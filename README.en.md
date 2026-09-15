@@ -7,7 +7,7 @@
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg?style=flat-square" alt="License"></a>
   <img src="https://img.shields.io/badge/node-%E2%89%A5%2022.13-3c873a?style=flat-square" alt="Node">
   <br>
-  <a href="README.md">中文</a> · Website <a href="https://relay.bobochang.cn/">relay.bobochang.cn</a> · Part of <a href="https://github.com/can4hou6joeng4/Homeport">The Fleet</a>
+  <a href="README.md">中文</a> · Website <a href="https://relay.bobochang.cn/en/">relay.bobochang.cn/en</a> · Part of <a href="https://github.com/can4hou6joeng4/Homeport">The Fleet</a>
 </div>
 
 ## Why
@@ -24,32 +24,42 @@ The images below were generated from synthetic sessions in an isolated environme
 
 <table>
 <tr>
-  <td align="center" colspan="2">
-    <img src="assets/cli-claude-to-opencode.gif" alt="CLI: Claude Code → OpenCode session handoff" width="720">
+  <td align="center" colspan="3">
+    <img src="assets/cli-claude-to-opencode.gif" alt="CLI: Claude Code → OpenCode session handoff">
     <br><b>CLI handoff</b> · Claude Code → OpenCode
     <br><sub>status → sessions → switch opencode → status, replayed with original timing</sub>
   </td>
 </tr>
 <tr>
-  <td align="center" width="50%">
-    <img src="assets/desktop-01-source.png" alt="Desktop: source session and context" width="400">
+  <td align="center" width="33%">
+    <img src="assets/desktop-01-source.png" alt="Desktop: source session and context">
     <br><b>Source session</b> · cwd and context lookup
     <br><sub>Session ID, working directory, usage and tool traces</sub>
   </td>
-  <td align="center" width="50%">
-    <img src="assets/desktop-03-imported.png" alt="Desktop: official import preview and confirmation" width="400">
-    <br><b>Official import</b> · preview → confirm → open
-    <br><sub>Claude Code → Codex Desktop, project created first</sub>
+  <td align="center" width="33%">
+    <img src="assets/desktop-02-preview.png" alt="Desktop: official import preview">
+    <br><b>Import preview</b> · read-only before confirm
+    <br><sub>Desktop project, cwd, CLI version and plan ID</sub>
+  </td>
+  <td align="center" width="33%">
+    <img src="assets/desktop-03-imported.png" alt="Desktop: import complete and independent open">
+    <br><b>Import complete</b> · then open separately
+    <br><sub>Target thread is kept; a failed open is only retried, never re-imported</sub>
   </td>
 </tr>
 <tr>
-  <td align="center" width="50%">
-    <img src="assets/desktop-05-compat.png" alt="Desktop: supported routes" width="400">
+  <td align="center" width="33%">
+    <img src="assets/desktop-04-history.png" alt="Desktop: handoff history (empty state)">
+    <br><b>Handoff history</b> · empty state
+    <br><sub>This list is the directory's chained handoff history, not an import execution log</sub>
+  </td>
+  <td align="center" width="33%">
+    <img src="assets/desktop-05-compat.png" alt="Desktop: supported routes">
     <br><b>Supported routes</b> · evidence boundary per direction
     <br><sub>Limited pass / per-route validation / not integrated</sub>
   </td>
-  <td align="center" width="50%">
-    <img src="assets/desktop-06-dark.png" alt="Desktop: dark appearance" width="400">
+  <td align="center" width="33%">
+    <img src="assets/desktop-06-dark.png" alt="Desktop: dark appearance">
     <br><b>Dark appearance</b> · light / dark / system
     <br><sub>Preference stored locally</sub>
   </td>
@@ -82,6 +92,39 @@ More conventions (code style, test isolation, commit format) are in the [contrib
 2. Check the detected source agent and project directory. **If detection fails, do not simply resume it as another tool.**
 3. Continue the original session with the source agent, or hand off to another agent. Selecting a target writes nothing by itself; the target may be a new session, or an existing matching session extended with the delta.
 4. Continue in the chosen terminal, or choose "copy command only" and run it yourself. A failed terminal launch falls back to copying.
+
+Common commands (all accept `--json`; success and failure both print a single-line JSON to stdout, diagnostics go to stderr):
+
+```bash
+npm run watch -- status --json                  # sessions, chain tip and switch history for this directory
+npm run watch -- sessions --json                # native sessions of every agent in this directory
+npm run watch -- switch codex                   # hand the chain tip over to Codex, print the resume command
+npm run watch -- adopt claude                   # attach an existing Claude session to the chain
+npm run watch -- new pi                         # create the other side of the chain (starts a session on an empty chain)
+npm run watch -- open <session-id> --json       # resolve the cwd and print a paste-ready command
+npm run watch -- open <session-id> --to codex   # transfer that session into a new Codex session
+```
+
+<details>
+<summary>All CLI subcommands</summary>
+<br>
+
+```text
+status   [--cwd <path>] [--chain <id|name>]     sessions, chain tip and switch history
+sessions [--cwd <path>] [--chain <id|name>]     native sessions per agent in this directory
+switch   <provider>                             hand the chain tip to the target provider
+adopt    <provider> [--session <id>]            attach an existing native session to the chain
+new      <provider>                             create the other side of the chain
+chain    list|new|rename|archive|use            manage and select chains
+search   <query>                                local full-text search (FTS5)
+usage    [--cwd <path>] [--chain <id|name>]     token usage per session on the chain
+recent   [--json]                               recently resolved sessions
+providers                                       local install detection per agent
+open     <session-id> [--from <id>] [--provider <name>] [--to <provider>]
+import-codex  prepare|confirm|status|project-prepare|project-confirm|project-status
+```
+
+</details>
 
 The desktop app has four views — **session handoff, handoff history, supported routes, settings** — with light, dark and system appearance. A browser preview never reads local agent records; "load demo" uses synthetic fixtures without session writes, client launches or model requests.
 
@@ -153,7 +196,11 @@ Paths that invoke a native agent require it to be properly authenticated. Valida
 
 ## License
 
-[MIT](LICENSE).
+Code and documentation in this repository are released under [MIT](LICENSE).
+
+- Site icons come from [Lucide](https://lucide.dev) (ISC). The agent icons under `site/agents/` and `desktop/public/` are each brand's own asset and are used for identification only.
+- Desktop installers bundle `tsx` and `esbuild` (both MIT) into `watch-core`; running the app still requires Node ≥ 22.13 on the user's machine.
+- Each agent CLI is bound by its own license and terms of service; Watch does not redistribute their models or credentials.
 
 ---
 

@@ -24,32 +24,42 @@ Watch 只做一件事：**把已保存的会话记录连同工作目录交到目
 
 <table>
 <tr>
-  <td align="center" colspan="2">
-    <img src="assets/cli-claude-to-opencode.gif" alt="CLI：Claude Code → OpenCode 会话接力" width="720">
+  <td align="center" colspan="3">
+    <img src="assets/cli-claude-to-opencode.gif" alt="CLI：Claude Code → OpenCode 会话接力">
     <br><b>CLI 接力</b> · Claude Code → OpenCode
     <br><sub>status → sessions → switch opencode → status，按真实时序回放</sub>
   </td>
 </tr>
 <tr>
-  <td align="center" width="50%">
-    <img src="assets/desktop-01-source.png" alt="桌面端：来源会话与上下文" width="400">
+  <td align="center" width="33%">
+    <img src="assets/desktop-01-source.png" alt="桌面端：来源会话与上下文">
     <br><b>来源会话</b> · 反查 cwd 与上下文
     <br><sub>会话 ID、工作目录、用量与工具痕迹</sub>
   </td>
-  <td align="center" width="50%">
-    <img src="assets/desktop-03-imported.png" alt="桌面端：官方导入预览与确认" width="400">
-    <br><b>官方导入</b> · 预览 → 确认 → 打开
-    <br><sub>Claude Code → Codex Desktop，项目先建</sub>
+  <td align="center" width="33%">
+    <img src="assets/desktop-02-preview.png" alt="桌面端：官方导入预览">
+    <br><b>导入预览</b> · 确认前只读
+    <br><sub>桌面项目、工作目录、CLI 版本与计划 ID</sub>
+  </td>
+  <td align="center" width="33%">
+    <img src="assets/desktop-03-imported.png" alt="桌面端：导入完成与独立打开">
+    <br><b>导入完成</b> · 再独立打开
+    <br><sub>目标线程保留，打开失败只重试打开</sub>
   </td>
 </tr>
 <tr>
-  <td align="center" width="50%">
-    <img src="assets/desktop-05-compat.png" alt="桌面端：支持路径" width="400">
-    <br><b>支持路径</b> · 逐方向列出证据边界
+  <td align="center" width="33%">
+    <img src="assets/desktop-04-history.png" alt="桌面端：接力记录（空态）">
+    <br><b>接力记录</b> · 空态与口径说明
+    <br><sub>这是工作目录的链式接力历史，不是导入执行日志</sub>
+  </td>
+  <td align="center" width="33%">
+    <img src="assets/desktop-05-compat.png" alt="桌面端：支持路径">
+    <br><b>支持路径</b> · 逐方向证据边界
     <br><sub>限定验收 / 逐方向验收 / 未接入</sub>
   </td>
-  <td align="center" width="50%">
-    <img src="assets/desktop-06-dark.png" alt="桌面端：暗色外观" width="400">
+  <td align="center" width="33%">
+    <img src="assets/desktop-06-dark.png" alt="桌面端：暗色外观">
     <br><b>暗色外观</b> · 亮色 / 暗色 / 跟随系统
     <br><sub>偏好保存在本地</sub>
   </td>
@@ -82,6 +92,39 @@ cd desktop && npx tauri build                # 打包当前平台
 2. 核对识别出的来源 Agent 和项目目录；**识别失败时不要直接按其他工具恢复**。
 3. 选择来源 Agent 继续原会话，或选择另一家执行接力。选择目标本身不会写入；目标可能是新会话，也可能复用匹配的既有会话并补充增量。
 4. 使用所选终端继续，或选择「仅复制命令」自行运行。终端打开失败时有复制回退。
+
+常用命令（均支持 `--json`；成功与失败都向 stdout 输出单行 JSON，诊断走 stderr）：
+
+```bash
+npm run watch -- status --json                  # 当前目录的会话、链尾与切换历史
+npm run watch -- sessions --json                # 该目录下各 Agent 的原生会话
+npm run watch -- switch codex                   # 把链尾内容交接给 Codex，输出恢复命令
+npm run watch -- adopt claude                   # 把已有 Claude 会话接入链
+npm run watch -- new pi                         # 在链上新建另一侧会话（空链时直接起会话）
+npm run watch -- open <session-id> --json       # 反查 cwd 并输出可粘贴的打开命令
+npm run watch -- open <session-id> --to codex   # 直接把该会话内容转入 Codex 新会话
+```
+
+<details>
+<summary>全部 CLI 子命令</summary>
+<br>
+
+```text
+status   [--cwd <path>] [--chain <id|name>]     会话、链尾与切换历史
+sessions [--cwd <path>] [--chain <id|name>]     各 Agent 在该目录的原生会话
+switch   <provider>                             链尾内容交接给目标 provider
+adopt    <provider> [--session <id>]            把已有原生会话接入链
+new      <provider>                             在链上新建另一侧会话
+chain    list|new|rename|archive|use            链的增删改与切换
+search   <query>                                本地全文检索（FTS5）
+usage    [--cwd <path>] [--chain <id|name>]     链上各会话的 token 用量
+recent   [--json]                               近期会话反查记录
+providers                                       各 Agent 的本机安装检测
+open     <session-id> [--from <id>] [--provider <name>] [--to <provider>]
+import-codex  prepare|confirm|status|project-prepare|project-confirm|project-status
+```
+
+</details>
 
 桌面端提供**会话接力 / 接力记录 / 支持路径 / 设置**四个视图，支持亮色、暗色与跟随系统三种外观。浏览器预览不读取本地 Agent 记录；「载入演示」使用合成样本，不写入会话、不启动客户端、不调用模型。
 
@@ -153,7 +196,11 @@ npm run watch -- import-codex status <plan-id> --json
 
 ## 许可
 
-[MIT](LICENSE)。
+本仓库的代码与文档以 [MIT](LICENSE) 发布。
+
+- 站点图标取自 [Lucide](https://lucide.dev)（ISC）。`site/agents/` 与 `desktop/public/` 下的 Agent 图标为各品牌自有资产，仅用于识别。
+- 桌面安装包会把 `tsx` 与 `esbuild`（均为 MIT）一并带入 `watch-core`，运行时仍需用户自备 Node ≥ 22.13。
+- 各 Agent CLI 受其自身许可与服务条款约束；Watch 不重新分发它们的模型或凭据。
 
 ---
 

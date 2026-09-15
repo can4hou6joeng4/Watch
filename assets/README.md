@@ -7,7 +7,7 @@
 | `cli-claude-to-opencode.gif` | CLI 链路径：`status` → `sessions` → `switch opencode` → `status` | 在临时 `HOME` / `WATCH_DB` / `WATCH_OPENCODE_DB` 下真实运行 CLI，输出录入 `cli-transcript.json`，再由 `replay-cli-gif.mjs` 在无头 Chrome 中按真实时序回放并合成 GIF | 来源是 `make-demo-fixture.mts` 生成的合成 Claude 会话；写入的是临时 OpenCode 库；路径已改写为 `~/…` 便于阅读；未启动任何原生客户端，不代表 OpenCode 原生续写通过 |
 | `app-icon.png` / `app-icon@2x.png` | 应用图标（航线交棒），与 `desktop/src-tauri/icons/` 同源 | 由 `desktop/src-tauri/icons/128x128@2x.png` 复制 / 缩放 | README 顶部使用 |
 | `cli-transcript.json` | 上述四条命令的原始 stdout 与耗时 | 同上 | 同上 |
-| `desktop-01-source.png`、`desktop-03-imported.png`、`desktop-05-compat.png`、`desktop-06-dark.png` | 桌面端视图与暗色外观 | `desktop/` 的 Vite 预览 + `?demo=1` 合成演示，无头 Chrome 经 CDP 点击「载入演示 → 预览导入计划 → 模拟确认导入」后整页截图 | 浏览器预览不读取本地记录、不调用 Tauri 命令；页面右上角「DEMO / 无真实写入」为真实渲染的标记 |
+| `desktop-01-source.png` … `desktop-06-dark.png`（六张） | 桌面端三个视图（会话接力 / 接力记录 / 支持路径）与亮、暗两种外观 | `desktop/` 的 Vite 预览 + `?demo=1` 合成演示，无头 Chrome 经 CDP 点击「载入演示 → 预览导入计划 → 模拟确认导入」并切换标签页后整页截图；暗色由脚本写入 `localStorage['watch-theme']=dark` 后重新载入 | 浏览器预览不读取本地记录、不调用 Tauri 命令；页面右上角「DEMO / 无真实写入」为真实渲染的标记 |
 
 ## 复现
 
