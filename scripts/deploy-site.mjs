@@ -35,7 +35,8 @@ if (!fs.existsSync(siteDir) || !fs.existsSync(path.join(siteDir, 'index.html')))
 }
 
 if (!envVars.CLOUDFLARE_ACCOUNT_ID && !envVars.CF_ACCOUNT_ID) {
-  envVars.CLOUDFLARE_ACCOUNT_ID = '619ac646dca07dca25d4863f66750593';
+  console.error('[Error] 缺少 Cloudflare 账号 ID。请在 ~/.env 的 [Cloudflare] 段写入 CLOUDFLARE_ACCOUNT_ID（或 CF_ACCOUNT_ID）；该值不写进仓库。');
+  process.exit(1);
 }
 
 console.log('正在生成双语站点与共享静态资产...');
