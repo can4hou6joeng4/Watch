@@ -20,7 +20,7 @@ It does not provide models, bypass usage limits, replace native agent chat, or m
 
 ## Showcase
 
-The images below were generated from synthetic sessions in an isolated environment and show real program output. They are **not native acceptance evidence**; see [assets](assets/README.md) for how they were produced and their limits.
+The images below were generated from synthetic sessions in an isolated environment and show real program output. They are **not native acceptance evidence**.
 
 <table>
 <tr>
@@ -32,34 +32,34 @@ The images below were generated from synthetic sessions in an isolated environme
 </tr>
 <tr>
   <td align="center" width="33%" valign="top">
-    <img src="assets/desktop-01-source.png" alt="Desktop: source session and context">
+    <img src="assets/desktop-01-source.webp" alt="Desktop: source session and context">
     <br><b>Source session</b> · cwd and context lookup
     <br><sub>Session ID, working directory, usage and tool traces</sub>
   </td>
   <td align="center" width="33%" valign="top">
-    <img src="assets/desktop-02-preview.png" alt="Desktop: official import preview">
+    <img src="assets/desktop-02-preview.webp" alt="Desktop: official import preview">
     <br><b>Import preview</b> · read-only before confirm
     <br><sub>Desktop project, cwd, CLI version and plan ID</sub>
   </td>
   <td align="center" width="33%" valign="top">
-    <img src="assets/desktop-03-imported.png" alt="Desktop: import complete and independent open">
+    <img src="assets/desktop-03-imported.webp" alt="Desktop: import complete and independent open">
     <br><b>Import complete</b> · then open separately
     <br><sub>Target thread is kept; a failed open is only retried, never re-imported</sub>
   </td>
 </tr>
 <tr>
   <td align="center" width="33%" valign="top">
-    <img src="assets/desktop-04-history.png" alt="Desktop: handoff history (empty state)">
+    <img src="assets/desktop-04-history.webp" alt="Desktop: handoff history (empty state)">
     <br><b>Handoff history</b> · empty state
     <br><sub>This list is the directory's chained handoff history, not an import execution log</sub>
   </td>
   <td align="center" width="33%" valign="top">
-    <img src="assets/desktop-05-compat.png" alt="Desktop: supported routes">
+    <img src="assets/desktop-05-compat.webp" alt="Desktop: supported routes">
     <br><b>Supported routes</b> · evidence boundary per direction
     <br><sub>Limited pass / per-route validation / not integrated</sub>
   </td>
   <td align="center" width="33%" valign="top">
-    <img src="assets/desktop-06-dark.png" alt="Desktop: dark appearance">
+    <img src="assets/desktop-06-dark.webp" alt="Desktop: dark appearance">
     <br><b>Dark appearance</b> · light / dark / system
     <br><sub>Preference stored locally</sub>
   </td>
