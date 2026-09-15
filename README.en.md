@@ -25,7 +25,7 @@ The images below were generated from synthetic sessions in an isolated environme
 <table>
 <tr>
   <td align="center" colspan="3">
-    <img src="assets/cli-claude-to-opencode.gif" alt="CLI: Claude Code → OpenCode session handoff" width="640">
+    <img src="assets/cli-claude-to-opencode.webp" alt="CLI: Claude Code → OpenCode session handoff" width="640">
     <br><b>CLI handoff</b> · Claude Code → OpenCode
     <br><sub>status → sessions → switch opencode → status, replayed with original timing</sub>
   </td>

@@ -25,7 +25,7 @@ Watch 只做一件事：**把已保存的会话记录连同工作目录交到目
 <table>
 <tr>
   <td align="center" colspan="3">
-    <img src="assets/cli-claude-to-opencode.gif" alt="CLI：Claude Code → OpenCode 会话接力" width="640">
+    <img src="assets/cli-claude-to-opencode.webp" alt="CLI：Claude Code → OpenCode 会话接力" width="640">
     <br><b>CLI 接力</b> · Claude Code → OpenCode
     <br><sub>status → sessions → switch opencode → status，按真实时序回放</sub>
   </td>
