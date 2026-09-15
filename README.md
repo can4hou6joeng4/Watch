@@ -31,34 +31,34 @@ Watch 只做一件事：**把已保存的会话记录连同工作目录交到目
   </td>
 </tr>
 <tr>
-  <td align="center" width="33%">
+  <td align="center" width="33%" valign="top">
     <img src="assets/desktop-01-source.png" alt="桌面端：来源会话与上下文">
     <br><b>来源会话</b> · 反查 cwd 与上下文
     <br><sub>会话 ID、工作目录、用量与工具痕迹</sub>
   </td>
-  <td align="center" width="33%">
+  <td align="center" width="33%" valign="top">
     <img src="assets/desktop-02-preview.png" alt="桌面端：官方导入预览">
     <br><b>导入预览</b> · 确认前只读
     <br><sub>桌面项目、工作目录、CLI 版本与计划 ID</sub>
   </td>
-  <td align="center" width="33%">
+  <td align="center" width="33%" valign="top">
     <img src="assets/desktop-03-imported.png" alt="桌面端：导入完成与独立打开">
     <br><b>导入完成</b> · 再独立打开
     <br><sub>目标线程保留，打开失败只重试打开</sub>
   </td>
 </tr>
 <tr>
-  <td align="center" width="33%">
+  <td align="center" width="33%" valign="top">
     <img src="assets/desktop-04-history.png" alt="桌面端：接力记录（空态）">
     <br><b>接力记录</b> · 空态与口径说明
     <br><sub>这是工作目录的链式接力历史，不是导入执行日志</sub>
   </td>
-  <td align="center" width="33%">
+  <td align="center" width="33%" valign="top">
     <img src="assets/desktop-05-compat.png" alt="桌面端：支持路径">
     <br><b>支持路径</b> · 逐方向证据边界
     <br><sub>限定验收 / 逐方向验收 / 未接入</sub>
   </td>
-  <td align="center" width="33%">
+  <td align="center" width="33%" valign="top">
     <img src="assets/desktop-06-dark.png" alt="桌面端：暗色外观">
     <br><b>暗色外观</b> · 亮色 / 暗色 / 跟随系统
     <br><sub>偏好保存在本地</sub>
