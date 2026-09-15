@@ -1,0 +1,22 @@
+[
+ {
+  "label": "watch status --cwd ./example-api",
+  "ms": 312,
+  "stdout": "cwd: ~/projects/example-api\n\n最新原生会话:\n  claude   7d3c2a10-5b8e-4f61-9c4d-2e0a8b7f1c33  mtime=2026-09-13T10:07:46.804Z\n           ~/.claude/projects/-Users-dev-projects-example-api/7d3c2a10-5b8e-4f61-9c4d-2e0a8b7f1c33.jsonl\n\n切换链: （空）\n"
+ },
+ {
+  "label": "watch sessions --cwd ./example-api",
+  "ms": 234,
+  "stdout": "claude:\n  7d3c2a10-5b8e-4f61-9c4d-2e0a8b7f1c33  mtime=2026-09-13T10:07:46.804Z\n    调用方反馈 /orders 接口偶发 502。请先复现，再定位重试逻辑的问题。\n"
+ },
+ {
+  "label": "watch switch opencode --cwd ./example-api",
+  "ms": 239,
+  "stdout": "已从 claude 交接 → opencode（5 轮）\n新会话: ses_f65b43326ffekpOvq6HL2S3f3K\n文件:   ~/.local/share/opencode/opencode.db\n\nresume: opencode -s ses_f65b43326ffekpOvq6HL2S3f3K\n"
+ },
+ {
+  "label": "watch status --cwd ./example-api",
+  "ms": 232,
+  "stdout": "链: 默认  (66285a15-b655-46de-aac7-5fd5dd91971e)\ncwd: ~/projects/example-api\n\n最新原生会话:\n  opencode ses_f65b43326ffekpOvq6HL2S3f3K  mtime=2026-09-13T10:24:14.047Z 🔗 ← 链尾\n           ~/.local/share/opencode/opencode.db\n  claude   7d3c2a10-5b8e-4f61-9c4d-2e0a8b7f1c33  mtime=2026-09-13T10:07:46.804Z 🔗\n           ~/.claude/projects/-Users-dev-projects-example-api/7d3c2a10-5b8e-4f61-9c4d-2e0a8b7f1c33.jsonl\n\n切换链:\n  claude → opencode  (ses_f65b43326ffekpOvq6HL2S3f3K)  @ 2026-09-13T10:24:14.048Z\n"
+ }
+]

@@ -1,0 +1,32 @@
+# Watch · 值更 (AgentRelay)
+
+> Watch (Chinese 值更, also called AgentRelay) is a free, MIT-licensed, local CLI and macOS desktop tool that hands a saved AI coding-agent session (messages, tool events and working directory) between Claude Code, OpenAI Codex, OpenCode, Kimi CLI and Pi when an agent runs out of quota or gets stuck. Conversion runs on your machine and Watch has no server of its own; only the target agent's own CLI talks to the network. Tool events may degrade to text and degraded items are reported.
+> Watch（值更，又名 AgentRelay）是本地运行、MIT 许可的跨 CLI 编程 Agent 会话接力工具：把已有会话记录在 Claude Code、Codex、OpenCode、Kimi CLI 与 Pi 之间转入继续工作，保留工作目录，不经任何中继服务器。工具事件可能降级为文本，降级项会在结果中列出。
+
+Author: can4hou6joeng4 (Guangzhou), part of "The Fleet" indexed at https://bobochang.cn.
+Version: 0.1.1. Site launched 2026-09-12. Requires Node.js >= 22.13 (node:sqlite) and the agent CLIs you use, already authenticated.
+Status: early stage. Source public on GitHub (MIT). No npm package yet; install by cloning the repository. Desktop builds are published on the GitHub Releases page when a version tag passes CI (macOS arm64 is the only validated platform).
+Primary name: Watch. Not related to other products named "AgentRelay" (agentrelay.com, several npm packages, a LinkedIn company).
+
+Adapter status: Claude Code (source or target; local JSONL history; strict cwd match), OpenAI Codex CLI and Codex Desktop (official single-session import with prepare, preview, confirm; verified by a real Tauri click-through on 2026-09-10 on macOS arm64 with Codex CLI 0.153.4; model continuation not verified), OpenCode (CLI adapter over the SQLite store; official Web/TUI path not integrated), Kimi CLI (adapter; creating a session invokes the kimi CLI), Pi CLI and Grok CLI (adapters retained, not validated; Grok has no desktop card).
+Desktop app: four views (session handoff, handoff history, supported routes, settings); light / dark / system appearance.
+Not supported: Antigravity, Claude Desktop Code, Windows and Linux (buildable, not validated), attachments (dropped, text placeholder kept), guaranteed zero data loss, quota bypass, code migration.
+
+Antigravity CLI has officially documented same-product entry points, not Watch support: `agy --conversation <conversation-id>` resumes existing CLI history; `agy -c` continues the latest conversation for the current cwd and may create a new conversation when history is missing. The interactive `/resume` picker can switch to the Antigravity tab and import a selected Antigravity 2.0 desktop conversation after a second confirmation. Watch has no Antigravity adapter, external-history contract, or native acceptance for that import. Official source: https://antigravity.google/docs/cli/commands/resume .
+
+The current website uses a dark Signal Ledger-style presentation and a synthetic handoff demo. The demo does not read real local sessions, write agent storage, launch clients or request models. In the desktop app, choosing a target does not execute a transfer; an explicit action performs the handoff. Official Codex opening remains separate from import confirmation.
+
+## Pages
+- [Homepage (zh-CN)](https://relay.bobochang.cn/): overview, install, compatibility, evidence, FAQ
+- [Homepage (en)](https://relay.bobochang.cn/en/): English mirror
+- [Full text for LLMs](https://relay.bobochang.cn/llms-full.txt)
+
+## Source and docs
+- [Watch on GitHub](https://github.com/can4hou6joeng4/Watch): source, README (zh/en), MIT license
+- [Client compatibility evidence](https://github.com/can4hou6joeng4/Watch/blob/main/docs/COMPATIBILITY.md)
+- [Official Claude Code → Codex import](https://github.com/can4hou6joeng4/Watch/blob/main/docs/import-codex.md)
+- [Dated acceptance records](https://github.com/can4hou6joeng4/Watch/tree/main/docs/evidence)
+
+## Related (public)
+- [bobochang.cn](https://bobochang.cn): author homepage and Fleet index
+- [Atlas](https://github.com/can4hou6joeng4/Atlas): companion macOS menu-bar app for AI coding usage and cost

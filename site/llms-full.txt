@@ -1,0 +1,96 @@
+# Watch · 值更 (AgentRelay) — full text for LLMs
+
+Last updated: 2026-09-14. Canonical page: https://relay.bobochang.cn/ (zh-CN), https://relay.bobochang.cn/en/ (en).
+
+## What it is
+
+Watch (Chinese 值更, also called AgentRelay) is a local session-handoff tool for AI coding agents. When Claude Code, Codex, OpenCode or Kimi runs out of quota, gets stuck, or you want to switch tools, Watch reads the saved session record on your machine, converts it into a format the target agent can resume, and keeps the original working directory (cwd). It is free and MIT-licensed. Version 0.1.1.
+
+Watch has no server, no account and no telemetry of its own. Conversion happens on your computer and results are written only into the target agent's local session store. The complete workflow is still not always offline: creating a Kimi session runs the kimi CLI, and the official Claude Code → Codex import starts the local Codex app-server, which reads your existing ~/.codex configuration. After handoff the target tool calls its model as usual.
+
+## How to use it
+
+1. Get the session ID from the original agent (Claude Code, OpenCode, ...) and paste it into the Watch desktop app or pass it to the CLI.
+2. Check the detected source agent and project directory (cwd). If detection fails, do not resume with another tool blindly.
+3. Select the target agent. Selection alone does not execute a transfer. Use the explicit action to convert and deliver a resume command, or preview the official Codex import and confirm it separately. Opening an imported Codex target is a separate action. Failed delivery retries reuse the existing target instead of transferring again.
+
+Claude Code → Codex Desktop goes through an official single-session import with three explicit states: prepare (preview), confirm (write), status (read-only). Uncertain results keep their execution log and lock and are never retried automatically.
+
+## Desktop app
+
+The macOS desktop app (Tauri shell, logic in TypeScript) has four views: session handoff, handoff history, supported routes and settings. Appearance can be light, dark or follow the system (switch in the sidebar status bar, stored locally). Claude Code → Codex Desktop uses the official import preview and explicit confirmation; other targets use the CLI adapters. Browser preview and the synthetic demo never read local records or launch clients.
+
+## Install (from source)
+
+Requirements: Node.js >= 22.13 (node:sqlite is required), the agent CLIs you use with working authentication. The packaged desktop app also depends on an external Node runtime.
+
+    git clone https://github.com/can4hou6joeng4/Watch.git
+    cd Watch && npm install
+    npm run watch -- status --json
+
+No npm package exists yet. Desktop builds appear on https://github.com/can4hou6joeng4/Watch/releases when a version tag passes CI; only macOS arm64 is validated.
+
+## Adapter status (2026-09-13)
+
+- Claude Code: adapter available as source or target; parses local JSONL history under ~/.claude/projects; strict cwd match.
+- OpenAI Codex CLI and Codex Desktop: official single-session import (prepare → preview → confirm) with a Watch-only import lock. Verified on 2026-09-07 (native read and resume, tool events degraded to text) and on 2026-09-10 by a real Watch Tauri click-through on macOS arm64 with Codex CLI 0.153.4 and ChatGPT Desktop 26.903.61454. Model continuation is not verified.
+- OpenCode: CLI adapter over the SQLite store with path isolation and native-ID repair. The official Web/TUI import path passed isolated native checks but is not integrated.
+- Kimi CLI: adapter available; creating a new session invokes the kimi CLI.
+- Pi CLI and Grok CLI: adapters retained, not validated; Grok has no desktop target card.
+
+## Not supported or not promised
+
+### Antigravity CLI boundaries
+
+Official documentation reviewed for this site update: https://antigravity.google/docs/cli/commands/resume and https://antigravity.google/docs/cli/reference .
+
+- `agy --conversation <conversation-id>` resumes an existing Antigravity CLI conversation. It does not import an arbitrary Claude, Codex or desktop conversation.
+- `agy -c` looks up the latest conversation for the current working directory. A missing or deleted record can create a fresh conversation, so this is not a side-effect-free status check.
+- Inside the CLI, `/resume` opens an interactive picker. The Antigravity tab can import a selected Antigravity 2.0 conversation after a second confirmation. The official documentation describes cloned history, context and tool trajectories.
+- These are same-product operations. Watch has no Antigravity adapter or validated external-agent import protocol, and has not natively accepted the 2.0-to-CLI path. Antigravity is not a target in the Watch demo or desktop selector.
+- The website's synthetic demo does not perform these operations. No Antigravity picker, conversation resume or model request was run for this deployment.
+
+### Other limitations
+
+Antigravity; Claude Desktop Code; Windows and Linux (buildable, not validated); attachments (dropped, a text placeholder is kept); Claude "thinking" blocks (degraded to text); zero data loss (file replacement uses atomic writes with round-trip verification and a .bak copy, but append paths do not have equivalent protection); quota bypass; code or worktree migration; identical model behaviour across tools.
+
+## Safety mechanisms
+
+Atomic file replacement: write to a temp file in the same directory, fsync, re-parse it with the same adapter to verify, keep a single .bak, then rename. A fingerprint check blocks the write if the target changed between resolve and write. The official Codex import uses an execution log under ~/.watch/imports/<plan-id>/ and a lock file inside CODEX_HOME; both are kept on uncertain results.
+
+## FAQ
+
+Q: Claude Code hit its limit mid-task (5-hour or weekly limit, "limit reached"). How do I continue?
+A: Enter the Claude Code session ID in Watch, check the detected working directory (cwd), pick Codex, OpenCode, Kimi or Pi. Watch converts the saved record and launches the target agent in the same directory. Watch does not bypass limits; tool events may be degraded to text and the result lists what was degraded.
+
+Q: How do I switch from Claude Code to Codex and resume the same session (migration / handoff)?
+A: Desktop: select the source session and click the OpenAI Codex card (official single-session import: prepare → confirm → open). CLI: watch import-codex prepare <claude-id> --cwd <project> --desktop-project --experimental, then confirm. The project must already exist in Codex Desktop. Model continuation is outside the validated scope.
+
+Q: My Claude Code context window is full. Does Watch compact it?
+A: No. /compact and /clear are Claude Code's own commands. Watch moves the saved session record into another agent; the original session is untouched.
+
+Q: Where are Claude Code, Codex and OpenCode session files, and how do I resume a previous conversation?
+A: Claude Code: ~/.claude/projects/<encoded-cwd>/<session-id>.jsonl (claude --resume <id>). Codex: ~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl (codex resume <id>). OpenCode: ~/.local/share/opencode/opencode.db (opencode -s <id>). Watch resolves a session ID to these locations and shows the owning working directory.
+
+Q: I use both Claude Code and Codex. How do I move between them without losing context?
+A: Claude → Codex uses the official import preview; Codex → Claude uses the CLI adapter conversion. Both keep the working directory; degraded events are reported.
+
+Q: Is my code or my API key uploaded anywhere?
+A: Not by Watch. It has no server, account or telemetry. Two things do reach the network: the kimi CLI when creating a Kimi session, and the local Codex app-server during an official Codex import, using the credentials you already configured.
+
+Q: Will handoff damage the target client's existing history?
+A: The official Codex import writes only after you confirm the preview and holds a Watch-only lock. Direct-file targets use atomic replacement with verification and a .bak copy. Append paths are less protected, so test with a disposable session first.
+
+Q: What is YOLO mode?
+A: Off by default. When enabled, Watch adds the target CLI's own bypass flag (for example -y) to the generated command. The risk is whatever that CLI does with the flag; it is not a desktop permission setting.
+
+## Author
+
+can4hou6joeng4, developer, Guangzhou. Homepage https://bobochang.cn. GitHub https://github.com/can4hou6joeng4. Part of "The Fleet": Homeport, Watch, Atlas, Sonar, Semaphore, Buoy, Beacon.
+
+## Links
+
+- Source: https://github.com/can4hou6joeng4/Watch
+- Compatibility evidence: https://github.com/can4hou6joeng4/Watch/blob/main/docs/COMPATIBILITY.md
+- Official import guide: https://github.com/can4hou6joeng4/Watch/blob/main/docs/import-codex.md
+- Dated acceptance records: https://github.com/can4hou6joeng4/Watch/tree/main/docs/evidence

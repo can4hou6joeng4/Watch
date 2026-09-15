@@ -1,0 +1,34 @@
+node_modules/
+.DS_Store
+.mai/
+desktop/src-tauri/target/
+desktop/dist/
+.claude/
+
+# wrangler files
+.wrangler
+.dev.vars*
+!.dev.vars.example
+.env*
+!.env.example
+
+# 本地工作文件：agent 约定与内部文档，不随仓库分发
+CLAUDE.md
+AGENTS.md
+src/providers/CLAUDE.md
+src/providers/codex/CLAUDE.md
+desktop/CLAUDE.md
+desktop/src-tauri/CLAUDE.md
+docs/MODULE-MAP.md
+
+# 内部策略与研究稿，不随仓库分发
+GEO-AUDIT-REPORT.md
+docs/GTM_STRATEGY.md
+docs/keyword-research-2026-09-14.md
+
+# 验收证据：记录不随仓库分发；保留空目录占位，因为校验器要求该目录存在
+docs/evidence/*
+!docs/evidence/.gitkeep
+
+# 内部文档：验收规程与设计稿，不随仓库分发
+docs/internal/
