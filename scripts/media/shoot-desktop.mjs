@@ -21,8 +21,12 @@ const click = async (text, selector = 'button') => evalJs(`(() => { const b = [.
 const shot = async (name) => { const h = Math.min(1500, Math.max(820, await evalJs('document.documentElement.scrollHeight'))); await send('Emulation.setDeviceMetricsOverride', { width: 1280, height: h, deviceScaleFactor: 2, mobile: false }); await sleep(300); const r = await send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: true }); writeFileSync(`${OUT}/${name}.png`, Buffer.from(r.result.data, 'base64')); console.log('shot', name); };
 await send('Page.enable'); await send('Runtime.enable');
 await send('Emulation.setDeviceMetricsOverride', { width: 1280, height: 820, deviceScaleFactor: 2, mobile: false });
+// 主题确定性：素材不应随宿主机外观变化。先写死亮色再正式载入，01-05 固定为亮色。
+await send('Page.navigate', { url: 'http://localhost:1420/?demo=1' }); await sleep(1500);
+await evalJs(`localStorage.setItem('watch-theme','light')`);
 await send('Page.navigate', { url: 'http://localhost:1420/?demo=1' });
 await sleep(2500);
+console.log('theme:', await evalJs('document.documentElement.dataset.theme'));
 console.log('title:', await evalJs('document.title'), '| h1/h2:', await evalJs('[...document.querySelectorAll("h1,h2")].map(h=>h.innerText).slice(0,6).join(" | ")'));
 console.log(await click('载入演示')); await sleep(1200);
 await shot('desktop-01-source');
@@ -35,4 +39,12 @@ console.log(await click('接力记录')); await sleep(1000);
 await shot('desktop-04-history');
 console.log(await click('支持路径')); await sleep(1000);
 await shot('desktop-05-compat');
+// 暗色外观：先写入主题偏好再重新载入演示（App 从 localStorage 读 watch-theme 并写 <html data-theme>）
+await evalJs(`localStorage.setItem('watch-theme','dark')`);
+await send('Page.navigate', { url: 'http://localhost:1420/?demo=1' });
+await sleep(2500);
+console.log(await click('载入演示')); await sleep(1200);
+console.log('theme:', await evalJs('document.documentElement.dataset.theme'));
+await shot('desktop-06-dark');
+await evalJs(`localStorage.removeItem('watch-theme')`);
 ws.close(); chrome.kill();
