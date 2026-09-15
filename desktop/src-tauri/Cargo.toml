@@ -1,6 +1,6 @@
 [package]
 name = "desktop"
-version = "0.1.0"
+version = "0.1.1"
 description = "Watch 桌面壳 — 输入会话 ID，复制各 agent resume 命令"
 authors = ["czm"]
 edition = "2021"
