@@ -24,6 +24,12 @@
   ! Cache-Control
   Cache-Control: public, max-age=604800
 
+# 媒体体积已按显示尺寸优化（无损 WebP，1280 宽）。文件名不带内容哈希，
+# 因此不用 immutable：1 天 TTL + 回源期间先给旧内容，避免更新后的素材被浏览器冻结。
+/media/*
+  ! Cache-Control
+  Cache-Control: public, max-age=86400, stale-while-revalidate=604800
+
 /en/*
   ! Content-Language
   Content-Language: en
