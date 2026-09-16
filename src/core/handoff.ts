@@ -1,4 +1,4 @@
-import type { ProviderAdapter } from '../providers/adapter.js';
+import type { ImportTurnsOpts, ProviderAdapter } from '../providers/adapter.js';
 import type { SessionRef, TokenUsage, UnifiedTurn } from './types.js';
 import type { Chain, Store, SwitchRecord } from './store.js';
 import { dedupeCallEvents, mergeTurns, shouldReplacePairedSession, unwrapUserQuery } from './rich.js';
@@ -380,6 +380,15 @@ export async function handoff(
   const turns = await source.parse(sourceTip.ref);
   // 目标级保护：传入即将写入的会话，Codex 据此检查 per-thread writer 锁（而非只看 Desktop 是否运行）
   await target.preflight?.({ ref: into, cwd });
+  // 协作写锁：供应商支持时在写入期间独占原生锁，收窄与原生 writer 的竞态窗口
+  const guardedWrite = async (turnsToWrite: UnifiedTurn[], opts?: ImportTurnsOpts): Promise<SessionRef> => {
+    const guard = into ? await target.acquireWriteLock?.({ ref: into }) : undefined;
+    try {
+      return await target.importTurns(turnsToWrite, cwd, into, opts);
+    } finally {
+      await guard?.release();
+    }
+  };
 
   const replace = Boolean(into && shouldReplacePairedSession(turns, destTurns));
   let outgoing = replace ? mergeTurns(turns, destTurns) : into ? diffTurns(turns, destTurns) : turns;
@@ -407,7 +416,7 @@ export async function handoff(
     if (into) {
       try {
         await assertDestUnchanged();
-        await target.importTurns(dedupeCallEvents(turns), cwd, into, { replace: true });
+        await guardedWrite(dedupeCallEvents(turns), { replace: true });
         addFinding(findings, 'handoff.rewrite_only', 'synthesized', 1);
       } catch (error) {
         if (error instanceof HandoffBlockedError) throw error;
@@ -435,7 +444,7 @@ export async function handoff(
   }
 
   await assertDestUnchanged();
-  const newRef = await target.importTurns(dedupeCallEvents(outgoing), cwd, into, replace ? { replace: true } : undefined);
+  const newRef = await guardedWrite(dedupeCallEvents(outgoing), replace ? { replace: true } : undefined);
   if (replace) addFinding(findings, 'handoff.rewrite', 'degraded', destTurns.length);
   else addFinding(findings, 'handoff.append', 'exact', outgoing.length);
 

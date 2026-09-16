@@ -10,6 +10,8 @@ import { digestFile } from '../../core/atomic.js';
 import type { FileDigest } from '../../core/atomic.js';
 import type { ProviderAdapter, PreflightContext } from '../adapter.js';
 import { PreflightBlockedError } from '../adapter.js';
+import { acquireThreadWriterLock, probeThreadWriterHolders, threadWriterLockPath, type WriterLockGuard } from './writer-lock.js';
+export { threadWriterLockPath };
 import type { ProcessEvent, SessionRef, UnifiedTurn } from '../../core/types.js';
 import { streamCommand } from '../../core/streamCommand.js';
 import { parseCodexSession } from './parse.js';
@@ -416,47 +418,6 @@ export function isCodexDesktopExecutable(executable: string): boolean {
   return (bundle === 'Codex.app' || bundle === 'ChatGPT.app') && (binary === 'Codex' || binary === 'ChatGPT');
 }
 
-/**
- * 按原生 per-thread writer 锁定位（`<codexHome>/thread-writer-locks/<thread-id>.lock`，0 字节 flock 文件）。
- * 锁名就是 thread/session id，与 rollout 文件名里的 id 一致。
- */
-export function threadWriterLockPath(sessionId: string, codexHome = codexDir()): string {
-  return path.join(codexHome, 'thread-writer-locks', `${sessionId}.lock`);
-}
-
-type WriterHolder = { pid: number; command: string };
-
-function parseLsofHolders(stdout: string): WriterHolder[] {
-  const holders: WriterHolder[] = [];
-  let pid: number | undefined;
-  for (const raw of stdout.split('\n')) {
-    const line = raw.trim();
-    if (!line) continue;
-    if (line.startsWith('p')) pid = Number(line.slice(1));
-    else if (line.startsWith('c') && pid) {
-      holders.push({ pid, command: line.slice(1) });
-      pid = undefined;
-    }
-  }
-  return holders;
-}
-
-/**
- * 探测 writer 锁的当前持有者。
- * 返回 [] = 无人持有（陈旧锁/进程已退出）；null = 探测不可用（lsof 缺失或异常），调用方应回退。
- */
-async function probeThreadWriterHolders(lockPath: string): Promise<WriterHolder[] | null> {
-  try {
-    const { stdout } = await execFileAsync('lsof', ['-Fpc', '--', lockPath], { timeout: 10_000 });
-    return parseLsofHolders(stdout);
-  } catch (error) {
-    const err = error as { code?: unknown; stdout?: unknown };
-    if (err.code === 1) return []; // lsof: 无匹配
-    if (typeof err.stdout === 'string' && err.stdout.trim()) return parseLsofHolders(err.stdout);
-    return null;
-  }
-}
-
 /** Desktop 进程是否在运行（pgrep 不可用等异常按未运行放行，保持旧行为） */
 async function desktopProcessRunning(): Promise<boolean> {
   for (const pattern of ['Codex.app/Contents/MacOS/Codex', 'ChatGPT.app/Contents/MacOS/ChatGPT']) {
@@ -469,6 +430,23 @@ async function desktopProcessRunning(): Promise<boolean> {
     }
   }
   return false;
+}
+
+/** 协作写锁：写入前独占原生 per-thread 锁（收窄与原生 writer 的竞态窗口） */
+async function acquireCodexWriteLock(ctx: { ref?: SessionRef }): Promise<WriterLockGuard | undefined> {
+  const ref = ctx.ref;
+  if (!ref || process.platform !== 'darwin') return undefined;
+  try {
+    return await acquireThreadWriterLock(threadWriterLockPath(ref.sessionId));
+  } catch {
+    // 锁在探测与取锁之间被别的 writer 拿走（或取锁失败）→ 拒绝写入，交由调用方转成结构化 blocked
+    throw new PreflightBlockedError({
+      code: 'codex_target_busy',
+      sessionId: ref.sessionId,
+      message: `Codex 会话 ${ref.sessionId} 在写入前被其他 writer 抢先持有，已拒绝写入`,
+      hint: '稍后重试；本次未写入任何内容。',
+    });
+  }
 }
 
 export const codexAdapter: ProviderAdapter = {
@@ -568,6 +546,8 @@ export const codexAdapter: ProviderAdapter = {
   },
 
   findById: findCodexSessionById,
+
+  acquireWriteLock: acquireCodexWriteLock,
 
   sessionUsage: codexSessionUsage,
 };

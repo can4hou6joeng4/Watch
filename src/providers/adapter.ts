@@ -75,6 +75,14 @@ export interface ProviderAdapter {
   /** 可选（桌面壳用）：列 cwd 下本 provider 的原生会话，mtime 降序 */
   listSessions?(cwd: string): Promise<{ ref: SessionRef; updatedAt: number; preview?: string }[]>;
 
+  /**
+   * 可选：为目标会话取协作写锁（如 Codex 的原生 per-thread writer 锁）。
+   * 写入期间持有它可把「探测 → 写入」之间的竞态窗口收窄为原子取锁。
+   * 返回 undefined = 机制不可用（无 helper/平台不支持），调用方退回只探测；
+   * 抛 PreflightBlockedError = 已被其他 writer 抢占，调用方应拒绝写入。
+   */
+  acquireWriteLock?(ctx: { ref?: SessionRef }): Promise<{ release(): Promise<void>; holderPid?: number } | undefined>;
+
   /** 展示用：回到原生 CLI 继续的命令，如 `claude --resume <id>` */
   resumeCommand(ref: SessionRef): string;
 

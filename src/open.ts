@@ -213,11 +213,16 @@ export async function openSession(
       } else {
         const dedup = dedupeCallEvents(outgoing);
         await target.adapter.preflight?.({ ref: target.found.ref, cwd: target.found.ref.cwd });
-        await assertTargetUnchanged(target.adapter, target.found.ref, dstDigest, '并入');
-        const newRef = await target.adapter.importTurns(dedup, target.found.ref.cwd, target.found.ref);
-        merged = dedup.length;
-        notes.push(`已把 ${from} 的 ${merged} 轮新内容并入 ${target.adapter.displayName} 会话 ${newRef.sessionId}`);
-        target.found = { ref: newRef, updatedAt: 0 };
+        const guard = await target.adapter.acquireWriteLock?.({ ref: target.found.ref });
+        try {
+          await assertTargetUnchanged(target.adapter, target.found.ref, dstDigest, '并入');
+          const newRef = await target.adapter.importTurns(dedup, target.found.ref.cwd, target.found.ref);
+          merged = dedup.length;
+          notes.push(`已把 ${from} 的 ${merged} 轮新内容并入 ${target.adapter.displayName} 会话 ${newRef.sessionId}`);
+          target.found = { ref: newRef, updatedAt: 0 };
+        } finally {
+          await guard?.release();
+        }
       }
     } catch (error) {
       const blocked = blockedFrom(error);
@@ -433,7 +438,7 @@ async function planOpenInProvider(sourceId: string, providerId: string, mapping:
   };
 }
 
-/** 写入前的目标级保护：preflight（Codex 会查原生 writer 锁）+ TOCTOU 指纹比对 */
+/** 写入前的目标级保护：preflight（Codex 会查原生 writer 锁）+ 协作写锁 + TOCTOU 指纹比对 */
 async function guardedImport(
   adapter: ProviderAdapter,
   ref: SessionRef | undefined,
@@ -442,8 +447,14 @@ async function guardedImport(
   cwd: string,
 ): Promise<SessionRef> {
   await adapter.preflight?.({ ref, cwd });
-  if (ref) await assertTargetUnchanged(adapter, ref, snapshot, '转入');
-  return adapter.importTurns(turns, cwd, ref);
+  // 协作锁：若供应商支持，写入期间独占原生 writer 锁，把竞态窗口收窄为原子取锁
+  const guard = ref ? await adapter.acquireWriteLock?.({ ref }) : undefined;
+  try {
+    if (ref) await assertTargetUnchanged(adapter, ref, snapshot, '转入');
+    return await adapter.importTurns(turns, cwd, ref);
+  } finally {
+    await guard?.release();
+  }
 }
 
 /**
