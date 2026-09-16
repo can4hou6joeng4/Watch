@@ -286,6 +286,16 @@ async fn open_in(source_id: String, provider_id: String) -> Result<Value, String
     .map_err(|e| format!("open_in 任务失败: {e}"))?
 }
 
+/// 点击前预检（只读，不写入）：等价 `watch open <id> --to <provider> --check --json`
+#[tauri::command]
+async fn check_open(source_id: String, provider_id: String) -> Result<Value, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        run_cli_json(&["open", source_id.as_str(), "--to", provider_id.as_str(), "--check", "--json"])
+    })
+    .await
+    .map_err(|e| format!("check_open 任务失败: {e}"))?
+}
+
 /// 只读预览 Claude Code -> Codex Desktop 官方项目先建导入，不提交导入。
 #[tauri::command]
 async fn prepare_codex_import(source_id: String, cwd: String) -> Result<Value, String> {
@@ -881,6 +891,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             resolve_cwd,
             open_in,
+            check_open,
             list_recent_sessions,
             list_available_providers,
             get_handoff_history,

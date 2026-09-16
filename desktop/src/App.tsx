@@ -16,6 +16,7 @@ type Summary = { turnCount: number; userTurnCount: number; assistantTurnCount: n
 type Source = { cwd: string; provider: string | null; sessionId?: string; usage?: { inputTokens: number; outputTokens: number } | null; summary?: Summary | null };
 type Detect = { status: 'idle' | 'loading' } | { status: 'ok'; source: Source } | { status: 'error'; error: string };
 type Blocked = { code: string; sessionId?: string; holders?: { pid: number; command: string }[]; hint?: string };
+type Precheck = { status: 'idle' | 'checking' | 'ok' | 'blocked' | 'error'; writable?: boolean; note?: string; blocked?: Blocked; error?: string };
 type Transfer = { provider: string; sessionId: string; cwd?: string; notes: string[]; delivery?: 'copied' | 'launched'; error?: string };
 type BlockedNotice = { provider: string; sourceId: string; info: Blocked; error: string };
 const native = () => '__TAURI_INTERNALS__' in window && Boolean(window.__TAURI_INTERNALS__);
@@ -55,6 +56,8 @@ export default function App() {
   }, [theme]);
   function chooseTheme(value: ThemePreference) { setTheme(value); try { localStorage.setItem('watch-theme', value); } catch { /* 无持久化时仅本次生效 */ } }
   const [expanded, setExpanded] = useState(false);
+  // 点击前预检：目标卡片上提前显示「会落到哪个会话 / 是否可写」，避免点下去才被拒
+  const [precheck, setPrecheck] = useState<Precheck>({ status: 'idle' });
   const [busy, setBusy] = useState<string | null>(null);
   const [notice, setNotice] = useState<{ type: 'ok' | 'error'; text: string } | null>(null);
   const [codexImport, setCodexImport] = useState<CodexImportView>({ status: 'idle' });
@@ -63,6 +66,7 @@ export default function App() {
   const [blockedNotice, setBlockedNotice] = useState<BlockedNotice | null>(null);
   const input = useRef<HTMLInputElement>(null);
   const request = useRef(0);
+  const precheckRequest = useRef(0);
   const historyRequest = useRef(0);
   const toastTimer = useRef<number | undefined>(undefined);
   const id = sessionId.trim();
@@ -115,6 +119,29 @@ export default function App() {
     return () => { window.clearTimeout(timer); request.current += 1; };
   }, [id, demo]);
   useEffect(() => { if (owner === 'claude') setTarget('codex'); else if (owner === 'codex') setTarget('claude'); }, [owner]);
+  useEffect(() => {
+    const version = ++precheckRequest.current;
+    if (!id || !source || demo || !native() || route === 'unresolved' || route === 'official-codex') {
+      setPrecheck({ status: 'idle' });
+      return;
+    }
+    if (route === 'resume') {
+      setPrecheck({ status: 'ok', writable: true, note: '来源即目标，直接恢复原会话' });
+      return;
+    }
+    setPrecheck({ status: 'checking' });
+    const timer = window.setTimeout(() => {
+      void invoke<{ ok?: boolean; writable?: boolean; notes?: string[]; sessionId?: string; error?: string; blocked?: boolean; code?: string; holders?: { pid: number; command: string }[]; hint?: string }>('check_open', { sourceId: id, providerId: target })
+        .then((data) => {
+          if (version !== precheckRequest.current) return;
+          if (!data.ok) { setPrecheck({ status: 'error', error: data.error || '预检失败' }); return; }
+          const blocked = data.blocked ? { code: data.code ?? 'blocked', sessionId: data.sessionId, holders: data.holders, hint: data.hint } : undefined;
+          setPrecheck({ status: data.writable === false ? 'blocked' : 'ok', writable: data.writable !== false, note: data.notes?.[0], blocked, error: data.error });
+        })
+        .catch((error) => { if (version === precheckRequest.current) setPrecheck({ status: 'error', error: message(error) }); });
+    }, 400);
+    return () => window.clearTimeout(timer);
+  }, [id, target, route, demo, source]);
   useEffect(() => {
     const version = ++historyRequest.current; setHistory([]); setHistoryError('');
     if (!source || demo || !native()) return;
@@ -212,7 +239,8 @@ export default function App() {
           setTarget(AGENTS[next].id);
           (event.currentTarget.parentElement?.querySelectorAll<HTMLButtonElement>('[role="radio"]')[next])?.focus();
         }}><img src={`/${entry.id}.svg`} alt="" /><span>{entry.label}<small>{owner === entry.id ? '来源 Agent' : installed ? installed.available ? 'CLI 已检测到' : 'CLI 未检测到' : '环境未检测'}</small></span>{target === entry.id && <Check size={15} />}</button>; })}</div>
-          <div className="handoff-tool"><div className="handoff-tool-heading"><span className="route-label"><span className="status-dot" />{route === 'official-codex' ? '官方桌面导入' : route === 'resume' ? '原会话恢复' : '本地格式转换'}</span><span className="client-label">{route === 'official-codex' ? <Monitor size={14} /> : <Terminal size={14} />}{route === 'official-codex' ? 'Codex Desktop' : terminalLabels[mode]}</span></div>
+            {precheck.status !== 'idle' && <p className={`precheck${precheck.status === 'blocked' ? ' blocked' : ''}`} role="status">{precheck.status === 'checking' ? <><LoaderCircle className="spin" size={13} />正在预检目标会话…</> : precheck.status === 'error' ? <><Info size={13} />预检不可用：{precheck.error}（不影响转入）</> : precheck.status === 'blocked' ? <><Info size={13} />暂不可写入：{precheck.note}{!!precheck.blocked?.holders?.length && ` · 占用者 ${precheck.blocked.holders.map((holder) => `PID ${holder.pid} ${holder.command}`).join('、')}`}</> : <><Check size={13} />可写入：{precheck.note}</>}</p>}
+        <div className="handoff-tool"><div className="handoff-tool-heading"><span className="route-label"><span className="status-dot" />{route === 'official-codex' ? '官方桌面导入' : route === 'resume' ? '原会话恢复' : '本地格式转换'}</span><span className="client-label">{route === 'official-codex' ? <Monitor size={14} /> : <Terminal size={14} />}{route === 'official-codex' ? 'Codex Desktop' : terminalLabels[mode]}</span></div>
           {route === 'official-codex' ? <div className="official-import"><p className="route-description">先匹配已存在的桌面项目，再确认导入。工具记录可能转为文本；打开客户端不代表模型继续已验证。</p>
             {codexImport.status === 'idle' && <button className="primary-button" disabled={!ready || busy !== null} onClick={prepare}>预览导入计划<ArrowRight size={16} /></button>}
             {codexImport.status === 'preparing' && <div className="state-message" role="status"><LoaderCircle className="spin" size={17} />正在核验项目与来源…</div>}
