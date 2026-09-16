@@ -1,5 +1,5 @@
 import { DatabaseSync } from 'node:sqlite';
-import { chmodSync, copyFileSync, existsSync, mkdirSync, renameSync, rmSync, statSync } from 'node:fs';
+import { chmodSync, mkdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { homedir } from 'node:os';
 import { randomUUID } from 'node:crypto';
@@ -61,48 +61,6 @@ export const CHAIN_SESSION_TITLE = 'tui-chain';
 
 export const defaultDbPath = (): string => join(homedir(), '.watch', 'watch.db');
 
-/** 旧版数据库位置；首次以默认路径打开且新库不存在时自动迁入 */
-export const legacyDbPath = (): string => join(homedir(), '.tongbu', 'tongbu.db');
-
-/**
- * 旧库迁移（旧版 → Watch）：目标不存在而旧库存在时，把 db 与 -wal 复制到新路径
- * （-shm 是瞬态索引，SQLite 打开时自动重建，不复制）。只复制不删除，旧路径保留作回退。
- * 复制前先清掉目标旁残留的 -wal/-shm：目标不存在时它们只能是上次异常退出留下的孤儿，
- * 不清会被 SQLite 当作本库的 WAL 回放到刚复制来的页面上，造成损坏或静默串库。
- * 顺序是先 wal、再把 db 复制到临时名、最后 rename 到位：并发打开的另一进程要么看到
- * 「目标不存在」自己再迁一遍，要么看到完整的 db+wal，不会看到只有首页的半成品并在其上跑 schema 迁移。
- * 失败只清自己的临时文件；留下的孤儿 -wal 旁边没有非空 db，SQLite 打开时会自行删掉。
- */
-export function migrateLegacyDb(target: string = defaultDbPath(), legacy: string = legacyDbPath()): boolean {
-  if (dbFilePresent(target) || !existsSync(legacy)) return false;
-  const staging = `${target}.migrating-${process.pid}`;
-  try {
-    mkdirSync(dirname(target), { recursive: true, mode: 0o700 });
-    for (const p of [target, staging, `${target}-wal`, `${target}-shm`]) rmSync(p, { force: true });
-    if (existsSync(`${legacy}-wal`)) copyFileSync(`${legacy}-wal`, `${target}-wal`);
-    copyFileSync(legacy, staging);
-    renameSync(staging, target);
-    return true;
-  } catch (error) {
-    rmSync(staging, { force: true });
-    console.error(`[watch] 旧库迁移失败（${legacy} → ${target}），将新建空库:`, error);
-    return false;
-  }
-}
-
-/**
- * 库文件是否真的存在：0 字节视为不存在。DatabaseSync 打开即建空文件，构造中途失败
- * （磁盘满、被杀）会留下 0 字节壳；切到 WAL 模式必先写出首页（≥ 4096 字节），
- * 所以 0 字节文件旁不可能有合法的 -wal，连同旁边残留一起清掉是安全的。
- */
-function dbFilePresent(p: string): boolean {
-  try {
-    return statSync(p).size > 0;
-  } catch {
-    return false;
-  }
-}
-
 /**
  * 本地单库持久化（node:sqlite 同步 API，与 router 串行队列匹配）。
  * 迁移：PRAGMA user_version 步进，每版幂等（参考 hapi hub/src/store）。
@@ -118,11 +76,10 @@ export class Store {
 
   constructor(dbPath: string = defaultDbPath()) {
     if (dbPath !== ':memory:') {
-      if (dbPath === defaultDbPath()) migrateLegacyDb(dbPath);
       mkdirSync(dirname(dbPath), { recursive: true, mode: 0o700 });
     }
     this.db = new DatabaseSync(dbPath);
-    // busy_timeout 必须是第一条：另一进程正在重建 wal-index（如刚迁入、只有 -wal 没有 -shm）时，
+    // busy_timeout 必须是第一条：另一进程正在重建 wal-index（只剩 -wal 没有 -shm）时，
     // journal_mode 会撞 SQLITE_BUSY_RECOVERY，没装 busy handler 就直接抛 database is locked
     this.db.exec('PRAGMA busy_timeout = 5000');
     this.db.exec('PRAGMA journal_mode = WAL');
