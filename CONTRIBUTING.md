@@ -14,7 +14,6 @@
 npm install                                  # 仓库根
 npm --prefix desktop install                 # 桌面端依赖另装
 
-npm test                                     # 本地测试套件（不随版本库分发，见下）
 npm run typecheck                            # tsc --noEmit，只覆盖 src/
 npm --prefix desktop run build               # 桌面前端构建（tsc && vite build）
 npm run desktop:dev                          # 本地运行桌面端（Vite 在 1420）
@@ -23,7 +22,7 @@ cargo check --manifest-path desktop/src-tauri/Cargo.toml   # 快速检查
 cargo test  --manifest-path desktop/src-tauri/Cargo.toml   # Rust 桥接单测
 ```
 
-`tests/` **不随版本库分发**（已在 `.gitignore`）：CI 的 `quality.yml` 只跑类型检查、前端构建与 Rust 测试，不跑回归测试。在包含 `tests/` 的工作区里 `npm test` 仍按隔离环境运行全部用例，定向运行用 `npm test -- tests/handoff.test.ts`（任何参数都会整体替换默认文件表）；工作区没有 `tests/` 时脚本会给出明确提示并退出 1。
+仓库**不分发测试套件**：`tests/` 与本地测试运行器均不随版本库分发，根 `package.json` 也不提供 `test` 脚本。CI 的 `quality.yml` 因此只跑类型检查、前端构建与 Rust 测试（`cargo test`），远程通过不代表回归通过。贡献者改完 `src/` 后至少跑 `npm run typecheck` 与 `npm --prefix desktop run build`；手写原生验收器（`validate:*`）是可选的手动入口，参见兼容性文档。
 
 仓库**没有 lint 脚本**（无 eslint / biome / prettier），代码风格靠约定与评审维护。
 

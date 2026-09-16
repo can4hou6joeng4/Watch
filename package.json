@@ -9,7 +9,6 @@
     "watch": "tsx src/cli.ts",
     "desktop:dev": "npm --prefix desktop run tauri -- dev",
     "typecheck": "tsc --noEmit",
-    "test": "node scripts/run-tests.mjs",
     "validate:codex-native": "node scripts/validate-codex-native.mjs",
     "validate:opencode-native": "node --import tsx scripts/validate-opencode-native.mjs",
     "validate:opencode-server": "node --import tsx scripts/validate-opencode-server.mjs",
