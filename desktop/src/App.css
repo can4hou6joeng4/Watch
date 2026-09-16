@@ -103,7 +103,7 @@ h3 { font-size: 12px; font-weight: 600; }
 .tool-list { display: flex; flex-wrap: wrap; gap: 7px; align-items: center; padding-top: 10px; color: var(--muted); font-size: 10px; }
 .tool-list code { font-size: 9px; background: var(--hover); border-radius: 3px; padding: 2px 5px; }
 .target-section { margin-top: 27px; padding-top: 24px; border-top: 1px solid var(--border); }
-.agent-selector { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 8px; }
+.agent-selector { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 8px; }
 .agent-option { display: flex; align-items: center; position: relative; gap: 9px; background: var(--surface); border: 1px solid var(--border); border-radius: 6px; padding: 14px 10px; min-height: 66px; text-align: left; }
 .agent-option img { width: 24px; height: 24px; }
 .agent-option img, .provider-label img, .recent-item img { filter: var(--icon-filter); opacity: .6; }

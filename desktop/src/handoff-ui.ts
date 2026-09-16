@@ -4,7 +4,16 @@ export const AGENTS = [
   { id: 'opencode', label: 'OpenCode', command: (id: string) => `opencode -s ${id}`, yolo: '--auto' },
   { id: 'kimi', label: 'Kimi CLI', command: (id: string) => `kimi -r ${id}`, yolo: '--yolo' },
   { id: 'pi', label: 'Pi', command: (id: string) => `pi --session ${id}`, yolo: undefined },
+  { id: 'grok', label: 'Grok CLI', command: (id: string) => `grok -r ${id}`, yolo: '--always-approve' },
 ];
+
+/**
+ * 已注册适配器里刻意不建桌面卡片的 provider（当前为空）。
+ * 新增 Provider 时要么补卡片、要么加到这里；`tests/desktop-handoff-ui.test.ts` 会强制二者必居其一。
+ * grok 在 2026-09-14 补齐：原生 `updates.jsonl`（ACP 会话日志）写入后，隔离验收通过
+ * `grok sessions list` / `grok export` / ACP `session/load` 回放；真实终端里的 TUI 画面未逐帧验证。
+ */
+export const AGENTS_WITHOUT_CARD: readonly string[] = [];
 export type Agent = typeof AGENTS[number];
 export function handoffRoute(owner: string | null, target: string) {
   if (!owner) return 'unresolved';
