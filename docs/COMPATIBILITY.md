@@ -67,7 +67,13 @@ Antigravity 的 本机与官方检查 将交互式 2.0 import、既有 CLI ID �
 
 Grok 的桌面卡片曾因 `resume` 打开不正常而被移除。2026-09-14 定位到根因并修复：Grok 内置文档 `docs/user-guide/17-sessions.md` 明确 **`updates.jsonl`（ACP `session/update` 日志）才是 `/resume` 与 session restore 的权威会话来源**，`chat_history.jsonl` 只是发给 model 的原始消息；Watch 原先只写后者，因此原生打开时看不到任何对话。修复后 `src/providers/grok/build.ts` 同步写 ACP 日志（`user_message_chunk` / `agent_thought_chunk` / `tool_call` / `tool_call_update` / `agent_message_chunk` / `turn_completed`，`timestamp` 为 epoch 秒），并从本机最近原生会话探测 `current_model_id` / `agent_name` / `reasoning_effort`（此前硬编码的 `grok-4.5-build-free` 在本机根本不存于模型列表）。
 
-隔离验收（`GROK_HOME` 指向临时目录、合成来源、全程不发 prompt / 不调用模型、不读写真实 `~/.grok`）：`grok sessions list`（会话 cwd 下）列出该会话；`grok export <id>` 完整渲染对话与工具；`grok agent stdio` 的 ACP `session/load` 回放全部 `session/update`。`grok -r <id>` 在裸 PTY 下只能观察到进程启动并把窗口标题置为会话标题，逐帧画面需要真实终端模拟器，未验证；模型继续仍不在通过范围。
+隔离验收（`GROK_HOME` 指向临时目录、合成来源、全程不发 prompt / 不调用模型、不读写真实 `~/.grok`）：`grok sessions list`（会话 cwd 下）列出该会话；`grok export <id>` 完整渲染对话与工具；`grok agent stdio` 的 ACP `session/load` 回放全部 `session/update`。
+
+**TUI 逐帧验收（2026-09-16）**：裸 PTY 下 grok 只发终端标题转义（屏幕无法确认）；改用 PTY + 终端查询应答器（DA1/DA2/DSR/`CSI 18t`/OSC 10-11）+ 正确的 `TIOCSWINSZ` 窗口尺寸后，`grok -r <id>` 真实渲染出会话内容：帧里出现 `TUI_FRAME_MARKER 请回答 4242` / `TUI_REPLY_MARKER 已记住 4242`（含 `42 / 500K` 上下文计量）。同一帧还暴露了身份缺陷：`Model "grok-4.5-build-free" is no longer available for your account. Switched to "grok-4.6".` —— 硬编码 model id 已被原生判为不可用。
+
+**身份保真（承上修复）**：model id 改为探测顺序「本机最近原生会话 `current_model_id` → 非交互 `grok models` 的 `Default model` → 常量」，`agent_name` / `reasoning_effort` / `sandbox_profile` 同样探测，`model_fingerprint` **只沿用同一 `model_id` 的原生 assistant 行**（探测不到就不写，不伪造）；并修复了「新建空会话抢‘最新会话’位置」导致身份与 fingerprint 丢失的双重探测问题。用新写入器重跑：`sessions list` / `export` / ACP `session/load` 仍通过，且写出的 `current_model_id` 与 assistant 行均为原生默认 `grok-4.6`。
+
+**`grok usage` 的验证否定（2026-09-16）**：`grok usage <session-id>` 是非交互命令，但本机隔离合成会话与真实原生会话均返回 `No usage recorded`；原生 `signals.json` 只有 `contextTokensUsed` / `contextWindowTokens` 等聚合计数，没有 in/out token 总额。因此 `grokSessionUsage` 仍返回 `null`（不接 CLI、不解析拿不到的数据）。
 
 **Codex 直接文件路径改为目标级写保护（2026-09-16）**：原 `preflight()` 只看 `pgrep` 能否匹配 Codex/ChatGPT Desktop，导致两个方向都不准——应用只是开着就一律拒绝（实测：ChatGPT 运行中时非 Claude 来源 → Codex 全部被拒），而应用关闭但 `codex` CLI 正写同一线程时反而放行（正是要防的并发写）。现改为按目标会话判定：读原生 per-thread writer 锁 `~/.codex/thread-writer-locks/<thread-id>.lock`，用 `lsof -Fpc` 探测持有者——锁被活进程持有才拒绝并报出持有者 PID/命令；锁文件不存在（新建会话）或只剩陈旧锁（持有者已退出）则放行；有 ctx 但无目标 ref（新建）放行；无 ctx 或 `lsof` 不可用才回退旧的进程检查。`open --from` 与 `open --to` 两条写入路径同时补上写前/写后 `contentFingerprint` 比对。
 
