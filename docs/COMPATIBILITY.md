@@ -17,7 +17,7 @@
 | 来源或目标入口 | 当前实现/官方依据 | Watch 状态与限制 |
 |---|---|---|
 | Claude Code CLI、Codex CLI、Kimi CLI、OpenCode CLI、Pi CLI | 本地解析、转入与恢复命令，桌面有五张目标卡 | 实现存在 / 待逐方向、版本验收；OpenCode 产品入口使用基础 CLI 适配器，不意味着五家全组合通过 |
-| Kimi 新建会话 | 无 `into` 时必须在目标 cwd 调用真实 `kimi -p .`（真实模型调用）才能拿到原生 session id 并登记 `session_index.jsonl`；追加到既有会话不走 CLI。2026-09-16 验证阻塞：本机未安装 kimi CLI、无 `~/.kimi-code`、仓库也无「无 prompt 建会话」文档证据，因此既无法验收也无法改为无副作用路径；Kimi 侧的模型继续同样未验收（本机无 CLI） | 已知限制；解除条件：装有 kimi CLI 并确认存在无 prompt 的会话创建方式（或接受一次模型调用） |
+| Kimi 新建会话 | 无 `into` 时必须在目标 cwd 调用真实 `kimi -p .`（真实模型调用）才能拿到原生 session id 并登记 `session_index.jsonl`；追加到既有会话不走 CLI。2026-09-16 验证阻塞：本机未安装 kimi CLI、无 `~/.kimi-code`、仓库也无「无 prompt 建会话」文档证据，因此既无法验收也无法改为无副作用路径；Kimi 侧的模型继续同样未验收（本机无 CLI）。2026-09-16 额外检索了本机既有实现与缓存，看是否有可复用的离线创建逻辑：唯一另一份 Kimi wire 实现是 `~/Documents/CODE/tongbu`（Watch 同源前身），同样是 `kimi -p .`，无可复用新逻辑（且它仍带 Watch 已修的三处问题：缺 cwd 预检、错误分类、追加保留历史）；`boss-agent-cli` 文档只把 Moonshot 当 API provider，不含 CLI 会话格式；npm 缓存、全局 `node_modules`、常见 bin 目录与 Applications 均无 kimi CLI 或其包 | 已知限制；解除条件：装有 kimi CLI 并确认存在无 prompt 的会话创建方式（或接受一次模型调用） |
 | Grok CLI | 适配器已注册，桌面已接入目标卡（`grok -r <id>`，YOLO `--always-approve`） | 实现存在；2026-09-14 隔离原生验收通过 `sessions list` / `export` / ACP `session/load` 回放（不发 prompt）。真实终端 TUI 画面与模型继续未验证 |
 | Codex CLI → 桌面端 | S1 `/app`；S2 指定本地会话深链接 | Watch 已为官方导入的目标线程接入固定 deep link；其他来源仍待集成和验证 |
 | 已导入 Codex 会话 → 桌面项目成员 | S7 实验性项目查询与元数据接口；S8 当前 Desktop 私有筛选 | 后置 app-server 关联可验证后端成员关系，但不能解除 projectless 排除；不再作为 GUI 修复路径 |
