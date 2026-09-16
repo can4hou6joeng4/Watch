@@ -69,6 +69,8 @@ Grok 的桌面卡片曾因 `resume` 打开不正常而被移除。2026-09-14 定
 
 隔离验收（`GROK_HOME` 指向临时目录、合成来源、全程不发 prompt / 不调用模型、不读写真实 `~/.grok`）：`grok sessions list`（会话 cwd 下）列出该会话；`grok export <id>` 完整渲染对话与工具；`grok agent stdio` 的 ACP `session/load` 回放全部 `session/update`。`grok -r <id>` 在裸 PTY 下只能观察到进程启动并把窗口标题置为会话标题，逐帧画面需要真实终端模拟器，未验证；模型继续仍不在通过范围。
 
+**Codex 直接文件路径改为目标级写保护（2026-09-16）**：原 `preflight()` 只看 `pgrep` 能否匹配 Codex/ChatGPT Desktop，导致两个方向都不准——应用只是开着就一律拒绝（实测：ChatGPT 运行中时非 Claude 来源 → Codex 全部被拒），而应用关闭但 `codex` CLI 正写同一线程时反而放行（正是要防的并发写）。现改为按目标会话判定：读原生 per-thread writer 锁 `~/.codex/thread-writer-locks/<thread-id>.lock`，用 `lsof -Fpc` 探测持有者——锁被活进程持有才拒绝并报出持有者 PID/命令；锁文件不存在（新建会话）或只剩陈旧锁（持有者已退出）则放行；有 ctx 但无目标 ref（新建）放行；无 ctx 或 `lsof` 不可用才回退旧的进程检查。`open --from` 与 `open --to` 两条写入路径同时补上写前/写后 `contentFingerprint` 比对。残留边界：writer 锁是 advisory，探测与实际写入之间仍有窄窗口；本轮**未做真实并发写验证**，也**不提供强制覆盖开关**（被占用时必须先结束该 writer）。隔离回归（stub `pgrep`/`lsof` 五种分支 + 零写入断言）见本地测试，不随仓库分发。
+
 ## 4. 只读本机预检记录
 
 以下是开发环境观察，不是安装要求，也不是版本兼容范围：
