@@ -17,7 +17,7 @@
 | 来源或目标入口 | 当前实现/官方依据 | Watch 状态与限制 |
 |---|---|---|
 | Claude Code CLI、Codex CLI、Kimi CLI、OpenCode CLI、Pi CLI | 本地解析、转入与恢复命令，桌面有五张目标卡 | 实现存在 / 待逐方向、版本验收；OpenCode 产品入口使用基础 CLI 适配器，不意味着五家全组合通过 |
-| Grok CLI | 适配器仍注册，无桌面目标卡 | 实现存在；不扩大已有可用性声明 |
+| Grok CLI | 适配器已注册，桌面已接入目标卡（`grok -r <id>`，YOLO `--always-approve`） | 实现存在；2026-09-14 隔离原生验收通过 `sessions list` / `export` / ACP `session/load` 回放（不发 prompt）。真实终端 TUI 画面与模型继续未验证 |
 | Codex CLI → 桌面端 | S1 `/app`；S2 指定本地会话深链接 | Watch 已为官方导入的目标线程接入固定 deep link；其他来源仍待集成和验证 |
 | 已导入 Codex 会话 → 桌面项目成员 | S7 实验性项目查询与元数据接口；S8 当前 Desktop 私有筛选 | 后置 app-server 关联可验证后端成员关系，但不能解除 projectless 排除；不再作为 GUI 修复路径 |
 | Claude Code → 官方 Codex/桌面导入 | S3 用户流程；S6 官方 app-server；S8 当前 Desktop 私有筛选 | `--desktop-project` 要求项目先存在；真实合成样本已通过技术预检、项目列表及 Watch Tauri 预览/确认/两次独立打开验收。当前本机 CodexPilot 的既有续写失败仍阻止标记完整模型继续可用 |
@@ -64,6 +64,10 @@ OpenCode v1.18.29 的 多客户端命令检查 进一步区分了独立 `--sessi
 Claude 的 本机实现检查 解释了为什么不能把 `claude://resume` 当成独立导入 API：保存 transcript 和 flush 状态发生在链接打开之前。它只支持设计候选流程，不代表 Watch 已验证 Claude Desktop。
 
 Antigravity 的 本机与官方检查 将交互式 2.0 import、既有 CLI ID 恢复和按 cwd 的 `-c` 恢复分开。CLI 命令存在不等于 Watch 获得了外部会话写入协议。
+
+Grok 的桌面卡片曾因 `resume` 打开不正常而被移除。2026-09-14 定位到根因并修复：Grok 内置文档 `docs/user-guide/17-sessions.md` 明确 **`updates.jsonl`（ACP `session/update` 日志）才是 `/resume` 与 session restore 的权威会话来源**，`chat_history.jsonl` 只是发给 model 的原始消息；Watch 原先只写后者，因此原生打开时看不到任何对话。修复后 `src/providers/grok/build.ts` 同步写 ACP 日志（`user_message_chunk` / `agent_thought_chunk` / `tool_call` / `tool_call_update` / `agent_message_chunk` / `turn_completed`，`timestamp` 为 epoch 秒），并从本机最近原生会话探测 `current_model_id` / `agent_name` / `reasoning_effort`（此前硬编码的 `grok-4.5-build-free` 在本机根本不存于模型列表）。
+
+隔离验收（`GROK_HOME` 指向临时目录、合成来源、全程不发 prompt / 不调用模型、不读写真实 `~/.grok`）：`grok sessions list`（会话 cwd 下）列出该会话；`grok export <id>` 完整渲染对话与工具；`grok agent stdio` 的 ACP `session/load` 回放全部 `session/update`。`grok -r <id>` 在裸 PTY 下只能观察到进程启动并把窗口标题置为会话标题，逐帧画面需要真实终端模拟器，未验证；模型继续仍不在通过范围。
 
 ## 4. 只读本机预检记录
 

@@ -41,7 +41,7 @@
     $('commandOutput').hidden = state !== 'imported' && state !== 'opened';
     if (!$('commandOutput').hidden) {
       const id = currentRoute === 'resume' ? sample.id : targetId;
-      const commands = { claude: `claude --resume ${id}`, codex: `codex resume ${id}`, opencode: `opencode -s ${id}`, kimi: `kimi -r ${id}`, pi: `pi --session ${id}` };
+      const commands = { claude: `claude --resume ${id}`, codex: `codex resume ${id}`, opencode: `opencode -s ${id}`, kimi: `kimi -r ${id}`, pi: `pi --session ${id}`, grok: `grok -r ${id}` };
       $('targetCommand').textContent = `cd '${sample.cwd}' && ${commands[target]}`;
     }
     document.querySelectorAll('[data-step]').forEach((item) => { const index = Number(item.dataset.step); item.classList.toggle('complete', sample && (index < 2 || index === 2 && state !== 'idle' || index === 3 && (state === 'imported' || state === 'opened'))); });
