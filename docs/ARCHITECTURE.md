@@ -134,7 +134,7 @@ export type ProcessEvent = {
 
 `verifyWrittenTurns` 对比角色、文本、事件计数和 callId，并有后缀匹配及 provider 声明的降级处理。附件不参与完整对账。自家解析器读回成功，不证明目标原生客户端接受该会话格式。
 
-直接写入路径已改为**目标级写保护**：按原生 per-thread writer 锁（`~/.codex/thread-writer-locks/<thread-id>.lock` + `lsof` 探测持有者）判定，只在目标会话真被持有才拒绝；无目标上下文或 `lsof` 不可用时才回退桌面进程检查，并在写入前后做 `contentFingerprint` 比对。官方导入仍采用独立的目标目录保护；限定原生验证见兼容性矩阵。保留旧数据库迁移及已落盘的 `tui-chain`、schema 标识。
+直接写入路径已改为**目标级写保护**：按原生 per-thread writer 锁（`~/.codex/thread-writer-locks/<thread-id>.lock` + `lsof` 探测持有者）判定，只在目标会话真被持有才拒绝；无目标上下文或 `lsof` 不可用时才回退桌面进程检查，并在写入前后做 `contentFingerprint` 比对。 桌面端可在点击前调用只读预检（CLI `watch open --to <provider> --check`，Tauri `check_open`）：它复用同一套转入决策解析目标会话（resume/chain/reuse/new）并跑一次目标级探测，返回 `writable`/`blocked` 且零写入，预检不可用时不阻塞转入。官方导入仍采用独立的目标目录保护；限定原生验证见兼容性矩阵。保留旧数据库迁移及已落盘的 `tui-chain`、schema 标识。
 
 ---
 

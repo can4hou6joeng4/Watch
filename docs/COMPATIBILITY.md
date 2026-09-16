@@ -69,7 +69,11 @@ Grok 的桌面卡片曾因 `resume` 打开不正常而被移除。2026-09-14 定
 
 隔离验收（`GROK_HOME` 指向临时目录、合成来源、全程不发 prompt / 不调用模型、不读写真实 `~/.grok`）：`grok sessions list`（会话 cwd 下）列出该会话；`grok export <id>` 完整渲染对话与工具；`grok agent stdio` 的 ACP `session/load` 回放全部 `session/update`。`grok -r <id>` 在裸 PTY 下只能观察到进程启动并把窗口标题置为会话标题，逐帧画面需要真实终端模拟器，未验证；模型继续仍不在通过范围。
 
-**Codex 直接文件路径改为目标级写保护（2026-09-16）**：原 `preflight()` 只看 `pgrep` 能否匹配 Codex/ChatGPT Desktop，导致两个方向都不准——应用只是开着就一律拒绝（实测：ChatGPT 运行中时非 Claude 来源 → Codex 全部被拒），而应用关闭但 `codex` CLI 正写同一线程时反而放行（正是要防的并发写）。现改为按目标会话判定：读原生 per-thread writer 锁 `~/.codex/thread-writer-locks/<thread-id>.lock`，用 `lsof -Fpc` 探测持有者——锁被活进程持有才拒绝并报出持有者 PID/命令；锁文件不存在（新建会话）或只剩陈旧锁（持有者已退出）则放行；有 ctx 但无目标 ref（新建）放行；无 ctx 或 `lsof` 不可用才回退旧的进程检查。`open --from` 与 `open --to` 两条写入路径同时补上写前/写后 `contentFingerprint` 比对。残留边界：writer 锁是 advisory，探测与实际写入之间仍有窄窗口；本轮**未做真实并发写验证**，也**不提供强制覆盖开关**（被占用时必须先结束该 writer）。隔离回归（stub `pgrep`/`lsof` 五种分支 + 零写入断言）见本地测试，不随仓库分发。
+**Codex 直接文件路径改为目标级写保护（2026-09-16）**：原 `preflight()` 只看 `pgrep` 能否匹配 Codex/ChatGPT Desktop，导致两个方向都不准——应用只是开着就一律拒绝（实测：ChatGPT 运行中时非 Claude 来源 → Codex 全部被拒），而应用关闭但 `codex` CLI 正写同一线程时反而放行（正是要防的并发写）。现改为按目标会话判定：读原生 per-thread writer 锁 `~/.codex/thread-writer-locks/<thread-id>.lock`，用 `lsof -Fpc` 探测持有者——锁被活进程持有才拒绝并报出持有者 PID/命令；锁文件不存在（新建会话）或只剩陈旧锁（持有者已退出）则放行；有 ctx 但无目标 ref（新建）放行；无 ctx 或 `lsof` 不可用才回退旧的进程检查。`open --from` 与 `open --to` 两条写入路径同时补上写前/写后 `contentFingerprint` 比对。
+
+**真实并发写验收（2026-09-16，隔离原生）**：方法为在隔离 `HOME`/`CODEX_HOME` 中用 Watch 写一条合成 rollout，再起真实 `codex app-server --listen stdio://`（0.153.4），通过 `thread/resume` 按 thread id 打开该线程——**不发 turn、不调模型**；`lsof` 确认锁由真实 `codex` 进程持有（PID 实测如 56190）。持有期间 Watch 的 `open --from` 返回 `ok:false` + `code:codex_target_busy` + 该 PID，且写入前后 `contentFingerprint` 完全一致（零写入）；杀死 writer 释放锁后同一命令返回 `ok:true`。`thread/resume` 在无凭据的隔离环境可用，因此本项验收不依赖登录状态。脚本 `scripts/validate-codex-writer-guard.mjs`（`npm run validate:codex-writer-guard`，手动 opt-in）可复现全部七项检查，当前 7/7 通过；原始记录 codex-writer-guard-native-2026-09-16 按仓库约定保留在本地 `docs/evidence/`，不随仓库分发。残留边界：writer 锁是 advisory，探测与实际写入之间仍有窄窗口；本轮**不提供强制覆盖开关**（被占用时必须先结束该 writer）。
+
+**点击前预检**：`watch open <id> --to <provider> --check --json` 只读解析转入会落到哪种目标（`resume` / `chain` / `reuse` / `new`）并跑一次目标级保护探测，返回 `writable` 与 `blocked`，**不写入任何内容**（回归里用指纹与目录清单断言零写入）。桌面端在（来源会话 + 目标 Agent）变化后去抖调用它，在目标卡片下显示「可写入：将并入既有会话 <id>」「暂不可写入：… 占用者 PID x codex」；预检不可用时只提示不影响转入。
 
 ## 4. 只读本机预检记录
 
