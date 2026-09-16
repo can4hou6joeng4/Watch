@@ -1,5 +1,6 @@
 import { readFile } from 'node:fs/promises';
 import {
+  CLAUDE_THINKING_PREFIX,
   ENCRYPTED_THINKING,
   ensureAssistant,
   flattenToolOutput,
@@ -16,6 +17,7 @@ import type { ProcessEvent, SessionRef, TokenUsage, UnifiedTurn } from '../../co
  * - thinking / tool_use / tool_result 挂到当前 assistant.events
  * - 仅含 tool_result 的 user 记录不当作用户消息
  * - 同一 user turn 内多条 assistant 合并：过程事件累积，文本留最后一条非空
+ * - assistant 的 `[思考] …` 记录（build 的 thinking 降级形态）还原成 thinking 事件
  * - 丢弃首条 user 之前的记录
  */
 export async function parseClaudeSession(ref: SessionRef): Promise<UnifiedTurn[]> {
@@ -40,7 +42,7 @@ export async function parseClaudeSession(ref: SessionRef): Promise<UnifiedTurn[]
 
     const timestamp = typeof r.timestamp === 'string' ? r.timestamp : '';
     const content = (r.message as Record<string, unknown> | undefined)?.content;
-    const extracted = extractRich(content, timestamp);
+    const extracted = extractRich(content, timestamp, type);
     if (!extracted) continue;
     const { text, onlyToolResult, events } = extracted;
 
@@ -84,6 +86,7 @@ function readUsage(message: unknown): TokenUsage | undefined {
 function extractRich(
   content: unknown,
   timestamp: string,
+  role: 'user' | 'assistant',
 ): { text: string; onlyToolResult: boolean; events: ProcessEvent[] } | null {
   let blocks: unknown[];
   if (typeof content === 'string') {
@@ -105,6 +108,18 @@ function extractRich(
     switch (b.type) {
       case 'text':
         if (typeof b.text === 'string' && b.text !== '') {
+          // build 把 thinking 写成 `[思考] <detail>` 文本（伪造 thinking 块缺 signature 会让
+          // `claude --resume` 报错）。这里按同一前缀还原为 thinking 事件，否则
+          // 「Claude → 其他 Agent」会静默丢掉思考内容。只认 assistant 侧，避免误判用户消息。
+          if (role === 'assistant' && b.text.startsWith(CLAUDE_THINKING_PREFIX)) {
+            const thinking = b.text.slice(CLAUDE_THINKING_PREFIX.length).trim();
+            if (thinking) {
+              sawVisible = true;
+              onlyToolResult = false;
+              events.push({ ...base, kind: 'thinking', summary: summarize(thinking, '思考'), detail: thinking });
+              break;
+            }
+          }
           parts.push(b.text);
           sawVisible = true;
           onlyToolResult = false;

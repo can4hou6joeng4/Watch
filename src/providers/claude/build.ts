@@ -4,7 +4,7 @@ import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { appendFileAtomic, writeFileAtomic } from '../../core/atomic.js';
 import { verifyWrittenTurns } from '../../core/verify.js';
-import { claudeBashInput, ENCRYPTED_THINKING, toClaudeToolName, turnHasContent } from '../../core/rich.js';
+import { claudeBashInput, CLAUDE_THINKING_PREFIX, ENCRYPTED_THINKING, toClaudeToolName, turnHasContent } from '../../core/rich.js';
 import { parseClaudeSession } from './parse.js';
 import type { ProcessEvent, SessionRef, TokenUsage, UnifiedTurn } from '../../core/types.js';
 import type { ImportTurnsOpts } from '../adapter.js';
@@ -205,8 +205,8 @@ export function buildClaudeLines(
 /**
  * claude 写出侧的受控降级（round-trip 校验的期望模型）：
  * thinking 事件写为 `[思考] <detail>` 文本记录（伪造 thinking 块缺签名会破坏 resume），
- * 反解后 thinking 事件消失：有最终文本时被覆盖，无最终文本时文本停在最后一条 `[思考]` 记录；
- * 加密/空思考直接丢弃。全空 turn 也随之消失（对齐 stripEmptyEvents）。
+ * parse 按同一前缀还原为 thinking 事件，因此期望模型只需丢掉加密/空思考；
+ * 全空 turn 也随之消失（对齐 stripEmptyEvents）。
  */
 function expectClaudeRoundTrip(turns: UnifiedTurn[]): UnifiedTurn[] {
   const out: UnifiedTurn[] = [];
@@ -223,19 +223,13 @@ function expectClaudeRoundTrip(turns: UnifiedTurn[]): UnifiedTurn[] {
       }
       continue;
     }
-    const thinkings = (t.events ?? []).filter((e) => e.kind === 'thinking');
-    const events = (t.events ?? []).filter((e) => e.kind !== 'thinking');
-    const kept = thinkings.filter((e) => {
-      const d = (e.detail ?? e.summary ?? '').trim();
-      return d.length > 0 && d !== ENCRYPTED_THINKING;
+    const events = (t.events ?? []).filter((e) => {
+      if (e.kind !== 'thinking') return true;
+      const detail = (e.detail ?? e.summary ?? '').trim();
+      return detail.length > 0 && detail !== ENCRYPTED_THINKING;
     });
-    let text = t.text;
-    if (!text.trim() && kept.length) {
-      const last = kept.at(-1)!;
-      text = `[思考] ${(last.detail ?? last.summary ?? '').trim()}`;
-    }
-    if (!text.trim() && events.length === 0) continue;
-    out.push({ ...t, text, events });
+    if (!t.text.trim() && events.length === 0) continue;
+    out.push({ ...t, events });
   }
   return out;
 }
@@ -256,7 +250,7 @@ function emitClaudeEvent(
     if (!thinking || thinking === ENCRYPTED_THINKING) return;
     const record = ctx.baseRecord();
     record.type = 'assistant';
-    record.message = ctx.assistantMessage([{ type: 'text', text: `[思考] ${thinking}` }], null, ctx.usage);
+    record.message = ctx.assistantMessage([{ type: 'text', text: `${CLAUDE_THINKING_PREFIX}${thinking}` }], null, ctx.usage);
     ctx.push(record);
     return;
   }

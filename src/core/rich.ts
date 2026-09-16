@@ -2,6 +2,13 @@ import type { ProcessEvent, UnifiedTurn } from './types.js';
 
 export const ENCRYPTED_THINKING = '思考中…（加密）';
 
+/**
+ * Claude 写出侧的 thinking 降级前缀：Claude 原生 thinking 块必须带 signature，
+ * Watch 伪造会直接破坏 `claude --resume`，因此只能写成带此前缀的普通文本记录。
+ * build 写、parse 读同一常量，保证 Watch 自己的往返不丢 thinking。
+ */
+export const CLAUDE_THINKING_PREFIX = '[思考] ';
+
 export function turnHasContent(t: UnifiedTurn): boolean {
   return t.text.trim() !== '' || (t.events?.length ?? 0) > 0;
 }
