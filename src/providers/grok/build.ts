@@ -1,4 +1,7 @@
-import { mkdir, readdir, readFile, stat, writeFile } from 'node:fs/promises';
+import { mkdir, open, readdir, readFile, stat, writeFile } from 'node:fs/promises';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
+import { resolveCli } from '../../core/platform.js';
 import { createHash, randomUUID } from 'node:crypto';
 import { homedir } from 'node:os';
 import path from 'node:path';
@@ -6,6 +9,8 @@ import { writeFileAtomic } from '../../core/atomic.js';
 import { verifyWrittenTurns } from '../../core/verify.js';
 import { mergeConsecutiveAssistant } from '../../core/rich.js';
 import { parseGrokSession } from './parse.js';
+
+const execFileAsync = promisify(execFile);
 import type { ImportTurnsOpts } from '../adapter.js';
 import type { ProcessEvent, SessionRef, UnifiedTurn } from '../../core/types.js';
 
@@ -42,8 +47,11 @@ type GrokIdentity = {
   agentName: string;
   reasoningEffort: string;
   sandboxProfile: string;
+  /** 原生 assistant 行里的 model_fingerprint；探测不到就不写（不伪造） */
+  modelFingerprint?: string;
 };
 
+/** 本机没有会话且无法询问 `grok models` 时的最后回退；已知会过期，会被原生提示“Switched to …” */
 const DEFAULT_IDENTITY: GrokIdentity = {
   modelId: defaultModelId(),
   agentName: 'grok-build',
@@ -164,9 +172,69 @@ async function detectGrokIdentity(sessionsRoot: string): Promise<GrokIdentity> {
       agentName: pick('agentName', DEFAULT_IDENTITY.agentName),
       reasoningEffort: pick('reasoningEffort', DEFAULT_IDENTITY.reasoningEffort),
       sandboxProfile: pick('sandboxProfile', DEFAULT_IDENTITY.sandboxProfile),
+      modelFingerprint: await readModelFingerprint(path.join(path.dirname(file), 'chat_history.jsonl'), modelId),
     };
   }
-  return { ...DEFAULT_IDENTITY };
+  return { ...DEFAULT_IDENTITY, modelId: await queryDefaultModelId() };
+}
+
+/** 从本机会话的 assistant 行里找同一 model 的 model_fingerprint（只读尾部，文件可能很大） */
+async function readModelFingerprint(chatPath: string, modelId: string): Promise<string | undefined> {
+  let raw: string;
+  try {
+    raw = await readTail(chatPath, 256 * 1024);
+  } catch {
+    return undefined;
+  }
+  const lines = raw.split('\n');
+  for (let i = lines.length - 1; i >= 0; i -= 1) {
+    const line = lines[i]!.trim();
+    if (!line) continue;
+    try {
+      const record = JSON.parse(line) as { type?: unknown; model_id?: unknown; model_fingerprint?: unknown };
+      if (record.type !== 'assistant' || record.model_id !== modelId) continue;
+      if (typeof record.model_fingerprint === 'string' && record.model_fingerprint) return record.model_fingerprint;
+    } catch {
+      continue; // 尾部截断行
+    }
+  }
+  return undefined;
+}
+
+/** 读文件尾部（最多 maxBytes），用于大 chat_history 的元数据探测 */
+async function readTail(filePath: string, maxBytes: number): Promise<string> {
+  const handle = await open(filePath, 'r');
+  try {
+    const { size } = await handle.stat();
+    const length = Math.min(size, maxBytes);
+    const buffer = Buffer.alloc(length);
+    await handle.read(buffer, 0, length, size - length);
+    return buffer.toString('utf8');
+  } finally {
+    await handle.close();
+  }
+}
+
+/** 同一 HOME 下缓存 `grok models` 的默认 model（避免每次首次导入都起进程） */
+const defaultModelIdCache = new Map<string, string>();
+
+/**
+ * 本机没有会话时的 model id 探测：非交互 `grok models`（不调模型）会打印 `Default model: <id>`。
+ * 失败/无 CLI 时回退到常量；按 HOME 缓存（测试/多环境隔离）。
+ */
+async function queryDefaultModelId(): Promise<string> {
+  const key = process.env.HOME ?? process.env.USERPROFILE ?? '';
+  const cached = defaultModelIdCache.get(key);
+  if (cached !== undefined) return cached;
+  let resolved = DEFAULT_IDENTITY.modelId;
+  try {
+    const { stdout } = await execFileAsync(resolveCli('grok'), ['models'], { timeout: 15_000 });
+    resolved = /Default model:\s*([^\s]+)/.exec(stdout)?.[1] ?? resolved;
+  } catch {
+    // 无 CLI / 命令失败：保持常量回退
+  }
+  defaultModelIdCache.set(key, resolved);
+  return resolved;
 }
 
 export async function findLatestGrokSession(
@@ -275,13 +343,18 @@ export async function findGrokSessionById(
 }
 
 /** 在 Grok sessions 目录下建一个可 resume 的空会话 */
-export async function createEmptyGrokSession(cwd: string, sessionsRoot?: string): Promise<SessionRef> {
+export async function createEmptyGrokSession(
+  cwd: string,
+  sessionsRoot?: string,
+  identityOverride?: GrokIdentity,
+): Promise<SessionRef> {
   if (!path.isAbsolute(cwd)) {
     throw new Error(`cwd 必须是绝对路径: ${cwd}`);
   }
   const sessionId = randomUUID();
   const root = sessionsRoot ?? grokSessionsRoot();
-  const identity = await detectGrokIdentity(root);
+  // 身份只探测一次并传进来：否则刚建的空会话会成为“最新会话”而掩盖真正的本机身份
+  const identity = identityOverride ?? (await detectGrokIdentity(root));
   const dir = path.join(root, encodeGrokProjectDir(cwd), sessionId);
   await mkdir(dir, { recursive: true });
   const now = isoNow();
@@ -330,13 +403,20 @@ function toolOutputString(output: unknown): string {
   }
 }
 
-function buildAssistantLine(text: string, toolCalls: ProcessEvent[], modelId: string): ChatLine {
+function buildAssistantLine(
+  text: string,
+  toolCalls: ProcessEvent[],
+  modelId: string,
+  identity?: GrokIdentity,
+): ChatLine {
   const line: ChatLine = {
     type: 'assistant',
     content: text,
     model_id: modelId,
-    reasoning_effort: 'high',
+    reasoning_effort: identity?.reasoningEffort ?? 'high',
   };
+  // 只有从本机原生会话探测到同一 model 的 fingerprint 时才写（不伪造）
+  if (identity?.modelFingerprint) line.model_fingerprint = identity.modelFingerprint;
   if (toolCalls.length > 0) {
     (line as { tool_calls?: Array<{ id: string; name: string; arguments: string }> }).tool_calls =
       toolCalls.map((ev) => ({
@@ -508,11 +588,12 @@ export async function importTurnsToGrok(
   // 导入前先合并，保证写回内容能被自家 parse 对称还原
   turns = mergeConsecutiveAssistant(turns);
 
-  const ref = into ?? (await createEmptyGrokSession(cwd, sessionsRoot));
+  // 先探测身份，再建会话：避免新建的空会话抢占“最新会话”位置
+  const identity = await detectGrokIdentity(sessionsRoot ?? grokSessionsRoot());
+  const ref = into ?? (await createEmptyGrokSession(cwd, sessionsRoot, identity));
   const chatPath = ref.filePath;
   const updatesPath = path.join(path.dirname(chatPath), 'updates.jsonl');
   const summaryPath = path.join(path.dirname(chatPath), 'summary.json');
-  const identity = await detectGrokIdentity(sessionsRoot ?? grokSessionsRoot());
   const modelId = identity.modelId;
 
   let existing: ChatLine[] = [];
@@ -558,7 +639,7 @@ export async function importTurnsToGrok(
     if (toolCalls.length > 0) {
       // Grok TUI 期望 tool_calls 所在的 assistant 行 content 为空，
       // 最终文本单独作为下一条 assistant 行跟在 tool_result 后面。
-      out.push(buildAssistantLine('', toolCalls, modelId));
+      out.push(buildAssistantLine('', toolCalls, modelId, identity));
       chatMsgCount += 1;
 
       // tool_result 按 callId 紧随对应 tool_call 之后
@@ -579,11 +660,11 @@ export async function importTurnsToGrok(
       }
 
       if (turn.text.trim()) {
-        out.push(buildAssistantLine(turn.text, [], modelId));
+        out.push(buildAssistantLine(turn.text, [], modelId, identity));
         chatMsgCount += 1;
       }
     } else {
-      out.push(buildAssistantLine(turn.text, [], modelId));
+      out.push(buildAssistantLine(turn.text, [], modelId, identity));
       chatMsgCount += 1;
     }
   }
