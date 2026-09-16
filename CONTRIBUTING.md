@@ -14,7 +14,7 @@
 npm install                                  # 仓库根
 npm --prefix desktop install                 # 桌面端依赖另装
 
-npm test                                     # 隔离环境下的回归测试
+npm test                                     # 本地测试套件（不随版本库分发，见下）
 npm run typecheck                            # tsc --noEmit，只覆盖 src/
 npm --prefix desktop run build               # 桌面前端构建（tsc && vite build）
 npm run desktop:dev                          # 本地运行桌面端（Vite 在 1420）
@@ -23,7 +23,7 @@ cargo check --manifest-path desktop/src-tauri/Cargo.toml   # 快速检查
 cargo test  --manifest-path desktop/src-tauri/Cargo.toml   # Rust 桥接单测
 ```
 
-`npm test` 支持定向运行：`npm test -- tests/handoff.test.ts`（任何参数都会整体替换默认文件表）。
+`tests/` **不随版本库分发**（已在 `.gitignore`）：CI 的 `quality.yml` 只跑类型检查、前端构建与 Rust 测试，不跑回归测试。在包含 `tests/` 的工作区里 `npm test` 仍按隔离环境运行全部用例，定向运行用 `npm test -- tests/handoff.test.ts`（任何参数都会整体替换默认文件表）；工作区没有 `tests/` 时脚本会给出明确提示并退出 1。
 
 仓库**没有 lint 脚本**（无 eslint / biome / prettier），代码风格靠约定与评审维护。
 
