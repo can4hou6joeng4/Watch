@@ -140,6 +140,11 @@ h3 { font-size: 12px; font-weight: 600; }
 .command-output code { color: var(--text-2); font-size: 11px; white-space: pre-wrap; }
 .command-output > button { margin-left: auto; }
 .transfer-result { padding: 8px 0; }
+.blocked-message { border: 1px solid var(--warn-border); border-radius: 6px; background: var(--warn-bg); padding: 12px 14px; margin: 12px 0; }
+.blocked-heading { display: flex; align-items: center; gap: 8px; color: var(--warn); font-size: 12px; font-weight: 550; margin-bottom: 4px; }
+.blocked-target { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 11px; color: var(--muted); margin: 8px 0; }
+.blocked-target code { font: 11px var(--mono); color: var(--text-3); overflow-wrap: anywhere; }
+.blocked-message .warning-message { background: none; border-left: 0; padding: 0; margin: 6px 0; }
 .delivery-options { display: flex; align-items: center; justify-content: space-between; border-top: 1px solid var(--border-soft); padding: 14px 0; margin-top: 18px; }
 .delivery-options > label:first-child { display: flex; gap: 8px; color: var(--muted); align-items: center; }
 select { border: 1px solid var(--border); border-radius: 4px; background: var(--surface); padding: 6px 9px; color: var(--text-3); font-size: 11px; max-width: 100%; }
