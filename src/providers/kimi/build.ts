@@ -78,8 +78,20 @@ export async function listKimiSessionsByCwd(
 /**
  * 新建一个真实的 Kimi 会话（用最小提示词），然后截断 wire.jsonl 到只剩头部事件。
  * 返回 sessionId 与 wire.jsonl 路径。
+ * 依赖原生 CLI 登记会话目录与 `session_index.jsonl`；需要已登录，且会产生一次模型调用。
  */
 async function createRealKimiSession(cwd: string): Promise<{ sessionId: string; filePath: string }> {
+  // cwd 不存在 / 不是目录 与「PATH 里没有 kimi」在 spawn 层都是 ENOENT，先分开判定再给准确报错
+  let cwdUsable = false;
+  try {
+    cwdUsable = (await stat(cwd)).isDirectory();
+  } catch {
+    cwdUsable = false;
+  }
+  if (!cwdUsable) {
+    throw new Error(`目标工作目录不存在或不是目录，无法新建 Kimi 会话: ${cwd}`);
+  }
+
   let stdout: string;
   try {
     const out = await execFileAsync(resolveCli('kimi'), ['-p', '.', '--output-format', 'stream-json'], {
@@ -90,7 +102,7 @@ async function createRealKimiSession(cwd: string): Promise<{ sessionId: string; 
   } catch (error) {
     const err = error as NodeJS.ErrnoException & { stderr?: unknown; stdout?: unknown };
     if (err.code === 'ENOENT') {
-      throw new Error('找不到 kimi code：当前进程 PATH 中没有 kimi 命令');
+      throw new Error('找不到 kimi 命令：新建 Kimi 会话需要本机 PATH 中已安装并登录 kimi CLI');
     }
     const pick = (v: unknown): string => (typeof v === 'string' ? v.trim() : '');
     const detail = (pick(err.stderr) || pick(err.stdout) || err.message || String(error)).slice(0, 500);
@@ -146,22 +158,19 @@ async function truncateToHeader(filePath: string): Promise<void> {
   await writeFileAtomic(filePath, lines.join('\n') + (lines.length ? '\n' : ''), { backup: true });
 }
 
-async function readHeaderLines(filePath: string): Promise<string[]> {
+/** wire.jsonl 的非空行（保持原顺序，含头部与历史事件）；文件缺失时按裸 ENOENT 抛出 */
+async function readWireLines(filePath: string): Promise<string[]> {
   const raw = await readFile(filePath, 'utf8');
-  const lines: string[] = [];
-  for (const line of raw.split('\n')) {
-    if (!line.trim()) continue;
-    let event: Record<string, unknown>;
-    try {
-      event = JSON.parse(line);
-    } catch {
-      continue;
-    }
-    if (HEADER_TYPES.has(typeof event.type === 'string' ? event.type : '')) {
-      lines.push(line);
-    }
+  return raw.split('\n').filter((line) => line.trim() !== '');
+}
+
+function isHeaderLine(line: string): boolean {
+  try {
+    const event = JSON.parse(line) as Record<string, unknown>;
+    return HEADER_TYPES.has(typeof event.type === 'string' ? event.type : '');
+  } catch {
+    return false;
   }
-  return lines;
 }
 
 function nextTurnId(filePath: string): number {
@@ -446,12 +455,14 @@ export async function importTurnsToKimi(
     sessionId = created.sessionId;
   }
 
-  const headerLines = await readHeaderLines(filePath);
+  const existingLines = await readWireLines(filePath);
   const startTurnId = opts?.replace ? 0 : nextTurnId(filePath);
 
-  // replace 为 true 时仍保留已有头部；历史内容用 turns 重写
+  // replace：保留已有头部、用 turns 重写整段历史。
+  // 追加：必须保留既有 wire 行再写增量；只写头部+增量会让 Kimi 丢掉全部旧历史。
+  const prefix = opts?.replace ? existingLines.filter(isHeaderLine) : existingLines;
   const bodyLines = buildKimiWireLines(turns, startTurnId);
-  await writeFileAtomic(filePath, [...headerLines, ...bodyLines].join('\n') + '\n', {
+  await writeFileAtomic(filePath, [...prefix, ...bodyLines].join('\n') + '\n', {
     backup: Boolean(into?.filePath),
     verify: async (tmp) =>
       verifyWrittenTurns({
