@@ -18,7 +18,8 @@
     "site:build": "node scripts/build-site.mjs",
     "site:deploy": "node scripts/deploy-site.mjs",
     "deploy": "wrangler deploy",
-    "preview": "wrangler dev"
+    "preview": "wrangler dev",
+    "validate:codex-writer-guard": "node --import tsx scripts/validate-codex-writer-guard.mjs"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
