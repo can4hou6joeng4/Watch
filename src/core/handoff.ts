@@ -13,12 +13,28 @@ export class HandoffBlockedError extends Error {
   }
 }
 
-function turnKey(t: UnifiedTurn): string {
-  const callIds = (t.events ?? [])
+function turnKey(t: UnifiedTurn): string {  const callIds = (t.events ?? [])
     .map((e) => e.callId)
     .filter((id): id is string => Boolean(id))
     .join(',');
   return `${t.role}\n${unwrapUserQuery(t.text).trim()}\n${callIds}`;
+}
+
+/**
+ * 写前 TOCTOU 校验：目标会话指纹与快照不一致（被外部写入）则拒绝。
+ * `action` 只影响错误文案（“已中止本次<action>”）。open / switch 两条写入路径共用。
+ */
+export async function assertTargetUnchanged(
+  adapter: ProviderAdapter,
+  ref: SessionRef,
+  snapshot: FileDigest | null,
+  action = '切换',
+): Promise<void> {
+  if (!snapshot) return;
+  const current = (await adapter.contentFingerprint?.(ref)) ?? null;
+  if (!current || current.sha256 !== snapshot.sha256 || current.sizeBytes !== snapshot.sizeBytes) {
+    throw new HandoffBlockedError('target_changed', `目标会话正在被外部写入，已中止本次${action}，请稍后重试`);
+  }
 }
 
 /** 从 source 里去掉 dest 已有的前缀子序列，只留下待追加增量 */
@@ -301,11 +317,8 @@ export async function handoff(
 
   // TOCTOU 守卫：dest 解析后若被外部修改（指纹不一致），拒绝写回，避免覆盖外部新内容
   const assertDestUnchanged = async (): Promise<void> => {
-    if (!into || !destDigest) return;
-    const current = (await target.contentFingerprint?.(into)) ?? null;
-    if (!current || current.sha256 !== destDigest.sha256 || current.sizeBytes !== destDigest.sizeBytes) {
-      throw new HandoffBlockedError('target_changed', '目标会话正在被外部写入，已中止本次切换，请稍后重试');
-    }
+    if (!into) return;
+    await assertTargetUnchanged(target, into, destDigest, '切换');
   };
 
   if (history.length > 0) {
@@ -365,7 +378,8 @@ export async function handoff(
   if (!source) throw new Error(`链尾 provider 未注册: ${sourceTip.provider}`);
 
   const turns = await source.parse(sourceTip.ref);
-  await target.preflight?.();
+  // 目标级保护：传入即将写入的会话，Codex 据此检查 per-thread writer 锁（而非只看 Desktop 是否运行）
+  await target.preflight?.({ ref: into, cwd });
 
   const replace = Boolean(into && shouldReplacePairedSession(turns, destTurns));
   let outgoing = replace ? mergeTurns(turns, destTurns) : into ? diffTurns(turns, destTurns) : turns;

@@ -1,10 +1,12 @@
 import { stat } from 'node:fs/promises';
-import { diffTurns } from './core/handoff.js';
+import type { FileDigest } from './core/atomic.js';
+import { assertTargetUnchanged, diffTurns, HandoffBlockedError } from './core/handoff.js';
 import { dedupeCallEvents } from './core/rich.js';
 import { Store, defaultDbPath } from './core/store.js';
 import { IS_WIN, stripDevicePrefix } from './core/platform.js';
 import type { SessionRef, TokenUsage, UnifiedTurn } from './core/types.js';
 import type { ProviderAdapter } from './providers/adapter.js';
+import { PreflightBlockedError } from './providers/adapter.js';
 import { getAdapter, listAdapters } from './providers/registry.js';
 
 /** `watch open` 的返回协议：桌面 GUI 通过 CLI `--json` 消费 */
@@ -39,7 +41,26 @@ export type OpenSessionResult = {
   /** 会话切面遥测摘要（轮次、首尾片段、思考/工具调用标识） */
   summary?: SessionSummary | null;
   notes?: string[];
+  /** 目标被占用等写入拒绝：结构化原因（未写入任何内容，可重试） */
+  blocked?: {
+    code: string;
+    sessionId?: string;
+    holders?: { pid: number; command: string }[];
+    hint?: string;
+  };
 };
+
+/** 把写入拒绝异常转成结构化 blocked（其余错误返回 undefined） */
+function blockedFrom(error: unknown): OpenSessionResult['blocked'] | undefined {
+  if (error instanceof PreflightBlockedError) {
+    const { code, sessionId, holders, hint } = error.block;
+    return { code, sessionId, holders, hint };
+  }
+  if (error instanceof HandoffBlockedError) {
+    return { code: error.code, hint: '请确认目标会话已停止写入后重试；本次未写入任何内容。' };
+  }
+  return undefined;
+}
 
 async function fileExists(p: string): Promise<boolean> {
   try {
@@ -181,18 +202,24 @@ export async function openSession(
       }
       const srcTurns = await source.adapter.parse(source.found.ref);
       const dstTurns = await target.adapter.parse(target.found.ref);
+      // 写前快照：与 handoff 一致，写入前再比一次（目标被外部写入则中止）
+      const dstDigest = (await target.adapter.contentFingerprint?.(target.found.ref)) ?? null;
       const outgoing = diffTurns(srcTurns, dstTurns);
       if (outgoing.length === 0) {
         notes.push(`${from} 的内容已全部包含在 ${targetId} 中，无需并入`);
       } else {
         const dedup = dedupeCallEvents(outgoing);
+        await target.adapter.preflight?.({ ref: target.found.ref, cwd: target.found.ref.cwd });
+        await assertTargetUnchanged(target.adapter, target.found.ref, dstDigest, '并入');
         const newRef = await target.adapter.importTurns(dedup, target.found.ref.cwd, target.found.ref);
         merged = dedup.length;
         notes.push(`已把 ${from} 的 ${merged} 轮新内容并入 ${target.adapter.displayName} 会话 ${newRef.sessionId}`);
         target.found = { ref: newRef, updatedAt: 0 };
       }
     } catch (error) {
-      return { ok: false, error: `并入新内容失败: ${error instanceof Error ? error.message : String(error)}` };
+      const blocked = blockedFrom(error);
+      const raw = error instanceof Error ? error.message : String(error);
+      return blocked ? { ok: false, error: raw, blocked } : { ok: false, error: `并入新内容失败: ${raw}` };
     }
   }
   let usage: TokenUsage | null = null;
@@ -314,7 +341,17 @@ export async function openInProvider(
 
   const notes: string[] = [];
   try {
-    await target.preflight?.();
+    // 写入前才做目标级保护：先解析出真正要写的目标会话（链上配对 / 内容复用 / 新建），
+    // 再交给 preflight 判定（Codex 会查该会话的原生 writer 锁），避免“只看 Desktop 是否运行”。
+    const write = async (
+      toWrite: UnifiedTurn[],
+      ref: SessionRef | undefined,
+      snapshot: FileDigest | null,
+    ): Promise<SessionRef> => {
+      await target.preflight?.({ ref, cwd });
+      if (ref) await assertTargetUnchanged(target, ref, snapshot, '转入');
+      return target.importTurns(toWrite, cwd, ref);
+    };
     let sourceUsage: TokenUsage | null = null;
     if (typeof source.adapter.sessionUsage === 'function') {
       sourceUsage = (await source.adapter.sessionUsage(source.found.ref).catch(() => null)) ?? null;
@@ -342,11 +379,12 @@ export async function openInProvider(
     let usingChain = false;
     if (chainPaired) {
       const pairTurns = await target.parse(chainPaired);
+      const pairDigest = (await target.contentFingerprint?.(chainPaired)) ?? null;
       const delta = dedupeCallEvents(diffTurns(turns, pairTurns));
       if (delta.length < turns.length / 2) {
         usingChain = true;
         merged = delta.length;
-        newRef = delta.length === 0 ? chainPaired : await target.importTurns(delta, cwd, chainPaired);
+        newRef = delta.length === 0 ? chainPaired : await write(delta, chainPaired, pairDigest);
         notes.push(
           delta.length === 0
             ? `回到链上 ${target.displayName} 会话 ${chainPaired.sessionId}，无需并入`
@@ -386,9 +424,11 @@ export async function openInProvider(
         }
       }
       if (reuse) {
-        const delta = dedupeCallEvents(diffTurns(turns, await target.parse(reuse)));
+        const reuseTurns = await target.parse(reuse);
+        const reuseDigest = (await target.contentFingerprint?.(reuse)) ?? null;
+        const delta = dedupeCallEvents(diffTurns(turns, reuseTurns));
         merged = delta.length;
-        newRef = delta.length === 0 ? reuse : await target.importTurns(delta, cwd, reuse);
+        newRef = delta.length === 0 ? reuse : await write(delta, reuse, reuseDigest);
         notes.push(
           delta.length === 0
             ? `已在 ${target.displayName} 找到包含全部内容的既有会话 ${reuse.sessionId}，直接打开，无需新建`
@@ -396,7 +436,7 @@ export async function openInProvider(
         );
       } else {
         merged = outgoing.length;
-        newRef = await target.importTurns(outgoing, cwd, undefined);
+        newRef = await write(outgoing, undefined, null);
         notes.push(
           `已把 ${source.adapter.displayName} 的 ${outgoing.length} 轮内容转入 ${target.displayName} 新会话 ${newRef.sessionId}`,
         );
@@ -426,6 +466,8 @@ export async function openInProvider(
       notes,
     };
   } catch (error) {
-    return { ok: false, error: `转入新会话失败: ${error instanceof Error ? error.message : String(error)}` };
+    const blocked = blockedFrom(error);
+    const raw = error instanceof Error ? error.message : String(error);
+    return blocked ? { ok: false, error: raw, blocked } : { ok: false, error: `转入新会话失败: ${raw}` };
   }
 }

@@ -6,6 +6,7 @@ import { reindexCwd } from './core/search.js';
 import type { SessionRef } from './core/types.js';
 import { getAdapter, listAdapters, listProviders } from './providers/registry.js';
 import { openInProvider, openSession } from './open.js';
+import { PreflightBlockedError } from './providers/adapter.js';
 import { runImportCodex } from './import-codex.js';
 
 function usage(): never {
@@ -26,9 +27,27 @@ function usage(): never {
   process.exit(1);
 }
 
-function fail(json: boolean, message: string): never {
-  if (json) console.log(JSON.stringify({ ok: false, error: message }));
+function fail(json: boolean, message: string, extra?: Record<string, unknown>): never {
+  if (json) console.log(JSON.stringify({ ok: false, error: message, ...extra }));
   else console.error(message);
+  process.exit(1);
+}
+
+/** 写入被拒（目标被占用 / TOCTOU）：统一输出 `blocked:*` 结构；未写入任何内容，可重试 */
+function failBlocked(error: HandoffBlockedError | PreflightBlockedError, json: boolean): never {
+  const block = error instanceof PreflightBlockedError ? error.block : undefined;
+  const code = block?.code ?? (error instanceof HandoffBlockedError ? error.code : 'blocked');
+  const payload = {
+    ok: false,
+    error: error.message,
+    blocked: true,
+    code,
+    sessionId: block?.sessionId,
+    holders: block?.holders,
+    hint: block?.hint ?? '未写入任何内容；请确认目标会话停止写入后重试。',
+  };
+  if (json) console.log(JSON.stringify(payload));
+  else console.error(`[blocked:${code}] ${error.message}\n${payload.hint}`);
   process.exit(1);
 }
 
@@ -187,11 +206,7 @@ async function cmdSwitch(cwd: string, targetId: string, json: boolean, chain?: s
     console.log('');
     console.log(`resume: ${result.resumeCommand}`);
   } catch (error) {
-    if (error instanceof HandoffBlockedError) {
-      if (json) console.log(JSON.stringify({ ok: false, error: error.message, blocked: true, code: error.code }));
-      else console.error(`[blocked:${error.code}] ${error.message}`);
-      process.exit(1);
-    }
+    if (error instanceof HandoffBlockedError || error instanceof PreflightBlockedError) failBlocked(error, json);
     const message = error instanceof Error ? error.message : String(error);
     if (json) {
       console.log(JSON.stringify({ ok: false, error: message }));
@@ -229,11 +244,7 @@ async function cmdAdopt(
     if (result.replacedRef) console.log(`替换了:  ${result.replacedRef.sessionId}`);
     if (result.warnings.length) console.log(`警告: ${result.warnings.join('；')}`);
   } catch (error) {
-    if (error instanceof HandoffBlockedError) {
-      if (json) console.log(JSON.stringify({ ok: false, error: error.message, blocked: true, code: error.code }));
-      else console.error(`[blocked:${error.code}] ${error.message}`);
-      process.exit(1);
-    }
+    if (error instanceof HandoffBlockedError || error instanceof PreflightBlockedError) failBlocked(error, json);
     const message = error instanceof Error ? error.message : String(error);
     if (json) console.log(JSON.stringify({ ok: false, error: message }));
     else console.error(message);
@@ -253,7 +264,9 @@ async function cmdOpen(
     ? await openInProvider(targetId, toId)
     : await openSession(targetId, { from: fromId, provider: providerId });
   if (!result.ok) {
-    fail(json, result.error ?? '未知错误');
+    // 目标被占用等写入拒绝：带上结构化原因，供桌面端/脚本给出可操作提示（未写入任何内容）
+    const extra = result.blocked ? { blocked: true, ...result.blocked } : undefined;
+    fail(json, result.error ?? '未知错误', extra);
   }
   if (json) {
     console.log(JSON.stringify(result));

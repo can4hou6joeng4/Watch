@@ -8,7 +8,8 @@ import * as readline from 'node:readline';
 import { promisify } from 'node:util';
 import { digestFile } from '../../core/atomic.js';
 import type { FileDigest } from '../../core/atomic.js';
-import type { ProviderAdapter } from '../adapter.js';
+import type { ProviderAdapter, PreflightContext } from '../adapter.js';
+import { PreflightBlockedError } from '../adapter.js';
 import type { ProcessEvent, SessionRef, UnifiedTurn } from '../../core/types.js';
 import { streamCommand } from '../../core/streamCommand.js';
 import { parseCodexSession } from './parse.js';
@@ -415,6 +416,61 @@ export function isCodexDesktopExecutable(executable: string): boolean {
   return (bundle === 'Codex.app' || bundle === 'ChatGPT.app') && (binary === 'Codex' || binary === 'ChatGPT');
 }
 
+/**
+ * 按原生 per-thread writer 锁定位（`<codexHome>/thread-writer-locks/<thread-id>.lock`，0 字节 flock 文件）。
+ * 锁名就是 thread/session id，与 rollout 文件名里的 id 一致。
+ */
+export function threadWriterLockPath(sessionId: string, codexHome = codexDir()): string {
+  return path.join(codexHome, 'thread-writer-locks', `${sessionId}.lock`);
+}
+
+type WriterHolder = { pid: number; command: string };
+
+function parseLsofHolders(stdout: string): WriterHolder[] {
+  const holders: WriterHolder[] = [];
+  let pid: number | undefined;
+  for (const raw of stdout.split('\n')) {
+    const line = raw.trim();
+    if (!line) continue;
+    if (line.startsWith('p')) pid = Number(line.slice(1));
+    else if (line.startsWith('c') && pid) {
+      holders.push({ pid, command: line.slice(1) });
+      pid = undefined;
+    }
+  }
+  return holders;
+}
+
+/**
+ * 探测 writer 锁的当前持有者。
+ * 返回 [] = 无人持有（陈旧锁/进程已退出）；null = 探测不可用（lsof 缺失或异常），调用方应回退。
+ */
+async function probeThreadWriterHolders(lockPath: string): Promise<WriterHolder[] | null> {
+  try {
+    const { stdout } = await execFileAsync('lsof', ['-Fpc', '--', lockPath], { timeout: 10_000 });
+    return parseLsofHolders(stdout);
+  } catch (error) {
+    const err = error as { code?: unknown; stdout?: unknown };
+    if (err.code === 1) return []; // lsof: 无匹配
+    if (typeof err.stdout === 'string' && err.stdout.trim()) return parseLsofHolders(err.stdout);
+    return null;
+  }
+}
+
+/** Desktop 进程是否在运行（pgrep 不可用等异常按未运行放行，保持旧行为） */
+async function desktopProcessRunning(): Promise<boolean> {
+  for (const pattern of ['Codex.app/Contents/MacOS/Codex', 'ChatGPT.app/Contents/MacOS/ChatGPT']) {
+    try {
+      await execFileAsync('pgrep', ['-f', pattern], { timeout: 10_000 });
+      return true;
+    } catch (error) {
+      if (typeof error === 'object' && error !== null && 'code' in error && error.code === 1) continue;
+      return false;
+    }
+  }
+  return false;
+}
+
 export const codexAdapter: ProviderAdapter = {
   id: 'codex',
   displayName: 'Codex',
@@ -436,20 +492,49 @@ export const codexAdapter: ProviderAdapter = {
   findLatestSession: findLatestCodexRollout,
   listSessions: (cwd) => listCodexRollouts(cwd),
 
-  /** 写入 Codex 侧前检查 Desktop 互斥：Codex.app / ChatGPT.app 在运行则拒绝（对齐 cc-sessions desktop_guard） */
-  async preflight(): Promise<void> {
+  /**
+   * 写入 Codex 侧前的目标级保护。
+   * - 有目标会话：以原生 per-thread writer 锁为准，仅当锁被活进程持有才拒绝；
+   *   锁文件不存在或只剩陈旧锁（无持有者）则放行，与 Desktop 是否运行无关。
+   * - 无目标上下文，或 lsof 不可用：退回旧的 Desktop 进程检查（保守）。
+   * 详见 docs/COMPATIBILITY.md 的 Codex 保护说明。
+   */
+  async preflight(ctx?: PreflightContext): Promise<void> {
     if (process.platform !== 'darwin') return; // MVP 只覆盖 macOS，其余平台放行
-    for (const pattern of ['Codex.app/Contents/MacOS/Codex', 'ChatGPT.app/Contents/MacOS/ChatGPT']) {
-      try {
-        await execFileAsync('pgrep', ['-f', pattern], { timeout: 10_000 });
-        throw new Error('检测到 Codex/ChatGPT Desktop 正在运行，请先退出再切换（避免会话目录写入互斥）');
-      } catch (error) {
-        // pgrep exit 1 = 无匹配进程，继续查下一个；pgrep 不可用等异常按未运行放行
-        if (typeof error === 'object' && error !== null && 'code' in error && error.code === 1) continue;
-        if (error instanceof Error && error.message.startsWith('检测到')) throw error;
-        return;
-      }
+    if (!ctx) {
+      // 未提供任何目标上下文（兼容旧调用）：无法做目标级判定，按进程保守拒绝
+      if (!(await desktopProcessRunning())) return;
+      throw new PreflightBlockedError({
+        code: 'codex_desktop_running',
+        message: '检测到 Codex/ChatGPT Desktop 正在运行，请先退出再切换（避免会话目录写入互斥）',
+        hint: '未提供目标会话时无法做目标级判定，因此保守拒绝。',
+      });
     }
+    const ref = ctx.ref;
+    // 显式的新建会话（有 ctx、无 ref）：没有可冲突的既有文件，放行
+    if (!ref) return;
+    const lockPath = threadWriterLockPath(ref.sessionId);
+    const lockExists = (await stat(lockPath).catch(() => undefined))?.isFile() ?? false;
+    if (!lockExists) return; // 无 writer 登记：无共享文件可冲突
+    const holders = await probeThreadWriterHolders(lockPath);
+    if (holders?.length) {
+      const who = holders.map((h) => `PID ${h.pid} ${h.command}`).join('、');
+      throw new PreflightBlockedError({
+        code: 'codex_target_busy',
+        sessionId: ref.sessionId,
+        holders,
+        message: `Codex 会话 ${ref.sessionId} 正被其他 writer 持有（${who}），已拒绝写入以免并发损坏`,
+        hint: '结束该 writer 进程后重试；本次未写入任何内容。',
+      });
+    }
+    if (holders) return; // 陈旧锁：持有者已退出 → 可写
+    if (!(await desktopProcessRunning())) return;
+    throw new PreflightBlockedError({
+      code: 'codex_target_busy',
+      sessionId: ref.sessionId,
+      message: `Codex 会话 ${ref.sessionId} 可能正被写入（无法探测 writer 锁，且 Desktop 正在运行），已保守拒绝`,
+      hint: '退出 Codex/ChatGPT Desktop 后重试；本次未写入任何内容。',
+    });
   },
 
   /** nezha 式启动：预写 interactive 身份的空 rollout，后续由 PTY 执行 `codex resume <id>` */
