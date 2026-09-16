@@ -37,6 +37,39 @@ function defaultModelId(): string {
   return 'grok-4.5-build-free';
 }
 
+type GrokIdentity = {
+  modelId: string;
+  agentName: string;
+  reasoningEffort: string;
+  sandboxProfile: string;
+};
+
+const DEFAULT_IDENTITY: GrokIdentity = {
+  modelId: defaultModelId(),
+  agentName: 'grok-build',
+  reasoningEffort: 'high',
+  sandboxProfile: 'off',
+};
+
+/** ACP 事件 id 形态：uuid + '-' + 1 位（与原生 updates.jsonl 一致） */
+function acpEventId(): string {
+  return `${randomUUID()}-0`;
+}
+
+/**
+ * 一行 ACP 会话更新。`updates.jsonl` 是原生 `/resume` 与 session restore 的权威会话日志
+ * （见 grok 内置文档 docs/user-guide/17-sessions.md），只写 chat_history.jsonl 会让原生
+ * 打开/恢复时看不到任何对话。timestamp 为 epoch 秒，_meta.agentTimestampMs 为毫秒。
+ */
+function acpLine(sessionId: string, update: Record<string, unknown>, atMs: number): string {
+  const ms = Number.isFinite(atMs) ? atMs : Date.now();
+  return JSON.stringify({
+    timestamp: Math.floor(ms / 1000),
+    method: 'session/update',
+    params: { sessionId, update, _meta: { eventId: acpEventId(), agentTimestampMs: ms } },
+  });
+}
+
 function systemLine(): ChatLine {
   return {
     type: 'system',
@@ -80,6 +113,60 @@ async function readSummary(filePath: string): Promise<Record<string, unknown> | 
   } catch {
     return null;
   }
+}
+
+/** 本机最近的 grok 会话 summary.json（按 mtime 降序）；用于探测原生身份 */
+async function newestSummaryPaths(sessionsRoot: string, max: number): Promise<string[]> {
+  let cwdDirs: import('node:fs').Dirent[];
+  try {
+    cwdDirs = await readdir(sessionsRoot, { withFileTypes: true });
+  } catch {
+    return [];
+  }
+  const found: { file: string; mtime: number }[] = [];
+  for (const cwdDir of cwdDirs) {
+    if (!cwdDir.isDirectory()) continue;
+    let sessionDirs: string[];
+    try {
+      sessionDirs = await readdir(path.join(sessionsRoot, cwdDir.name));
+    } catch {
+      continue;
+    }
+    for (const sessionId of sessionDirs) {
+      const file = path.join(sessionsRoot, cwdDir.name, sessionId, 'summary.json');
+      const mtime = (await stat(file).catch(() => undefined))?.mtimeMs;
+      if (mtime !== undefined) found.push({ file, mtime });
+    }
+  }
+  return found
+    .sort((a, b) => b.mtime - a.mtime)
+    .slice(0, max)
+    .map((x) => x.file);
+}
+
+/**
+ * 从本机最近的 grok 会话探测身份（model / agent / effort / sandbox）。
+ * 原生 `/resume` 会读这些字段；硬编码一个本机不存在的 model id 会让会话与当前配置不一致。
+ * 探测不到就退回默认值，不阻断写入。
+ */
+async function detectGrokIdentity(sessionsRoot: string): Promise<GrokIdentity> {
+  for (const file of await newestSummaryPaths(sessionsRoot, 5)) {
+    const summary = await readSummary(file);
+    if (!summary) continue;
+    const modelId = typeof summary.current_model_id === 'string' ? summary.current_model_id.trim() : '';
+    if (!modelId) continue;
+    const pick = (key: keyof GrokIdentity, fallback: string): string => {
+      const value = summary[key === 'modelId' ? 'current_model_id' : key === 'agentName' ? 'agent_name' : key === 'reasoningEffort' ? 'reasoning_effort' : 'sandbox_profile'];
+      return typeof value === 'string' && value.trim() ? value.trim() : fallback;
+    };
+    return {
+      modelId,
+      agentName: pick('agentName', DEFAULT_IDENTITY.agentName),
+      reasoningEffort: pick('reasoningEffort', DEFAULT_IDENTITY.reasoningEffort),
+      sandboxProfile: pick('sandboxProfile', DEFAULT_IDENTITY.sandboxProfile),
+    };
+  }
+  return { ...DEFAULT_IDENTITY };
 }
 
 export async function findLatestGrokSession(
@@ -194,12 +281,15 @@ export async function createEmptyGrokSession(cwd: string, sessionsRoot?: string)
   }
   const sessionId = randomUUID();
   const root = sessionsRoot ?? grokSessionsRoot();
+  const identity = await detectGrokIdentity(root);
   const dir = path.join(root, encodeGrokProjectDir(cwd), sessionId);
   await mkdir(dir, { recursive: true });
   const now = isoNow();
   const chatPath = path.join(dir, 'chat_history.jsonl');
   const summaryPath = path.join(dir, 'summary.json');
   await writeFile(chatPath, JSON.stringify(systemLine()) + '\n', 'utf8');
+  // 空 updates.jsonl：原生靠它识别可恢复会话（缺失时 sessions/export 会当成找不到）
+  await writeFile(path.join(dir, 'updates.jsonl'), '', 'utf8');
   const summary = {
     info: { id: sessionId, cwd },
     session_summary: `Imported - ${now}`,
@@ -207,16 +297,16 @@ export async function createEmptyGrokSession(cwd: string, sessionsRoot?: string)
     updated_at: now,
     num_messages: 1,
     num_chat_messages: 0,
-    current_model_id: defaultModelId(),
+    current_model_id: identity.modelId,
     next_trace_turn: 1,
     chat_format_version: 1,
     request_id: randomUUID(),
     grok_home: path.join(homedir(), '.grok'),
     last_active_at: now,
     generated_title: `Imported - ${now}`,
-    agent_name: 'grok-build',
-    sandbox_profile: 'off',
-    reasoning_effort: 'high',
+    agent_name: identity.agentName,
+    sandbox_profile: identity.sandboxProfile,
+    reasoning_effort: identity.reasoningEffort,
   };
   await writeFile(summaryPath, JSON.stringify(summary, null, 2), 'utf8');
   return { provider: 'grok', sessionId, filePath: chatPath, cwd };
@@ -275,6 +365,131 @@ function buildReasoningLine(ev: ProcessEvent): ChatLine {
   };
 }
 
+/** updates.jsonl 的非空行（原样保留，用于追加） */
+async function readRawLines(filePath: string): Promise<string[]> {
+  const raw = await readFile(filePath, 'utf8').catch(() => '');
+  return raw.split('\n').filter((line) => line.trim() !== '');
+}
+
+function countUserChunks(lines: string[]): number {
+  let count = 0;
+  for (const line of lines) {
+    if (line.includes('"sessionUpdate":"user_message_chunk"')) count += 1;
+  }
+  return count;
+}
+
+/**
+ * UnifiedTurn[] → ACP 会话更新流行（updates.jsonl）。
+ * 与 chat_history.jsonl 写同一份内容：chat 是发给 model 的原始消息，updates 才是原生恢复用的日志。
+ * 每个 user 轮以 user_message_chunk 起、turn_completed 收尾，assistant 侧写思考/工具/文本。
+ */
+export function buildGrokUpdateLines(
+  turns: UnifiedTurn[],
+  sessionId: string,
+  modelId: string,
+  startPromptIndex: number,
+  fallbackMs: number,
+): string[] {
+  const lines: string[] = [];
+  let promptIndex = startPromptIndex;
+  let drift = 0;
+  const at = (timestamp: string): number => {
+    const ms = Date.parse(timestamp);
+    return Number.isFinite(ms) ? ms : fallbackMs + (drift += 1000);
+  };
+
+  for (const turn of turns) {
+    if (!turn.text.trim() && (turn.events?.length ?? 0) === 0) continue;
+    const ms = at(turn.timestamp);
+    if (turn.role === 'user') {
+      lines.push(
+        acpLine(
+          sessionId,
+          {
+            sessionUpdate: 'user_message_chunk',
+            content: { type: 'text', text: turn.text },
+            _meta: { modelId, promptIndex },
+          },
+          ms,
+        ),
+      );
+      promptIndex += 1;
+      continue;
+    }
+
+    const events = turn.events ?? [];
+    for (const ev of events) {
+      if (ev.kind !== 'thinking') continue;
+      const text = (ev.detail ?? ev.summary ?? '').trim();
+      if (!text) continue;
+      lines.push(
+        acpLine(sessionId, { sessionUpdate: 'agent_thought_chunk', content: { type: 'text', text } }, ms),
+      );
+    }
+
+    const resultByCallId = new Map<string, ProcessEvent>();
+    for (const ev of events) {
+      if (ev.kind === 'tool_result' && ev.callId) resultByCallId.set(ev.callId, ev);
+    }
+    for (const ev of events) {
+      if (ev.kind !== 'tool_call') continue;
+      const callId = ev.callId || `call_${randomUUID()}`;
+      const name = ev.name || 'tool';
+      const rawInput =
+        typeof ev.input === 'string' ? ev.input : (ev.input ?? { input: toolInputString(ev.input) });
+      const toolMeta = { version: 1, name, kind: 'other', namespace: 'grok_build', label: name, read_only: false };
+      lines.push(
+        acpLine(
+          sessionId,
+          { sessionUpdate: 'tool_call', toolCallId: callId, title: name, rawInput, _meta: { 'x.ai/tool': toolMeta } },
+          ms,
+        ),
+      );
+      const result = resultByCallId.get(callId);
+      resultByCallId.delete(callId);
+      lines.push(
+        acpLine(
+          sessionId,
+          {
+            sessionUpdate: 'tool_call_update',
+            toolCallId: callId,
+            kind: 'other',
+            title: name,
+            locations: [],
+            rawInput,
+            ...(result ? { rawOutput: toolOutputString(result.detail ?? result.summary ?? '') } : {}),
+            _meta: { 'x.ai/tool': toolMeta },
+          },
+          ms,
+        ),
+      );
+    }
+
+    if (turn.text.trim()) {
+      lines.push(
+        acpLine(sessionId, { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: turn.text } }, ms),
+      );
+    }
+
+    const inputTokens = turn.usage?.inputTokens ?? 0;
+    const outputTokens = turn.usage?.outputTokens ?? 0;
+    lines.push(
+      acpLine(
+        sessionId,
+        {
+          sessionUpdate: 'turn_completed',
+          prompt_id: randomUUID(),
+          stop_reason: 'end_turn',
+          usage: { inputTokens, outputTokens, totalTokens: inputTokens + outputTokens },
+        },
+        ms,
+      ),
+    );
+  }
+  return lines;
+}
+
 /** 把 UnifiedTurn[] 写成 Grok chat_history.jsonl */
 export async function importTurnsToGrok(
   turns: UnifiedTurn[],
@@ -295,7 +510,10 @@ export async function importTurnsToGrok(
 
   const ref = into ?? (await createEmptyGrokSession(cwd, sessionsRoot));
   const chatPath = ref.filePath;
+  const updatesPath = path.join(path.dirname(chatPath), 'updates.jsonl');
   const summaryPath = path.join(path.dirname(chatPath), 'summary.json');
+  const identity = await detectGrokIdentity(sessionsRoot ?? grokSessionsRoot());
+  const modelId = identity.modelId;
 
   let existing: ChatLine[] = [];
   if (into && !opts?.replace) {
@@ -340,7 +558,7 @@ export async function importTurnsToGrok(
     if (toolCalls.length > 0) {
       // Grok TUI 期望 tool_calls 所在的 assistant 行 content 为空，
       // 最终文本单独作为下一条 assistant 行跟在 tool_result 后面。
-      out.push(buildAssistantLine('', toolCalls, defaultModelId()));
+      out.push(buildAssistantLine('', toolCalls, modelId));
       chatMsgCount += 1;
 
       // tool_result 按 callId 紧随对应 tool_call 之后
@@ -361,11 +579,11 @@ export async function importTurnsToGrok(
       }
 
       if (turn.text.trim()) {
-        out.push(buildAssistantLine(turn.text, [], defaultModelId()));
+        out.push(buildAssistantLine(turn.text, [], modelId));
         chatMsgCount += 1;
       }
     } else {
-      out.push(buildAssistantLine(turn.text, [], defaultModelId()));
+      out.push(buildAssistantLine(turn.text, [], modelId));
       chatMsgCount += 1;
     }
   }
@@ -381,6 +599,16 @@ export async function importTurnsToGrok(
       }),
   });
 
+  // ACP 日志：原生 /resume 与 session restore 读这里；追加时保留既有行（与 chat_history 对称）
+  const existingUpdates = opts?.replace ? [] : await readRawLines(updatesPath);
+  const updateLines = buildGrokUpdateLines(turns, ref.sessionId, modelId, countUserChunks(existingUpdates), Date.now());
+  const nextUpdates = [...existingUpdates, ...updateLines];
+  if (updateLines.length > 0 || opts?.replace) {
+    await writeFileAtomic(updatesPath, nextUpdates.join('\n') + (nextUpdates.length ? '\n' : ''), {
+      backup: Boolean(into?.filePath),
+    });
+  }
+
   const summary = (await readSummary(summaryPath)) ?? {
     info: { id: ref.sessionId, cwd },
     session_summary: `Imported - ${isoNow()}`,
@@ -391,8 +619,16 @@ export async function importTurnsToGrok(
   summary.last_active_at = now;
   summary.num_messages = out.length;
   summary.num_chat_messages = chatMsgCount;
-  summary.current_model_id = defaultModelId();
+  summary.current_model_id = modelId;
   summary.grok_home = path.join(homedir(), '.grok');
+  // 身份字段只在缺失时补：已有原生会话的 agent_name / effort 属于它自己的创建者，不覆盖
+  if (typeof summary.agent_name !== 'string' || !summary.agent_name) summary.agent_name = identity.agentName;
+  if (typeof summary.reasoning_effort !== 'string' || !summary.reasoning_effort) {
+    summary.reasoning_effort = identity.reasoningEffort;
+  }
+  if (typeof summary.sandbox_profile !== 'string' || !summary.sandbox_profile) {
+    summary.sandbox_profile = identity.sandboxProfile;
+  }
   if (!summary.info || typeof summary.info !== 'object') {
     summary.info = { id: ref.sessionId, cwd };
   } else {
