@@ -48,6 +48,9 @@ export type OpenSessionResult = {
     holders?: { pid: number; command: string }[];
     hint?: string;
   };
+  /** 点击前预检（`--check`）：本次转入会落到哪种目标、是否可写 */
+  writable?: boolean;
+  plan?: { kind: 'resume' | 'chain' | 'reuse' | 'new'; turnCount: number };
 };
 
 /** 把写入拒绝异常转成结构化 blocked（其余错误返回 undefined） */
@@ -303,10 +306,149 @@ function findChainPaired(
   return pair;
 }
 
+/** 转入计划：只读解析的结果（不写入任何内容） */
+export type OpenPlan = {
+  kind: 'resume' | 'chain' | 'reuse' | 'new';
+  /** resume/chain/reuse 时的目标会话；new 时为空 */
+  targetRef?: SessionRef;
+  /** 待写入增量；为空表示无需写入（直接打开既有会话） */
+  turns: UnifiedTurn[];
+  merged: number;
+  /** 解析时抓的目标指纹（TOCTOU 用）；new 时为 null */
+  snapshot: FileDigest | null;
+  note?: string;
+};
+
+type PlannedOpen =
+  | { ok: true; adapter: ProviderAdapter; sourceRef: SessionRef; sourceProvider: string; cwd: string; plan: OpenPlan }
+  | { ok: false; error: string };
+
+/**
+ * 只读解析「把 sourceId 转入 providerId」会落到哪个目标会话、需要写多少轮。
+ * 决策顺序与旧实现一致：属主即目标（resume）→ 链上配对 → 内容复用 → 新建。
+ */
+async function planOpenInProvider(sourceId: string, providerId: string, mapping: Store | null): Promise<PlannedOpen> {
+  const source = await resolveById(sourceId, undefined, mapping);
+  if (!source) return { ok: false, error: `未找到会话: ${sourceId}` };
+  const target = getAdapter(providerId);
+  if (!target) return { ok: false, error: `未知 provider: ${providerId}` };
+  const cwd = source.found.ref.cwd;
+  const sourceRef = source.found.ref;
+  const sourceProvider = source.adapter.id;
+  const base = { ok: true as const, adapter: target, sourceRef, sourceProvider, cwd };
+
+  // 属主即目标：无需转化，直接 resume
+  if (sourceProvider === providerId) {
+    return { ...base, plan: { kind: 'resume', targetRef: sourceRef, turns: [], merged: 0, snapshot: null } };
+  }
+
+  const turns = await source.adapter.parse(sourceRef);
+  const outgoing = dedupeCallEvents(turns);
+  if (outgoing.length === 0) return { ok: false, error: `来源会话 ${sourceId} 没有可转入的内容` };
+
+  // 决策 1：来源在链上 → 回链上另一侧配对会话并并入增量；
+  // 但目标 provider 的链上「最新配对」不一定对应该输入（同链会分叉出多条线），
+  // 必须先做内容校验：配对确实承接了来源主要内容（缺失<一半）才落回，否则退到内容匹配。
+  const chainPaired = mapping ? findChainPaired(mapping, sourceProvider, sourceId, providerId, cwd) : null;
+  if (chainPaired) {
+    const pairTurns = await target.parse(chainPaired);
+    const delta = dedupeCallEvents(diffTurns(turns, pairTurns));
+    if (delta.length < turns.length / 2) {
+      const snapshot = (await target.contentFingerprint?.(chainPaired)) ?? null;
+      return {
+        ...base,
+        plan: {
+          kind: 'chain',
+          targetRef: chainPaired,
+          turns: delta,
+          merged: delta.length,
+          snapshot,
+          note:
+            delta.length === 0
+              ? `回到链上 ${target.displayName} 会话 ${chainPaired.sessionId}，无需并入`
+              : `已把 ${source.adapter.displayName} 的新增 ${delta.length} 轮并入链上 ${target.displayName} 会话 ${chainPaired.sessionId}`,
+        },
+      };
+    }
+  }
+
+  // 决策 2：游离会话 → 内容匹配复用「包含来源主要部分」的既有目标会话；
+  // 取缺失最少且更新时间最新的候选，完全包含直接开回来，部分缺失补增量，找不到才新建。
+  let reuse: SessionRef | undefined;
+  let reuseMissing = Infinity;
+  let reuseAt = -1;
+  if (typeof target.listSessions === 'function') {
+    try {
+      const sessions = await target.listSessions(cwd);
+      for (const s of sessions) {
+        let destTurns: UnifiedTurn[];
+        try {
+          destTurns = await target.parse(s.ref);
+        } catch {
+          continue;
+        }
+        const missing = diffTurns(turns, destTurns);
+        // 缺失少于来源一半才认为同源；多个候选时取缺失最少、更新最新者
+        if (
+          missing.length < turns.length / 2 &&
+          (missing.length < reuseMissing || (missing.length === reuseMissing && s.updatedAt > reuseAt))
+        ) {
+          reuse = s.ref;
+          reuseMissing = missing.length;
+          reuseAt = s.updatedAt;
+        }
+      }
+    } catch {
+      /* 扫描复用失败回退新建 */
+    }
+  }
+  if (reuse) {
+    const destinationTurns = await target.parse(reuse);
+    const delta = dedupeCallEvents(diffTurns(turns, destinationTurns));
+    const snapshot = (await target.contentFingerprint?.(reuse)) ?? null;
+    return {
+      ...base,
+      plan: {
+        kind: 'reuse',
+        targetRef: reuse,
+        turns: delta,
+        merged: delta.length,
+        snapshot,
+        note:
+          delta.length === 0
+            ? `已在 ${target.displayName} 找到包含全部内容的既有会话 ${reuse.sessionId}，直接打开，无需新建`
+            : `已把 ${source.adapter.displayName} 的新增 ${delta.length} 轮并入既有 ${target.displayName} 会话 ${reuse.sessionId}`,
+      },
+    };
+  }
+  return {
+    ...base,
+    plan: {
+      kind: 'new',
+      turns: outgoing,
+      merged: outgoing.length,
+      snapshot: null,
+      note: `已把 ${source.adapter.displayName} 的 ${outgoing.length} 轮内容转入 ${target.displayName} 新会话`,
+    },
+  };
+}
+
+/** 写入前的目标级保护：preflight（Codex 会查原生 writer 锁）+ TOCTOU 指纹比对 */
+async function guardedImport(
+  adapter: ProviderAdapter,
+  ref: SessionRef | undefined,
+  snapshot: FileDigest | null,
+  turns: UnifiedTurn[],
+  cwd: string,
+): Promise<SessionRef> {
+  await adapter.preflight?.({ ref, cwd });
+  if (ref) await assertTargetUnchanged(adapter, ref, snapshot, '转入');
+  return adapter.importTurns(turns, cwd, ref);
+}
+
 /**
  * 把来源会话内容直接转入指定 provider 的会话，返回可 resume 命令。
  * 桌面端点非属主 agent 卡时使用：属性即目标时等价 openSession 快路径，不做转化。
- * 决策顺序：链上配对（来源在链上时回到另一侧）→ 内容已含来源主要部分的既有会话 → 新建。
  * 不抛异常，失败以 { ok:false, error } 返回。
  */
 export async function openInProvider(
@@ -315,22 +457,19 @@ export async function openInProvider(
   store?: Store | null,
 ): Promise<OpenSessionResult> {
   const mapping = store ?? openMappingDb();
-  const source = await resolveById(sourceId, undefined, mapping);
-  if (!source) return { ok: false, error: `未找到会话: ${sourceId}` };
-  const target = getAdapter(providerId);
-  if (!target) return { ok: false, error: `未知 provider: ${providerId}` };
+  const planned = await planOpenInProvider(sourceId, providerId, mapping);
+  if (!planned.ok) return { ok: false, error: planned.error };
+  const { adapter: target, sourceRef, sourceProvider, cwd, plan } = planned;
 
-  const cwd = source.found.ref.cwd;
-  // 属主即目标：无需转化，直接 resume
-  if (source.adapter.id === providerId) {
-    const resumeCommand = target.resumeCommand(source.found.ref);
+  if (plan.kind === 'resume') {
+    const resumeCommand = target.resumeCommand(sourceRef);
     const cd = buildCd(cwd);
     return {
       ok: true,
       provider: providerId,
       cwd,
-      sessionId: source.found.ref.sessionId,
-      filePath: source.found.ref.filePath,
+      sessionId: sourceRef.sessionId,
+      filePath: sourceRef.filePath,
       cd,
       resumeCommand,
       command: buildCommand(cd, resumeCommand),
@@ -341,108 +480,20 @@ export async function openInProvider(
 
   const notes: string[] = [];
   try {
-    // 写入前才做目标级保护：先解析出真正要写的目标会话（链上配对 / 内容复用 / 新建），
-    // 再交给 preflight 判定（Codex 会查该会话的原生 writer 锁），避免“只看 Desktop 是否运行”。
-    const write = async (
-      toWrite: UnifiedTurn[],
-      ref: SessionRef | undefined,
-      snapshot: FileDigest | null,
-    ): Promise<SessionRef> => {
-      await target.preflight?.({ ref, cwd });
-      if (ref) await assertTargetUnchanged(target, ref, snapshot, '转入');
-      return target.importTurns(toWrite, cwd, ref);
-    };
+    const source = getAdapter(sourceProvider);
     let sourceUsage: TokenUsage | null = null;
-    if (typeof source.adapter.sessionUsage === 'function') {
-      sourceUsage = (await source.adapter.sessionUsage(source.found.ref).catch(() => null)) ?? null;
+    if (typeof source?.sessionUsage === 'function') {
+      sourceUsage = (await source.sessionUsage(sourceRef).catch(() => null)) ?? null;
       if (sourceUsage) {
         notes.push(
-          `来源 ${source.adapter.displayName} 用量 in=${sourceUsage.inputTokens} out=${sourceUsage.outputTokens}（已在对账中携带）`,
+          `来源 ${source.displayName} 用量 in=${sourceUsage.inputTokens} out=${sourceUsage.outputTokens}（已在对账中携带）`,
         );
       }
     }
-    const turns = await source.adapter.parse(source.found.ref);
-    const outgoing = dedupeCallEvents(turns);
-    if (outgoing.length === 0) {
-      return { ok: false, error: `来源会话 ${sourceId} 没有可转入的内容` };
-    }
-
-    // 决策 1：来源在链上 → 回链上另一侧配对会话并并入增量；
-    // 但目标 provider 的链上「最新配对」不一定对应该输入（同链会分叉出多条线），
-    // 必须先做内容校验：配对确实承接了来源主要内容（缺失<一半）才落回，否则退到内容匹配。
-    let merged = 0;
-    let newRef: SessionRef | undefined;
-    const chainPaired =
-      mapping && source.adapter.id !== providerId
-        ? findChainPaired(mapping, source.adapter.id, sourceId, providerId, cwd)
-        : null;
-    let usingChain = false;
-    if (chainPaired) {
-      const pairTurns = await target.parse(chainPaired);
-      const pairDigest = (await target.contentFingerprint?.(chainPaired)) ?? null;
-      const delta = dedupeCallEvents(diffTurns(turns, pairTurns));
-      if (delta.length < turns.length / 2) {
-        usingChain = true;
-        merged = delta.length;
-        newRef = delta.length === 0 ? chainPaired : await write(delta, chainPaired, pairDigest);
-        notes.push(
-          delta.length === 0
-            ? `回到链上 ${target.displayName} 会话 ${chainPaired.sessionId}，无需并入`
-            : `已把 ${source.adapter.displayName} 的新增 ${delta.length} 轮并入链上 ${target.displayName} 会话 ${chainPaired.sessionId}`,
-        );
-      }
-    }
-    if (!usingChain) {
-      // 决策 2：游离会话 → 内容匹配复用「包含来源主要部分」的既有目标会话；
-      // 取缺失最少且更新时间最新的候选，完全包含直接开回来，部分缺失补增量，找不到才新建。
-      let reuse: SessionRef | undefined;
-      let reuseMissing = Infinity;
-      let reuseAt = -1;
-      if (typeof target.listSessions === 'function') {
-        try {
-          const sessions = await target.listSessions(cwd);
-          for (const s of sessions) {
-            let destTurns: UnifiedTurn[];
-            try {
-              destTurns = await target.parse(s.ref);
-            } catch {
-              continue;
-            }
-            const missing = diffTurns(turns, destTurns);
-            // 缺失少于来源一半才认为同源；多个候选时取缺失最少、更新最新者
-            if (
-              missing.length < turns.length / 2 &&
-              (missing.length < reuseMissing || (missing.length === reuseMissing && s.updatedAt > reuseAt))
-            ) {
-              reuse = s.ref;
-              reuseMissing = missing.length;
-              reuseAt = s.updatedAt;
-            }
-          }
-        } catch {
-          /* 扫描复用失败回退新建 */
-        }
-      }
-      if (reuse) {
-        const reuseTurns = await target.parse(reuse);
-        const reuseDigest = (await target.contentFingerprint?.(reuse)) ?? null;
-        const delta = dedupeCallEvents(diffTurns(turns, reuseTurns));
-        merged = delta.length;
-        newRef = delta.length === 0 ? reuse : await write(delta, reuse, reuseDigest);
-        notes.push(
-          delta.length === 0
-            ? `已在 ${target.displayName} 找到包含全部内容的既有会话 ${reuse.sessionId}，直接打开，无需新建`
-            : `已把 ${source.adapter.displayName} 的新增 ${delta.length} 轮并入既有 ${target.displayName} 会话 ${reuse.sessionId}`,
-        );
-      } else {
-        merged = outgoing.length;
-        newRef = await write(outgoing, undefined, null);
-        notes.push(
-          `已把 ${source.adapter.displayName} 的 ${outgoing.length} 轮内容转入 ${target.displayName} 新会话 ${newRef.sessionId}`,
-        );
-      }
-    }
+    const newRef =
+      plan.turns.length > 0 ? await guardedImport(target, plan.targetRef, plan.snapshot, plan.turns, cwd) : plan.targetRef;
     if (!newRef) return { ok: false, error: '转入目标会话失败: 未获得可用的目标会话引用' };
+    if (plan.note) notes.push(plan.note);
     if (mapping) {
       try {
         mapping.rememberSessionLocation(providerId, newRef, Date.now());
@@ -461,7 +512,7 @@ export async function openInProvider(
       cd,
       resumeCommand,
       command: buildCommand(cd, resumeCommand),
-      mergedTurns: merged,
+      mergedTurns: plan.merged,
       sourceUsage,
       notes,
     };
@@ -470,4 +521,60 @@ export async function openInProvider(
     const raw = error instanceof Error ? error.message : String(error);
     return blocked ? { ok: false, error: raw, blocked } : { ok: false, error: `转入新会话失败: ${raw}` };
   }
+}
+
+/** 预检用的中性描述（写入路径的 note 是过去式，不适用于“尚未写入”的预检） */
+function describePlan(target: ProviderAdapter, plan: OpenPlan): string {
+  const turnText = plan.turns.length === 0 ? '无需并入' : `写入 ${plan.turns.length} 轮`;
+  switch (plan.kind) {
+    case 'resume':
+      return '来源即目标，直接恢复原会话';
+    case 'chain':
+      return `将回到链上 ${target.displayName} 会话 ${plan.targetRef?.sessionId}（${turnText}）`;
+    case 'reuse':
+      return `将并入既有 ${target.displayName} 会话 ${plan.targetRef?.sessionId}（${turnText}）`;
+    default:
+      return `将新建 ${target.displayName} 会话（${turnText}）`;
+  }
+}
+
+/**
+ * 点击前预检（只读）：解析转入会落到哪种目标，并用目标级保护探测是否可写；不写入任何内容。
+ * `writable:false` + `blocked` 表示现在点「转入」会被拒绝。
+ */
+export async function checkOpenInProvider(
+  sourceId: string,
+  providerId: string,
+  store?: Store | null,
+): Promise<OpenSessionResult> {
+  const mapping = store ?? openMappingDb();
+  const planned = await planOpenInProvider(sourceId, providerId, mapping);
+  if (!planned.ok) return { ok: false, error: planned.error };
+  const { adapter: target, cwd, plan } = planned;
+  const base: OpenSessionResult = {
+    ok: true,
+    provider: target.id,
+    cwd,
+    sessionId: plan.targetRef?.sessionId,
+    filePath: plan.targetRef?.filePath,
+    notes: [describePlan(target, plan)],
+    writable: true,
+    plan: { kind: plan.kind, turnCount: plan.turns.length },
+  };
+  if (plan.turns.length === 0) return base; // 无需写入（直接打开既有会话）
+  try {
+    await target.preflight?.({ ref: plan.targetRef, cwd });
+  } catch (error) {
+    const blocked = blockedFrom(error);
+    if (blocked) {
+      return {
+        ...base,
+        writable: false,
+        blocked,
+        error: error instanceof Error ? error.message : String(error),
+      };
+    }
+    throw error;
+  }
+  return base;
 }

@@ -5,7 +5,7 @@ import { adoptIntoChain, chainStatus, chainUsage, collectTips, createChainSessio
 import { reindexCwd } from './core/search.js';
 import type { SessionRef } from './core/types.js';
 import { getAdapter, listAdapters, listProviders } from './providers/registry.js';
-import { openInProvider, openSession } from './open.js';
+import { checkOpenInProvider, openInProvider, openSession } from './open.js';
 import { PreflightBlockedError } from './providers/adapter.js';
 import { runImportCodex } from './import-codex.js';
 
@@ -23,7 +23,7 @@ function usage(): never {
   watch usage [--json] [--cwd <path>] [--chain <id|name>]
   watch import-codex prepare|confirm|status <id> [--cwd <path>] [--desktop-project] [--experimental] [--json]
   watch import-codex project-prepare|project-confirm|project-status <plan-id> [--project <project-id>] [--experimental] [--json]
-  watch open <session-id> [--from <session-id>] [--provider <name>] [--to <provider>]  反查 cwd 并输出 cd + 打开命令；带 --from 先并入旧会话；带 --to 把该会话内容转入指定 provider 的新会话`);
+  watch open <session-id> [--from <session-id>] [--provider <name>] [--to <provider>] [--check]  反查 cwd 并输出 cd + 打开命令；带 --from 先并入旧会话；带 --to 把该会话内容转入指定 provider 的新会话；带 --check 只做点击前预检（不写入）`);
   process.exit(1);
 }
 
@@ -77,6 +77,7 @@ function parseArgs(argv: string[]): {
   from?: string;
   provider?: string;
   to?: string;
+  check: boolean;
 } {
   const args = argv.slice(2);
   const json = args.includes('--json');
@@ -87,10 +88,15 @@ function parseArgs(argv: string[]): {
   let from: string | undefined;
   let provider: string | undefined;
   let to: string | undefined;
+  let check = false;
   const positional: string[] = [];
   for (let i = 0; i < args.length; i++) {
     const a = args[i]!;
     if (a === '--json') continue;
+    if (a === '--check') {
+      check = true;
+      continue;
+    }
     if (a === '--cwd') {
       const next = args[++i];
       if (!next) usage();
@@ -140,6 +146,7 @@ function parseArgs(argv: string[]): {
     from,
     provider,
     to,
+    check,
   };
 }
 
@@ -259,7 +266,24 @@ async function cmdOpen(
   fromId?: string,
   providerId?: string,
   toId?: string,
+  check?: boolean,
 ): Promise<void> {
+  if (check) {
+    if (!toId) fail(json, '--check 需要同时指定 --to <provider>');
+    const checked = await checkOpenInProvider(targetId, toId);
+    if (json) {
+      console.log(JSON.stringify(checked));
+      process.exit(checked.ok ? 0 : 1);
+    }
+    if (!checked.ok) fail(false, checked.error ?? '预检失败');
+    const target = checked.sessionId ? `${checked.sessionId}` : '（将新建会话）';
+    console.log(`预检：${checked.plan?.kind ?? '?'} · 目标 ${target} · ${checked.writable ? '可写入' : '暂不可写'}`);
+    if (!checked.writable) {
+      for (const line of [checked.error, checked.blocked?.hint]) if (line) console.error(line);
+      process.exit(1);
+    }
+    return;
+  }
   const result = toId
     ? await openInProvider(targetId, toId)
     : await openSession(targetId, { from: fromId, provider: providerId });
@@ -545,7 +569,7 @@ async function main(): Promise<void> {
     await runImportCodex(process.argv.slice(3));
     return;
   }
-  const { cmd, target, extra, rest, json, cwd, session, chain, from, provider, to } = parseArgs(process.argv);
+  const { cmd, target, extra, rest, json, cwd, session, chain, from, provider, to, check } = parseArgs(process.argv);
   if (cmd === 'status') {
     await cmdStatus(cwd, json, chain);
     return;
@@ -593,7 +617,7 @@ async function main(): Promise<void> {
   }
   if (cmd === 'open') {
     if (!target) usage();
-    await cmdOpen(target, json, from, provider, to);
+    await cmdOpen(target, json, from, provider, to, check);
     return;
   }
   usage();
