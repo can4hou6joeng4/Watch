@@ -30,13 +30,14 @@ Requirements: Node.js >= 22.13 (node:sqlite is required), the agent CLIs you use
 
 No npm package exists yet. Desktop builds appear on https://github.com/can4hou6joeng4/Watch/releases when a version tag passes CI; only macOS arm64 is validated.
 
-## Adapter status (2026-09-13)
+## Adapter status (2026-09-16)
 
-- Claude Code: adapter available as source or target; parses local JSONL history under ~/.claude/projects; strict cwd match.
-- OpenAI Codex CLI and Codex Desktop: official single-session import (prepare → preview → confirm) with a Watch-only import lock. Verified on 2026-09-07 (native read and resume, tool events degraded to text) and on 2026-09-10 by a real Watch Tauri click-through on macOS arm64 with Codex CLI 0.153.4 and ChatGPT Desktop 26.903.61454. Model continuation is not verified.
+- Claude Code: adapter available as source or target; parses local JSONL history under ~/.claude/projects; strict cwd match. Thinking is written as a `[思考] …` text record (a forged native thinking block would break `claude --resume`) and parsed back into a thinking event.
+- OpenAI Codex CLI and Codex Desktop: official single-session import (prepare → preview → confirm) with a Watch-only import lock. Verified on 2026-09-07 (native read and resume, tool events degraded to text) and on 2026-09-10 by a real Watch Tauri click-through on macOS arm64 with Codex CLI 0.153.4 and ChatGPT Desktop 26.903.61454. Model continuation is not verified. Direct-file writes are guarded per target session: Watch reads the native per-thread writer lock `~/.codex/thread-writer-locks/<thread-id>.lock` via `lsof`, refuses only when a live writer holds it, and verifies the target fingerprint before and after; a refused write leaves the target byte-identical (validated 2026-09-16 against a real `codex app-server` holding the lock).
 - OpenCode: CLI adapter over the SQLite store with path isolation and native-ID repair. The official Web/TUI import path passed isolated native checks but is not integrated.
-- Kimi CLI: adapter available; creating a new session invokes the kimi CLI.
-- Pi CLI and Grok CLI: adapters retained, not validated; Grok has no desktop target card.
+- Kimi CLI: adapter available; creating a new session invokes the kimi CLI. Appending to an existing session preserves its history.
+- Pi CLI: adapter retained, not validated.
+- Grok CLI: adapter plus desktop target card (`grok -r <id>`). Watch writes the native ACP `updates.jsonl` that `/resume` restores from, and detects the local model/agent identity. Isolated validation on 2026-09-14 passed `grok sessions list`, `grok export <id>` and ACP `session/load`; real-terminal TUI frames and model continuation are not verified.
 
 ## Not supported or not promised
 
@@ -79,7 +80,7 @@ Q: Is my code or my API key uploaded anywhere?
 A: Not by Watch. It has no server, account or telemetry. Two things do reach the network: the kimi CLI when creating a Kimi session, and the local Codex app-server during an official Codex import, using the credentials you already configured.
 
 Q: Will handoff damage the target client's existing history?
-A: The official Codex import writes only after you confirm the preview and holds a Watch-only lock. Direct-file targets use atomic replacement with verification and a .bak copy. Append paths are less protected, so test with a disposable session first.
+A: The official Codex import writes only after you confirm the preview and holds a Watch-only lock. Direct-file targets use atomic replacement with verification and a .bak copy. For Codex specifically, Watch first resolves the exact target session (existing pairing/reuse or a new session), probes the native per-thread writer lock, and refuses when another writer holds it — a refused handoff writes nothing at all, reports the holder PID, and can be retried after the writer exits (`watch open … --check` reports the same state read-only). Other append paths are less protected, so test with a disposable session first.
 
 Q: What is YOLO mode?
 A: Off by default. When enabled, Watch adds the target CLI's own bypass flag (for example -y) to the generated command. The risk is whatever that CLI does with the flag; it is not a desktop permission setting.
