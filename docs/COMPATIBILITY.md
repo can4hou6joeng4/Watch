@@ -17,6 +17,7 @@
 | 来源或目标入口 | 当前实现/官方依据 | Watch 状态与限制 |
 |---|---|---|
 | Claude Code CLI、Codex CLI、Kimi CLI、OpenCode CLI、Pi CLI | 本地解析、转入与恢复命令，桌面有五张目标卡 | 实现存在 / 待逐方向、版本验收；OpenCode 产品入口使用基础 CLI 适配器，不意味着五家全组合通过 |
+| Kimi 新建会话 | 无 `into` 时必须在目标 cwd 调用真实 `kimi -p .`（真实模型调用）才能拿到原生 session id 并登记 `session_index.jsonl`；追加到既有会话不走 CLI。2026-09-16 验证阻塞：本机未安装 kimi CLI、无 `~/.kimi-code`、仓库也无「无 prompt 建会话」文档证据，因此既无法验收也无法改为无副作用路径 | 已知限制；解除条件：装有 kimi CLI 并确认存在无 prompt 的会话创建方式（或接受一次模型调用） |
 | Grok CLI | 适配器已注册，桌面已接入目标卡（`grok -r <id>`，YOLO `--always-approve`） | 实现存在；2026-09-14 隔离原生验收通过 `sessions list` / `export` / ACP `session/load` 回放（不发 prompt）。真实终端 TUI 画面与模型继续未验证 |
 | Codex CLI → 桌面端 | S1 `/app`；S2 指定本地会话深链接 | Watch 已为官方导入的目标线程接入固定 deep link；其他来源仍待集成和验证 |
 | 已导入 Codex 会话 → 桌面项目成员 | S7 实验性项目查询与元数据接口；S8 当前 Desktop 私有筛选 | 后置 app-server 关联可验证后端成员关系，但不能解除 projectless 排除；不再作为 GUI 修复路径 |
@@ -74,6 +75,8 @@ Grok 的桌面卡片曾因 `resume` 打开不正常而被移除。2026-09-14 定
 **身份保真（承上修复）**：model id 改为探测顺序「本机最近原生会话 `current_model_id` → 非交互 `grok models` 的 `Default model` → 常量」，`agent_name` / `reasoning_effort` / `sandbox_profile` 同样探测，`model_fingerprint` **只沿用同一 `model_id` 的原生 assistant 行**（探测不到就不写，不伪造）；并修复了「新建空会话抢‘最新会话’位置」导致身份与 fingerprint 丢失的双重探测问题。用新写入器重跑：`sessions list` / `export` / ACP `session/load` 仍通过，且写出的 `current_model_id` 与 assistant 行均为原生默认 `grok-4.6`。
 
 **`grok usage` 的验证否定（2026-09-16）**：`grok usage <session-id>` 是非交互命令，但本机隔离合成会话与真实原生会话均返回 `No usage recorded`；原生 `signals.json` 只有 `contextTokensUsed` / `contextWindowTokens` 等聚合计数，没有 in/out token 总额。因此 `grokSessionUsage` 仍返回 `null`（不接 CLI、不解析拿不到的数据）。
+
+**模型继续验收（2026-09-16，真实凭据）**：在临时 cwd 用 Watch 写出一条合成会话（写入真实 `~/.grok`），再用真实 `grok agent stdio` 走 ACP：`initialize` → `session/load` → `session/prompt`（一个最小提示词）→ 模型返回 `已记住收到`。验收后已执行 `grok sessions delete <id>` 并复核会话目录与临时 cwd 均不存在。这是单条合成样本、单轮、无工具调用的限定结论；不推广到其他版本、平台或远程会话，也不改变其他 Provider 的旧结论。记录名 grok-model-continuation-native-2026-09-16（本地 `docs/evidence/`，不随仓库分发）。
 
 **Codex 直接文件路径改为目标级写保护（2026-09-16）**：原 `preflight()` 只看 `pgrep` 能否匹配 Codex/ChatGPT Desktop，导致两个方向都不准——应用只是开着就一律拒绝（实测：ChatGPT 运行中时非 Claude 来源 → Codex 全部被拒），而应用关闭但 `codex` CLI 正写同一线程时反而放行（正是要防的并发写）。现改为按目标会话判定：读原生 per-thread writer 锁 `~/.codex/thread-writer-locks/<thread-id>.lock`，用 `lsof -Fpc` 探测持有者——锁被活进程持有才拒绝并报出持有者 PID/命令；锁文件不存在（新建会话）或只剩陈旧锁（持有者已退出）则放行；有 ctx 但无目标 ref（新建）放行；无 ctx 或 `lsof` 不可用才回退旧的进程检查。`open --from` 与 `open --to` 两条写入路径同时补上写前/写后 `contentFingerprint` 比对。
 
