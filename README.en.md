@@ -204,14 +204,10 @@ Code and documentation in this repository are released under [MIT](LICENSE).
 
 ---
 
-## ⚓ The Fleet
+## Related projects
 
-| Ship | Idea | Route |
-|---|---|---|
-| 🧭 [Homeport](https://github.com/can4hou6joeng4/Homeport) | Home port | Personal site · fleet base |
-| **⏱️ Watch** | **Watch** | **Cross-CLI coding-agent session relay** |
-| 🗺️ [Atlas](https://github.com/can4hou6joeng4/Atlas) | Chart | AI coding usage menu-bar app |
-| 🐋 [Sonar](https://github.com/can4hou6joeng4/Sonar) | Sonar | Cover-art colour driven iOS music player |
-| 🚩 [Semaphore](https://github.com/can4hou6joeng4/Semaphore) | Semaphore | Local browser ASCII art converter |
-| 🛟 [Buoy](https://github.com/can4hou6joeng4/Buoy) | Buoy | AnyRouter multi-account check-in tool |
-| 🗼 [Beacon](https://github.com/can4hou6joeng4/Beacon) | Beacon | PDF credential expiry audit |
+- 🧭 [Homeport](https://github.com/can4hou6joeng4/Homeport) — personal site
+- 🐋 [Sonar](https://github.com/can4hou6joeng4/Sonar) — cover-art colour driven iOS music player
+- 🚩 [Semaphore](https://github.com/can4hou6joeng4/Semaphore) — local browser ASCII art converter
+- 🛟 [Buoy](https://github.com/can4hou6joeng4/Buoy) — AnyRouter multi-account check-in tool
+- 🗼 [Beacon](https://github.com/can4hou6joeng4/Beacon) — PDF credential expiry audit

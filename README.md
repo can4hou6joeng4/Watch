@@ -204,14 +204,10 @@ npm run watch -- import-codex status <plan-id> --json
 
 ---
 
-## ⚓ The Fleet
+## 相关项目
 
-| 船 | 意象 | 航线 |
-|---|---|---|
-| 🧭 [Homeport](https://github.com/can4hou6joeng4/Homeport) | 母港 | 个人主页 · 船队大本营 |
-| **⏱️ Watch** | **值更** | **跨 CLI 编程 Agent 会话接力台** |
-| 🗺️ [Atlas](https://github.com/can4hou6joeng4/Atlas) | 海图 | AI 编程用量菜单栏应用 |
-| 🐋 [Sonar](https://github.com/can4hou6joeng4/Sonar) | 声呐 | 封面取色驱动的 iOS 音乐播放器 |
-| 🚩 [Semaphore](https://github.com/can4hou6joeng4/Semaphore) | 旗语 | 浏览器本地 ASCII 艺术转换 |
-| 🛟 [Buoy](https://github.com/can4hou6joeng4/Buoy) | 浮标 | AnyRouter 多账号签到工具 |
-| 🗼 [Beacon](https://github.com/can4hou6joeng4/Beacon) | 灯塔 | PDF 证件有效期审计 |
+- 🧭 [Homeport](https://github.com/can4hou6joeng4/Homeport) —— 个人主页
+- 🐋 [Sonar](https://github.com/can4hou6joeng4/Sonar) —— 封面取色驱动的 iOS 音乐播放器
+- 🚩 [Semaphore](https://github.com/can4hou6joeng4/Semaphore) —— 浏览器本地 ASCII 艺术转换
+- 🛟 [Buoy](https://github.com/can4hou6joeng4/Buoy) —— AnyRouter 多账号签到工具
+- 🗼 [Beacon](https://github.com/can4hou6joeng4/Beacon) —— PDF 证件有效期审计
