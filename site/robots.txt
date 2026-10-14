@@ -1,4 +1,6 @@
 User-agent: *
 Allow: /
 
+# Canonical Sitemap and LLM context declarations
 Sitemap: https://relay.bobochang.cn/sitemap.xml
+

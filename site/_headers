@@ -13,8 +13,20 @@
   Cache-Control: public, max-age=0, must-revalidate
 
 /favicon.svg
+  ! Content-Language
   ! Cache-Control
   Cache-Control: public, max-age=604800, immutable
+
+/favicon.ico
+  ! Content-Language
+  ! Cache-Control
+  Cache-Control: public, max-age=604800, immutable
+
+/sitemap.xml
+  ! Content-Language
+
+/robots.txt
+  ! Content-Language
 
 /og.png
   ! Cache-Control

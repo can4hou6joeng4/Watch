@@ -1,8 +1,23 @@
-export const siteDate = '2026-09-14';
+export const siteDate = '2026-10-14';
 export const siteUrl = 'https://relay.bobochang.cn';
 export const repo = 'https://github.com/can4hou6joeng4/Watch';
 export const maintainer = { name: 'can4hou6joeng4', url: 'https://bobochang.cn', github: 'https://github.com/can4hou6joeng4', locality: 'Guangzhou' };
-export const locales = { zh: { path: '/', hreflang: 'zh-CN', ogLocale: 'zh_CN', ogImage: '/og.png' }, en: { path: '/en/', hreflang: 'en', ogLocale: 'en_US', ogImage: '/og-en.png' } };
+export const locales = {
+  zh: { path: '/', hreflang: 'zh-CN', ogLocale: 'zh_CN', ogImage: '/og.png', label: '简体中文' },
+  'zh-tw': { path: '/zh-tw/', hreflang: 'zh-TW', ogLocale: 'zh_TW', ogImage: '/og.png', label: '繁體中文' },
+  en: { path: '/en/', hreflang: 'en', ogLocale: 'en_US', ogImage: '/og-en.png', label: 'English' },
+  ja: { path: '/ja/', hreflang: 'ja', ogLocale: 'ja_JP', ogImage: '/og-en.png', label: '日本語' },
+  ko: { path: '/ko/', hreflang: 'ko', ogLocale: 'ko_KR', ogImage: '/og-en.png', label: '한국어' },
+  fr: { path: '/fr/', hreflang: 'fr', ogLocale: 'fr_FR', ogImage: '/og-en.png', label: 'Français' },
+  de: { path: '/de/', hreflang: 'de', ogLocale: 'de_DE', ogImage: '/og-en.png', label: 'Deutsch' },
+  es: { path: '/es/', hreflang: 'es', ogLocale: 'es_ES', ogImage: '/og-en.png', label: 'Español' },
+  'pt-br': { path: '/pt-br/', hreflang: 'pt-BR', ogLocale: 'pt_BR', ogImage: '/og-en.png', label: 'Português' },
+  ru: { path: '/ru/', hreflang: 'ru', ogLocale: 'ru_RU', ogImage: '/og-en.png', label: 'Русский' },
+  it: { path: '/it/', hreflang: 'it', ogLocale: 'it_IT', ogImage: '/og-en.png', label: 'Italiano' },
+  vi: { path: '/vi/', hreflang: 'vi', ogLocale: 'vi_VN', ogImage: '/og-en.png', label: 'Tiếng Việt' },
+  id: { path: '/id/', hreflang: 'id', ogLocale: 'id_ID', ogImage: '/og-en.png', label: 'Bahasa Indonesia' },
+  tr: { path: '/tr/', hreflang: 'tr', ogLocale: 'tr_TR', ogImage: '/og-en.png', label: 'Türkçe' },
+};
 export const defaultLocale = 'en';
 export const siteVerification = { 'baidu-site-verification': 'codeva-W4z09gkNmy' };
 export const agents = [
@@ -28,7 +43,7 @@ export const content = {
       ['从 Antigravity 2.0 导入', '/resume', '在 CLI 的会话选择器中切至 Antigravity 页签，选择桌面会话并二次确认。官方描述为克隆历史、上下文与工具轨迹；Watch 尚未原生验收，也没有外部 Agent 导入协议。'],
     ], antigravityDocs: '官方恢复与导入文档', heroLabel: 'AGENTRELAY / 本地会话接力', h1: 'Watch · 值更', h1Sub: '本地会话接力工具', ogAlt: 'Watch · 值更：本地 AI 编程 Agent 会话接力工具', siteName: 'Watch · 值更', heroDetail: 'Claude Code 限额、上下文满了或排查停滞时，带上已有记录与工作目录，切换到 Codex、OpenCode、Kimi、Pi 或 Grok 继续。', start: '从源码开始', explore: '体验接力', scroll: '探索会话接力',
     lang: 'zh-CN', loaded: '样本已载入', title: 'Watch · 值更 | AgentRelay 本地会话接力', description: 'Watch（AgentRelay）是本地 AI 编程会话接力工具：Claude Code 限额或额度用完后，把已有会话记录切换到 Codex、OpenCode、Kimi、Pi 或 Grok 继续，核对工作目录与路径限制。',
-    workspace: '工作空间', resource: '项目资源', demo: '接力演示', mechanisms: '核心机制', compatibility: '支持路径', quickstart: '从源码上手', evidence: '验收证据', faq: '常见问题', repo: '源代码', docs: '项目文档', local: '本地会话工具', language: 'English', skip: '跳至内容', menu: '打开导航',
+    workspace: '工作空间', resource: '项目资源', demo: '接力演示', mechanisms: '核心机制', compatibility: '支持路径', quickstart: '从源码上手', guides: '实操指南', guidesIntro: '每篇先给可以直接引用的答案，再给步骤。Watch 不绕过限额，也不评测哪家模型更好。', evidence: '验收证据', faq: '常见问题', repo: '源代码', docs: '项目文档', local: '本地会话工具', language: '语言', skip: '跳至内容', menu: '打开导航', readGuide: '阅读指南', crumbHome: '首页', backHome: '返回首页', guideFaq: '常见问题与限制', guideSources: '官方事实与验证来源', guideEyebrow: 'WATCH 技术指南 / 本地接力', published: '发布日期', modified: '更新日期', appliesTo: '适用版本', returnHome: '返回会话接力首页', downloadDesktop: '下载 Watch 桌面端',
     intro: '换一个编程工具，继续同一项工作。', introDetail: '读取已有会话记录，核对工作目录，再选择目标 Agent。', demoBadge: '合成演示 · 无真实写入', online: '交互预览', stepLabels: ['来源会话', '上下文核验', '接力目标', '交付结果'],
     source: '来源会话', sample: '示例场景', sampleNames: ['Claude Code · 切换工具', 'OpenCode · 继续排查', 'Kimi CLI · 历史接力'], sessionId: '来源会话 ID', sourceAgent: '来源 Agent', cwd: '工作目录', messages: '消息', tools: '工具调用', context: '上下文摘录', user: '用户', assistant: '助手', userPrompt: '检查 API 重试流程，保留此前结论与失败尝试。', assistantReply: '已确认工作目录和重试边界；下一步补充错误处理回归。',
     target: '接力目标', route: '接力方式', official: '官方桌面导入', conversion: '基础 CLI 转换', resume: '原会话恢复', delivery: '交付方式', terminal: '终端命令', desktop: 'Codex Desktop', preview: '预览接力', confirm: '模拟确认导入', open: '模拟打开目标', reset: '重置演示', result: '接力结果', logs: '流程记录', structure: '事件示意', waiting: '等待预览', prepared: '计划已准备', imported: '演示导入完成', opened: '演示打开完成', unknown: '未知示例 ID', copy: '复制命令', copied: '已复制', copyError: '复制失败，请手动选择命令',
@@ -66,7 +81,7 @@ export const content = {
       ['Import from Antigravity 2.0', '/resume', 'Switch to the Antigravity tab in the CLI session picker, select a desktop conversation and confirm the import. Official documentation describes cloned history, context and tool trajectories. Watch has not natively validated it and has no external-agent import contract.'],
     ], antigravityDocs: 'Official resume and import documentation', heroLabel: 'AGENTRELAY / LOCAL SESSION HANDOFF', h1: 'Watch', h1Sub: 'Local session handoff for coding agents', ogAlt: 'Watch: local session handoff tool for AI coding agents', siteName: 'Watch · 值更', heroDetail: 'Hit a Claude Code limit, a full context window or a stuck investigation? Carry the saved history and working directory into Codex, OpenCode, Kimi, Pi or Grok and keep going.', start: 'Run from source', explore: 'Explore handoff', scroll: 'Explore session handoff',
     lang: 'en', loaded: 'Source loaded', title: 'Watch | AgentRelay Local Session Handoff', description: 'Watch (AgentRelay): local session handoff for AI coding agents. When Claude Code hits its limit, switch to Codex, OpenCode, Kimi, Pi or Grok and resume the saved session.',
-    workspace: 'WORKSPACE', resource: 'RESOURCES', demo: 'Session Handoff', mechanisms: 'Core Mechanisms', compatibility: 'Supported Routes', quickstart: 'Run From Source', evidence: 'Validation Records', faq: 'Questions', repo: 'Source Code', docs: 'Documentation', local: 'Local session tool', language: '中文', skip: 'Skip to content', menu: 'Open navigation',
+    workspace: 'WORKSPACE', resource: 'RESOURCES', demo: 'Session Handoff', mechanisms: 'Core Mechanisms', compatibility: 'Supported Routes', quickstart: 'Run From Source', guides: 'Guides', guidesIntro: 'Each guide opens with an answer that can stand alone, then the steps. Watch does not bypass limits and does not rank models.', evidence: 'Validation Records', faq: 'Questions', repo: 'Source Code', docs: 'Documentation', local: 'Local session tool', language: 'Language', skip: 'Skip to content', menu: 'Open navigation', readGuide: 'Read the guide', crumbHome: 'Home', backHome: 'Home', guideFaq: 'Frequently Asked Questions', guideSources: 'Official Sources & Acceptance Records', guideEyebrow: 'WATCH TECHNICAL GUIDE / SESSION HANDOFF', published: 'Published', modified: 'Modified', appliesTo: 'Applies to', returnHome: 'Return to Watch Home', downloadDesktop: 'Download Watch Desktop',
     intro: 'Another coding tool. The same work.', introDetail: 'Read saved history, check the working directory, then choose a target agent.', demoBadge: 'SYNTHETIC DEMO / NO WRITES', online: 'Interactive preview', stepLabels: ['Source session', 'Check context', 'Target agent', 'Delivery result'],
     source: 'Source Session', sample: 'Sample scenario', sampleNames: ['Claude Code · Switch tools', 'OpenCode · Continue debugging', 'Kimi CLI · Handoff history'], sessionId: 'Source session ID', sourceAgent: 'Source agent', cwd: 'Working directory', messages: 'Messages', tools: 'Tool calls', context: 'Context Excerpt', user: 'USER', assistant: 'AGENT', userPrompt: 'Check the API retry flow and retain earlier conclusions and failed attempts.', assistantReply: 'Confirmed the working directory and retry boundary. Next: error-handling regressions.',
     target: 'Target Agent', route: 'Handoff route', official: 'Official desktop import', conversion: 'Baseline CLI conversion', resume: 'Resume original session', delivery: 'Delivery', terminal: 'Terminal command', desktop: 'Codex Desktop', preview: 'Preview handoff', confirm: 'Simulate confirmation', open: 'Simulate opening', reset: 'Reset demo', result: 'Handoff Result', logs: 'Workflow log', structure: 'Event illustration', waiting: 'Awaiting preview', prepared: 'Plan prepared', imported: 'Demo import complete', opened: 'Demo open complete', unknown: 'Unknown sample ID', copy: 'Copy command', copied: 'Copied', copyError: 'Copy failed. Select the command manually.',

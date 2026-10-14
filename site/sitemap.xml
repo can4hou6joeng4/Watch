@@ -1,17 +1,43 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9" xmlns:xhtml="http://www.w3.org/1999/xhtml">
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
   <url>
     <loc>https://relay.bobochang.cn/</loc>
-    <lastmod>2026-09-14</lastmod>
-    <xhtml:link rel="alternate" hreflang="zh-CN" href="https://relay.bobochang.cn/" />
-    <xhtml:link rel="alternate" hreflang="en" href="https://relay.bobochang.cn/en/" />
-    <xhtml:link rel="alternate" hreflang="x-default" href="https://relay.bobochang.cn/en/" />
+    <lastmod>2026-10-14</lastmod>
   </url>
   <url>
     <loc>https://relay.bobochang.cn/en/</loc>
-    <lastmod>2026-09-14</lastmod>
-    <xhtml:link rel="alternate" hreflang="zh-CN" href="https://relay.bobochang.cn/" />
-    <xhtml:link rel="alternate" hreflang="en" href="https://relay.bobochang.cn/en/" />
-    <xhtml:link rel="alternate" hreflang="x-default" href="https://relay.bobochang.cn/en/" />
+    <lastmod>2026-10-14</lastmod>
+  </url>
+  <url>
+    <loc>https://relay.bobochang.cn/guides/claude-code-limit-to-codex/</loc>
+    <lastmod>2026-10-14</lastmod>
+  </url>
+  <url>
+    <loc>https://relay.bobochang.cn/en/guides/claude-code-limit-to-codex/</loc>
+    <lastmod>2026-10-14</lastmod>
+  </url>
+  <url>
+    <loc>https://relay.bobochang.cn/guides/opencode-handover-sqlite-isolation/</loc>
+    <lastmod>2026-10-14</lastmod>
+  </url>
+  <url>
+    <loc>https://relay.bobochang.cn/en/guides/opencode-handover-sqlite-isolation/</loc>
+    <lastmod>2026-10-14</lastmod>
+  </url>
+  <url>
+    <loc>https://relay.bobochang.cn/guides/context-limit-vs-usage-limit-handoff/</loc>
+    <lastmod>2026-10-14</lastmod>
+  </url>
+  <url>
+    <loc>https://relay.bobochang.cn/en/guides/context-limit-vs-usage-limit-handoff/</loc>
+    <lastmod>2026-10-14</lastmod>
+  </url>
+  <url>
+    <loc>https://relay.bobochang.cn/guides/opus-5-5-five-hour-limit/</loc>
+    <lastmod>2026-10-14</lastmod>
+  </url>
+  <url>
+    <loc>https://relay.bobochang.cn/en/guides/opus-5-5-five-hour-limit/</loc>
+    <lastmod>2026-10-14</lastmod>
   </url>
 </urlset>

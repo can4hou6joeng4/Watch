@@ -25,7 +25,13 @@ code { font-size: 12px; }
 .nav-item { font-size: 12px; color: #a1a1a8; transition: color 150ms ease; }
 .nav-item:hover, .nav-item.active { color: #fff; }
 .topbar-actions { display: flex; align-items: center; gap: 22px; font-size: 12px; }
-.topbar-actions > a { display: inline-flex; align-items: center; gap: 5px; }
+.topbar-actions > a, .language-link { display: inline-flex; align-items: center; gap: 5px; }
+.language-menu { position: relative; }
+.language-menu > summary { list-style: none; cursor: pointer; color: #b8b8bf; }
+.language-menu > summary::-webkit-details-marker { display: none; }
+.language-panel { position: absolute; top: calc(100% + 10px); right: 0; z-index: 30; min-width: 180px; max-height: 320px; overflow: auto; padding: 8px; background: #131417; border: 1px solid #383b43; border-radius: 6px; display: grid; }
+.language-panel a { padding: 7px 10px; color: #d5d7de; border-radius: 4px; font-size: 12px; }
+.language-panel a:hover, .language-panel a[aria-current="true"] { background: #1d1f24; color: #fff; }
 .topbar-actions > a:not(.nav-start) { color: #b8b8bf; }
 .nav-start { color: #080809; background: #fff; padding: 9px 19px; border-radius: 9999px; white-space: nowrap; }
 .mobile-menu { display: none !important; }
@@ -195,7 +201,7 @@ select { padding: 10px 13px; font-size: 12px; }
 @media (max-width: 760px) { .antigravity-list { grid-template-columns: 1fr; gap: 24px; } }
 .not-found { padding: 48px 6%; }
 .not-found main { margin-top: 100px; display: grid; gap: 56px; }
-.not-found section[lang=en] { padding-top: 40px; border-top: 1px solid var(--border); }
+.not-found section + section { padding-top: 40px; border-top: 1px solid var(--border); }
 .not-found h1 { font-size: 48px; font-weight: 300; margin-top: 14px; }
 .not-found p { color: #a0a5b1; margin: 20px 0; }
 @media (min-width: 1600px) { .hero-content h1 { font-size: 120px; } .hero-tagline { font-size: 52px; } }
@@ -205,5 +211,42 @@ select { padding: 10px 13px; font-size: 12px; }
 @media (max-height: 650px) and (min-width: 761px) { .signal-hero { min-height: 500px; } .hero-content { padding-top: 10px; padding-bottom: 20px; } .hero-content h1 { font-size: 70px; } .hero-tagline { font-size: 30px; } .hero-detail { font-size: 16px; margin-top: 15px; } .hero-actions { margin-top: 20px; } }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { transition: none !important; animation: none !important; scroll-behavior: auto !important; } }
 @media (max-width: 760px) { .signal-hero { min-height: min(620px, calc(100svh - 120px)); height: calc(100svh - 120px); } }
-@media (max-width: 420px) { .signal-hero { min-height: min(550px, calc(100svh - 120px)); } }
 @media (max-height: 650px) and (max-width: 760px) { .hero-detail { display: none; } .hero-content { padding-top: 15px; padding-bottom: 20px; } .hero-content h1 { font-size: 42px; } .hero-tagline { font-size: 24px; } }
+.guide-container { max-width: 860px; margin: 0 auto; padding: 48px 6% 80px; }
+.guide-breadcrumbs { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--muted); margin-bottom: 28px; }
+.guide-breadcrumbs a:hover { color: #fff; }
+.guide-header { border-bottom: 1px solid var(--border); padding-bottom: 32px; margin-bottom: 40px; }
+.guide-header h1 { font-size: 38px; font-weight: 400; line-height: 1.25; margin: 14px 0 18px; color: #fff; }
+.guide-answer { font-size: 17px; color: #f3f4f8; line-height: 1.75; margin: 0 0 16px; max-width: 68ch; }
+.guide-summary { font-size: 16px; color: #c0c4ce; line-height: 1.7; }
+.guide-index { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 22px; }
+.guide-index article { border: 1px solid var(--border); border-radius: 6px; padding: 22px 22px 18px; background: #101216; min-width: 0; }
+.guide-index h3 { font-size: 17px; font-weight: 400; line-height: 1.45; }
+.guide-index h3 a:hover { color: #fff; }
+.guide-index p { color: #b7bcc8; font-size: 13px; line-height: 1.8; margin: 12px 0 16px; }
+.guide-index-more { display: inline-flex; align-items: center; gap: 8px; color: #93c5fd; font-size: 12px; }
+.guide-index-more:hover { color: #fff; }
+@media (max-width: 760px) { .guide-index { grid-template-columns: 1fr; } .guide-answer { font-size: 16px; } }
+.guide-meta { display: flex; flex-wrap: wrap; gap: 20px; font-size: 12px; color: var(--muted); margin-top: 20px; font-family: var(--mono); }
+.guide-content { display: grid; gap: 28px; }
+.guide-paragraph { font-size: 15px; color: #d0d4dd; line-height: 1.8; }
+.guide-callout { border: 1px solid var(--border); border-left-width: 4px; padding: 18px 22px; border-radius: 4px; background: var(--panel); }
+.guide-callout.info { border-left-color: #3b82f6; }
+.guide-callout.warning { border-left-color: #f59e0b; }
+.guide-callout strong { display: block; font-size: 14px; font-weight: 500; margin-bottom: 8px; color: #fff; }
+.guide-callout p { font-size: 13px; color: #c0c5d0; line-height: 1.7; white-space: pre-line; }
+.guide-steps { padding-left: 0; list-style: none; display: grid; gap: 20px; counter-reset: guide-step; }
+.guide-steps li { position: relative; padding: 18px 20px 18px 56px; border: 1px solid var(--border); border-radius: 4px; background: #0c0d0f; }
+.guide-steps li::before { counter-increment: guide-step; content: "0" counter(guide-step); position: absolute; left: 16px; top: 18px; font-family: var(--mono); font-size: 12px; color: #60a5fa; font-weight: 600; }
+.guide-steps h3 { font-size: 15px; font-weight: 500; margin-bottom: 8px; color: #fff; }
+.guide-steps p { font-size: 13px; color: #adb2be; line-height: 1.7; }
+.guide-faq { margin-top: 48px; padding-top: 36px; border-top: 1px solid var(--border); }
+.guide-faq h2 { font-size: 22px; font-weight: 400; margin-bottom: 24px; }
+.guide-sources { margin-top: 48px; padding-top: 36px; border-top: 1px solid var(--border); }
+.guide-sources h2 { font-size: 18px; font-weight: 400; margin-bottom: 16px; }
+.guide-sources ul { padding-left: 20px; font-size: 13px; color: #9da3b2; }
+.guide-sources li { margin-bottom: 8px; }
+.guide-sources a { color: #93c5fd; text-decoration: underline; }
+.guide-sources a:hover { color: #fff; }
+.guide-nav-footer { margin-top: 48px; padding-top: 24px; border-top: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center; }
+

@@ -68,23 +68,3 @@ if (result.status !== 0) {
 
 console.log(`\n✅ 部署完成！已成功部署为 Cloudflare Worker:`);
 console.log(`  👉 https://relay.bobochang.cn`);
-
-// 3. IndexNow：通知 Bing / Yandex 等已变更的 URL（key 文件由 site/<key>.txt 提供）
-const keyFile = fs.readdirSync(siteDir).find((name) => /^[0-9a-f]{32}\.txt$/.test(name));
-if (keyFile) {
-  const key = keyFile.slice(0, -4);
-  const host = 'relay.bobochang.cn';
-  const urlList = [`https://${host}/`, `https://${host}/en/`, `https://${host}/llms.txt`, `https://${host}/sitemap.xml`];
-  try {
-    const response = await fetch('https://api.indexnow.org/IndexNow', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json; charset=utf-8' },
-      body: JSON.stringify({ host, key, keyLocation: `https://${host}/${keyFile}`, urlList }),
-    });
-    console.log(`📣 IndexNow 已提交 ${urlList.length} 个 URL，状态 ${response.status}`);
-  } catch (error) {
-    console.error(`[Warn] IndexNow 提交失败（不影响部署）: ${error.message}`);
-  }
-} else {
-  console.error('[Warn] site/ 下没有 IndexNow key 文件，跳过提交');
-}

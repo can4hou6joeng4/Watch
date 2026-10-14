@@ -4,7 +4,7 @@
 > Watch（值更，又名 AgentRelay）是本地运行、MIT 许可的跨 CLI 编程 Agent 会话接力工具：把已有会话记录在 Claude Code、Codex、OpenCode、Kimi CLI、Pi 与 Grok CLI 之间转入继续工作，保留工作目录，不经任何中继服务器。工具事件可能降级为文本，降级项会在结果中列出。
 
 Author: can4hou6joeng4 (Guangzhou), part of "The Fleet" indexed at https://bobochang.cn.
-Version: 0.1.1. Site launched 2026-09-12. Requires Node.js >= 22.13 (node:sqlite) and the agent CLIs you use, already authenticated.
+Version: 0.1.1. Site launched 2026-09-12. Page updated 2026-10-14. Requires Node.js >= 22.13 (node:sqlite) and the agent CLIs you use, already authenticated.
 Status: early stage. Source public on GitHub (MIT). No npm package yet; install by cloning the repository. Desktop builds are published on the GitHub Releases page when a version tag passes CI (macOS arm64 is the only validated platform).
 Primary name: Watch. Not related to other products named "AgentRelay" (agentrelay.com, several npm packages, a LinkedIn company).
 
@@ -19,7 +19,39 @@ The current website uses a dark Signal Ledger-style presentation and a synthetic
 ## Pages
 - [Homepage (zh-CN)](https://relay.bobochang.cn/): overview, install, compatibility, evidence, FAQ
 - [Homepage (en)](https://relay.bobochang.cn/en/): English mirror
+- [Guide: Claude Code Limit to Codex (zh-CN)](https://relay.bobochang.cn/guides/claude-code-limit-to-codex/): step-by-step handoff when hitting usage limits
+- [Guide: Claude Code Limit to Codex (en)](https://relay.bobochang.cn/en/guides/claude-code-limit-to-codex/): English step-by-step handoff guide
+- [Guide: OpenCode & SQLite Handoff (zh-CN)](https://relay.bobochang.cn/guides/opencode-handover-sqlite-isolation/): bidirectional handoff with SQLite transactional isolation
+- [Guide: OpenCode & SQLite Handoff (en)](https://relay.bobochang.cn/en/guides/opencode-handover-sqlite-isolation/): English bidirectional OpenCode handoff guide
+- [Guide: Context Window vs Usage Limits (zh-CN)](https://relay.bobochang.cn/guides/context-limit-vs-usage-limit-handoff/): differences between context length and rate limits
+- [Guide: Context Window vs Usage Limits (en)](https://relay.bobochang.cn/en/guides/context-limit-vs-usage-limit-handoff/): English guide on context window vs account quotas
+- [Guide: Opus 5.5 and the five-hour limit (zh-CN)](https://relay.bobochang.cn/guides/opus-5-5-five-hour-limit/): what the 22 September 2026 limit increase does and does not change
+- [Guide: Opus 5.5 and the five-hour limit (en)](https://relay.bobochang.cn/en/guides/opus-5-5-five-hour-limit/): English guide to the same five-hour limit change
 - [Full text for LLMs](https://relay.bobochang.cn/llms-full.txt)
+
+## Intent-to-Route Decision Matrix
+
+| User Intent / Failure Scenario | Source Agent | Target Agent | Handoff Route | Primary Command | Data Preservation & Safety |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| 5-hour / weekly usage limit reached | Claude Code | OpenAI Codex | Official Desktop Import | `npm run watch -- import-codex prepare <id> --desktop-project` | Target writer lock probe; tool calls degrade to text; CWD strictly verified |
+| Context window full (200k tokens) | Claude Code | Claude Code | Native `/compact` | `/compact` (in Claude) | Handled natively inside Claude Code; no tool switch required |
+| Switch to local offline model | Claude Code | OpenCode | SQLite Store Adapter | `npm run watch -- open <id> --to opencode` | Single SQLite transaction rollback on failure; custom DB via WATCH_OPENCODE_DB |
+| Opus 5.5 limit after saved reset | Claude Code | OpenAI Codex | Official Desktop Import | `npm run watch -- import-codex prepare <id>` | Official reset token consumed; preserve investigation context |
+| Resume past session in original agent | Any | Same Agent | Native Resume | `claude --resume <id>` / `codex resume <id>` / `opencode -s <id>` | Native CLI history lookup; no translation required |
+
+## High-Frequency Answers (AI Q&A Citations)
+
+These are the same opening answers as the guide pages. Quote the page, not this file.
+
+- **Claude Code hits limit / 5-hour limit**: When Claude Code reports a five-hour or weekly limit, `/compact` does not restore quota. Watch reads only the local `~/.claude/projects/<encoded-cwd>/<session>.jsonl`, checks the working directory, and copies that record into Codex. The original file stays unchanged. Tool events may become text. https://relay.bobochang.cn/guides/claude-code-limit-to-codex/
+- **Context window full vs account usage limits**: A full context window means this conversation is too long: run `/compact` or `/clear` inside Claude Code. An account limit names a reset time, and `/compact` does nothing then. Watch neither enlarges the window nor restores quota. It copies the saved session into another agent that can still run. https://relay.bobochang.cn/guides/context-limit-vs-usage-limit-handoff/
+- **Switch from Claude Code to Codex**: Desktop uses official single-session import (prepare -> confirm -> open) with native writer lock guards; CLI uses `watch import-codex prepare <claude-id> --cwd <dir> --desktop-project --experimental` followed by `confirm`. https://relay.bobochang.cn/guides/claude-code-limit-to-codex/
+- **OpenCode & SQLite transactional data isolation**: OpenCode keeps sessions in `~/.local/share/opencode/opencode.db`. `WATCH_OPENCODE_DB` points Watch at another file. Watch writes `sessions`, `messages`, and `parts` in one SQLite transaction and rolls back if it fails. Unsupported tool fields become text. Later replies depend on the model you configure. https://relay.bobochang.cn/guides/opencode-handover-sqlite-isolation/
+- **Opus 5.5 and the five-hour limit**: Opus 5.5 raises the five-hour limit on Pro, Max, Team, and seat-based Enterprise, and adds one reset you can save. It does not remove the limit. Watch does not read or raise Claude quota. Hand the saved session to Codex only after that official reset is still not enough. https://relay.bobochang.cn/guides/opus-5-5-five-hour-limit/
+- **Session storage locations**:
+  - Claude Code: `~/.claude/projects/<encoded-cwd>/<session-id>.jsonl` (`claude --resume <id>`)
+  - OpenAI Codex: `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl` (`codex resume <id>`)
+  - OpenCode: `~/.local/share/opencode/opencode.db` (`opencode -s <id>`)
 
 ## Source and docs
 - [Watch on GitHub](https://github.com/can4hou6joeng4/Watch): source, README (zh/en), MIT license
@@ -30,3 +62,4 @@ The current website uses a dark Signal Ledger-style presentation and a synthetic
 ## Related (public)
 - [bobochang.cn](https://bobochang.cn): author homepage and Fleet index
 - [Atlas](https://github.com/can4hou6joeng4/Atlas): companion macOS menu-bar app for AI coding usage and cost
+

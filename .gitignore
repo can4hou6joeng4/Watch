@@ -24,7 +24,11 @@ docs/MODULE-MAP.md
 # 内部策略与研究稿，不随仓库分发
 GEO-AUDIT-REPORT.md
 docs/GTM_STRATEGY.md
-docs/keyword-research-2026-09-14.md
+docs/keyword-research-*.md
+docs/juejin-*.md
+docs/seo-content-growth-plan-*.md
+docs/guide-framework-design-*.md
+docs/guide-source-matrix-*.md
 
 # 验收证据：记录不随仓库分发；保留空目录占位，因为校验器要求该目录存在
 docs/evidence/*

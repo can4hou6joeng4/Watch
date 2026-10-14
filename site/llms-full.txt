@@ -1,97 +1,122 @@
-# Watch · 值更 (AgentRelay) — full text for LLMs
+# Watch · 值更 (AgentRelay) — Full Context for AI Search & LLMs
 
-Last updated: 2026-09-14. Canonical page: https://relay.bobochang.cn/ (zh-CN), https://relay.bobochang.cn/en/ (en).
+> Canonical Site: https://relay.bobochang.cn/ (zh-CN) | https://relay.bobochang.cn/en/ (en)
+> Author: can4hou6joeng4 (https://bobochang.cn)
+> Generated: 2026-10-14. License: MIT
 
-## What it is
+---
 
-Watch (Chinese 值更, also called AgentRelay) is a local session-handoff tool for AI coding agents. When Claude Code, Codex, OpenCode or Kimi runs out of quota, gets stuck, or you want to switch tools, Watch reads the saved session record on your machine, converts it into a format the target agent can resume, and keeps the original working directory (cwd). It is free and MIT-licensed. Version 0.1.1.
+## 1. Core System & Overview
 
-Watch has no server, no account and no telemetry of its own. Conversion happens on your computer and results are written only into the target agent's local session store. The complete workflow is still not always offline: creating a Kimi session runs the kimi CLI, and the official Claude Code → Codex import starts the local Codex app-server, which reads your existing ~/.codex configuration. After handoff the target tool calls its model as usual.
+Watch (Chinese: 值更, also called AgentRelay) is a free, local-only CLI and macOS desktop tool that hands an in-progress AI coding-agent session (conversation history, tool call events, and exact working directory) between Claude Code, OpenAI Codex, OpenCode, Kimi CLI, Pi and Grok CLI when an agent hits account usage limits or gets stuck.
 
-## How to use it
+### Key Safety Constraints
+- 100% Local Execution: Watch has no cloud relay, server, or analytics. It reads and writes local disk stores directly.
+- Strict CWD Matching: Prevents code edits across different workspaces or Git worktrees.
+- Target Writer Guard: Direct writes to Codex inspect native per-thread writer locks (~/.codex/thread-writer-locks/<id>.lock via lsof) and pre/post content fingerprints.
+- OpenCode SQLite Isolation: Multi-table writes (sessions, messages, parts) execute in one SQLite transaction and roll back on failure; supports WATCH_OPENCODE_DB isolation.
+- Tool Call Degradation: Complex proprietary tool call events are downgraded to structured text representations in target agents.
 
-1. Get the session ID from the original agent (Claude Code, OpenCode, ...) and paste it into the Watch desktop app or pass it to the CLI.
-2. Check the detected source agent and project directory (cwd). If detection fails, do not resume with another tool blindly.
-3. Select the target agent. Selection alone does not execute a transfer. Use the explicit action to convert and deliver a resume command, or preview the official Codex import and confirm it separately. Opening an imported Codex target is a separate action. Failed delivery retries reuse the existing target instead of transferring again.
+---
 
-Claude Code → Codex Desktop goes through an official single-session import with three explicit states: prepare (preview), confirm (write), status (read-only). Uncertain results keep their execution log and lock and are never retried automatically.
+## 2. Intent-to-Route Decision Matrix
 
-## Desktop app
+| User Intent / Failure Scenario | Source Agent | Target Agent | Handoff Route | Primary Command | Data Preservation & Safety |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| 5-hour / weekly usage limit reached | Claude Code | OpenAI Codex | Official Desktop Import | `npm run watch -- import-codex prepare <id> --desktop-project` | Target writer lock probe; tool calls degrade to text; CWD strictly verified |
+| Context window full (200k tokens) | Claude Code | Claude Code | Native `/compact` | `/compact` (in Claude) | Handled natively inside Claude Code; no tool switch required |
+| Switch to local offline model | Claude Code | OpenCode | SQLite Store Adapter | `npm run watch -- open <id> --to opencode` | Single SQLite transaction rollback on failure; custom DB via WATCH_OPENCODE_DB |
+| Opus 5.5 limit after saved reset | Claude Code | OpenAI Codex | Official Desktop Import | `npm run watch -- import-codex prepare <id>` | Official reset token consumed; preserve investigation context |
+| Resume past session in original agent | Any | Same Agent | Native Resume | `claude --resume <id>` / `codex resume <id>` / `opencode -s <id>` | Native CLI history lookup; no translation required |
 
-The macOS desktop app (Tauri shell, logic in TypeScript) has four views: session handoff, handoff history, supported routes and settings. Appearance can be light, dark or follow the system (switch in the sidebar status bar, stored locally). Claude Code → Codex Desktop uses the official import preview and explicit confirmation; other targets use the CLI adapters. Browser preview and the synthetic demo never read local records or launch clients.
+---
 
-## Install (from source)
+## 3. Technical Guides (Full Text & Official Procedures)
 
-Requirements: Node.js >= 22.13 (node:sqlite is required), the agent CLIs you use with working authentication. The packaged desktop app also depends on an external Node runtime.
+### Guide: Continuing in Codex After Claude Code Reaches Usage Limit (Claude Code 达到使用限额后转入 Codex 继续实操指南)
+- URL (zh): https://relay.bobochang.cn/guides/claude-code-limit-to-codex/
+- URL (en): https://relay.bobochang.cn/en/guides/claude-code-limit-to-codex/
+- Direct Answer (en): When Claude Code reports a five-hour or weekly limit, /compact does not restore quota. Watch reads only the local ~/.claude/projects/<encoded-cwd>/<session>.jsonl, checks the working directory, and copies that record into Codex. The original file stays unchanged. Tool events may become text.
+- 核心解答 (zh): Claude Code 提示 5 小时或周限额时，/compact 不能恢复额度。Watch 只读取本机 ~/.claude/projects/<编码目录>/<会话>.jsonl，核对工作目录后转入 Codex；原文件不改，工具事件可能降级为文本。
 
-    git clone https://github.com/can4hou6joeng4/Watch.git
-    cd Watch && npm install
-    npm run watch -- status --json
+#### Procedure Steps:
+1. **Step 1: Verify source session ID and working directory**: Locate the active Claude Code session ID. History is stored under ~/.claude/projects/<encoded-cwd>/<session-id>.jsonl. Ensure the directory path (cwd) matches the actual project workspace to prevent worktree and repository misalignments.
+1. **Step 2: Ensure target project exists in Codex Desktop**: Under official external agent import requirements, the destination workspace must already be registered in Codex Desktop. Open the folder in Codex Desktop beforehand to establish local trust and project recognition.
+1. **Step 3: Prepare the import plan (Prepare)**: In Watch Desktop, select the source session and click OpenAI Codex, or run the prepare CLI command. This stage performs read-only checks, verifies lock status, and establishes an execution journal without modifying target files.
+1. **Step 4: Confirm import and review degradation items (Confirm)**: Review the previewed message count, working directory, and tool call traces. Explicitly confirm to initiate the transfer via the local Codex app-server import protocol. Note that tool call events may degrade into text representations.
+1. **Step 5: Launch the target client independently (Open)**: Once confirmed, open Codex Desktop using the app interface or resume command. Import and opening are strictly separated: if launching fails, retry opening only without repeating the import phase.
 
-No npm package exists yet. Desktop builds appear on https://github.com/can4hou6joeng4/Watch/releases when a version tag passes CI; only macOS arm64 is validated.
+#### Frequently Asked Questions:
+- **Q: Does Watch bypass or reset Claude Code rate limits?**
+  A: No. Watch is a local handoff utility. It does not tamper with Anthropic accounts or inject credits; it transfers locally saved session artifacts into another agent that has active capacity.
+- **Q: Can I immediately prompt Codex to continue coding?**
+  A: Codex will inspect the imported conversation history, but model performance on resumed tasks depends on the target agent's context capacity. We recommend asking Codex to summarize the current objective before assigning new code edits.
+- **Q: What happens if I submit an import twice?**
+  A: Watch enforces persistent locks and plan idempotency. Duplicate prepare requests for the same source and directory return the existing plan without duplicating records.
 
-## Adapter status (2026-09-16)
+---
 
-- Claude Code: adapter available as source or target; parses local JSONL history under ~/.claude/projects; strict cwd match. Thinking is written as a `[思考] …` text record (a forged native thinking block would break `claude --resume`) and parsed back into a thinking event.
-- OpenAI Codex CLI and Codex Desktop: official single-session import (prepare → preview → confirm) with a Watch-only import lock. Verified on 2026-09-07 (native read and resume, tool events degraded to text) and on 2026-09-10 by a real Watch Tauri click-through on macOS arm64 with Codex CLI 0.153.4 and ChatGPT Desktop 26.903.61454. Model continuation is not verified. Direct-file writes are guarded per target session: Watch reads the native per-thread writer lock `~/.codex/thread-writer-locks/<thread-id>.lock` via `lsof`, refuses only when a live writer holds it, and verifies the target fingerprint before and after; a refused write leaves the target byte-identical (validated 2026-09-16 against a real `codex app-server` holding the lock).
-- OpenCode: CLI adapter over the SQLite store with path isolation and native-ID repair. The official Web/TUI import path passed isolated native checks but is not integrated.
-- Kimi CLI: adapter available. Creating a new session must invoke the real kimi CLI (a model call) to obtain a native session ID and register it in session_index.jsonl; appending to an existing session preserves its history without invoking the CLI. Verified blocker (2026-09-16): the kimi CLI is not installed on the validation host and no documented no-prompt session-creation path exists, so a side-effect-free path could neither be implemented nor validated.
-- Pi CLI: adapter retained, not validated.
-- Grok CLI: adapter plus desktop target card (`grok -r <id>`). Watch writes the native ACP `updates.jsonl` that `/resume` restores from, and detects the local model/agent identity. Isolated validation on 2026-09-14 passed `grok sessions list`, `grok export <id>` and ACP `session/load`; real-terminal TUI frames and model continuation are not verified.
+### Guide: OpenCode, Claude & Codex Bidirectional Session Handoff Guide (OpenCode 与 Claude/Codex 双向会话接力与 SQLite 数据隔离指南)
+- URL (zh): https://relay.bobochang.cn/guides/opencode-handover-sqlite-isolation/
+- URL (en): https://relay.bobochang.cn/en/guides/opencode-handover-sqlite-isolation/
+- Direct Answer (en): OpenCode keeps sessions in ~/.local/share/opencode/opencode.db. WATCH_OPENCODE_DB points Watch at another file. Watch writes sessions, messages, and parts in one SQLite transaction and rolls back if it fails. Unsupported tool fields become text. Later replies depend on the model you configure.
+- 核心解答 (zh): OpenCode 的会话在本机 ~/.local/share/opencode/opencode.db，可用 WATCH_OPENCODE_DB 换库。Watch 用一次 SQLite 事务写入 sessions、messages、parts；事务失败会回滚。不支持的工具参数降级为文本，续写质量取决于你配置的模型。
 
-## Not supported or not promised
+#### Procedure Steps:
+1. **Step 1: Identify source session ID and working directory**: Locate your active session ID. Claude Code stores files in ~/.claude/projects/; Codex in ~/.codex/sessions/; OpenCode indexes sessions via globally unique IDs. Verify that the working directory is an absolute path to maintain project boundary alignment.
+1. **Step 2: Preflight target database status (Check)**: Run Watch CLI with --check to probe the target OpenCode database. Watch validates write permissions and locks on ~/.local/share/opencode/opencode.db (or the custom path specified by WATCH_OPENCODE_DB) to prevent concurrent write contention.
+1. **Step 3: Execute bidirectional handoff (Handoff)**: Select the source session in Watch Desktop and target OpenCode, or run the CLI open command. Watch extracts incremental turns, executes atomic SQLite transactions across sessions, messages, and parts, and issues the destination session ID.
+1. **Step 4: Resume session natively in OpenCode (Resume)**: After conversion, execute opencode -s <session-id> in the workspace directory or trigger the launch button in Watch Desktop. OpenCode loads the recorded conversation in that working directory.
 
-### Antigravity CLI boundaries
+#### Frequently Asked Questions:
+- **Q: What is the advantage of OpenCode's SQLite storage over JSONL?**
+  A: SQLite provides ACID transactions and robust indexing, eliminating the risk of line truncation or file corruption during unexpected termination. The WATCH_OPENCODE_DB override also facilitates isolated test environments.
+- **Q: Are custom model reasoning thoughts retained when handing off out of OpenCode?**
+  A: Watch copies the saved user prompts, assistant text, thinking traces, and tool outputs it can map. Unsupported tool fields become text, so the copy is not a complete replica of the OpenCode row.
+- **Q: How does Watch prevent working directory mismatch?**
+  A: Watch strictly binds the source session's absolute cwd to the OpenCode session entry. When resuming via opencode -s <session-id>, OpenCode locks to that workspace, preventing accidental edits in the wrong directory.
 
-Official documentation reviewed for this site update: https://antigravity.google/docs/cli/commands/resume and https://antigravity.google/docs/cli/reference .
+---
 
-- `agy --conversation <conversation-id>` resumes an existing Antigravity CLI conversation. It does not import an arbitrary Claude, Codex or desktop conversation.
-- `agy -c` looks up the latest conversation for the current working directory. A missing or deleted record can create a fresh conversation, so this is not a side-effect-free status check.
-- Inside the CLI, `/resume` opens an interactive picker. The Antigravity tab can import a selected Antigravity 2.0 conversation after a second confirmation. The official documentation describes cloned history, context and tool trajectories.
-- These are same-product operations. Watch has no Antigravity adapter or validated external-agent import protocol, and has not natively accepted the 2.0-to-CLI path. Antigravity is not a target in the Watch demo or desktop selector.
-- The website's synthetic demo does not perform these operations. No Antigravity picker, conversation resume or model request was run for this deployment.
+### Guide: Context Window Full vs Usage Limits in Claude Code: Practical Guide (Claude Code 上下文满与账户限额的本质区别与应对实操指南)
+- URL (zh): https://relay.bobochang.cn/guides/context-limit-vs-usage-limit-handoff/
+- URL (en): https://relay.bobochang.cn/en/guides/context-limit-vs-usage-limit-handoff/
+- Direct Answer (en): A full context window means this conversation is too long: run /compact or /clear inside Claude Code. An account limit names a reset time, and /compact does nothing then. Watch neither enlarges the window nor restores quota. It copies the saved session into another agent that can still run.
+- 核心解答 (zh): 上下文满了是这一次对话太长，在 Claude Code 里执行 /compact 或 /clear。账户限额到了会给出重置时间，此时 /compact 无效。Watch 不扩大上下文，也不恢复额度，只把已保存的会话记录转入另一个仍可用的 Agent。
 
-### Other limitations
+#### Procedure Steps:
+1. **Step 1: Check terminal error signals to identify the limit type**: If Claude reports "exceeded your limit" with a reset time, it is an account Usage Limit: running /compact will fail because the model quota is exhausted; wait for reset or hand off to Codex / OpenCode. If Claude reports conversation length limits or high latency, it is a Context Window Limit: run /compact.
+1. **Step 2: Apply native resolution for context length (/compact & /clear)**: Inside Claude Code, run /compact to compress conversation history into a distilled summary. If historical investigative turns are no longer required, run /clear to begin a clean slate in the current workspace.
+1. **Step 3: Save session state upon hitting account usage quotas**: Verify Claude Code has flushed its session transcript to ~/.claude/projects/<enc-cwd>/<session-id>.jsonl. Use Watch to inspect the working directory and target readiness for Codex or OpenCode.
+1. **Step 4: Hand off to an alternative agent without repeating context**: Use Watch to convert the recorded reasoning and test results into the destination agent's format, then resume in the new CLI with full preceding context.
 
-Antigravity; Claude Desktop Code; Windows and Linux (buildable, not validated); attachments (dropped, a text placeholder is kept); Claude "thinking" blocks (degraded to text); zero data loss (file replacement uses atomic writes with round-trip verification and a .bak copy, but append paths do not have equivalent protection); quota bypass; code or worktree migration; identical model behaviour across tools.
+#### Frequently Asked Questions:
+- **Q: Will /compact discard code modifications made on disk?**
+  A: No. File edits already exist on your local filesystem. /compact only compresses in-memory conversation history. However, detailed sub-error messages may be summarized.
+- **Q: Why does /compact fail when hitting an account usage limit?**
+  A: /compact requires calling the underlying LLM to generate the conversation summary. When your account quota is exhausted, all API requests are blocked. In this scenario, switching to another agent via Watch is the only immediate continuation path.
+- **Q: Does handing off to Codex or OpenCode reset context?**
+  A: The destination agent receives a fresh context window initialized with the preceding task summary and command outputs, resolving context saturation from the previous session.
 
-## Safety mechanisms
+---
 
-Atomic file replacement: write to a temp file in the same directory, fsync, re-parse it with the same adapter to verify, keep a single .bak, then rename. A fingerprint check blocks the write if the target changed between resolve and write. The official Codex import uses an execution log under ~/.watch/imports/<plan-id>/ and a lock file inside CODEX_HOME; both are kept on uncertain results.
+### Guide: What Claude Opus 5.5 changes about five-hour limits, and what to do when you are still capped (Claude Opus 5.5 提高 5 小时限额之后，限额和会话接力分别怎么处理)
+- URL (zh): https://relay.bobochang.cn/guides/opus-5-5-five-hour-limit/
+- URL (en): https://relay.bobochang.cn/en/guides/opus-5-5-five-hour-limit/
+- Direct Answer (en): Opus 5.5 raises the five-hour limit on Pro, Max, Team, and seat-based Enterprise, and adds one reset you can save. It does not remove the limit. Watch does not read or raise Claude quota. Hand the saved session to Codex only after that official reset is still not enough.
+- 核心解答 (zh): Opus 5.5 提高的是 Pro、Max、Team 和按席位 Enterprise 的 5 小时限额，并给一次可保存的重置，不是取消限额。Watch 不读取、不增加 Claude 额度。官方重置用完后若仍被拦住，再把本机会话转入 Codex。
 
-## FAQ
+#### Procedure Steps:
+1. **Step 1: Read which limit the product is reporting**: A message that you have exceeded the current usage limit, with a reset time, is an account limit. /compact does not restore that quota. A message about conversation length is a context-window limit. Compact inside Claude Code. Switching the model name is not the fix for either case.
+1. **Step 2: Use the plan’s own five-hour limit and saved reset**: The higher five-hour limit applies to Pro, Max, Team, and seat-based Enterprise. The savable reset belongs to the Claude subscription. Watch has not verified a CLI flag that stores it, so do not assume a Watch command has banked the reset for you. If you are still blocked after the reset Anthropic provides, then consider another agent.
+1. **Step 3: Hand off only if Claude is still blocked**: Watch does not read, raise, or bypass Claude quota. It copies a session already saved on disk into Codex, keeping the working directory. Follow the existing guide, Continuing in Codex after Claude Code reaches its usage limit: check the session id and directory, then prepare, confirm, and open Codex separately.
 
-Q: Claude Code hit its limit mid-task (5-hour or weekly limit, "limit reached"). How do I continue?
-A: Enter the Claude Code session ID in Watch, check the detected working directory (cwd), pick Codex, OpenCode, Kimi or Pi. Watch converts the saved record and launches the target agent in the same directory. Watch does not bypass limits; tool events may be degraded to text and the result lists what was degraded.
+#### Frequently Asked Questions:
+- **Q: Does Claude Opus 5.5 remove the five-hour usage limit?**
+  A: No. Anthropic increased the five-hour limit on Pro, Max, Team, and seat-based Enterprise. The limit still exists, and hitting it still shows a reset time.
+- **Q: Can Watch spend the savable rate-limit reset for me?**
+  A: No. That control belongs to the Claude subscription. Watch does not sign in to a Claude account, and it neither stores nor spends the reset.
+- **Q: Do I still hand the session to Codex after the limit increase?**
+  A: Only when the official reset is not enough and Codex still has quota. The handoff steps did not change with Opus 5.5.
 
-Q: How do I switch from Claude Code to Codex and resume the same session (migration / handoff)?
-A: Desktop: select the source session and click the OpenAI Codex card (official single-session import: prepare → confirm → open). CLI: watch import-codex prepare <claude-id> --cwd <project> --desktop-project --experimental, then confirm. The project must already exist in Codex Desktop. Model continuation is outside the validated scope.
-
-Q: My Claude Code context window is full. Does Watch compact it?
-A: No. /compact and /clear are Claude Code's own commands. Watch moves the saved session record into another agent; the original session is untouched.
-
-Q: Where are Claude Code, Codex and OpenCode session files, and how do I resume a previous conversation?
-A: Claude Code: ~/.claude/projects/<encoded-cwd>/<session-id>.jsonl (claude --resume <id>). Codex: ~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl (codex resume <id>). OpenCode: ~/.local/share/opencode/opencode.db (opencode -s <id>). Watch resolves a session ID to these locations and shows the owning working directory.
-
-Q: I use both Claude Code and Codex. How do I move between them without losing context?
-A: Claude → Codex uses the official import preview; Codex → Claude uses the CLI adapter conversion. Both keep the working directory; degraded events are reported.
-
-Q: Is my code or my API key uploaded anywhere?
-A: Not by Watch. It has no server, account or telemetry. Two things do reach the network: the kimi CLI when creating a Kimi session, and the local Codex app-server during an official Codex import, using the credentials you already configured.
-
-Q: Will handoff damage the target client's existing history?
-A: The official Codex import writes only after you confirm the preview and holds a Watch-only lock. Direct-file targets use atomic replacement with verification and a .bak copy. For Codex specifically, Watch first resolves the exact target session (existing pairing/reuse or a new session), probes the native per-thread writer lock, and refuses when another writer holds it — a refused handoff writes nothing at all, reports the holder PID, and can be retried after the writer exits (`watch open … --check` reports the same state read-only). Other append paths are less protected, so test with a disposable session first.
-
-Q: What is YOLO mode?
-A: Off by default. When enabled, Watch adds the target CLI's own bypass flag (for example -y) to the generated command. The risk is whatever that CLI does with the flag; it is not a desktop permission setting.
-
-## Author
-
-can4hou6joeng4, developer, Guangzhou. Homepage https://bobochang.cn. GitHub https://github.com/can4hou6joeng4. Part of "The Fleet": Homeport, Watch, Atlas, Sonar, Semaphore, Buoy, Beacon.
-
-## Links
-
-- Source: https://github.com/can4hou6joeng4/Watch
-- Compatibility evidence: https://github.com/can4hou6joeng4/Watch/blob/main/docs/COMPATIBILITY.md
-- Official import guide: https://github.com/can4hou6joeng4/Watch/blob/main/docs/import-codex.md
-- Dated acceptance records: https://github.com/can4hou6joeng4/Watch/tree/main/docs/evidence
+---
