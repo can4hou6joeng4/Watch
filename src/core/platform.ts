@@ -11,14 +11,19 @@ export function toPosix(p: string): string {
   return p.replace(/\\/g, '/');
 }
 
-/** 去掉 Windows 设备路径前缀 `\\?\`（canonicalize 返回）；非 Windows 原样返回。 */
+/** 去掉 Windows 设备路径前缀 `\\?\`（canonicalize 返回）；UNC 形式还原为普通 UNC 路径。 */
 export function stripDevicePrefix(p: string): string {
-  return IS_WIN && p.startsWith('\\\\?\\') ? p.slice(4) : p;
+  if (p.startsWith('\\\\?\\UNC\\')) return `\\\\${p.slice(8)}`;
+  if (p.startsWith('\\\\?\\')) return p.slice(4);
+  return p;
 }
 
-/** canonicalize 语义的键归一：去设备前缀 + 正反斜杠统一。不改变磁盘路径本身。 */
+/**
+ * canonicalize 语义的键归一：先去设备前缀，再统一正反斜杠。
+ * 顺序不能反：`toPosix` 会把 `\\?\` 变成 `//?/`，此前缀不再匹配，前缀会留在键里。
+ */
 export function normalizePath(p: string): string {
-  return stripDevicePrefix(toPosix(p));
+  return toPosix(stripDevicePrefix(p));
 }
 
 /** 剥尾部 `/`/`\` 后做大小写不敏感比较（Windows 文件系统不区分大小写），其余平台精确比较。 */
