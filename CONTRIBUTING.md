@@ -51,7 +51,7 @@ site/               官网静态资源
 
 ## 提交规范
 
-- Conventional Commits，作用域小写英文，主题一行中文，例如 `fix(store): 修复旧数据库迁移顺序`。
+- Conventional Commits，作用域小写英文，主题一行中文，例如 `fix(handoff): 修复空链来源判定顺序`。
 - 只写一行 subject，不加 body 或 trailers。
 - 一次提交聚焦一个模块；涉及行为变更的 PR 请说明验证方式、已知问题与平台限制。
 
