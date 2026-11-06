@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { stat } from 'node:fs/promises';
+import path from 'node:path';
 import { Store, defaultDbPath } from './core/store.js';
 import { adoptIntoChain, chainStatus, chainUsage, collectTips, createChainSession, handoff, HandoffBlockedError } from './core/handoff.js';
 import { reindexCwd } from './core/search.js';
@@ -158,7 +159,9 @@ function parseArgs(argv: string[]): {
     extra: positional[2],
     rest: positional.slice(2),
     json,
-    cwd,
+    // 统一绝对路径：各 provider 的 listSessions / findLatestSession 按记录里的字符串精确比较 cwd，
+    // `--cwd .` 或尾部带 / 会静默匹配不到任何会话。path.resolve 幂等，不影响桌面桥传来的绝对路径。
+    cwd: path.resolve(cwd),
     session,
     chain,
     from,
