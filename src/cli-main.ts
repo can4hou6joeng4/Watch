@@ -397,9 +397,12 @@ async function cmdSessions(cwd: string, json: boolean, chain?: string): Promise<
             return { provider: a.id, sessions: [] };
           }
           const ids = bound.get(a.id);
+          // 撞到适配器上限时列表只是「最近 N 个」：不标出来会被当成全集
+          const capped = a.listSessionsCap !== undefined && sessions.length >= a.listSessionsCap;
           return {
             provider: a.id,
             sessions: ids ? sessions.filter((s) => ids.has(s.ref.sessionId)) : sessions,
+            ...(capped ? { capped: true } : {}),
           };
         }),
     );
@@ -421,7 +424,7 @@ async function cmdSessions(cwd: string, json: boolean, chain?: string): Promise<
       return;
     }
     for (const g of result) {
-      console.log(`${g.provider}:`);
+      console.log(`${g.provider}${g.capped ? '（已达列表上限，更早的会话未列出）' : ''}:`);
       for (const s of g.sessions) {
         console.log(`  ${s.ref.sessionId}  mtime=${fmtTime(s.updatedAt)}`);
         if (s.preview) console.log(`    ${s.preview}`);

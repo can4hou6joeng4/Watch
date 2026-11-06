@@ -29,6 +29,14 @@ export async function reindexCwd(
       continue;
     }
     const stats = store.indexedStats(cwd, adapter.id);
+    // listSessions 有上限时，更早的会话本轮根本不会被枚举到，索引里也就永远没有它们——
+    // 不说清楚，「搜不到」会被当成「没聊过」
+    const cap = adapter.listSessionsCap;
+    if (cap !== undefined && list.length >= cap) {
+      warnings?.push(
+        `${adapter.id} 会话数达到列表上限 ${cap}，本次只索引最近的 ${cap} 个会话，更早的会话搜不到`,
+      );
+    }
     let failed = 0;
     let firstError = '';
     for (const s of list) {
