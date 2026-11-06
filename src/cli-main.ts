@@ -527,11 +527,14 @@ async function cmdRecent(cwd: string, json: boolean, limit: number = 8): Promise
 
   results.sort((a, b) => b.updatedAt - a.updatedAt);
   const final = results.slice(0, limit);
+  // 列表被 --limit（默认 8）截断时要说出来，否则用户会把「最近 8 条」当成全部
+  const truncated = results.length > final.length;
 
   if (json) {
     console.log(JSON.stringify({
       ok: true,
       sessions: final,
+      ...(truncated ? { truncated: true, total: results.length } : {}),
       ...(unavailable.length ? { unavailable } : {}),
       ...(warnings.length ? { warnings } : {}),
     }));
@@ -539,6 +542,9 @@ async function cmdRecent(cwd: string, json: boolean, limit: number = 8): Promise
   }
   for (const warning of warnings) console.error(`警告: ${warning}`);
   if (unavailable.length) console.error(`未读取: ${unavailable.join('、')}（读取失败，已跳过）`);
+  if (truncated) {
+    console.error(`提示: 只显示最近 ${final.length} 条，另有 ${results.length - final.length} 条更早的会话未列出（--limit 可调，最大 50）`);
+  }
   if (!final.length) {
     console.log('暂无最近会话记录');
     return;
