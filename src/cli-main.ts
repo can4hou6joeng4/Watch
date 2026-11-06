@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { stat } from 'node:fs/promises';
 import path from 'node:path';
-import { Store, defaultDbPath } from './core/store.js';
+import { SEARCH_MAX_HITS, Store, defaultDbPath } from './core/store.js';
 import { adoptIntoChain, chainStatus, chainUsage, collectTips, createChainSession, handoff, HandoffBlockedError } from './core/handoff.js';
 import { reindexCwd } from './core/search.js';
 import type { SessionRef } from './core/types.js';
@@ -878,8 +878,17 @@ async function cmdSearch(cwd: string, json: boolean, query: string): Promise<voi
     if (cwdIssue) warnings.push(cwdIssue);
     await reindexCwd(cwd, listAdapters(), store, warnings);
     const hits = store.searchMessages(query, cwd);
+    // 命中撞上限时结果只是「至少这么多」：单会话 3 条 + 全局 40 条都会截断，不说清楚会被当成全部
+    const truncated = hits.length >= SEARCH_MAX_HITS;
     if (json) {
-      console.log(JSON.stringify({ ok: true, query, cwd, hits, ...(warnings.length ? { warnings } : {}) }));
+      console.log(JSON.stringify({
+        ok: true,
+        query,
+        cwd,
+        hits,
+        ...(truncated ? { truncated: true } : {}),
+        ...(warnings.length ? { warnings } : {}),
+      }));
       return;
     }
     for (const warning of warnings) console.error(`警告: ${warning}`);
@@ -890,6 +899,11 @@ async function cmdSearch(cwd: string, json: boolean, query: string): Promise<voi
     for (const h of hits) {
       console.log(`${h.provider}  ${h.sessionId}`);
       console.log(`  ${h.snippet.replace(/\s+/g, ' ')}`);
+    }
+    if (truncated) {
+      console.error(
+        `提示: 命中数达到上限 ${SEARCH_MAX_HITS} 条，可能还有更多结果未列出（单个会话最多 3 条），可用更具体的关键词缩小范围`,
+      );
     }
   } catch (error) {
     fail(json, error instanceof Error ? error.message : String(error));

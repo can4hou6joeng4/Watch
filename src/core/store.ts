@@ -11,6 +11,8 @@ const REQUIRED_TABLES = ['sessions', 'turns', 'switch_events', 'turn_events', 'c
 const FTS_TEXT_LIMIT = 8192;
 /** 搜索返回的命中上限；单个会话最多占 MAX_PER_SESSION 条，避免一场对话淹没其它会话 */
 const MAX_HITS = 40;
+/** 命中数撞到 MAX_HITS 只说明「至少这么多」：调用方据此披露结果被截断 */
+export const SEARCH_MAX_HITS = MAX_HITS;
 const MAX_PER_SESSION = 3;
 /** SQL 先多取一些再按会话截断，否则 LIMIT 会在截断前就把其它会话切掉 */
 const SCAN_LIMIT = 200;
@@ -750,7 +752,7 @@ function capPerSession(hits: SearchHit[]): SearchHit[] {
     if (n >= MAX_PER_SESSION) continue;
     seen.set(key, n + 1);
     out.push(hit);
-    if (out.length >= MAX_HITS) break;
+    if (out.length >= SEARCH_MAX_HITS) break;
   }
   return out;
 }
