@@ -283,7 +283,16 @@ async function cmdAdopt(
       if (!adapter?.listSessions) throw new Error(`未知 provider: ${providerId}`);
       const all = await adapter.listSessions(cwd);
       const hit = all.find((s) => s.ref.sessionId === sessionId);
-      if (!hit) throw new Error(`在当前目录找不到会话: ${sessionId}`);
+      if (!hit) {
+        // 列表有上限时，更早的会话根本没被枚举到：直接说「找不到」会让用户以为 id 写错了
+        const cap = adapter.listSessionsCap;
+        const capped = cap !== undefined && all.length >= cap;
+        throw new Error(
+          capped
+            ? `在当前目录最近 ${all.length} 个会话里找不到: ${sessionId}（${adapter.id} 列表上限 ${cap}，更早的会话不在其中，可用 watch sessions 或原生 CLI 确认真实 id）`
+            : `在当前目录找不到会话: ${sessionId}`,
+        );
+      }
       targetRef = hit.ref;
     }
     const result = await adoptIntoChain(providerId, cwd, listAdapters(), store, targetRef, chain);
