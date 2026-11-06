@@ -163,16 +163,19 @@ export async function chainUsage(
 ): Promise<{
   chain: Chain | null;
   total: TokenUsage;
-  byProvider: { provider: string; sessionId: string; usage: TokenUsage | null }[];
+  byProvider: { provider: string; sessionId: string; usage: TokenUsage | null; error?: string }[];
+  /** 用量读不出来的会话：null 可能是「原生没有 usage」，这里单独说明是真失败 */
+  warnings: string[];
 }> {
   const empty = { inputTokens: 0, outputTokens: 0 };
   if (!store) {
-    return { chain: null, total: empty, byProvider: [] };
+    return { chain: null, total: empty, byProvider: [], warnings: [] };
   }
+  const warnings: string[] = [];
   const chain = store.findActiveChain(cwd, chainId);
   if (chainId && !chain) throw new Error(`找不到链: ${chainId}`);
   const history = chain ? store.listSwitchEvents(chain.id) : [];
-  const byProvider: { provider: string; sessionId: string; usage: TokenUsage | null }[] = [];
+  const byProvider: { provider: string; sessionId: string; usage: TokenUsage | null; error?: string }[] = [];
   let total = { ...empty };
   for (const adapter of adapters) {
     const ref = pairedRef(history, adapter.id);
@@ -180,8 +183,12 @@ export async function chainUsage(
     let usage: TokenUsage | null = null;
     try {
       usage = await adapter.sessionUsage(ref);
-    } catch {
-      usage = null;
+    } catch (error) {
+      // 读失败不能和「这家原生格式没有 usage」混为一谈（grok 本机无数据也是 null）
+      const msg = error instanceof Error ? error.message : String(error);
+      warnings.push(`${adapter.id} 用量读取失败：${msg}`);
+      byProvider.push({ provider: adapter.id, sessionId: ref.sessionId, usage: null, error: msg });
+      continue;
     }
     byProvider.push({ provider: adapter.id, sessionId: ref.sessionId, usage });
     if (usage) {
@@ -191,7 +198,7 @@ export async function chainUsage(
       };
     }
   }
-  return { chain, total, byProvider };
+  return { chain, total, byProvider, warnings };
 }
 
 export type ProviderTip = {

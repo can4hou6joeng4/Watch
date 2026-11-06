@@ -669,12 +669,17 @@ async function cmdUsage(cwd: string, json: boolean, chain?: string): Promise<voi
       console.log('无链或该链无绑定会话');
       return;
     }
+    for (const warning of result.warnings) console.error(`警告: ${warning}`);
     console.log(`合计: in=${result.total.inputTokens}  out=${result.total.outputTokens}`);
     console.log('');
     console.log('按会话:');
     for (const item of result.byProvider) {
       const u = item.usage ?? { inputTokens: 0, outputTokens: 0 };
-      const note = item.usage === null ? '（无 usage 字段）' : '';
+      const note = item.error
+        ? `（读取失败: ${item.error}）`
+        : item.usage === null
+          ? '（无 usage 字段）'
+          : '';
       console.log(
         `  ${item.provider.padEnd(8)} ${item.sessionId.slice(0, 8)}…  in=${u.inputTokens}  out=${u.outputTokens}${note}`,
       );
