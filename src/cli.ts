@@ -689,12 +689,14 @@ async function cmdSearch(cwd: string, json: boolean, query: string): Promise<voi
   const store = openStore();
   if (!store) fail(json, '无法打开数据库');
   try {
-    await reindexCwd(cwd, listAdapters(), store);
+    const warnings: string[] = [];
+    await reindexCwd(cwd, listAdapters(), store, warnings);
     const hits = store.searchMessages(query, cwd);
     if (json) {
-      console.log(JSON.stringify({ ok: true, query, cwd, hits }));
+      console.log(JSON.stringify({ ok: true, query, cwd, hits, ...(warnings.length ? { warnings } : {}) }));
       return;
     }
+    for (const warning of warnings) console.error(`警告: ${warning}`);
     if (!hits.length) {
       console.log('无结果');
       return;
