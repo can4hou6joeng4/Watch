@@ -581,7 +581,9 @@ async function cmdRecent(cwd: string, json: boolean, limit: number = 8): Promise
     return;
   }
   for (const s of final) {
-    console.log(`  [${s.provider}] ${s.sessionId} (${s.cwd})`);
+    // 「最近」的价值就在时间与摘要：JSON 一直带 updatedAt / preview，文本模式不能只留 id
+    console.log(`  [${s.provider}] ${s.sessionId} (${s.cwd})  mtime=${fmtTime(s.updatedAt)}`);
+    if (s.preview) console.log(`    ${s.preview}`);
   }
 }
 
