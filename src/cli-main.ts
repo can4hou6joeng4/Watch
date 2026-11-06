@@ -921,9 +921,8 @@ async function cmdSearch(cwd: string, json: boolean, query: string): Promise<voi
     const cwdIssue = await cwdProblem(cwd);
     if (cwdIssue) warnings.push(cwdIssue);
     await reindexCwd(cwd, listAdapters(), store, warnings);
-    const hits = store.searchMessages(query, cwd);
-    // 命中撞上限时结果只是「至少这么多」：单会话 3 条 + 全局 40 条都会截断，不说清楚会被当成全部
-    const truncated = hits.length >= SEARCH_MAX_HITS;
+    // 三种上限各自独立：全局 40 条、单会话 3 条、session id 前缀 10 条；只说「truncated」会混淆是哪一种
+    const { hits, truncated, perSessionCapped, idPrefixCapped } = store.searchMessagesWithMeta(query, cwd);
     if (json) {
       console.log(JSON.stringify({
         ok: true,
@@ -931,6 +930,8 @@ async function cmdSearch(cwd: string, json: boolean, query: string): Promise<voi
         cwd,
         hits,
         ...(truncated ? { truncated: true } : {}),
+        ...(perSessionCapped ? { perSessionCapped: true } : {}),
+        ...(idPrefixCapped ? { idPrefixCapped: true } : {}),
         ...(warnings.length ? { warnings } : {}),
       }));
       return;
@@ -948,6 +949,12 @@ async function cmdSearch(cwd: string, json: boolean, query: string): Promise<voi
       console.error(
         `提示: 命中数达到上限 ${SEARCH_MAX_HITS} 条，可能还有更多结果未列出（单个会话最多 3 条），可用更具体的关键词缩小范围`,
       );
+    }
+    if (perSessionCapped) {
+      console.error('提示: 单个会话最多显示 3 条命中，命中更多的会话只列出了前 3 条，可用更具体的关键词缩小范围');
+    }
+    if (idPrefixCapped) {
+      console.error('提示: session id 前缀命中超过 10 个，只列出前 10 个，可用更长的 id 前缀缩小范围');
     }
   } catch (error) {
     fail(json, error instanceof Error ? error.message : String(error));

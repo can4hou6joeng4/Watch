@@ -25,6 +25,17 @@ export type SearchHit = {
   snippet: string;
 };
 
+/** 搜索结果 + 三种硬上限是否真的截掉了命中（逐项独立，不能互相冒充） */
+export type SearchResult = {
+  hits: SearchHit[];
+  /** 全局 40 条上限截掉了命中 */
+  truncated: boolean;
+  /** 某会话命中超过 3 条、只保留前 3 条 */
+  perSessionCapped: boolean;
+  /** 查询像 session id 时，前缀命中触碰 LIMIT 10 */
+  idPrefixCapped: boolean;
+};
+
 export type Chain = {
   id: string;
   cwd: string;
@@ -369,16 +380,26 @@ export class Store {
   }
 
   searchMessages(query: string, cwd?: string): SearchHit[] {
+    return this.searchMessagesWithMeta(query, cwd).hits;
+  }
+
+  /**
+   * 与 `searchMessages` 同源，但把「结果被截断」的原因一并带出：
+   * 全局 40 条、单会话 3 条、session id 前缀 10 条都是硬上限，消费方不能把截断当成全部。
+   */
+  searchMessagesWithMeta(query: string, cwd?: string): SearchResult {
     const q = query.trim();
-    if (!q) return [];
+    if (!q) return { hits: [], truncated: false, perSessionCapped: false, idPrefixCapped: false };
+    const normalized = cwd ? this.normCwd(cwd) : undefined;
     // 顺手支持按原生 session id（或其前缀）找会话：用户手里常只有 id，正文里搜不到
-    const byId = this.searchSessionIdPrefix(q, cwd ? this.normCwd(cwd) : undefined);
-    return capPerSession([...byId, ...this.searchIndexText(q, cwd)]);
+    const byId = this.searchSessionIdPrefix(q, normalized);
+    const capped = capPerSession([...byId.hits, ...this.searchIndexText(q, normalized)]);
+    return { hits: capped.hits, truncated: capped.truncated, perSessionCapped: capped.perSessionCapped, idPrefixCapped: byId.capped };
   }
 
   /** 查询形如 session id 时，按 `search_index` 里的 id 前缀命中（uuid 片段即可；`reindexCwd` 总会写游标） */
-  private searchSessionIdPrefix(q: string, cwd?: string): SearchHit[] {
-    if (!/^[0-9a-f][0-9a-f-]{3,63}$/i.test(q)) return [];
+  private searchSessionIdPrefix(q: string, cwd?: string): { hits: SearchHit[]; capped: boolean } {
+    if (!/^[0-9a-f][0-9a-f-]{3,63}$/i.test(q)) return { hits: [], capped: false };
     const like = `${q.toLowerCase()}%`;
     const sql = cwd
       ? `SELECT session_id, provider, cwd, file_path FROM search_index WHERE cwd=? AND session_id LIKE ? LIMIT 10`
@@ -386,13 +407,17 @@ export class Store {
     const rows = (
       cwd ? this.db.prepare(sql).all(cwd, like) : this.db.prepare(sql).all(like)
     ) as { session_id: string; provider: string; cwd: string; file_path: string }[];
-    return rows.map((r) => ({
-      sessionId: r.session_id,
-      provider: r.provider,
-      cwd: r.cwd,
-      filePath: r.file_path,
-      snippet: `会话 ${r.session_id}`,
-    }));
+    return {
+      // 撞到 LIMIT 10 时前缀命中只是「至少这么多」
+      capped: rows.length >= 10,
+      hits: rows.map((r) => ({
+        sessionId: r.session_id,
+        provider: r.provider,
+        cwd: r.cwd,
+        filePath: r.file_path,
+        snippet: `会话 ${r.session_id}`,
+      })),
+    };
   }
 
   private searchIndexText(query: string, cwd?: string): SearchHit[] {
@@ -416,15 +441,14 @@ export class Store {
       file_path: string;
       snippet: string;
     }[];
-    return capPerSession(
-      rows.map((r) => ({
-        sessionId: r.session_id,
-        provider: r.provider,
-        cwd: r.cwd,
-        filePath: r.file_path,
-        snippet: r.snippet,
-      })),
-    );
+    // 截断统一在 searchMessagesWithMeta 里做，这里只负责取候选
+    return rows.map((r) => ({
+      sessionId: r.session_id,
+      provider: r.provider,
+      cwd: r.cwd,
+      filePath: r.file_path,
+      snippet: r.snippet,
+    }));
   }
 
   /** 不足 3 字符的查询：FTS5 trigram 无法命中，直接对索引文本做子串匹配 */
@@ -442,15 +466,13 @@ export class Store {
       file_path: string;
       text: string;
     }[];
-    return capPerSession(
-      rows.map((r) => ({
-        sessionId: r.session_id,
-        provider: r.provider,
-        cwd: r.cwd,
-        filePath: r.file_path,
-        snippet: excerpt(r.text, q),
-      })),
-    );
+    return rows.map((r) => ({
+      sessionId: r.session_id,
+      provider: r.provider,
+      cwd: r.cwd,
+      filePath: r.file_path,
+      snippet: excerpt(r.text, q),
+    }));
   }
 
   /** 首开聊：建 session 行 + 首轮 user/assistant + 首轮过程事件，返回 session id */
@@ -743,18 +765,26 @@ export class Store {
 
 /** 为短查询生成带方括号高亮的片段（FTS5 的 snippet() 只在 MATCH 路径可用） */
 /** 按 (provider, sessionId) 截断到 MAX_PER_SESSION 条，再取前 MAX_HITS 条；保持原有排序 */
-function capPerSession(hits: SearchHit[]): SearchHit[] {
+function capPerSession(hits: SearchHit[]): Pick<SearchResult, 'hits' | 'truncated' | 'perSessionCapped'> {
   const seen = new Map<string, number>();
   const out: SearchHit[] = [];
+  let perSessionCapped = false;
+  let truncated = false;
   for (const hit of hits) {
     const key = `${hit.provider}\u0000${hit.sessionId}`;
     const n = seen.get(key) ?? 0;
-    if (n >= MAX_PER_SESSION) continue;
+    if (n >= MAX_PER_SESSION) {
+      perSessionCapped = true;
+      continue;
+    }
+    if (out.length >= SEARCH_MAX_HITS) {
+      truncated = true;
+      break;
+    }
     seen.set(key, n + 1);
     out.push(hit);
-    if (out.length >= SEARCH_MAX_HITS) break;
   }
-  return out;
+  return { hits: out, truncated, perSessionCapped };
 }
 
 function excerpt(text: string, q: string): string {
