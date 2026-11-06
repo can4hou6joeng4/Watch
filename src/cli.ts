@@ -23,7 +23,7 @@ function usage(): never {
   watch usage [--json] [--cwd <path>] [--chain <id|name>]
   watch import-codex prepare|confirm|status <id> [--cwd <path>] [--desktop-project] [--experimental] [--json]
   watch import-codex project-prepare|project-confirm|project-status <plan-id> [--project <project-id>] [--experimental] [--json]
-  watch open <session-id> [--from <session-id>] [--provider <name>] [--to <provider>] [--check]  反查 cwd 并输出 cd + 打开命令；带 --from 先并入旧会话；带 --to 把该会话内容转入指定 provider 的新会话；带 --check 只做点击前预检（不写入）`);
+  watch open <session-id> [--from <session-id>] [--provider <name>] [--to <provider>] [--check] [--json]  反查 cwd 并输出 cd + 打开命令；带 --from 先并入旧会话；带 --to 把该会话内容转入指定 provider 的新会话；带 --check 只做点击前预检（不写入）`);
   process.exit(1);
 }
 
@@ -88,7 +88,14 @@ function parseArgs(argv: string[]): {
   let to: string | undefined;
   let check = false;
   const positional: string[] = [];
-  for (let i = 0; i < args.length; i++) {
+  let i = 0;
+  /** 取下一个 token 作为参数值；缺值或误吞了下一个 flag 都按用法错误处理 */
+  const takeValue = (): string => {
+    const next = args[++i];
+    if (!next || next.startsWith('--')) usage();
+    return next;
+  };
+  for (i = 0; i < args.length; i++) {
     const a = args[i]!;
     if (a === '--json') continue;
     if (a === '--check') {
@@ -96,33 +103,27 @@ function parseArgs(argv: string[]): {
       continue;
     }
     if (a === '--cwd') {
-      const next = args[++i];
-      if (!next) usage();
-      cwd = next;
+      cwd = takeValue();
       continue;
     }
     if (a === '--session') {
-      session = args[++i];
+      session = takeValue();
       continue;
     }
     if (a === '--chain') {
-      chain = args[++i];
-      if (!chain) usage();
+      chain = takeValue();
       continue;
     }
     if (a === '--from') {
-      from = args[++i];
-      if (!from) usage();
+      from = takeValue();
       continue;
     }
     if (a === '--provider') {
-      provider = args[++i];
-      if (!provider) usage();
+      provider = takeValue();
       continue;
     }
     if (a === '--to') {
-      to = args[++i];
-      if (!to) usage();
+      to = takeValue();
       continue;
     }
     positional.push(a);
