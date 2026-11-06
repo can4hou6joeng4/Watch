@@ -394,29 +394,27 @@ async function cmdRecent(cwd: string, json: boolean, limit: number = 8): Promise
     }
   }
 
-  // Also scan cwd and providers for recent sessions if few
-  if (results.length < limit) {
-    for (const adapter of listAdapters()) {
-      if (!adapter.listSessions) continue;
-      try {
-        const sessions = await adapter.listSessions(cwd);
-        for (const s of sessions) {
-          if (results.length >= limit) break;
-          const key = `${s.ref.provider}:${s.ref.sessionId}`;
-          if (!seen.has(key)) {
-            seen.add(key);
-            results.push({
-              provider: s.ref.provider,
-              sessionId: s.ref.sessionId,
-              cwd: s.ref.cwd,
-              updatedAt: s.updatedAt,
-              preview: s.preview,
-            });
-          }
+  // 原生存储里可能有映射表还没见过的更新会话，所以始终扫一遍；
+  // 不能凑够 limit 条就提前收手——那会按 registry 顺序先到先得，把别家更新的会话挤掉。
+  for (const adapter of listAdapters()) {
+    if (!adapter.listSessions) continue;
+    try {
+      const sessions = await adapter.listSessions(cwd);
+      for (const s of sessions) {
+        const key = `${s.ref.provider}:${s.ref.sessionId}`;
+        if (!seen.has(key)) {
+          seen.add(key);
+          results.push({
+            provider: s.ref.provider,
+            sessionId: s.ref.sessionId,
+            cwd: s.ref.cwd,
+            updatedAt: s.updatedAt,
+            preview: s.preview,
+          });
         }
-      } catch {
-        // ignore
       }
+    } catch {
+      // ignore
     }
   }
 
