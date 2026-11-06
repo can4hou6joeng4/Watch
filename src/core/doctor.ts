@@ -1,4 +1,4 @@
-import { stat } from 'node:fs/promises';
+import { realpath, stat } from 'node:fs/promises';
 import type { ProviderAdapter } from '../providers/adapter.js';
 import { listAdapters, listProviders } from '../providers/registry.js';
 import type { ProviderInfo } from './types.js';
@@ -122,6 +122,17 @@ export async function doctorReport(cwd: string, deps: DoctorDeps): Promise<Docto
   // 路径本身错了，下面每项都会安静地返回 0，看起来像「一切正常」——先把它说清楚
   const cwdIssue = await cwdProblem(cwd);
   if (cwdIssue) warnings.push(cwdIssue);
+  // 符号链接是另一类「路径没写错但匹配不到」：provider 按原生记录的字符串精确比较，
+  // 用另一写法打开过的会话不会出现在这里。先记下 realpath，等扫完会话再决定要不要提醒。
+  let realCwd: string | null = null;
+  if (!cwdIssue) {
+    try {
+      const real = await realpath(cwd);
+      if (real !== cwd) realCwd = real;
+    } catch {
+      /* stat 已经成功；realpath 失败不额外报，避免同一路径报两次 */
+    }
+  }
 
   const adapters = deps.adapters ?? listAdapters();
   const providers = await listProviders(adapters);
@@ -139,6 +150,12 @@ export async function doctorReport(cwd: string, deps: DoctorDeps): Promise<Docto
       storage.push({ provider: adapter.id, count: null, error: message });
       warnings.push(`${adapter.displayName} 会话列表读取失败：${message}`);
     }
+  }
+
+  if (realCwd && storage.length > 0 && storage.every((s) => s.count === 0)) {
+    warnings.push(
+      `--cwd 是符号链接（realpath: ${realCwd}），且本目录没扫到任何会话；各 provider 按原生记录的路径字符串精确比较，若曾在另一写法下开过会话，换该路径重跑 watch doctor`,
+    );
   }
 
   let store: DoctorReport['store'];
