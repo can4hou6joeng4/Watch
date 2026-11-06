@@ -34,7 +34,7 @@ export async function runImportCodex(args: string[]): Promise<void> {
       else console.log(`Source: ${result.plan.source.sessionId}\nProject: ${result.plan.source.cwd}`);
       if ('evidenceScope' in result && result.status === 'associated') console.log('Recorded association result; live project membership is not queried by status.');
       console.log(`Codex data: ${result.plan.target?.path ?? result.plan.codexHome}`);
-      if ('warnings' in result) for (const warning of result.warnings) console.log(`Warning: ${warning}`);
+      if ('warnings' in result) for (const warning of result.warnings) console.error(`Warning: ${warning}`);
       if (result.canConfirm) console.log(`Review the plan, then explicitly run: watch import-codex ${action!.startsWith('project-') ? 'project-confirm' : 'confirm'} ${result.planId} --experimental`);
       if (result.outcome && 'target' in result.outcome && result.outcome.target) console.log(`Target: ${result.outcome.target.sessionId}`);
       if (!ok) console.log(`Import may have partially completed. Do not repeat it or delete its journal or target lock: ${result.targetLockPath ?? 'unknown'}`);
