@@ -92,6 +92,7 @@ export async function resolveById(
   providerId?: string,
   store?: Store | null,
   adapters: ProviderAdapter[] = listAdapters(),
+  diagnostics?: string[],
 ): Promise<{ adapter: ProviderAdapter; found: { ref: SessionRef; updatedAt: number } } | null> {
   const candidates = providerId
     ? ([getAdapter(providerId)].filter((a): a is ProviderAdapter => Boolean(a)) ?? [])
@@ -138,7 +139,9 @@ export async function resolveById(
         }
         return { adapter: a, found };
       }
-    } catch {
+    } catch (error) {
+      // 一家存储读失败不该拖垮反查，但必须披露：否则「没找到」和「没查成」分不清
+      diagnostics?.push(`${a.id} 反查失败：${error instanceof Error ? error.message : String(error)}`);
       continue;
     }
   }
@@ -179,11 +182,13 @@ export async function openSession(
 ): Promise<OpenSessionResult> {
   const { from, provider } = opts ?? {};
   const mapping = store ?? openMappingDb();
-  const target = await resolveById(targetId, provider, mapping);
+  const lookup: string[] = [];
+  const target = await resolveById(targetId, provider, mapping, undefined, lookup);
   if (!target) {
+    const detail = lookup.length ? `（${lookup.join('；')}）` : '';
     return {
       ok: false,
-      error: `未找到会话: ${targetId}${provider ? `（provider=${provider}）` : ''}。请确认 id 正确且对应 CLI 已安装登录。`,
+      error: `未找到会话: ${targetId}${provider ? `（provider=${provider}）` : ''}。请确认 id 正确且对应 CLI 已安装登录。${detail}`,
     };
   }
   const notes: string[] = [];
@@ -191,8 +196,11 @@ export async function openSession(
   let sourceUsage: TokenUsage | null = null;
 
   if (from) {
-    const source = await resolveById(from, undefined, mapping);
-    if (!source) return { ok: false, error: `未找到来源会话: ${from}` };
+    const source = await resolveById(from, undefined, mapping, undefined, lookup);
+    if (!source) {
+      const detail = lookup.length ? `（${lookup.join('；')}）` : '';
+      return { ok: false, error: `未找到来源会话: ${from}${detail}` };
+    }
     try {
       // 来源 usage 聚合携带：source 支持 sessionUsage 时读出，跨侧对账展示（写回各 build 仍为零占位）
       if (typeof source.adapter.sessionUsage === 'function') {
@@ -332,9 +340,19 @@ type PlannedOpen =
  * 只读解析「把 sourceId 转入 providerId」会落到哪个目标会话、需要写多少轮。
  * 决策顺序与旧实现一致：属主即目标（resume）→ 链上配对 → 内容复用 → 新建。
  */
-async function planOpenInProvider(sourceId: string, providerId: string, mapping: Store | null): Promise<PlannedOpen> {
-  const source = await resolveById(sourceId, undefined, mapping);
-  if (!source) return { ok: false, error: `未找到会话: ${sourceId}` };
+async function planOpenInProvider(
+  sourceId: string,
+  providerId: string,
+  mapping: Store | null,
+  diagnostics?: string[],
+): Promise<PlannedOpen> {
+  // 反查失败原因只在「真的没找到」时报；命中了就别拿别家存储的毛病打扰用户
+  const lookup: string[] = [];
+  const source = await resolveById(sourceId, undefined, mapping, undefined, lookup);
+  if (!source) {
+    const detail = lookup.length ? `（${lookup.join('；')}）` : '';
+    return { ok: false, error: `未找到会话: ${sourceId}${detail}` };
+  }
   const target = getAdapter(providerId);
   if (!target) return { ok: false, error: `未知 provider: ${providerId}` };
   const cwd = source.found.ref.cwd;
@@ -382,6 +400,7 @@ async function planOpenInProvider(sourceId: string, providerId: string, mapping:
   let reuse: SessionRef | undefined;
   let reuseMissing = Infinity;
   let reuseAt = -1;
+  let parseFailed = 0;
   if (typeof target.listSessions === 'function') {
     try {
       const sessions = await target.listSessions(cwd);
@@ -390,6 +409,7 @@ async function planOpenInProvider(sourceId: string, providerId: string, mapping:
         try {
           destTurns = await target.parse(s.ref);
         } catch {
+          parseFailed += 1;
           continue;
         }
         const missing = diffTurns(turns, destTurns);
@@ -403,8 +423,14 @@ async function planOpenInProvider(sourceId: string, providerId: string, mapping:
           reuseAt = s.updatedAt;
         }
       }
-    } catch {
-      /* 扫描复用失败回退新建 */
+    } catch (error) {
+      // 扫不动只能新建：会多出一份会话，必须说明原因，而不是让用户以为 「本该复用却新建」
+      diagnostics?.push(
+        `目标 ${target.displayName} 会话列表读取失败，未能复用既有会话（将新建）：${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+    if (parseFailed > 0) {
+      diagnostics?.push(`目标 ${target.displayName} 有 ${parseFailed} 个候选会话解析失败，未参与复用匹配`);
     }
   }
   if (reuse) {
@@ -468,7 +494,8 @@ export async function openInProvider(
   store?: Store | null,
 ): Promise<OpenSessionResult> {
   const mapping = store ?? openMappingDb();
-  const planned = await planOpenInProvider(sourceId, providerId, mapping);
+  const diagnostics: string[] = [];
+  const planned = await planOpenInProvider(sourceId, providerId, mapping, diagnostics);
   if (!planned.ok) return { ok: false, error: planned.error };
   const { adapter: target, sourceRef, sourceProvider, cwd, plan } = planned;
 
@@ -485,11 +512,11 @@ export async function openInProvider(
       resumeCommand,
       command: buildCommand(cd, resumeCommand),
       mergedTurns: 0,
-      notes: [],
+      notes: [...diagnostics],
     };
   }
 
-  const notes: string[] = [];
+  const notes: string[] = [...diagnostics];
   try {
     const source = getAdapter(sourceProvider);
     let sourceUsage: TokenUsage | null = null;
@@ -559,7 +586,8 @@ export async function checkOpenInProvider(
   store?: Store | null,
 ): Promise<OpenSessionResult> {
   const mapping = store ?? openMappingDb();
-  const planned = await planOpenInProvider(sourceId, providerId, mapping);
+  const diagnostics: string[] = [];
+  const planned = await planOpenInProvider(sourceId, providerId, mapping, diagnostics);
   if (!planned.ok) return { ok: false, error: planned.error };
   const { adapter: target, cwd, plan } = planned;
   const base: OpenSessionResult = {
@@ -568,7 +596,7 @@ export async function checkOpenInProvider(
     cwd,
     sessionId: plan.targetRef?.sessionId,
     filePath: plan.targetRef?.filePath,
-    notes: [describePlan(target, plan)],
+    notes: [describePlan(target, plan), ...diagnostics],
     writable: true,
     plan: { kind: plan.kind, turnCount: plan.turns.length },
   };
