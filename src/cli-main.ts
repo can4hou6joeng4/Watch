@@ -56,13 +56,24 @@ function failBlocked(error: HandoffBlockedError | PreflightBlockedError, json: b
   process.exit(1);
 }
 
+/** 最近一次 openStore 失败的原因；供「需要库」的子命令拼进错误文案 */
+let lastStoreError: string | null = null;
+
 function openStore(): Store | null {
   try {
+    lastStoreError = null;
     return new Store(process.env.WATCH_DB ?? defaultDbPath());
   } catch (error) {
-    console.error('[watch] 打开数据库失败，以降级无库模式继续:', error);
+    lastStoreError = error instanceof Error ? error.message : String(error);
+    console.error('[watch] 打开数据库失败，以降级无库模式继续:', lastStoreError);
     return null;
   }
+}
+
+/** 裸「无法打开数据库」不指向任何东西：带上实际路径、失败原因与版本门槛 */
+function storeUnavailableError(): string {
+  const db = process.env.WATCH_DB ?? defaultDbPath();
+  return `无法打开本地库 ${db}${lastStoreError ? `（${lastStoreError}）` : ''}；可检查路径与权限，Node ≥ 22.13 才提供 node:sqlite`;
 }
 
 function fmtTime(ms: number): string {
@@ -632,7 +643,7 @@ async function cmdNew(cwd: string, providerId: string, json: boolean, chain?: st
 
 async function cmdChain(cwd: string, json: boolean, action?: string, a?: string, b?: string): Promise<void> {
   const store = openStore();
-  if (!store) fail(json, '无法打开数据库');
+  if (!store) fail(json, storeUnavailableError());
   try {
     if (!action || action === 'list') {
       const chains = store.listChains(cwd);
@@ -799,7 +810,7 @@ async function cmdUsage(cwd: string, json: boolean, chain?: string): Promise<voi
 
 async function cmdSearch(cwd: string, json: boolean, query: string): Promise<void> {
   const store = openStore();
-  if (!store) fail(json, '无法打开数据库');
+  if (!store) fail(json, storeUnavailableError());
   try {
     const warnings: string[] = [];
     await reindexCwd(cwd, listAdapters(), store, warnings);
