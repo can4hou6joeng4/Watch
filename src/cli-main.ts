@@ -570,6 +570,11 @@ async function cmdDoctor(cwd: string, json: boolean): Promise<void> {
 
 async function cmdNew(cwd: string, providerId: string, json: boolean, chain?: string): Promise<void> {
   const store = openStore();
+  const warnings: string[] = [];
+  if (!store) {
+    // 会话本身能建出来，但没有 switch_events：后续 switch 不认这条绑定，必须说明
+    warnings.push('本地库不可用，本次新会话未写入链记录（后续切换不会认同这条绑定）');
+  }
   try {
     let historyLen = 0;
     if (store) {
@@ -600,8 +605,9 @@ async function cmdNew(cwd: string, providerId: string, json: boolean, chain?: st
         store.recordSwitch(id, null, null, providerId, ref);
       }
       const resumeCommand = adapter.resumeCommand(ref);
+      for (const warning of warnings) console.error(`警告: ${warning}`);
       if (json) {
-        console.log(JSON.stringify({ ok: true, newRef: ref, resumeCommand, turnCount, fromProvider: providerId }));
+        console.log(JSON.stringify({ ok: true, newRef: ref, resumeCommand, turnCount, fromProvider: providerId, ...(warnings.length ? { warnings } : {}) }));
         return;
       }
       console.log(`新会话: ${ref.sessionId}`);
