@@ -433,7 +433,17 @@ export async function handoff(
   const source = resolve(sourceTip.provider);
   if (!source) throw new Error(`链尾 provider 未注册: ${sourceTip.provider}`);
 
-  const turns = await source.parse(sourceTip.ref);
+  let turns: UnifiedTurn[];
+  try {
+    turns = await source.parse(sourceTip.ref);
+  } catch (error) {
+    // 链尾指向的会话文件被删 / 截断时，裸 ENOENT 看不出下一步该做什么（doctor 的 brokenTips 报的正是这种）
+    const raw = error instanceof Error ? error.message : String(error);
+    throw new Error(
+      `来源会话 ${sourceTip.ref.sessionId}（${source.displayName}）读取失败：${raw}。` +
+        `文件 ${sourceTip.ref.filePath} 可能已被删除或截断，而链记录仍指向它：可用 watch adopt 重新绑定，或用 watch sessions 查看该目录还有哪些可接力的会话`,
+    );
+  }
   // 目标级保护：传入即将写入的会话，Codex 据此检查 per-thread writer 锁（而非只看 Desktop 是否运行）
   await target.preflight?.({ ref: into, cwd });
   // 协作写锁：供应商支持时在写入期间独占原生锁，收窄与原生 writer 的竞态窗口
