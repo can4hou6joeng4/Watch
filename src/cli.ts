@@ -15,7 +15,7 @@ function usage(): never {
   watch switch <provider> [--json] [--cwd <path>] [--chain <id|name>]
   watch adopt <provider> [--json] [--cwd <path>] [--chain <id|name>] [--session <id>]
   watch sessions [--json] [--cwd <path>] [--chain <id|name>]
-  watch recent [--json]
+  watch recent [--json] [--cwd <path>]
   watch providers [--json]
   watch new <provider> [--json] [--cwd <path>] [--chain <id|name>]
   watch chain list|new <name>|rename <id|name> <new>|archive <id|name>|use <id|name> [--json] [--cwd]
@@ -71,7 +71,6 @@ function parseArgs(argv: string[]): {
   rest: string[];
   json: boolean;
   cwd: string;
-  message?: string;
   session?: string;
   chain?: string;
   from?: string;
@@ -82,7 +81,6 @@ function parseArgs(argv: string[]): {
   const args = argv.slice(2);
   const json = args.includes('--json');
   let cwd = process.cwd();
-  let message: string | undefined;
   let session: string | undefined;
   let chain: string | undefined;
   let from: string | undefined;
@@ -101,10 +99,6 @@ function parseArgs(argv: string[]): {
       const next = args[++i];
       if (!next) usage();
       cwd = next;
-      continue;
-    }
-    if (a === '--message') {
-      message = args[++i];
       continue;
     }
     if (a === '--session') {
@@ -140,7 +134,6 @@ function parseArgs(argv: string[]): {
     rest: positional.slice(2),
     json,
     cwd,
-    message,
     session,
     chain,
     from,
