@@ -367,6 +367,33 @@ export class Store {
   }
 
   searchMessages(query: string, cwd?: string): SearchHit[] {
+    const q = query.trim();
+    if (!q) return [];
+    // 顺手支持按原生 session id（或其前缀）找会话：用户手里常只有 id，正文里搜不到
+    const byId = this.searchSessionIdPrefix(q, cwd ? this.normCwd(cwd) : undefined);
+    return capPerSession([...byId, ...this.searchIndexText(q, cwd)]);
+  }
+
+  /** 查询形如 session id 时，按 `search_index` 里的 id 前缀命中（uuid 片段即可；`reindexCwd` 总会写游标） */
+  private searchSessionIdPrefix(q: string, cwd?: string): SearchHit[] {
+    if (!/^[0-9a-f][0-9a-f-]{3,63}$/i.test(q)) return [];
+    const like = `${q.toLowerCase()}%`;
+    const sql = cwd
+      ? `SELECT session_id, provider, cwd, file_path FROM search_index WHERE cwd=? AND session_id LIKE ? LIMIT 10`
+      : `SELECT session_id, provider, cwd, file_path FROM search_index WHERE session_id LIKE ? LIMIT 10`;
+    const rows = (
+      cwd ? this.db.prepare(sql).all(cwd, like) : this.db.prepare(sql).all(like)
+    ) as { session_id: string; provider: string; cwd: string; file_path: string }[];
+    return rows.map((r) => ({
+      sessionId: r.session_id,
+      provider: r.provider,
+      cwd: r.cwd,
+      filePath: r.file_path,
+      snippet: `会话 ${r.session_id}`,
+    }));
+  }
+
+  private searchIndexText(query: string, cwd?: string): SearchHit[] {
     cwd = cwd ? this.normCwd(cwd) : undefined;
     const q = query.trim();
     if (!q) return [];
