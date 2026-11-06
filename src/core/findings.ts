@@ -23,6 +23,20 @@ export function mergeFindings(...lists: Finding[][]): Finding[] {
   return out.sort((a, b) => a.code.localeCompare(b.code) || a.disposition.localeCompare(b.disposition));
 }
 
+/** 文本模式用：只列出非 exact 的处置（exact 不需要说明），措辞面向用户 */
+export function describeFindings(findings: Finding[]): string[] {
+  const label: Record<Disposition, string> = {
+    exact: '完整',
+    degraded: '降级',
+    skipped: '跳过',
+    synthesized: '整文件重建',
+    blocked: '阻断',
+  };
+  return findings
+    .filter((f) => f.disposition !== 'exact')
+    .map((f) => `内容处理${label[f.disposition]}：${f.code} × ${f.count}`);
+}
+
 export type FindingsStatus = 'exact' | 'degraded' | 'blocked';
 
 /** 三档归约：任一 blocked → blocked；任一非 exact → degraded；否则 exact */

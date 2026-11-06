@@ -2,6 +2,7 @@
 import { stat } from 'node:fs/promises';
 import path from 'node:path';
 import { SEARCH_MAX_HITS, Store, defaultDbPath } from './core/store.js';
+import { describeFindings } from './core/findings.js';
 import { adoptIntoChain, chainStatus, chainUsage, collectTips, createChainSession, handoff, HandoffBlockedError } from './core/handoff.js';
 import { reindexCwd } from './core/search.js';
 import type { SessionRef } from './core/types.js';
@@ -254,6 +255,8 @@ async function cmdSwitch(cwd: string, targetId: string, json: boolean, chain?: s
     console.log(`文件:   ${result.newRef.filePath}`);
     console.log('');
     console.log(`resume: ${result.resumeCommand}`);
+    // exact 之外的处置（整文件重写、去重跳过等）--json 里一直有，文本模式也要说，否则看不出内容被改写过
+    for (const line of describeFindings(result.findings ?? [])) console.error(`说明: ${line}`);
   } catch (error) {
     if (error instanceof HandoffBlockedError || error instanceof PreflightBlockedError) failBlocked(error, json);
     const message = error instanceof Error ? error.message : String(error);
