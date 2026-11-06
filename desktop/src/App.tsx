@@ -16,7 +16,7 @@ type Summary = { turnCount: number; userTurnCount: number; assistantTurnCount: n
 type Source = { cwd: string; provider: string | null; sessionId?: string; usage?: { inputTokens: number; outputTokens: number } | null; summary?: Summary | null };
 type Detect = { status: 'idle' | 'loading' } | { status: 'ok'; source: Source } | { status: 'error'; error: string };
 type Blocked = { code: string; sessionId?: string; holders?: { pid: number; command: string }[]; hint?: string };
-type Precheck = { status: 'idle' | 'checking' | 'ok' | 'blocked' | 'error'; writable?: boolean; note?: string; blocked?: Blocked; error?: string };
+type Precheck = { status: 'idle' | 'checking' | 'ok' | 'blocked' | 'error'; writable?: boolean; note?: string; notes?: string[]; blocked?: Blocked; error?: string };
 type Transfer = { provider: string; sessionId: string; cwd?: string; notes: string[]; delivery?: 'copied' | 'launched'; error?: string };
 type BlockedNotice = { provider: string; sourceId: string; info: Blocked; error: string };
 const native = () => '__TAURI_INTERNALS__' in window && Boolean(window.__TAURI_INTERNALS__);
@@ -138,7 +138,7 @@ export default function App() {
           if (version !== precheckRequest.current) return;
           if (!data.ok) { setPrecheck({ status: 'error', error: data.error || '预检失败' }); return; }
           const blocked = parsePrecheckBlocked(data);
-          setPrecheck({ status: data.writable === false ? 'blocked' : 'ok', writable: data.writable !== false, note: data.notes?.[0], blocked, error: data.error });
+          setPrecheck({ status: data.writable === false ? 'blocked' : 'ok', writable: data.writable !== false, note: data.notes?.[0], notes: data.notes ?? [], blocked, error: data.error });
         })
         .catch((error) => { if (version === precheckRequest.current) setPrecheck({ status: 'error', error: message(error) }); });
     }, 400);
@@ -243,6 +243,7 @@ export default function App() {
         }}><img src={`/${entry.id}.svg`} alt="" /><span>{entry.label}<small>{owner === entry.id ? '来源 Agent' : installed ? installed.available ? 'CLI 已检测到' : 'CLI 未检测到' : '环境未检测'}</small></span>{target === entry.id && <Check size={15} />}</button>; })}</div>
               {providersError && <p className="precheck blocked" role="status"><Info size={13} />无法检测本机 Agent：{providersError}（仍可选择目标）</p>}
           {precheck.status !== 'idle' && <p className={`precheck${precheck.status === 'blocked' ? ' blocked' : ''}`} role="status">{precheck.status === 'checking' ? <><LoaderCircle className="spin" size={13} />正在预检目标会话…</> : precheck.status === 'error' ? <><Info size={13} />预检不可用：{precheck.error}（不影响转入）</> : precheck.status === 'blocked' ? <><Info size={13} />暂不可写入：{precheck.note}{precheck.blocked?.hint ? ` · ${precheck.blocked.hint}` : precheck.error ? ` · ${precheck.error}` : ''}{!!precheck.blocked?.holders?.length && ` · 占用者 ${precheck.blocked.holders.map((holder) => `PID ${holder.pid} ${holder.command}`).join('、')}`}</> : <><Check size={13} />可写入：{precheck.note}</>}</p>}
+          {!!precheck.notes && precheck.notes.length > 1 && <p className="muted precheck-notes">{precheck.notes.slice(1).join('；')}</p>}
         <div className="handoff-tool"><div className="handoff-tool-heading"><span className="route-label"><span className="status-dot" />{route === 'official-codex' ? '官方桌面导入' : route === 'resume' ? '原会话恢复' : '本地格式转换'}</span><span className="client-label">{route === 'official-codex' ? <Monitor size={14} /> : <Terminal size={14} />}{route === 'official-codex' ? 'Codex Desktop' : terminalLabels[mode]}</span></div>
           {route === 'official-codex' ? <div className="official-import"><p className="route-description">先匹配已存在的桌面项目，再确认导入。工具记录可能转为文本；打开客户端不代表模型继续已验证。</p>
             {codexImport.status === 'idle' && <button className="primary-button" disabled={!ready || busy !== null} onClick={prepare}>预览导入计划<ArrowRight size={16} /></button>}
