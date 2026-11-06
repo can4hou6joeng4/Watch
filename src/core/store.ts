@@ -9,6 +9,11 @@ import type { ProcessEvent, SessionRef, UnifiedTurn } from './types.js';
 const SCHEMA_VERSION = 6;
 const REQUIRED_TABLES = ['sessions', 'turns', 'switch_events', 'turn_events', 'chains', 'messages_fts', 'search_index'] as const;
 const FTS_TEXT_LIMIT = 8192;
+/** 搜索返回的命中上限；单个会话最多占 MAX_PER_SESSION 条，避免一场对话淹没其它会话 */
+const MAX_HITS = 40;
+const MAX_PER_SESSION = 3;
+/** SQL 先多取一些再按会话截断，否则 LIMIT 会在截断前就把其它会话切掉 */
+const SCAN_LIMIT = 200;
 
 export type SearchHit = {
   sessionId: string;
@@ -370,9 +375,9 @@ export class Store {
     const match = `"${q.replace(/"/g, ' ')}"`;
     const sql = cwd
       ? `SELECT session_id, provider, cwd, file_path, snippet(messages_fts, 0, '[', ']', '…', 10) AS snippet
-         FROM messages_fts WHERE messages_fts MATCH ? AND cwd=? LIMIT 40`
+         FROM messages_fts WHERE messages_fts MATCH ? AND cwd=? LIMIT ${SCAN_LIMIT}`
       : `SELECT session_id, provider, cwd, file_path, snippet(messages_fts, 0, '[', ']', '…', 10) AS snippet
-         FROM messages_fts WHERE messages_fts MATCH ? LIMIT 40`;
+         FROM messages_fts WHERE messages_fts MATCH ? LIMIT ${SCAN_LIMIT}`;
     const rows = (
       cwd ? this.db.prepare(sql).all(match, cwd) : this.db.prepare(sql).all(match)
     ) as {
@@ -382,21 +387,23 @@ export class Store {
       file_path: string;
       snippet: string;
     }[];
-    return rows.map((r) => ({
-      sessionId: r.session_id,
-      provider: r.provider,
-      cwd: r.cwd,
-      filePath: r.file_path,
-      snippet: r.snippet,
-    }));
+    return capPerSession(
+      rows.map((r) => ({
+        sessionId: r.session_id,
+        provider: r.provider,
+        cwd: r.cwd,
+        filePath: r.file_path,
+        snippet: r.snippet,
+      })),
+    );
   }
 
   /** 不足 3 字符的查询：FTS5 trigram 无法命中，直接对索引文本做子串匹配 */
   private searchShort(q: string, cwd?: string): SearchHit[] {
     const like = `%${q.replace(/[\\%_]/g, (c) => `\\${c}`)}%`;
     const sql = cwd
-      ? `SELECT session_id, provider, cwd, file_path, text FROM messages_fts WHERE cwd=? AND text LIKE ? ESCAPE '\\' LIMIT 40`
-      : `SELECT session_id, provider, cwd, file_path, text FROM messages_fts WHERE text LIKE ? ESCAPE '\\' LIMIT 40`;
+      ? `SELECT session_id, provider, cwd, file_path, text FROM messages_fts WHERE cwd=? AND text LIKE ? ESCAPE '\\' LIMIT ${SCAN_LIMIT}`
+      : `SELECT session_id, provider, cwd, file_path, text FROM messages_fts WHERE text LIKE ? ESCAPE '\\' LIMIT ${SCAN_LIMIT}`;
     const rows = (
       cwd ? this.db.prepare(sql).all(cwd, like) : this.db.prepare(sql).all(like)
     ) as {
@@ -406,13 +413,15 @@ export class Store {
       file_path: string;
       text: string;
     }[];
-    return rows.map((r) => ({
-      sessionId: r.session_id,
-      provider: r.provider,
-      cwd: r.cwd,
-      filePath: r.file_path,
-      snippet: excerpt(r.text, q),
-    }));
+    return capPerSession(
+      rows.map((r) => ({
+        sessionId: r.session_id,
+        provider: r.provider,
+        cwd: r.cwd,
+        filePath: r.file_path,
+        snippet: excerpt(r.text, q),
+      })),
+    );
   }
 
   /** 首开聊：建 session 行 + 首轮 user/assistant + 首轮过程事件，返回 session id */
@@ -704,6 +713,21 @@ export class Store {
 }
 
 /** 为短查询生成带方括号高亮的片段（FTS5 的 snippet() 只在 MATCH 路径可用） */
+/** 按 (provider, sessionId) 截断到 MAX_PER_SESSION 条，再取前 MAX_HITS 条；保持原有排序 */
+function capPerSession(hits: SearchHit[]): SearchHit[] {
+  const seen = new Map<string, number>();
+  const out: SearchHit[] = [];
+  for (const hit of hits) {
+    const key = `${hit.provider}\u0000${hit.sessionId}`;
+    const n = seen.get(key) ?? 0;
+    if (n >= MAX_PER_SESSION) continue;
+    seen.set(key, n + 1);
+    out.push(hit);
+    if (out.length >= MAX_HITS) break;
+  }
+  return out;
+}
+
 function excerpt(text: string, q: string): string {
   const at = text.toLowerCase().indexOf(q.toLowerCase());
   if (at < 0) return text.slice(0, 80);
