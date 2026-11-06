@@ -365,6 +365,8 @@ export class Store {
     cwd = cwd ? this.normCwd(cwd) : undefined;
     const q = query.trim();
     if (!q) return [];
+    // trigram 分词最短要 3 个字符；更短的查询（中文两字词如「登录」）退化为 LIKE 子串匹配
+    if ([...q].length < 3) return this.searchShort(q, cwd);
     const match = `"${q.replace(/"/g, ' ')}"`;
     const sql = cwd
       ? `SELECT session_id, provider, cwd, file_path, snippet(messages_fts, 0, '[', ']', '…', 10) AS snippet
@@ -386,6 +388,30 @@ export class Store {
       cwd: r.cwd,
       filePath: r.file_path,
       snippet: r.snippet,
+    }));
+  }
+
+  /** 不足 3 字符的查询：FTS5 trigram 无法命中，直接对索引文本做子串匹配 */
+  private searchShort(q: string, cwd?: string): SearchHit[] {
+    const like = `%${q.replace(/[\\%_]/g, (c) => `\\${c}`)}%`;
+    const sql = cwd
+      ? `SELECT session_id, provider, cwd, file_path, text FROM messages_fts WHERE cwd=? AND text LIKE ? ESCAPE '\\' LIMIT 40`
+      : `SELECT session_id, provider, cwd, file_path, text FROM messages_fts WHERE text LIKE ? ESCAPE '\\' LIMIT 40`;
+    const rows = (
+      cwd ? this.db.prepare(sql).all(cwd, like) : this.db.prepare(sql).all(like)
+    ) as {
+      session_id: string;
+      provider: string;
+      cwd: string;
+      file_path: string;
+      text: string;
+    }[];
+    return rows.map((r) => ({
+      sessionId: r.session_id,
+      provider: r.provider,
+      cwd: r.cwd,
+      filePath: r.file_path,
+      snippet: excerpt(r.text, q),
     }));
   }
 
@@ -675,6 +701,15 @@ export class Store {
     }
     return out;
   }
+}
+
+/** 为短查询生成带方括号高亮的片段（FTS5 的 snippet() 只在 MATCH 路径可用） */
+function excerpt(text: string, q: string): string {
+  const at = text.toLowerCase().indexOf(q.toLowerCase());
+  if (at < 0) return text.slice(0, 80);
+  const start = Math.max(0, at - 20);
+  const end = Math.min(text.length, at + q.length + 20);
+  return `${start > 0 ? '…' : ''}${text.slice(start, at)}[${text.slice(at, at + q.length)}]${text.slice(at + q.length, end)}${end < text.length ? '…' : ''}`;
 }
 
 type SessionLocationRow = {
