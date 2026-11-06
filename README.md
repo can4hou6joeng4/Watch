@@ -112,19 +112,22 @@ npm run watch -- open <session-id> --to codex   # 直接把该会话内容转入
 <br>
 
 ```text
-status   [--cwd <path>] [--chain <id|name>]     会话、链尾与切换历史
-sessions [--cwd <path>] [--chain <id|name>]     各 Agent 在该目录的原生会话
-switch   <provider>                             链尾内容交接给目标 provider
-adopt    <provider> [--session <id>]            把已有原生会话接入链
-new      <provider>                             在链上新建另一侧会话
-chain    list|new|rename|archive|use            链的增删改与切换
-search   <query>                                本地全文检索（FTS5）
-usage    [--cwd <path>] [--chain <id|name>]     链上各会话的 token 用量
-recent   [--json]                               近期会话反查记录
-providers                                       各 Agent 的本机安装检测
-open     <session-id> [--from <id>] [--provider <name>] [--to <provider>]
+status   [--cwd <path>] [--chain <id|name>]                 会话、链尾与切换历史
+sessions [--cwd <path>] [--chain <id|name>]                 各 Agent 在该目录的原生会话
+switch   <provider> [--cwd <path>] [--chain <id|name>]      链尾内容交接给目标 provider
+adopt    <provider> [--session <id>] [--cwd <path>] [--chain <id|name>]   把已有原生会话接入链
+new      <provider> [--cwd <path>] [--chain <id|name>]      在链上新建另一侧会话
+chain    list|new|rename|archive|use [--cwd <path>]         链的增删改与切换
+search   <query> [--cwd <path>]                             本地全文检索（FTS5）
+usage    [--cwd <path>] [--chain <id|name>]                 链上各会话的 token 用量
+recent   [--cwd <path>] [--limit <n>]                       近期会话反查记录（默认 8 条，最多 50）
+providers                                                   各 Agent 的本机安装检测
+doctor   [--cwd <path>]                                     只读环境诊断（Agent 检测 / 本地库 / 导入日志）
+open     <session-id> [--from <id>] [--provider <name>] [--to <provider>] [--check]
 import-codex  prepare|confirm|status|project-prepare|project-confirm|project-status
 ```
+
+`--check` 只与 `open ... --to <provider>` 同用：只读预检目标会话是否可写，不写入任何内容。
 
 </details>
 
