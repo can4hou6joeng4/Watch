@@ -993,7 +993,8 @@ async function cmdUsage(cwd: string, json: boolean, chain?: string): Promise<voi
           ? '（无 usage 字段）'
           : '';
       console.log(
-        `  ${item.provider.padEnd(8)} ${item.sessionId.slice(0, 8)}…  in=${u.inputTokens}  out=${u.outputTokens}${note}`,
+        // 打全 id：截成 8 位再省略号就复制不了，接不上 watch adopt --session / 原生 resume
+        `  ${item.provider.padEnd(8)} ${item.sessionId}  in=${u.inputTokens}  out=${u.outputTokens}${note}`,
       );
     }
   } catch (error) {
