@@ -640,6 +640,12 @@ async function cmdDoctor(cwd: string, json: boolean): Promise<void> {
           `  链「${d.chainName}」: ${d.from.provider}:${d.from.sessionId} → ${d.to.provider}:${d.to.sessionId}，缺 ${d.missingTurns}/${d.sourceTurns} 条`,
         );
       }
+      // 摘要行只报个数；缺的是哪条链尾必须直接给 provider:sessionId，否则照「可先 adopt」也无法定位
+      for (const b of report.store.brokenTips) {
+        console.log(
+          `  链「${b.chainName}」: ${b.provider}:${b.sessionId} 链尾文件已不存在（${b.filePath}），可先 adopt 该 provider 的新会话`,
+        );
+      }
     } else {
       console.log(`本地库: 不可用（${report.store.error}）`);
     }
