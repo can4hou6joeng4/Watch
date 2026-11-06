@@ -244,7 +244,8 @@ async function cmdSwitch(cwd: string, targetId: string, json: boolean, chain?: s
       return;
     }
     // 警告先打：alreadyAtTarget 分支同样可能带「读库/写链失败」，提前 return 会把它吞掉
-    if (result.warnings.length) console.log(`警告: ${result.warnings.join('；')}`);
+    // 走 stderr：stdout 留给结果，重定向 / 管道时警告不该混进正文（与 status / new / usage 一致）
+    for (const warning of result.warnings) console.error(`警告: ${warning}`);
     if (result.alreadyAtTarget) {
       console.log(`链尾已在 ${targetId}，直接打开即可。`);
       console.log(`resume: ${result.resumeCommand}`);
@@ -304,9 +305,10 @@ async function cmdAdopt(
       console.log(JSON.stringify({ ok: true, ...result }));
       return;
     }
+    // 与 switch 一致：警告先打（未写入链记录这类说明不能排在成功之后被漏看），且走 stderr
+    for (const warning of result.warnings) console.error(`警告: ${warning}`);
     console.log(`已接入链: ${result.adoptedRef.sessionId}`);
     if (result.replacedRef) console.log(`替换了:  ${result.replacedRef.sessionId}`);
-    if (result.warnings.length) console.log(`警告: ${result.warnings.join('；')}`);
   } catch (error) {
     if (error instanceof HandoffBlockedError || error instanceof PreflightBlockedError) failBlocked(error, json);
     const message = error instanceof Error ? error.message : String(error);
