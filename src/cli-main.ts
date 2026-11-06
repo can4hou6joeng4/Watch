@@ -780,9 +780,14 @@ async function cmdChain(cwd: string, json: boolean, action?: string, a?: string,
         console.log('（无链）');
         return;
       }
+      // 「当前」= 活跃链里 last_used_at 最新的一条（与 status / switch 的默认链同一判定）。
+      // 以前只给名字 + id：同一目录多条链时看不出哪条在用、哪条最近没动（--json 一直有 lastUsedAt）
+      const current = store.findActiveChain(cwd);
+      console.log(`链（cwd: ${cwd}）:`);
       for (const c of chains) {
         const mark = c.status === 'archived' ? ' [归档]' : '';
-        console.log(`  ${c.name}${mark}  ${c.id}`);
+        const here = current && c.id === current.id ? ' ← 当前' : '';
+        console.log(`  ${c.name}${mark}${here}  ${c.id}  lastUsed=${fmtTime(c.lastUsedAt)}`);
       }
       return;
     }
