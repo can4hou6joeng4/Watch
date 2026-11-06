@@ -286,6 +286,23 @@ export class Store {
     }
   }
 
+  /** 某 provider/cwd 已建索引的会话及其原生文件路径（用于核对文件是否还在） */
+  indexedSessions(cwd: string, provider: string): { sessionId: string; filePath: string }[] {
+    const rows = this.db
+      .prepare(
+        'SELECT session_id, MIN(file_path) AS file_path FROM messages_fts WHERE cwd=? AND provider=? GROUP BY session_id',
+      )
+      .all(this.normCwd(cwd), provider) as { session_id: string; file_path: string }[];
+    return rows.map((row) => ({ sessionId: row.session_id, filePath: row.file_path }));
+  }
+
+  /** 删除单个会话在本 provider/cwd 下的全部索引行 */
+  removeIndexedSession(cwd: string, provider: string, sessionId: string): void {
+    this.db
+      .prepare('DELETE FROM messages_fts WHERE cwd=? AND provider=? AND session_id=?')
+      .run(this.normCwd(cwd), provider, sessionId);
+  }
+
   searchMessages(query: string, cwd?: string): SearchHit[] {
     cwd = cwd ? this.normCwd(cwd) : undefined;
     const q = query.trim();
