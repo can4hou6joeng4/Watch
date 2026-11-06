@@ -159,7 +159,7 @@ async function cmdStatus(cwd: string, json: boolean, chain?: string): Promise<vo
     fail(json, error instanceof Error ? error.message : String(error));
   }
   if (json) {
-    console.log(JSON.stringify(result));
+    console.log(JSON.stringify({ ok: true, ...result }));
     return;
   }
   const { tips, chainTip, history, chain: current } = result;
@@ -323,33 +323,37 @@ async function cmdSessions(cwd: string, json: boolean, chain?: string): Promise<
       // 无 store 或链查询失败时退化为全量列表
     }
   }
-  const groups = await Promise.all(
-    adapters
-      .filter((a) => a.listSessions)
-      .map(async (a) => {
-        const sessions = await a.listSessions!(cwd);
-        const ids = bound.get(a.id);
-        return {
-          provider: a.id,
-          sessions: ids ? sessions.filter((s) => ids.has(s.ref.sessionId)) : sessions,
-        };
-      }),
-  );
-  const result = groups.filter((g) => g.sessions.length > 0);
-  if (json) {
-    console.log(JSON.stringify({ cwd, providers: result }));
-    return;
-  }
-  if (!result.length) {
-    console.log('未发现会话');
-    return;
-  }
-  for (const g of result) {
-    console.log(`${g.provider}:`);
-    for (const s of g.sessions) {
-      console.log(`  ${s.ref.sessionId}  mtime=${fmtTime(s.updatedAt)}`);
-      if (s.preview) console.log(`    ${s.preview}`);
+  try {
+    const groups = await Promise.all(
+      adapters
+        .filter((a) => a.listSessions)
+        .map(async (a) => {
+          const sessions = await a.listSessions!(cwd);
+          const ids = bound.get(a.id);
+          return {
+            provider: a.id,
+            sessions: ids ? sessions.filter((s) => ids.has(s.ref.sessionId)) : sessions,
+          };
+        }),
+    );
+    const result = groups.filter((g) => g.sessions.length > 0);
+    if (json) {
+      console.log(JSON.stringify({ ok: true, cwd, providers: result }));
+      return;
     }
+    if (!result.length) {
+      console.log('未发现会话');
+      return;
+    }
+    for (const g of result) {
+      console.log(`${g.provider}:`);
+      for (const s of g.sessions) {
+        console.log(`  ${s.ref.sessionId}  mtime=${fmtTime(s.updatedAt)}`);
+        if (s.preview) console.log(`    ${s.preview}`);
+      }
+    }
+  } catch (error) {
+    fail(json, error instanceof Error ? error.message : String(error));
   }
 }
 
@@ -436,14 +440,18 @@ async function cmdRecent(json: boolean, limit: number = 8): Promise<void> {
 }
 
 async function cmdProviders(json: boolean): Promise<void> {
-  const providers = await listProviders();
-  if (json) {
-    console.log(JSON.stringify({ ok: true, providers }));
-    return;
-  }
-  console.log('支持的 Agent 与本机检测状态:');
-  for (const p of providers) {
-    console.log(`  ${p.id.padEnd(10)} ${p.displayName.padEnd(12)} ${p.available ? '✓ 已就绪' : '✗ 未检测到'}`);
+  try {
+    const providers = await listProviders();
+    if (json) {
+      console.log(JSON.stringify({ ok: true, providers }));
+      return;
+    }
+    console.log('支持的 Agent 与本机检测状态:');
+    for (const p of providers) {
+      console.log(`  ${p.id.padEnd(10)} ${p.displayName.padEnd(12)} ${p.available ? '✓ 已就绪' : '✗ 未检测到'}`);
+    }
+  } catch (error) {
+    fail(json, error instanceof Error ? error.message : String(error));
   }
 }
 
