@@ -361,7 +361,7 @@ async function cmdSessions(cwd: string, json: boolean, chain?: string): Promise<
   }
 }
 
-async function cmdRecent(json: boolean, limit: number = 8): Promise<void> {
+async function cmdRecent(cwd: string, json: boolean, limit: number = 8): Promise<void> {
   const store = openStore();
   type RecentItem = {
     provider: string;
@@ -402,7 +402,6 @@ async function cmdRecent(json: boolean, limit: number = 8): Promise<void> {
 
   // Also scan cwd and providers for recent sessions if few
   if (results.length < limit) {
-    const cwd = process.cwd();
     for (const adapter of listAdapters()) {
       if (!adapter.listSessions) continue;
       try {
@@ -601,7 +600,7 @@ async function main(): Promise<void> {
     return;
   }
   if (cmd === 'recent') {
-    await cmdRecent(json);
+    await cmdRecent(cwd, json);
     return;
   }
   if (cmd === 'providers') {
