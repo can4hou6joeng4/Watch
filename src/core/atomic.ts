@@ -29,20 +29,20 @@ export async function writeFileAtomic(
 ): Promise<void> {
   await mkdir(path.dirname(filePath), { recursive: true });
   const tmpPath = `${filePath}.watch-tmp-${randomUUID()}`;
-  let mode: number | undefined;
   try {
-    mode = (await stat(filePath)).mode & 0o777;
-  } catch {
-    mode = undefined; // 新文件
-  }
-  const handle = await open(tmpPath, 'w', mode ?? 0o600);
-  try {
-    await handle.writeFile(content, 'utf8');
-    await handle.sync();
-  } finally {
-    await handle.close();
-  }
-  try {
+    let mode: number | undefined;
+    try {
+      mode = (await stat(filePath)).mode & 0o777;
+    } catch {
+      mode = undefined; // 新文件
+    }
+    const handle = await open(tmpPath, 'w', mode ?? 0o600);
+    try {
+      await handle.writeFile(content, 'utf8');
+      await handle.sync();
+    } finally {
+      await handle.close();
+    }
     if (opts?.verify) await opts.verify(tmpPath);
     if (opts?.backup) {
       try {
@@ -71,38 +71,38 @@ export async function appendFileAtomic(
 ): Promise<void> {
   await mkdir(path.dirname(filePath), { recursive: true });
   const tmpPath = `${filePath}.watch-tmp-${randomUUID()}`;
-  let originalExists = false;
-  let mode: number | undefined;
-
   try {
-    const s = await stat(filePath);
-    mode = s.mode & 0o777;
-    originalExists = true;
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
-    mode = undefined;
-  }
+    let originalExists = false;
+    let mode: number | undefined;
 
-  if (originalExists) {
-    await copyFile(filePath, tmpPath);
-    const handle = await open(tmpPath, 'a');
     try {
-      await handle.writeFile(extraContent, 'utf8');
-      await handle.sync();
-    } finally {
-      await handle.close();
+      const s = await stat(filePath);
+      mode = s.mode & 0o777;
+      originalExists = true;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+      mode = undefined;
     }
-  } else {
-    const handle = await open(tmpPath, 'w', mode ?? 0o600);
-    try {
-      await handle.writeFile(extraContent, 'utf8');
-      await handle.sync();
-    } finally {
-      await handle.close();
-    }
-  }
 
-  try {
+    if (originalExists) {
+      await copyFile(filePath, tmpPath);
+      const handle = await open(tmpPath, 'a');
+      try {
+        await handle.writeFile(extraContent, 'utf8');
+        await handle.sync();
+      } finally {
+        await handle.close();
+      }
+    } else {
+      const handle = await open(tmpPath, 'w', mode ?? 0o600);
+      try {
+        await handle.writeFile(extraContent, 'utf8');
+        await handle.sync();
+      } finally {
+        await handle.close();
+      }
+    }
+
     if (opts?.verify) await opts.verify(tmpPath);
     if (opts?.backup && originalExists) {
       try {
