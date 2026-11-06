@@ -9,6 +9,7 @@ import { diffTurns } from './handoff.js';
 import type { SessionRef } from './types.js';
 import { readWatchVersion } from './watch-version.js';
 import { cwdProblem } from './cwd.js';
+import { countUnparsableJsonLines } from './jsonl.js';
 
 export type BrokenTip = {
   chainId: string;
@@ -217,6 +218,22 @@ export async function doctorReport(cwd: string, deps: DoctorDeps): Promise<Docto
         if (!(await exists(from.filePath))) {
           warnings.push(`链「${chain.name}」的来源会话文件已不存在：${from.filePath}（${from.provider}）；链尾仍在，但无法再做内容对账`);
           continue;
+        }
+        // parse 对坏行一律跳过：两边都坏时 diffTurns 可能「看起来对齐」，实际上内容已经丢了，
+        // 内容对账（只比解析结果）永远查不出来，只能在这里主动报
+        const [fromBad, toBad] = await Promise.all([
+          countUnparsableJsonLines(from.filePath),
+          countUnparsableJsonLines(to.filePath),
+        ]);
+        if (fromBad > 0) {
+          warnings.push(
+            `链「${chain.name}」的来源会话 ${from.sessionId}（${from.provider}）有 ${fromBad} 行无法解析（截断或损坏）：切换时这些内容会被跳过`,
+          );
+        }
+        if (toBad > 0) {
+          warnings.push(
+            `链「${chain.name}」的链尾会话 ${to.sessionId}（${to.provider}）有 ${toBad} 行无法解析（截断或损坏）：内容对账与增量判定可能不准`,
+          );
         }
         try {
           const [fromTurns, toTurns] = await Promise.all([fromAdapter.parse(from), toAdapter.parse(to)]);
