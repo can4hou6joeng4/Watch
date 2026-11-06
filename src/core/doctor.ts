@@ -56,7 +56,16 @@ export type DoctorReport = {
     | { available: true; chains: number; activeChains: number; brokenTips: BrokenTip[]; driftedPairs: DriftedPair[] }
     | { available: false; error: string };
   imports:
-    | { available: true; total: number; imported: number; associated: number; uncertain: number; prepared: number }
+    | {
+        available: true;
+        total: number;
+        imported: number;
+        associated: number;
+        uncertain: number;
+        prepared: number;
+        /** 结果未知的计划 id（最多 10 个）：文本模式要能直接照着跑 status，不能只报个数 */
+        uncertainIds: string[];
+      }
     | { available: false; error: string };
   warnings: string[];
 };
@@ -235,6 +244,8 @@ export async function doctorReport(cwd: string, deps: DoctorDeps): Promise<Docto
         associated: count('associated'),
         uncertain: count('uncertain'),
         prepared: count('prepared'),
+        // 「不要重试」只有配上 planId 才可执行
+        uncertainIds: items.filter((i) => i.status === 'uncertain').map((i) => i.id).slice(0, 10),
       };
       if (imports.uncertain > 0) {
         warnings.push(`有 ${imports.uncertain} 个导入/关联计划结果未知（uncertain）：不要重试，也不要删除其执行日志`);

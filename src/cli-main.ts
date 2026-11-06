@@ -645,6 +645,10 @@ async function cmdDoctor(cwd: string, json: boolean): Promise<void> {
     if (report.imports.available) {
       const i = report.imports;
       console.log(`导入日志: ${i.total} 条（imported ${i.imported} / associated ${i.associated} / uncertain ${i.uncertain} / prepared ${i.prepared}）`);
+      // 「不要重试」只有配上 planId 才能执行；否则用户只知道有 N 个未知结果，找不到是哪一个
+      for (const id of i.uncertainIds) {
+        console.log(`  结果未知: ${id}（用 watch import-codex status ${id} 查看；勿重试、勿删日志）`);
+      }
     } else {
       console.log(`导入日志: 不可用（${report.imports.error}）`);
     }
