@@ -65,6 +65,12 @@ export interface ProviderAdapter {
    */
   createEmptySession?(cwd: string): Promise<SessionRef>;
 
+  /**
+   * 可选：新建会话必须调用原生 CLI（无 CLI 只能追加既有会话，如 Kimi）。
+   * `open --check` 据此在只读预检阶段判 CLI 是否可用，避免报告「可写」后实际必然失败。
+   */
+  requiresCliForNewSession?: boolean;
+
   /** 可选：写入该 Provider 前的检查。传入目标会话时会做目标级判定（如 Codex 的 per-thread writer 锁）；
    *  不传 ctx 时保持保守语义。不通过则抛 PreflightBlockedError（结构化）或其他 Error。 */
   preflight?(ctx?: PreflightContext): Promise<void>;

@@ -510,6 +510,11 @@ export async function openInProvider(
   if (!planned.ok) return { ok: false, error: planned.error };
   const { adapter: target, sourceRef, sourceProvider, cwd, plan } = planned;
 
+  const cliBlock = await newSessionCliBlock(target, plan);
+  if (cliBlock) {
+    return { ok: false, error: cliBlock.error, blocked: { code: cliBlock.code, hint: cliBlock.hint } };
+  }
+
   if (plan.kind === 'resume') {
     const resumeCommand = target.resumeCommand(sourceRef);
     const cd = buildCd(cwd);
@@ -573,6 +578,21 @@ export async function openInProvider(
 }
 
 /** 预检用的中性描述（写入路径的 note 是过去式，不适用于“尚未写入”的预检） */
+/** 新建会话必须调原生 CLI 的 provider，CLI 不可用时给出可操作的结构化阻断（只读判定，不写盘） */
+export async function newSessionCliBlock(
+  target: ProviderAdapter,
+  plan: Pick<OpenPlan, 'kind'>,
+): Promise<{ code: string; hint: string; error: string } | undefined> {
+  if (plan.kind !== 'new' || !target.requiresCliForNewSession) return undefined;
+  const available = await target.detect().catch(() => false);
+  if (available) return undefined;
+  return {
+    code: 'cli_missing',
+    hint: `未写入任何内容；新建 ${target.displayName} 会话需要本机已安装并登录 ${target.id} CLI。`,
+    error: `${target.displayName} 未检测到：新建 ${target.id} 会话需要本机已安装并登录 ${target.id} CLI`,
+  };
+}
+
 function describePlan(target: ProviderAdapter, plan: OpenPlan): string {
   const turnText = plan.turns.length === 0 ? '无需并入' : `写入 ${plan.turns.length} 轮`;
   switch (plan.kind) {
@@ -611,6 +631,16 @@ export async function checkOpenInProvider(
     writable: true,
     plan: { kind: plan.kind, turnCount: plan.turns.length },
   };
+  // 空来源也会新建会话（Kimi 要真跑一次 CLI），所以 CLI 判定不能放在 turns===0 之后
+  const cliBlock = await newSessionCliBlock(target, plan);
+  if (cliBlock) {
+    return {
+      ...base,
+      writable: false,
+      blocked: { code: cliBlock.code, hint: cliBlock.hint },
+      error: cliBlock.error,
+    };
+  }
   if (plan.turns.length === 0) return base; // 无需写入（直接打开既有会话）
   try {
     await target.preflight?.({ ref: plan.targetRef, cwd });

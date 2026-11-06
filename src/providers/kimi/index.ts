@@ -227,6 +227,8 @@ export const kimiAdapter: ProviderAdapter = {
     }
   },
 
+  // 新建会话真跑 `kimi -p .`（决策 A：fail-closed，不做离线自建会话）
+  requiresCliForNewSession: true,
   parse: parseKimiSession,
   importTurns: importTurnsToKimi,
   sessionUsage: kimiSessionUsage,
