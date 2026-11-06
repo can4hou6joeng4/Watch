@@ -139,6 +139,17 @@ function parseArgs(argv: string[]): {
       limit = n;
       continue;
     }
+    if (a.startsWith('--')) {
+      // 未知 flag 不能滑进位置参数：`watch status --chian foo` 会被当成 cwd 之外的多余位置参数静默忽略
+      if (a === '--help') usage();
+      const message = `未知参数: ${a}`;
+      if (json) {
+        console.log(JSON.stringify({ ok: false, error: message }));
+        process.exit(1);
+      }
+      console.error(`[watch] ${message}`);
+      usage();
+    }
     positional.push(a);
   }
   return {
