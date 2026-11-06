@@ -518,6 +518,12 @@ async function cmdDoctor(cwd: string, json: boolean): Promise<void> {
       const state = p.available ? '✓ 已就绪' : p.error ? `✗ 检测失败: ${p.error}` : '✗ 未检测到';
       console.log(`  ${p.id.padEnd(10)} ${p.displayName.padEnd(12)} ${state}`);
     }
+    if (report.storage.length) {
+      console.log('会话存储:');
+      for (const st of report.storage) {
+        console.log(`  ${st.provider.padEnd(10)} ${st.count === null ? `✗ 读取失败: ${st.error}` : `${st.count} 个会话`}`);
+      }
+    }
     if (report.store.available) {
       const broken = report.store.brokenTips.length;
       console.log(

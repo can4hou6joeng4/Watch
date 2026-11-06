@@ -1,6 +1,6 @@
 import { stat } from 'node:fs/promises';
 import type { ProviderAdapter } from '../providers/adapter.js';
-import { listProviders } from '../providers/registry.js';
+import { listAdapters, listProviders } from '../providers/registry.js';
 import type { ProviderInfo } from './types.js';
 import type { Chain } from './store.js';
 import type { ImportJobs } from './import-jobs.js';
@@ -14,9 +14,13 @@ export type BrokenTip = {
   error: string;
 };
 
+/** 每家 Agent 的原生会话列表可读性：`count` 为 null 表示读取失败 */
+export type StorageProbe = { provider: string; count: number | null; error?: string };
+
 export type DoctorReport = {
   cwd: string;
   providers: ProviderInfo[];
+  storage: StorageProbe[];
   store:
     | { available: true; chains: number; activeChains: number; brokenTips: BrokenTip[] }
     | { available: false; error: string };
@@ -48,7 +52,21 @@ export type DoctorDeps = {
 export async function doctorReport(cwd: string, deps: DoctorDeps): Promise<DoctorReport> {
   const warnings: string[] = [];
 
-  const providers = await listProviders(deps.adapters);
+  const adapters = deps.adapters ?? listAdapters();
+  const providers = await listProviders(adapters);
+
+  // 原生会话列表只读；与 detect（只看 PATH）互补：装了但存储读不出，比「没装」更需要解释
+  const storage: StorageProbe[] = [];
+  for (const adapter of adapters) {
+    if (!adapter.listSessions) continue;
+    try {
+      storage.push({ provider: adapter.id, count: (await adapter.listSessions(cwd)).length });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      storage.push({ provider: adapter.id, count: null, error: message });
+      warnings.push(`${adapter.displayName} 会话列表读取失败：${message}`);
+    }
+  }
 
   let store: DoctorReport['store'];
   if (!deps.store) {
@@ -124,5 +142,5 @@ export async function doctorReport(cwd: string, deps: DoctorDeps): Promise<Docto
     if (p.error) warnings.push(`${p.displayName} 检测失败：${p.error}`);
   }
 
-  return { cwd, providers, store, imports, warnings };
+  return { cwd, providers, storage, store, imports, warnings };
 }
