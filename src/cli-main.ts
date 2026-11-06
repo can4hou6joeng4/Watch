@@ -370,6 +370,12 @@ async function cmdOpen(
     if (!result.ok) {
       // 目标被占用等写入拒绝：带上结构化原因，供桌面端/脚本给出可操作提示（未写入任何内容）
       const extra = result.blocked ? { blocked: true, ...result.blocked } : undefined;
+      if (!json && result.blocked) {
+        // 与 failBlocked 同一格式：文本模式也要给 code 与下一步，不能只在 --json 里有
+        console.error(`[blocked:${result.blocked.code}] ${result.error ?? '未知错误'}`);
+        if (result.blocked.hint) console.error(result.blocked.hint);
+        process.exit(1);
+      }
       fail(json, result.error ?? '未知错误', extra);
     }
     if (json) {
