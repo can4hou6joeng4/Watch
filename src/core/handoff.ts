@@ -5,6 +5,7 @@ import type { Chain, Store, SwitchRecord } from './store.js';
 import { dedupeCallEvents, mergeTurns, shouldReplacePairedSession, unwrapUserQuery } from './rich.js';
 import type { FileDigest } from './atomic.js';
 import { addFinding, type Finding } from './findings.js';
+import { countUnparsableJsonLines } from './jsonl.js';
 
 /** 写回被阻断（如 TOCTOU 检测到目标被外部修改）：一票否决，不产生部分写 */
 export class HandoffBlockedError extends Error {
@@ -447,6 +448,14 @@ export async function handoff(
     throw new Error(
       `来源会话 ${sourceTip.ref.sessionId}（${source.displayName}）读取失败：${raw}。` +
         `文件 ${sourceTip.ref.filePath} 可能已被删除或截断，而链记录仍指向它：可用 watch adopt 重新绑定，或用 watch sessions 查看该目录还有哪些可接力的会话`,
+    );
+  }
+  // 各家 parse 对坏行一律跳过：跳过的内容既不在 turns 里，也不会被 round-trip 查出（两边都按解析结果比），
+  // 不主动扫一遍就会把「少了几轮」当成完整交接
+  const badSourceLines = await countUnparsableJsonLines(sourceTip.ref.filePath);
+  if (badSourceLines > 0) {
+    warnings.push(
+      `来源会话 ${sourceTip.ref.sessionId}（${source.displayName}）有 ${badSourceLines} 行无法解析（截断或损坏），已跳过；交接内容可能不完整，可在原生 CLI 里打开确认`,
     );
   }
   // 目标级保护：传入即将写入的会话，Codex 据此检查 per-thread writer 锁（而非只看 Desktop 是否运行）

@@ -8,6 +8,7 @@ import type { SessionRef, TokenUsage, UnifiedTurn } from './core/types.js';
 import type { ProviderAdapter } from './providers/adapter.js';
 import { PreflightBlockedError } from './providers/adapter.js';
 import { getAdapter, listAdapters } from './providers/registry.js';
+import { countUnparsableJsonLines } from './core/jsonl.js';
 
 /** `watch open` 的返回协议：桌面 GUI 通过 CLI `--json` 消费 */
 export type SessionSummary = {
@@ -230,6 +231,12 @@ export async function openSession(
         }
       }
       const srcTurns = await source.adapter.parse(source.found.ref);
+      const badSrcLines = await countUnparsableJsonLines(source.found.ref.filePath);
+      if (badSrcLines > 0) {
+        warnings.push(
+          `来源会话 ${source.found.ref.sessionId} 有 ${badSrcLines} 行无法解析（截断或损坏），已跳过；并入内容可能不完整`,
+        );
+      }
       const dstTurns = await target.adapter.parse(target.found.ref);
       // 写前快照：与 handoff 一致，写入前再比一次（目标被外部写入则中止）
       const dstDigest = (await target.adapter.contentFingerprint?.(target.found.ref)) ?? null;
@@ -405,6 +412,13 @@ async function planOpenInProvider(
       ok: false,
       error: `来源会话 ${sourceId} 读取失败：${error instanceof Error ? error.message : String(error)}`,
     };
+  }
+  // parse 跳过坏行不会报错，round-trip 也比的是解析结果：不扫一遍就会把「少了几轮」当完整转入
+  const badSourceLines = await countUnparsableJsonLines(sourceRef.filePath);
+  if (badSourceLines > 0) {
+    diagnostics?.push(
+      `来源会话 ${sourceId} 有 ${badSourceLines} 行无法解析（截断或损坏），已跳过；转入内容可能不完整`,
+    );
   }
   const outgoing = dedupeCallEvents(turns);
   if (outgoing.length === 0) return { ok: false, error: `来源会话 ${sourceId} 没有可转入的内容` };
