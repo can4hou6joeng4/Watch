@@ -216,11 +216,22 @@ export type HandoffResult = {
 
 export type AdapterResolve = (id: string) => ProviderAdapter | undefined;
 
-export async function collectTips(cwd: string, adapters: ProviderAdapter[]): Promise<ProviderTip[]> {
+export async function collectTips(
+  cwd: string,
+  adapters: ProviderAdapter[],
+  warnings?: string[],
+): Promise<ProviderTip[]> {
   const tips: ProviderTip[] = [];
   for (const adapter of adapters) {
     if (!adapter.findLatestSession) continue;
-    const found = await adapter.findLatestSession(cwd);
+    let found;
+    try {
+      found = await adapter.findLatestSession(cwd);
+    } catch (error) {
+      // 单个 provider 的原生存储读不出来时跳过，不影响其它家，但要披露
+      warnings?.push(`${adapter.id} 原生会话读取失败，已跳过：${error instanceof Error ? error.message : String(error)}`);
+      continue;
+    }
     if (found) tips.push({ provider: adapter.id, ref: found.ref, updatedAt: found.updatedAt });
   }
   return tips;
@@ -243,8 +254,10 @@ export async function chainStatus(
   history: SwitchRecord[];
   chain: Chain | null;
   chains: Chain[];
+  warnings: string[];
 }> {
-  const allTips = await collectTips(cwd, adapters);
+  const warnings: string[] = [];
+  const allTips = await collectTips(cwd, adapters, warnings);
   let history: SwitchRecord[] = [];
   let chain: Chain | null = null;
   let chains: Chain[] = [];
@@ -257,6 +270,7 @@ export async function chainStatus(
     } catch (error) {
       if (error instanceof Error && /找不到链/.test(error.message)) throw error;
       history = [];
+      warnings.push(`链历史读取失败，按无链处理：${error instanceof Error ? error.message : String(error)}`);
     }
   }
   // 链尾只以当前链的 switch_events 最后一条为准；不再 fallback 到目录全局最新会话
@@ -276,7 +290,7 @@ export async function chainStatus(
     }
   }
   const tips = allTips.map((t) => ({ ...t, onChain: boundIds.get(t.provider)?.has(t.ref.sessionId) ?? false }));
-  return { tips, chainTip, history, chain, chains };
+  return { tips, chainTip, history, chain, chains, warnings };
 }
 
 /** 把链尾会话转换到 targetId，落 switch_events（store 可选）；opts.forceNew 强制新建目标会话（不追加既有配对） */
@@ -293,7 +307,7 @@ export async function handoff(
   const warnings: string[] = [];
   const findings: Finding[] = [];
 
-  const tips = await collectTips(cwd, adapters);
+  const tips = await collectTips(cwd, adapters, warnings);
   const mtimeTip = pickChainTip(tips);
   if (!mtimeTip) throw new Error('未发现原生会话，请先在 Claude Code 或 Codex TUI 里开聊');
 

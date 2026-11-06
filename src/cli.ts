@@ -166,7 +166,8 @@ async function cmdStatus(cwd: string, json: boolean, chain?: string): Promise<vo
     console.log(JSON.stringify({ ok: true, ...result }));
     return;
   }
-  const { tips, chainTip, history, chain: current } = result;
+  const { tips, chainTip, history, chain: current, warnings } = result;
+  for (const warning of warnings) console.error(`警告: ${warning}`);
   if (current) console.log(`链: ${current.name}  (${current.id})`);
   if (!tips.length) {
     console.log('未发现会话（请先在 Claude Code 或 Codex TUI 开聊）');
@@ -332,11 +333,19 @@ async function cmdSessions(cwd: string, json: boolean, chain?: string): Promise<
     }
   }
   try {
+    const unavailable: string[] = [];
     const groups = await Promise.all(
       adapters
         .filter((a) => a.listSessions)
         .map(async (a) => {
-          const sessions = await a.listSessions!(cwd);
+          // 单个 provider 读失败（opencode 库损坏/被占用等）不拖垮整张列表
+          let sessions: Awaited<ReturnType<NonNullable<typeof a.listSessions>>> = [];
+          try {
+            sessions = await a.listSessions!(cwd);
+          } catch {
+            unavailable.push(a.id);
+            return { provider: a.id, sessions: [] };
+          }
           const ids = bound.get(a.id);
           return {
             provider: a.id,
@@ -346,11 +355,12 @@ async function cmdSessions(cwd: string, json: boolean, chain?: string): Promise<
     );
     const result = groups.filter((g) => g.sessions.length > 0);
     if (json) {
-      console.log(JSON.stringify({ ok: true, cwd, providers: result }));
+      console.log(JSON.stringify({ ok: true, cwd, providers: result, ...(unavailable.length ? { unavailable } : {}) }));
       return;
     }
     if (!result.length) {
       console.log('未发现会话');
+      if (unavailable.length) console.error(`未读取: ${unavailable.join('、')}（原生存储读取失败）`);
       return;
     }
     for (const g of result) {
@@ -360,6 +370,7 @@ async function cmdSessions(cwd: string, json: boolean, chain?: string): Promise<
         if (s.preview) console.log(`    ${s.preview}`);
       }
     }
+    if (unavailable.length) console.error(`未读取: ${unavailable.join('、')}（原生存储读取失败）`);
   } catch (error) {
     fail(json, error instanceof Error ? error.message : String(error));
   }
