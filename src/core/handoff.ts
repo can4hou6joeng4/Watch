@@ -136,8 +136,10 @@ export async function createChainSession(
     if (chainId && !id) throw new Error(`找不到链: ${chainId}`);
     history = id ? store.listSwitchEvents(id) : [];
   } catch (error) {
-    if (error instanceof Error && /找不到链|已归档/.test(error.message)) throw error;
-    history = [];
+    const message = error instanceof Error ? error.message : String(error);
+    if (/找不到链|已归档/.test(message)) throw error;
+    // 读库失败不能退成空历史：下面会报「还没有切换链」，把用户引去建一条新链，真实原因丢失
+    throw new Error(`读取链记录失败，无法确认当前链状态：${message}`);
   }
   if (!history.length) throw new Error('当前目录还没有切换链，请先执行一次 Switch 建链');
   const tail = history.at(-1)!;
