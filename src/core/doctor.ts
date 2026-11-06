@@ -76,6 +76,15 @@ export type DoctorDeps = {
   environment?: DoctorEnvironment;
 };
 
+async function exists(filePath: string): Promise<boolean> {
+  try {
+    await stat(filePath);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function resolveEnvironment(importsRoot: string | null): DoctorEnvironment {
   return {
     watchVersion: readWatchVersion(),
@@ -164,6 +173,12 @@ export async function doctorReport(cwd: string, deps: DoctorDeps): Promise<Docto
         const fromAdapter = adapterById.get(from.provider);
         const toAdapter = adapterById.get(to.provider);
         if (!fromAdapter?.parse || !toAdapter?.parse) continue;
+        // 文件缺失已有 brokenTips / 专门警告，别再让 parse 抛 ENOENT 重复报一次
+        if (!(await exists(to.filePath))) continue;
+        if (!(await exists(from.filePath))) {
+          warnings.push(`链「${chain.name}」的来源会话文件已不存在：${from.filePath}（${from.provider}）；链尾仍在，但无法再做内容对账`);
+          continue;
+        }
         try {
           const [fromTurns, toTurns] = await Promise.all([fromAdapter.parse(from), toAdapter.parse(to)]);
           const missingTurns = diffTurns(fromTurns, toTurns).length;
@@ -177,7 +192,7 @@ export async function doctorReport(cwd: string, deps: DoctorDeps): Promise<Docto
               sourceTurns: fromTurns.length,
             });
             warnings.push(
-              `链「${chain.name}」的链尾比来源少 ${missingTurns} 条记录（来源 ${fromTurns.length} 条）：目标会话可能被改动或截断，可用 switch / adopt 重新对齐`,
+              `链「${chain.name}」的链尾比来源少 ${missingTurns} 条记录（来源 ${fromTurns.length} 条）：若切换后又在来源侧继续聊过属正常，下次切换会补齐；否则可能是目标会话被改动或截断，可用 switch / adopt 重新对齐`,
             );
           }
         } catch (error) {
