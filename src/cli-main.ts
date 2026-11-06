@@ -422,6 +422,7 @@ async function cmdRecent(cwd: string, json: boolean, limit: number = 8): Promise
   const seen = new Set<string>();
   const unavailable: string[] = [];
 
+  if (!store) unavailable.push('本地库');
   if (store) {
     try {
       const locations = store.listSessionLocations({ limit: limit * 2 });

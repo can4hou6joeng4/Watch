@@ -176,7 +176,13 @@ export async function chainUsage(
 }> {
   const empty = { inputTokens: 0, outputTokens: 0 };
   if (!store) {
-    return { chain: null, total: empty, byProvider: [], warnings: [] };
+    // 无库时链与用量都无从判断，不能返回一份看起来「就是 0」的空报告
+    return {
+      chain: null,
+      total: empty,
+      byProvider: [],
+      warnings: ['本地库不可用，无法确定当前链与各家用量（可检查 WATCH_DB 路径与 Node 版本）'],
+    };
   }
   const warnings: string[] = [];
   const chain = store.findActiveChain(cwd, chainId);
@@ -286,6 +292,8 @@ export async function chainStatus(
       history = [];
       warnings.push(`链历史读取失败，按无链处理：${error instanceof Error ? error.message : String(error)}`);
     }
+  } else {
+    warnings.push('本地库不可用，链信息与链尾无法显示（只列出原生会话；可检查 WATCH_DB 路径与 Node 版本）');
   }
   // 链尾只以当前链的 switch_events 最后一条为准；不再 fallback 到目录全局最新会话
   let chainTip: ProviderTip | null = null;
