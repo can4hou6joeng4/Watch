@@ -558,9 +558,15 @@ async function cmdDoctor(cwd: string, json: boolean): Promise<void> {
     }
     if (report.store.available) {
       const broken = report.store.brokenTips.length;
+      const drifted = report.store.driftedPairs.length;
       console.log(
-        `本地库: 可用，本目录 ${report.store.chains} 条链（${report.store.activeChains} 条活跃${broken ? `，${broken} 条链尾缺失` : ''}）`,
+        `本地库: 可用，本目录 ${report.store.chains} 条链（${report.store.activeChains} 条活跃${broken ? `，${broken} 条链尾缺失` : ''}${drifted ? `，${drifted} 条链尾内容落后于来源` : ''}）`,
       );
+      for (const d of report.store.driftedPairs) {
+        console.log(
+          `  链「${d.chainName}」: ${d.from.provider}:${d.from.sessionId} → ${d.to.provider}:${d.to.sessionId}，缺 ${d.missingTurns}/${d.sourceTurns} 条`,
+        );
+      }
     } else {
       console.log(`本地库: 不可用（${report.store.error}）`);
     }

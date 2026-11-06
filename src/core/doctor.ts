@@ -5,6 +5,8 @@ import type { ProviderInfo } from './types.js';
 import type { Chain } from './store.js';
 import type { ImportJobs } from './import-jobs.js';
 import { defaultDbPath } from './store.js';
+import { diffTurns } from './handoff.js';
+import type { SessionRef } from './types.js';
 import { readWatchVersion } from './watch-version.js';
 
 export type BrokenTip = {
@@ -25,6 +27,16 @@ export type DoctorEnvironment = {
   importsRoot: string | null;
 };
 
+/** 链尾与来源的内容对账：`missingTurns > 0` 说明目标会话比来源少了记录 */
+export type DriftedPair = {
+  chainId: string;
+  chainName: string;
+  from: { provider: string; sessionId: string };
+  to: { provider: string; sessionId: string };
+  missingTurns: number;
+  sourceTurns: number;
+};
+
 /** 每家 Agent 的原生会话列表可读性：`count` 为 null 表示读取失败 */
 export type StorageProbe = { provider: string; count: number | null; error?: string };
 
@@ -34,7 +46,7 @@ export type DoctorReport = {
   providers: ProviderInfo[];
   storage: StorageProbe[];
   store:
-    | { available: true; chains: number; activeChains: number; brokenTips: BrokenTip[] }
+    | { available: true; chains: number; activeChains: number; brokenTips: BrokenTip[]; driftedPairs: DriftedPair[] }
     | { available: false; error: string };
   imports:
     | { available: true; total: number; imported: number; associated: number; uncertain: number; prepared: number }
@@ -45,7 +57,10 @@ export type DoctorReport = {
 /** 诊断用的最小 Store 面：列出当前 cwd 的链、读某条链的切换记录；测试可注入假实现 */
 export type DoctorStore = {
   listChains(cwd: string): Chain[];
-  listSwitchEvents?(chainId: string): { toRef?: { provider: string; sessionId: string; filePath: string } | null }[];
+  listSwitchEvents?(chainId: string): {
+    fromRef?: SessionRef | null;
+    toRef?: SessionRef | null;
+  }[];
 };
 
 export type DoctorDeps = {
@@ -132,7 +147,45 @@ export async function doctorReport(cwd: string, deps: DoctorDeps): Promise<Docto
           );
         }
       }
-      store = { available: true, chains: chains.length, activeChains: activeChains.length, brokenTips };
+      // 内容对账：链尾文件还在，不代表它也还在内容上承接来源（手动改过、客户端截断、resume 重写都会让两者漂移）
+      const driftedPairs: DriftedPair[] = [];
+      const adapterById = new Map(adapters.map((a) => [a.id, a]));
+      for (const chain of activeChains) {
+        if (!listEvents) break;
+        let last: { fromRef?: SessionRef | null; toRef?: SessionRef | null } | undefined;
+        try {
+          last = listEvents(chain.id).at(-1);
+        } catch {
+          continue; // 上面已按链警告过读取失败
+        }
+        const from = last?.fromRef;
+        const to = last?.toRef;
+        if (!from || !to) continue; // 链起点没有来源，无从对账
+        const fromAdapter = adapterById.get(from.provider);
+        const toAdapter = adapterById.get(to.provider);
+        if (!fromAdapter?.parse || !toAdapter?.parse) continue;
+        try {
+          const [fromTurns, toTurns] = await Promise.all([fromAdapter.parse(from), toAdapter.parse(to)]);
+          const missingTurns = diffTurns(fromTurns, toTurns).length;
+          if (missingTurns > 0) {
+            driftedPairs.push({
+              chainId: chain.id,
+              chainName: chain.name,
+              from: { provider: from.provider, sessionId: from.sessionId },
+              to: { provider: to.provider, sessionId: to.sessionId },
+              missingTurns,
+              sourceTurns: fromTurns.length,
+            });
+            warnings.push(
+              `链「${chain.name}」的链尾比来源少 ${missingTurns} 条记录（来源 ${fromTurns.length} 条）：目标会话可能被改动或截断，可用 switch / adopt 重新对齐`,
+            );
+          }
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          warnings.push(`链「${chain.name}」的内容对账失败：${message}`);
+        }
+      }
+      store = { available: true, chains: chains.length, activeChains: activeChains.length, brokenTips, driftedPairs };
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       store = { available: false, error: message };
