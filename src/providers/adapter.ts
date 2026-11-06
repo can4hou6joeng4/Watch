@@ -81,6 +81,10 @@ export interface ProviderAdapter {
   /** 可选（桌面壳用）：列 cwd 下本 provider 的原生会话，mtime 降序 */
   listSessions?(cwd: string): Promise<{ ref: SessionRef; updatedAt: number; preview?: string }[]>;
 
+  /** 可选：`listSessions` 单次最多返回条数。声明后 `watch doctor` 会把「恰好等于上限」的计数
+   *  标成下限（`capped`），否则会把截断后的列表当成精确总数展示。 */
+  listSessionsCap?: number;
+
   /**
    * 可选：为目标会话取协作写锁（如 Codex 的原生 per-thread writer 锁）。
    * 写入期间持有它可把「探测 → 写入」之间的竞态窗口收窄为原子取锁。

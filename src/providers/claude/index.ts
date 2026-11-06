@@ -17,6 +17,9 @@ const execFileAsync = promisify(execFile);
 
 const UUID_JSONL = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.jsonl$/i;
 
+/** `listSessions` 单次上限：超出时只返回最新的这么多条（`watch doctor` 据此把计数标成下限） */
+export const CLAUDE_LIST_LIMIT = 50;
+
 /** 找 cwd 对应 projectDir 下 mtime 最新的 uuid 会话；目录不存在返回 null。projectsRoot 可注入供单测 */
 export async function findLatestClaudeSession(
   cwd: string,
@@ -138,7 +141,7 @@ export async function listClaudeSessions(
   }
   items.sort((a, b) => b.updatedAt - a.updatedAt);
   return Promise.all(
-    items.slice(0, 50).map(async (item) => ({
+    items.slice(0, CLAUDE_LIST_LIMIT).map(async (item) => ({
       ...item,
       preview: (await claudeFirstUserText(item.ref.filePath)) ?? undefined,
     })),
@@ -239,6 +242,7 @@ export const claudeAdapter: ProviderAdapter = {
   },
   findLatestSession: findLatestClaudeSession,
   listSessions: (cwd) => listClaudeSessions(cwd),
+  listSessionsCap: CLAUDE_LIST_LIMIT,
 
   /** nezha 式启动：预写一条占位 user 消息，`claude --resume <id>` 进 PTY 后可直接交互（不经 exec 等首条回复） */
   async createEmptySession(cwd: string): Promise<SessionRef> {

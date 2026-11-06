@@ -147,6 +147,9 @@ export async function findLatestCodexRollout(
 }
 
 /** cwd 下全部 rollout，mtime 降序；preview 取首条用户消息 */
+/** `listSessions` 单次上限：超出时只返回最新的这么多条（`watch doctor` 据此把计数标成下限） */
+export const CODEX_LIST_LIMIT = 50;
+
 export async function listCodexRollouts(
   cwd: string,
   sessionsRoot?: string,
@@ -160,7 +163,7 @@ export async function listCodexRollouts(
     if (!sessionId) continue;
     if ((await rolloutCwd(f.filePath)) !== cwd) continue;
     items.push({ ref: { provider: 'codex', sessionId, filePath: f.filePath, cwd }, updatedAt: f.mtimeMs });
-    if (items.length >= 50) break;
+    if (items.length >= CODEX_LIST_LIMIT) break;
   }
   return Promise.all(items.map(async (item) => ({ ...item, preview: (await codexFirstUserText(item.ref.filePath)) ?? undefined })));
 }
@@ -469,6 +472,7 @@ export const codexAdapter: ProviderAdapter = {
   },
   findLatestSession: findLatestCodexRollout,
   listSessions: (cwd) => listCodexRollouts(cwd),
+  listSessionsCap: CODEX_LIST_LIMIT,
 
   /**
    * 写入 Codex 侧前的目标级保护。

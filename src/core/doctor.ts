@@ -38,7 +38,13 @@ export type DriftedPair = {
 };
 
 /** 每家 Agent 的原生会话列表可读性：`count` 为 null 表示读取失败 */
-export type StorageProbe = { provider: string; count: number | null; error?: string };
+export type StorageProbe = {
+  provider: string;
+  count: number | null;
+  error?: string;
+  /** 计数已达适配器 `listSessionsCap`：实际会话数只会更多，不能当精确总数用 */
+  capped?: boolean;
+};
 
 export type DoctorReport = {
   cwd: string;
@@ -111,7 +117,9 @@ export async function doctorReport(cwd: string, deps: DoctorDeps): Promise<Docto
   for (const adapter of adapters) {
     if (!adapter.listSessions) continue;
     try {
-      storage.push({ provider: adapter.id, count: (await adapter.listSessions(cwd)).length });
+      const listed = await adapter.listSessions(cwd);
+      const capped = adapter.listSessionsCap !== undefined && listed.length >= adapter.listSessionsCap;
+      storage.push({ provider: adapter.id, count: listed.length, ...(capped ? { capped: true } : {}) });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       storage.push({ provider: adapter.id, count: null, error: message });

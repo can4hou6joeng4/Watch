@@ -18,6 +18,9 @@ import {
 
 const execFileAsync = promisify(execFile);
 
+/** `listSessions` 单次上限：超出时只返回最新的这么多条（`watch doctor` 据此把计数标成下限） */
+export const KIMI_LIST_LIMIT = 50;
+
 export { encodeKimiWorkspaceDir, kimiSessionsRoot };
 
 /** 从 stream-json 输出中提取 session_id 与最终 assistant 文本 */
@@ -119,7 +122,7 @@ export async function listKimiSessions(
 ): Promise<{ ref: SessionRef; updatedAt: number; preview?: string }[]> {
   const all = await listKimiSessionsByCwd(cwd);
   return Promise.all(
-    all.slice(0, 50).map(async (item) => ({
+    all.slice(0, KIMI_LIST_LIMIT).map(async (item) => ({
       ref: {
         provider: 'kimi',
         sessionId: item.sessionId,
@@ -237,6 +240,7 @@ export const kimiAdapter: ProviderAdapter = {
   },
   findLatestSession: findLatestKimiSession,
   listSessions: listKimiSessions,
+  listSessionsCap: KIMI_LIST_LIMIT,
 
   /** nezha 式启动：新建真实会话并截断，返回可直接 `kimi -r` 的 ref */
   async createEmptySession(cwd: string): Promise<SessionRef> {

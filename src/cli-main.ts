@@ -554,7 +554,13 @@ async function cmdDoctor(cwd: string, json: boolean): Promise<void> {
     if (report.storage.length) {
       console.log('会话存储:');
       for (const st of report.storage) {
-        console.log(`  ${st.provider.padEnd(10)} ${st.count === null ? `✗ 读取失败: ${st.error}` : `${st.count} 个会话`}`);
+        const countText =
+          st.count === null
+            ? `✗ 读取失败: ${st.error}`
+            : st.capped
+              ? `≥ ${st.count} 个会话（已达列表上限，实际可能更多）`
+              : `${st.count} 个会话`;
+        console.log(`  ${st.provider.padEnd(10)} ${countText}`);
       }
     }
     if (report.store.available) {
