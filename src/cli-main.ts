@@ -499,20 +499,26 @@ async function cmdDoctor(cwd: string, json: boolean): Promise<void> {
   try {
     const store = openStore();
     let importJobs: ImportJobs | null = null;
+    let importsRoot: string | undefined;
     let importJobsError: string | undefined;
     try {
-      importJobs = new ImportJobs(officialImportJournalRoot());
+      importsRoot = officialImportJournalRoot();
+      importJobs = new ImportJobs(importsRoot);
     } catch (error) {
       importJobsError = process.env.WATCH_DB === ':memory:'
         ? 'WATCH_DB=:memory: 不落盘，没有导入日志'
         : error instanceof Error ? error.message : String(error);
     }
-    const report = await doctorReport(cwd, { store, importJobs, importJobsError });
+    const report = await doctorReport(cwd, { store, importJobs, importJobsError, importsRoot });
     if (json) {
       console.log(JSON.stringify({ ok: true, ...report }));
       return;
     }
+    const env = report.environment;
     console.log(`诊断 cwd: ${report.cwd}`);
+    console.log(`环境: watch ${env.watchVersion ?? '未知版本'} · node ${env.node} · ${env.platform}`);
+    console.log(`本地库文件: ${env.dbPath}`);
+    console.log(`导入日志目录: ${env.importsRoot ?? '（不可用）'}`);
     console.log('Agent 检测:');
     for (const p of report.providers) {
       const state = p.available ? '✓ 已就绪' : p.error ? `✗ 检测失败: ${p.error}` : '✗ 未检测到';

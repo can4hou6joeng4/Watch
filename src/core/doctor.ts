@@ -4,6 +4,8 @@ import { listAdapters, listProviders } from '../providers/registry.js';
 import type { ProviderInfo } from './types.js';
 import type { Chain } from './store.js';
 import type { ImportJobs } from './import-jobs.js';
+import { defaultDbPath } from './store.js';
+import { readWatchVersion } from './watch-version.js';
 
 export type BrokenTip = {
   chainId: string;
@@ -14,11 +16,21 @@ export type BrokenTip = {
   error: string;
 };
 
+/** 报告来源：贴到 issue 里要能定位「哪一版、什么环境、看的是哪个库」 */
+export type DoctorEnvironment = {
+  watchVersion: string | null;
+  node: string;
+  platform: string;
+  dbPath: string;
+  importsRoot: string | null;
+};
+
 /** 每家 Agent 的原生会话列表可读性：`count` 为 null 表示读取失败 */
 export type StorageProbe = { provider: string; count: number | null; error?: string };
 
 export type DoctorReport = {
   cwd: string;
+  environment: DoctorEnvironment;
   providers: ProviderInfo[];
   storage: StorageProbe[];
   store:
@@ -43,7 +55,21 @@ export type DoctorDeps = {
   storeError?: string;
   importJobs: ImportJobs | null;
   importJobsError?: string;
+  /** 执行日志根目录（供报告标注路径）；不传则报告记为 null */
+  importsRoot?: string;
+  /** 测试可覆盖；默认读当前进程与 package.json */
+  environment?: DoctorEnvironment;
 };
+
+function resolveEnvironment(importsRoot: string | null): DoctorEnvironment {
+  return {
+    watchVersion: readWatchVersion(),
+    node: process.versions.node,
+    platform: `${process.platform}-${process.arch}`,
+    dbPath: process.env.WATCH_DB ?? defaultDbPath(),
+    importsRoot,
+  };
+}
 
 /**
  * 只读环境诊断：各项独立降级，任一失败只记入对应字段或 warnings，不影响其它项。
@@ -51,6 +77,7 @@ export type DoctorDeps = {
  */
 export async function doctorReport(cwd: string, deps: DoctorDeps): Promise<DoctorReport> {
   const warnings: string[] = [];
+  const environment = deps.environment ?? resolveEnvironment(deps.importsRoot ?? null);
 
   const adapters = deps.adapters ?? listAdapters();
   const providers = await listProviders(adapters);
@@ -142,5 +169,5 @@ export async function doctorReport(cwd: string, deps: DoctorDeps): Promise<Docto
     if (p.error) warnings.push(`${p.displayName} 检测失败：${p.error}`);
   }
 
-  return { cwd, providers, storage, store, imports, warnings };
+  return { cwd, environment, providers, storage, store, imports, warnings };
 }
