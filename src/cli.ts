@@ -268,37 +268,41 @@ async function cmdOpen(
   toId?: string,
   check?: boolean,
 ): Promise<void> {
-  if (check) {
-    if (!toId) fail(json, '--check 需要同时指定 --to <provider>');
-    const checked = await checkOpenInProvider(targetId, toId);
+  try {
+    if (check) {
+      if (!toId) fail(json, '--check 需要同时指定 --to <provider>');
+      const checked = await checkOpenInProvider(targetId, toId);
+      if (json) {
+        console.log(JSON.stringify(checked));
+        process.exit(checked.ok ? 0 : 1);
+      }
+      if (!checked.ok) fail(false, checked.error ?? '预检失败');
+      const target = checked.sessionId ? `${checked.sessionId}` : '（将新建会话）';
+      console.log(`预检：${checked.plan?.kind ?? '?'} · 目标 ${target} · ${checked.writable ? '可写入' : '暂不可写'}`);
+      if (!checked.writable) {
+        for (const line of [checked.error, checked.blocked?.hint]) if (line) console.error(line);
+        process.exit(1);
+      }
+      return;
+    }
+    const result = toId
+      ? await openInProvider(targetId, toId)
+      : await openSession(targetId, { from: fromId, provider: providerId });
+    if (!result.ok) {
+      // 目标被占用等写入拒绝：带上结构化原因，供桌面端/脚本给出可操作提示（未写入任何内容）
+      const extra = result.blocked ? { blocked: true, ...result.blocked } : undefined;
+      fail(json, result.error ?? '未知错误', extra);
+    }
     if (json) {
-      console.log(JSON.stringify(checked));
-      process.exit(checked.ok ? 0 : 1);
+      console.log(JSON.stringify(result));
+      return;
     }
-    if (!checked.ok) fail(false, checked.error ?? '预检失败');
-    const target = checked.sessionId ? `${checked.sessionId}` : '（将新建会话）';
-    console.log(`预检：${checked.plan?.kind ?? '?'} · 目标 ${target} · ${checked.writable ? '可写入' : '暂不可写'}`);
-    if (!checked.writable) {
-      for (const line of [checked.error, checked.blocked?.hint]) if (line) console.error(line);
-      process.exit(1);
-    }
-    return;
+    for (const n of result.notes ?? []) console.log(n);
+    console.log(result.cd);
+    console.log(result.resumeCommand);
+  } catch (error) {
+    fail(json, error instanceof Error ? error.message : String(error));
   }
-  const result = toId
-    ? await openInProvider(targetId, toId)
-    : await openSession(targetId, { from: fromId, provider: providerId });
-  if (!result.ok) {
-    // 目标被占用等写入拒绝：带上结构化原因，供桌面端/脚本给出可操作提示（未写入任何内容）
-    const extra = result.blocked ? { blocked: true, ...result.blocked } : undefined;
-    fail(json, result.error ?? '未知错误', extra);
-  }
-  if (json) {
-    console.log(JSON.stringify(result));
-    return;
-  }
-  for (const n of result.notes ?? []) console.log(n);
-  console.log(result.cd);
-  console.log(result.resumeCommand);
 }
 
 async function cmdSessions(cwd: string, json: boolean, chain?: string): Promise<void> {
