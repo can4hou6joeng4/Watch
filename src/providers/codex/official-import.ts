@@ -123,9 +123,23 @@ export class OfficialCodexImport {
     const plan = await this.deps.jobs.plan(planId);
     const outcome = await this.deps.jobs.outcome(planId);
     const attempted = await this.deps.jobs.attempted(planId);
+    // 先看这份来源是否已导入过：重复导入会在 Codex 里多出一份会话，预览阶段就要说清
+    const prior = await this.deps.jobs
+      .priorImports(plan.source, plan.digest, planId)
+      .catch((error: unknown) => ({ error: error instanceof Error ? error.message : String(error) }));
+    const warnings = [
+      ...WARNINGS,
+      ...(Array.isArray(prior)
+        ? prior.map((p) =>
+            p.sameContent
+              ? `This session was already imported to Codex thread ${p.outcome.target?.sessionId ?? 'unknown'} (plan ${p.id.slice(0, 8)}); importing again creates a second copy.`
+              : `This session was imported before from different content (plan ${p.id.slice(0, 8)}, thread ${p.outcome.target?.sessionId ?? 'unknown'}); the source has changed since.`,
+          )
+        : [`Import journal could not be read; the duplicate-import check was skipped: ${prior.error}`]),
+    ];
     return {
       planId, plan, status: outcome?.status ?? (attempted ? 'uncertain' : 'prepared'),
-      outcome, warnings: WARNINGS, canConfirm: !attempted && plan.target?.policy === 'official-api-target-v1',
+      outcome, warnings, canConfirm: !attempted && plan.target?.policy === 'official-api-target-v1',
       desktop: outcome?.desktopProject?.visibilityPreflightVerified
         ? 'project-membership-and-visibility-preflight-verified'
         : plan.desktopProject ? 'project-first-preflight' : 'unverified',
