@@ -170,6 +170,8 @@ export async function chainUsage(
 ): Promise<{
   chain: Chain | null;
   total: TokenUsage;
+  /** 读取失败、因而没有计入 total 的会话数：total 只是「已知用量之和」，不是全链上限 */
+  totalExcluded: number;
   byProvider: { provider: string; sessionId: string; usage: TokenUsage | null; error?: string }[];
   /** 用量读不出来的会话：null 可能是「原生没有 usage」，这里单独说明是真失败 */
   warnings: string[];
@@ -180,6 +182,7 @@ export async function chainUsage(
     return {
       chain: null,
       total: empty,
+      totalExcluded: 0,
       byProvider: [],
       warnings: ['本地库不可用，无法确定当前链与各家用量（可检查 WATCH_DB 路径与 Node 版本）'],
     };
@@ -190,6 +193,7 @@ export async function chainUsage(
   const history = chain ? store.listSwitchEvents(chain.id) : [];
   const byProvider: { provider: string; sessionId: string; usage: TokenUsage | null; error?: string }[] = [];
   let total = { ...empty };
+  let totalExcluded = 0;
   for (const adapter of adapters) {
     const ref = pairedRef(history, adapter.id);
     if (!ref || !adapter.sessionUsage) continue;
@@ -201,6 +205,7 @@ export async function chainUsage(
       const msg = error instanceof Error ? error.message : String(error);
       warnings.push(`${adapter.id} 用量读取失败：${msg}`);
       byProvider.push({ provider: adapter.id, sessionId: ref.sessionId, usage: null, error: msg });
+      totalExcluded += 1;
       continue;
     }
     byProvider.push({ provider: adapter.id, sessionId: ref.sessionId, usage });
@@ -211,7 +216,7 @@ export async function chainUsage(
       };
     }
   }
-  return { chain, total, byProvider, warnings };
+  return { chain, total, totalExcluded, byProvider, warnings };
 }
 
 export type ProviderTip = {
