@@ -1,3 +1,4 @@
+import { stat } from 'node:fs/promises';
 import type { ImportTurnsOpts, ProviderAdapter } from '../providers/adapter.js';
 import type { SessionRef, TokenUsage, UnifiedTurn } from './types.js';
 import type { Chain, Store, SwitchRecord } from './store.js';
@@ -285,6 +286,17 @@ export async function chainStatus(
   if (history.length) {
     const last = history.at(-1)!;
     chainTip = { provider: last.toProvider, ref: last.toRef, updatedAt: last.createdAt, onChain: true };
+    // 链尾指向的会话文件被删/被移走时，status 不能假装一切正常：下次 switch 会在这里失败
+    try {
+      const info = await stat(last.toRef.filePath);
+      if (!info.isFile()) throw new Error('not a regular file');
+    } catch (error) {
+      warnings.push(
+        `链尾会话文件已不存在：${last.toRef.filePath}（${last.toProvider} ${last.toRef.sessionId}）；下次切换会失败，可先 adopt 该 provider 的新会话：${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    }
   }
   // tips 仍列出同目录全部会话，但用 onChain 标记是否属于当前链；链尾不再 fallback 到游离会话
   const boundIds = new Map<string, Set<string>>();
