@@ -75,6 +75,10 @@ export async function adoptIntoChain(
   if (!found) throw new Error(`${providerId} 未发现可接入的会话`);
 
   let history: SwitchRecord[] = [];
+  if (!store) {
+    // 库打不开时接入仍然完成，但没有链记录：下次 switch 不会认这条绑定，必须说明
+    warnings.push('本地库不可用，本次接入未写入链记录（后续切换不会认同这条绑定）');
+  }
   if (store) {
     try {
       const id = store.findActiveChain(cwd, chainId)?.id ?? null;
@@ -83,7 +87,7 @@ export async function adoptIntoChain(
     } catch (error) {
       if (error instanceof Error && /找不到链|已归档/.test(error.message)) throw error;
       history = [];
-      warnings.push('链历史读取失败，按无链处理');
+      warnings.push(`链历史读取失败，按无链处理：${error instanceof Error ? error.message : String(error)}`);
     }
   }
   if (history.some((h) => h.toProvider === providerId && h.toRef?.sessionId === found.ref.sessionId)) {
