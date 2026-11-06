@@ -682,16 +682,21 @@ async function cmdNew(cwd: string, providerId: string, json: boolean, chain?: st
     }
 
     const result = await createChainSession(providerId, cwd, listAdapters(), getAdapter, store, chain);
+    // 链已存在时的表单同样要带出 cwd / 读库 / 交接降级说明，不能只在空链分支打印
+    const allWarnings = [...warnings, ...result.warnings];
     if (json) {
-      console.log(JSON.stringify({ ok: true, ...result }));
+      console.log(JSON.stringify({ ok: true, ...result, ...(allWarnings.length ? { warnings: allWarnings } : {}) }));
       return;
     }
+    for (const warning of allWarnings) console.error(`警告: ${warning}`);
     console.log(`新会话: ${result.newRef.sessionId}（${result.turnCount} 轮）`);
     console.log(`resume: ${result.resumeCommand}`);
   } catch (error) {
     const msg = error instanceof Error ? error.message : String(error);
-    if (json) console.log(JSON.stringify({ ok: false, error: msg }));
-    else console.error(msg);
+    // 与 switch / adopt 一致：目录本身有问题时先说路径，否则「还没有切换链」会被当成「目录里没东西」
+    const message = cwdIssue ? `${cwdIssue}；${msg}` : msg;
+    if (json) console.log(JSON.stringify({ ok: false, error: message }));
+    else console.error(message);
     process.exit(1);
   }
 }
