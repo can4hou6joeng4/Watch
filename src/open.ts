@@ -20,7 +20,10 @@ export type SessionSummary = {
   hasThinking: boolean;
   hasTools: boolean;
   hasAttachments: boolean;
+  /** 会话里出现过的工具名，最多 5 个（展示上限） */
   toolNames: string[];
+  /** 去重后的工具总数；大于 toolNames.length 时说明列表被截断 */
+  toolCount: number;
 };
 
 export type OpenSessionResult = {
@@ -275,9 +278,9 @@ export async function openSession(
       const hasThinking = turns.some((t) => t.events?.some((e) => e.kind === 'thinking'));
       const toolEvents = turns.flatMap((t) => (t.events ?? []).filter((e) => e.kind === 'tool_call'));
       const hasAttachments = turns.some((t) => t.events?.some((e) => Boolean(e.attachment)));
-      const toolNames = Array.from(
+      const allToolNames = Array.from(
         new Set(toolEvents.map((e) => (e.summary || '').split(' ')[0]).filter(Boolean)),
-      ).slice(0, 5);
+      );
       summary = {
         turnCount: turns.length,
         userTurnCount: userTurns.length,
@@ -288,7 +291,9 @@ export async function openSession(
         hasThinking,
         hasTools: toolEvents.length > 0,
         hasAttachments,
-        toolNames,
+        // 只展示前 5 个，同时带上总数，桌面端才能说「等 N 种」而不是把截断当成全部
+        toolNames: allToolNames.slice(0, 5),
+        toolCount: allToolNames.length,
       };
     } catch (error) {
       // 摘要只是附加信息，解析失败不阻断打开，但不能让用户以为这个会话没有内容
