@@ -219,6 +219,14 @@ async function cmdStatus(cwd: string, json: boolean, chain?: string): Promise<vo
   const { tips, chainTip, history, chain: current, warnings } = result;
   for (const warning of warnings) console.error(`警告: ${warning}`);
   if (current) console.log(`链: ${current.name}  (${current.id})`);
+  // 同一目录可能有多条链：只显示当前这条会让文本用户以为没有别的（--json 的 chains 一直是全量）
+  const otherChains = result.chains.filter((c) => c.id !== current?.id);
+  if (otherChains.length) {
+    const active = otherChains.filter((c) => c.status === 'active').length;
+    const archived = otherChains.length - active;
+    const parts = [active ? `${active} 条活跃` : '', archived ? `${archived} 条归档` : ''].filter(Boolean);
+    console.log(`另有 ${otherChains.length} 条链（${parts.join('、')}）；用 --chain <名或 id> 查看`);
+  }
   if (!tips.length) {
     console.log('未发现会话（请先在 Claude Code 或 Codex TUI 开聊）');
   } else {
