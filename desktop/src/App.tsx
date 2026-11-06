@@ -3,7 +3,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { readText, writeText } from '@tauri-apps/plugin-clipboard-manager';
 import { ArrowDownLeft, ArrowRight, ArrowUpRight, Check, ChevronDown, ClipboardPaste, Copy, FileText, Folder, History, Info, LoaderCircle, Monitor, Moon, RefreshCw, Search, Settings2, ShieldCheck, Sun, SunMoon, Terminal, Workflow, X } from 'lucide-react';
 import { assertSameCodexImportPlan, beginCodexOpen, completeCodexOpen, failCodexOpen, importedCodexThreadId, parseCodexImportResult, viewForCodexImportResult, type CodexImportResult, type CodexImportView } from './codex-import.js';
-import { AGENTS, buildCommand, handoffRoute, parseThemePreference, resolveTheme, THEME_OPTIONS, type ThemePreference } from './handoff-ui.js';
+import { AGENTS, buildCommand, handoffRoute, parsePrecheckBlocked, parseThemePreference, resolveTheme, THEME_OPTIONS, type PrecheckResponse, type ThemePreference } from './handoff-ui.js';
 import './App.css';
 
 type TerminalId = 'terminal' | 'kaku' | 'iterm2' | 'ghostty';
@@ -131,11 +131,11 @@ export default function App() {
     }
     setPrecheck({ status: 'checking' });
     const timer = window.setTimeout(() => {
-      void invoke<{ ok?: boolean; writable?: boolean; notes?: string[]; sessionId?: string; error?: string; blocked?: boolean; code?: string; holders?: { pid: number; command: string }[]; hint?: string }>('check_open', { sourceId: id, providerId: target })
+      void invoke<PrecheckResponse>('check_open', { sourceId: id, providerId: target })
         .then((data) => {
           if (version !== precheckRequest.current) return;
           if (!data.ok) { setPrecheck({ status: 'error', error: data.error || '预检失败' }); return; }
-          const blocked = data.blocked ? { code: data.code ?? 'blocked', sessionId: data.sessionId, holders: data.holders, hint: data.hint } : undefined;
+          const blocked = parsePrecheckBlocked(data);
           setPrecheck({ status: data.writable === false ? 'blocked' : 'ok', writable: data.writable !== false, note: data.notes?.[0], blocked, error: data.error });
         })
         .catch((error) => { if (version === precheckRequest.current) setPrecheck({ status: 'error', error: message(error) }); });

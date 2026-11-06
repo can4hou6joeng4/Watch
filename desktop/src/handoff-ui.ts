@@ -20,6 +20,39 @@ export function handoffRoute(owner: string | null, target: string) {
   if (owner === target) return 'resume';
   return owner === 'claude' && target === 'codex' ? 'official-codex' : 'convert';
 }
+
+export type PrecheckBlocked = {
+  code: string;
+  sessionId?: string;
+  holders?: { pid: number; command: string }[];
+  hint?: string;
+};
+
+export type PrecheckResponse = {
+  ok?: boolean;
+  writable?: boolean;
+  notes?: string[];
+  sessionId?: string;
+  error?: string;
+  /** `open --check` 返回嵌套对象 `{code, sessionId, holders, hint}`；旧形状把字段放在顶层 */
+  blocked?: boolean | PrecheckBlocked;
+  code?: string;
+  holders?: { pid: number; command: string }[];
+  hint?: string;
+};
+
+/** 统一 `check_open` 的 blocked 形状；`open_in` 失败仍用顶层扁平字段，两条都要能读。 */
+export function parsePrecheckBlocked(data: PrecheckResponse): PrecheckBlocked | undefined {
+  const raw = data.blocked;
+  if (!raw) return undefined;
+  const detail = typeof raw === 'object' ? raw : data;
+  return {
+    code: detail.code ?? 'blocked',
+    sessionId: detail.sessionId ?? data.sessionId,
+    holders: detail.holders,
+    hint: detail.hint,
+  };
+}
 export function shellQuote(value: string) { return `'${value.replace(/'/g, `'\\''`)}'`; }
 export function powershellQuote(value: string) { return `'${value.replace(/'/g, `''`)}'`; }
 export function buildCommand(agent: Agent, id: string, cwd: string | undefined, yolo: boolean, windows = false) {
