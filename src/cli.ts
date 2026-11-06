@@ -518,9 +518,14 @@ async function cmdDoctor(cwd: string, json: boolean): Promise<void> {
       const state = p.available ? '✓ 已就绪' : p.error ? `✗ 检测失败: ${p.error}` : '✗ 未检测到';
       console.log(`  ${p.id.padEnd(10)} ${p.displayName.padEnd(12)} ${state}`);
     }
-    console.log(report.store.available
-      ? `本地库: 可用，本目录 ${report.store.chains} 条链（${report.store.activeChains} 条活跃）`
-      : `本地库: 不可用（${report.store.error}）`);
+    if (report.store.available) {
+      const broken = report.store.brokenTips.length;
+      console.log(
+        `本地库: 可用，本目录 ${report.store.chains} 条链（${report.store.activeChains} 条活跃${broken ? `，${broken} 条链尾缺失` : ''}）`,
+      );
+    } else {
+      console.log(`本地库: 不可用（${report.store.error}）`);
+    }
     if (report.imports.available) {
       const i = report.imports;
       console.log(`导入日志: ${i.total} 条（imported ${i.imported} / associated ${i.associated} / uncertain ${i.uncertain} / prepared ${i.prepared}）`);

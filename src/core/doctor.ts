@@ -1,21 +1,36 @@
+import { stat } from 'node:fs/promises';
 import type { ProviderAdapter } from '../providers/adapter.js';
 import { listProviders } from '../providers/registry.js';
 import type { ProviderInfo } from './types.js';
 import type { Chain } from './store.js';
 import type { ImportJobs } from './import-jobs.js';
 
+export type BrokenTip = {
+  chainId: string;
+  chainName: string;
+  provider: string;
+  sessionId: string;
+  filePath: string;
+  error: string;
+};
+
 export type DoctorReport = {
   cwd: string;
   providers: ProviderInfo[];
-  store: { available: true; chains: number; activeChains: number } | { available: false; error: string };
+  store:
+    | { available: true; chains: number; activeChains: number; brokenTips: BrokenTip[] }
+    | { available: false; error: string };
   imports:
     | { available: true; total: number; imported: number; associated: number; uncertain: number; prepared: number }
     | { available: false; error: string };
   warnings: string[];
 };
 
-/** 诊断用的最小 Store 面：只要列出当前 cwd 的链，测试可注入假实现 */
-export type DoctorStore = { listChains(cwd: string): Chain[] };
+/** 诊断用的最小 Store 面：列出当前 cwd 的链、读某条链的切换记录；测试可注入假实现 */
+export type DoctorStore = {
+  listChains(cwd: string): Chain[];
+  listSwitchEvents?(chainId: string): { toRef?: { provider: string; sessionId: string; filePath: string } | null }[];
+};
 
 export type DoctorDeps = {
   /** 默认读注册表；测试注入假适配器 */
@@ -41,11 +56,38 @@ export async function doctorReport(cwd: string, deps: DoctorDeps): Promise<Docto
   } else {
     try {
       const chains = deps.store.listChains(cwd);
-      store = {
-        available: true,
-        chains: chains.length,
-        activeChains: chains.filter((c) => c.status === 'active').length,
-      };
+      const activeChains = chains.filter((c) => c.status === 'active');
+      const brokenTips: BrokenTip[] = [];
+      const listEvents = deps.store.listSwitchEvents?.bind(deps.store);
+      for (const chain of activeChains) {
+        if (!listEvents) break;
+        let tip: { provider: string; sessionId: string; filePath: string } | null | undefined;
+        try {
+          tip = listEvents(chain.id).at(-1)?.toRef;
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          warnings.push(`链「${chain.name}」的切换记录读取失败：${message}`);
+          continue;
+        }
+        if (!tip) continue;
+        try {
+          await stat(tip.filePath);
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          brokenTips.push({
+            chainId: chain.id,
+            chainName: chain.name,
+            provider: tip.provider,
+            sessionId: tip.sessionId,
+            filePath: tip.filePath,
+            error: message,
+          });
+          warnings.push(
+            `链「${chain.name}」的链尾会话文件已不存在：${tip.filePath}（${tip.provider}）；下次切换会失败，可先 adopt 该 provider 的新会话`,
+          );
+        }
+      }
+      store = { available: true, chains: chains.length, activeChains: activeChains.length, brokenTips };
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       store = { available: false, error: message };
