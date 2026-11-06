@@ -338,9 +338,9 @@ async function cmdOpen(
       if (!checked.ok) fail(false, checked.error ?? '预检失败');
       const target = checked.sessionId ? `${checked.sessionId}` : '（将新建会话）';
       console.log(`预检：${checked.plan?.kind ?? '?'} · 目标 ${target} · ${checked.writable ? '可写入' : '暂不可写'}`);
-      // notes[0] 是计划本身的中性描述，已在上一行概括；其余是降级原因（复用扫描失败、链上配对读不出等），
-      // 只出现在 --json 里的话，文本模式的用户看不到「为什么是新建」
-      for (const note of checked.notes?.slice(1) ?? []) console.error(`提示: ${note}`);
+      // warnings 是降级原因（复用扫描失败、链上配对读不出等），只出现在 --json 里的话，
+      // 文本模式的用户看不到「为什么是新建」
+      for (const warning of checked.warnings ?? []) console.error(`提示: ${warning}`);
       if (!checked.writable) {
         for (const line of [checked.error, checked.blocked?.hint]) if (line) console.error(line);
         process.exit(1);
@@ -359,6 +359,8 @@ async function cmdOpen(
       console.log(JSON.stringify(result));
       return;
     }
+    // 降级原因走 stderr（与 switch / status 同一通道），stdout 只留结果行与可复制的 cd / resume
+    for (const warning of result.warnings ?? []) console.error(`提示: ${warning}`);
     for (const n of result.notes ?? []) console.log(n);
     console.log(result.cd);
     console.log(result.resumeCommand);

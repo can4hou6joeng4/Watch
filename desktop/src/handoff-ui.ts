@@ -32,6 +32,8 @@ export type PrecheckResponse = {
   ok?: boolean;
   writable?: boolean;
   notes?: string[];
+  /** 降级原因（复用扫描失败、链上配对读不出等）：与 notes 分开渲染，不再按 notes[1..] 猜 */
+  warnings?: string[];
   sessionId?: string;
   error?: string;
   /** `open --check` 返回嵌套对象 `{code, sessionId, holders, hint}`；旧形状把字段放在顶层 */

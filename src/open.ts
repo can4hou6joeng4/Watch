@@ -40,7 +40,13 @@ export type OpenSessionResult = {
   usage?: TokenUsage | null;
   /** 会话切面遥测摘要（轮次、首尾片段、思考/工具调用标识） */
   summary?: SessionSummary | null;
+  /** 结果说明（做了什么：已并入 N 轮 / 无需并入 / 返回链上会话…），文本模式打 stdout */
   notes?: string[];
+  /**
+   * 降级原因（读取失败、复用扫描失败、链上配对读不出…）：说明「为什么是这个结果」，
+   * 不是结果本身。文本模式一律打到 stderr，避免和可复制的结果行混在 stdout。
+   */
+  warnings?: string[];
   /** 目标被占用等写入拒绝：结构化原因（未写入任何内容，可重试） */
   blocked?: {
     code: string;
@@ -193,6 +199,7 @@ export async function openSession(
     };
   }
   const notes: string[] = [];
+  const warnings: string[] = [];
   let merged = 0;
   let sourceUsage: TokenUsage | null = null;
 
@@ -246,7 +253,7 @@ export async function openSession(
       usage =
         (await target.adapter.sessionUsage(target.found.ref).catch((error: unknown) => {
           // 「原生没有 usage」与「读取失败」都是 null，后者必须说明
-          notes.push(
+          warnings.push(
             `${target.adapter.displayName} 用量读取失败：${error instanceof Error ? error.message : String(error)}`,
           );
           return null;
@@ -278,7 +285,7 @@ export async function openSession(
       };
     } catch (error) {
       // 摘要只是附加信息，解析失败不阻断打开，但不能让用户以为这个会话没有内容
-      notes.push(
+      warnings.push(
         `会话摘要解析失败，未展示轮次与工具信息：${error instanceof Error ? error.message : String(error)}`,
       );
     }
@@ -300,6 +307,7 @@ export async function openSession(
     usage,
     summary,
     notes,
+    ...(warnings.length ? { warnings } : {}),
   };
 }
 
@@ -558,11 +566,12 @@ export async function openInProvider(
       resumeCommand,
       command: buildCommand(cd, resumeCommand),
       mergedTurns: 0,
-      notes: [...diagnostics],
+      ...(diagnostics.length ? { warnings: [...diagnostics] } : {}),
     };
   }
 
-  const notes: string[] = [...diagnostics];
+  const notes: string[] = [];
+  const warnings: string[] = [...diagnostics];
   try {
     const source = getAdapter(sourceProvider);
     let sourceUsage: TokenUsage | null = null;
@@ -599,6 +608,7 @@ export async function openInProvider(
       mergedTurns: plan.merged,
       sourceUsage,
       notes,
+      ...(warnings.length ? { warnings } : {}),
     };
   } catch (error) {
     const blocked = blockedFrom(error);
@@ -657,7 +667,8 @@ export async function checkOpenInProvider(
     cwd,
     sessionId: plan.targetRef?.sessionId,
     filePath: plan.targetRef?.filePath,
-    notes: [describePlan(target, plan), ...diagnostics],
+    notes: [describePlan(target, plan)],
+    ...(diagnostics.length ? { warnings: [...diagnostics] } : {}),
     writable: true,
     plan: { kind: plan.kind, turnCount: plan.turns.length },
   };
