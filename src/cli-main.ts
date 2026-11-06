@@ -235,13 +235,14 @@ async function cmdSwitch(cwd: string, targetId: string, json: boolean, chain?: s
       console.log(JSON.stringify({ ok: true, ...result }));
       return;
     }
+    // 警告先打：alreadyAtTarget 分支同样可能带「读库/写链失败」，提前 return 会把它吞掉
+    if (result.warnings.length) console.log(`警告: ${result.warnings.join('；')}`);
     if (result.alreadyAtTarget) {
       console.log(`链尾已在 ${targetId}，直接打开即可。`);
       console.log(`resume: ${result.resumeCommand}`);
       return;
     }
     console.log(`已从 ${result.fromProvider} 交接 → ${targetId}（${result.turnCount} 轮）`);
-    if (result.warnings.length) console.log(`警告: ${result.warnings.join('；')}`);
     console.log(`新会话: ${result.newRef.sessionId}`);
     console.log(`文件:   ${result.newRef.filePath}`);
     console.log('');
@@ -784,11 +785,12 @@ async function cmdUsage(cwd: string, json: boolean, chain?: string): Promise<voi
     } else if (chain) {
       console.log(`链: ${chain}`);
     }
+    // 警告必须先打：本地库不可用时 byProvider 也是空的，先 return 会把「读不出来」说成「没有绑定会话」
+    for (const warning of result.warnings) console.error(`警告: ${warning}`);
     if (!result.byProvider.length) {
-      console.log('无链或该链无绑定会话');
+      console.log(result.warnings.length ? '（无可统计的用量；原因见上方警告）' : '无链或该链无绑定会话');
       return;
     }
-    for (const warning of result.warnings) console.error(`警告: ${warning}`);
     console.log(`合计: in=${result.total.inputTokens}  out=${result.total.outputTokens}`);
     console.log('');
     console.log('按会话:');
