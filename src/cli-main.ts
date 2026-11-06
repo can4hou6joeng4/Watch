@@ -337,14 +337,21 @@ async function cmdAdopt(
     }
     const result = await adoptIntoChain(providerId, cwd, listAdapters(), store, targetRef, chain);
     if (cwdIssue) result.warnings.push(cwdIssue);
+    // 与 switch 对齐：接入之后用户下一步就是打开这个会话，resume 命令不能只给 --json
+    const adoptedAdapter = listAdapters().find((a) => a.id === result.adoptedRef.provider);
+    const resumeCommand = adoptedAdapter ? adoptedAdapter.resumeCommand(result.adoptedRef) : undefined;
     if (json) {
-      console.log(JSON.stringify({ ok: true, ...result }));
+      console.log(JSON.stringify({ ok: true, ...result, ...(resumeCommand ? { resumeCommand } : {}) }));
       return;
     }
     // 与 switch 一致：警告先打（未写入链记录这类说明不能排在成功之后被漏看），且走 stderr
     for (const warning of result.warnings) console.error(`警告: ${warning}`);
     console.log(`已接入链: ${result.adoptedRef.sessionId}`);
     if (result.replacedRef) console.log(`替换了:  ${result.replacedRef.sessionId}`);
+    if (resumeCommand) {
+      console.log('');
+      console.log(`resume: ${resumeCommand}`);
+    }
   } catch (error) {
     if (error instanceof HandoffBlockedError || error instanceof PreflightBlockedError) failBlocked(error, json);
     const message = error instanceof Error ? error.message : String(error);
