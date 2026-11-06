@@ -179,11 +179,12 @@ export async function openSession(
   targetId: string,
   opts?: { from?: string; provider?: string },
   store?: Store | null,
+  adapters: ProviderAdapter[] = listAdapters(),
 ): Promise<OpenSessionResult> {
   const { from, provider } = opts ?? {};
   const mapping = store ?? openMappingDb();
   const lookup: string[] = [];
-  const target = await resolveById(targetId, provider, mapping, undefined, lookup);
+  const target = await resolveById(targetId, provider, mapping, adapters, lookup);
   if (!target) {
     const detail = lookup.length ? `（${lookup.join('；')}）` : '';
     return {
@@ -196,7 +197,7 @@ export async function openSession(
   let sourceUsage: TokenUsage | null = null;
 
   if (from) {
-    const source = await resolveById(from, undefined, mapping, undefined, lookup);
+    const source = await resolveById(from, undefined, mapping, adapters, lookup);
     if (!source) {
       const detail = lookup.length ? `（${lookup.join('；')}）` : '';
       return { ok: false, error: `未找到来源会话: ${from}${detail}` };
@@ -242,7 +243,14 @@ export async function openSession(
   let summary: SessionSummary | null = null;
   if (!from) {
     if (typeof target.adapter.sessionUsage === 'function') {
-      usage = (await target.adapter.sessionUsage(target.found.ref).catch(() => null)) ?? null;
+      usage =
+        (await target.adapter.sessionUsage(target.found.ref).catch((error: unknown) => {
+          // 「原生没有 usage」与「读取失败」都是 null，后者必须说明
+          notes.push(
+            `${target.adapter.displayName} 用量读取失败：${error instanceof Error ? error.message : String(error)}`,
+          );
+          return null;
+        })) ?? null;
     }
     try {
       const turns = await target.adapter.parse(target.found.ref);
@@ -268,8 +276,11 @@ export async function openSession(
         hasAttachments,
         toolNames,
       };
-    } catch {
-      /* 解析摘要失败不阻断正常会话 */
+    } catch (error) {
+      // 摘要只是附加信息，解析失败不阻断打开，但不能让用户以为这个会话没有内容
+      notes.push(
+        `会话摘要解析失败，未展示轮次与工具信息：${error instanceof Error ? error.message : String(error)}`,
+      );
     }
   }
 
