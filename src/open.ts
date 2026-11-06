@@ -212,7 +212,14 @@ export async function openSession(
     try {
       // 来源 usage 聚合携带：source 支持 sessionUsage 时读出，跨侧对账展示（写回各 build 仍为零占位）
       if (typeof source.adapter.sessionUsage === 'function') {
-        sourceUsage = (await source.adapter.sessionUsage(source.found.ref).catch(() => null)) ?? null;
+        sourceUsage =
+          (await source.adapter.sessionUsage(source.found.ref).catch((error: unknown) => {
+            // 与目标侧一致：读失败不能和「原生没有 usage」一样静默成 null
+            warnings.push(
+              `来源 ${source.adapter.displayName} 用量读取失败：${error instanceof Error ? error.message : String(error)}`,
+            );
+            return null;
+          })) ?? null;
         if (sourceUsage) {
           notes.push(
             `来源 ${source.adapter.displayName} 用量 in=${sourceUsage.inputTokens} out=${sourceUsage.outputTokens}（已在对账中携带）`,
@@ -576,7 +583,13 @@ export async function openInProvider(
     const source = getAdapter(sourceProvider);
     let sourceUsage: TokenUsage | null = null;
     if (typeof source?.sessionUsage === 'function') {
-      sourceUsage = (await source.sessionUsage(sourceRef).catch(() => null)) ?? null;
+      sourceUsage =
+        (await source.sessionUsage(sourceRef).catch((error: unknown) => {
+          warnings.push(
+            `来源 ${source.displayName} 用量读取失败：${error instanceof Error ? error.message : String(error)}`,
+          );
+          return null;
+        })) ?? null;
       if (sourceUsage) {
         notes.push(
           `来源 ${source.displayName} 用量 in=${sourceUsage.inputTokens} out=${sourceUsage.outputTokens}（已在对账中携带）`,
