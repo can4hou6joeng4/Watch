@@ -468,7 +468,8 @@ async function cmdProviders(json: boolean): Promise<void> {
     }
     console.log('支持的 Agent 与本机检测状态:');
     for (const p of providers) {
-      console.log(`  ${p.id.padEnd(10)} ${p.displayName.padEnd(12)} ${p.available ? '✓ 已就绪' : '✗ 未检测到'}`);
+      const state = p.available ? '✓ 已就绪' : p.error ? `✗ 检测失败: ${p.error}` : '✗ 未检测到';
+      console.log(`  ${p.id.padEnd(10)} ${p.displayName.padEnd(12)} ${state}`);
     }
   } catch (error) {
     fail(json, error instanceof Error ? error.message : String(error));

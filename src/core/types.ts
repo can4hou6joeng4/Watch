@@ -26,6 +26,8 @@ export type ProviderInfo = {
   id: string;
   displayName: string;
   available: boolean; // detect() 结果：本机 CLI 已装已登录
+  /** detect() 抛错时的原因（`available` 记 false）；区分「没装」与「检测失败」 */
+  error?: string;
 };
 
 /**

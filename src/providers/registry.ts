@@ -25,12 +25,21 @@ export function listAdapters(): ProviderAdapter[] {
   return [...adapters];
 }
 
-export async function listProviders(): Promise<ProviderInfo[]> {
+/** `overrides` 只给测试注入假适配器用；默认读注册表 */
+export async function listProviders(overrides?: ProviderAdapter[]): Promise<ProviderInfo[]> {
   return Promise.all(
-    adapters.map(async (a) => ({
-      id: a.id,
-      displayName: a.displayName,
-      available: await a.detect(),
-    })),
+    (overrides ?? adapters).map(async (a) => {
+      try {
+        return { id: a.id, displayName: a.displayName, available: await a.detect() };
+      } catch (error) {
+        // 一家检测抛错不能拖垮整张表；把原因带出去，和「没装」区分开
+        return {
+          id: a.id,
+          displayName: a.displayName,
+          available: false,
+          error: error instanceof Error ? error.message : String(error),
+        };
+      }
+    }),
   );
 }
