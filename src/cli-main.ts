@@ -12,6 +12,7 @@ import { runImportCodex } from './import-codex.js';
 import { ImportJobs } from './core/import-jobs.js';
 import { officialImportJournalRoot } from './providers/codex/official-import.js';
 import { doctorReport } from './core/doctor.js';
+import { cwdProblem } from './core/cwd.js';
 
 function usage(): never {
   console.error(`用法:
@@ -191,6 +192,9 @@ async function cmdStatus(cwd: string, json: boolean, chain?: string): Promise<vo
   } catch (error) {
     fail(json, error instanceof Error ? error.message : String(error));
   }
+  // 路径写错时各 provider 会安静返回空列表，先把原因放进同一条 warnings 通道
+  const cwdIssue = await cwdProblem(cwd);
+  if (cwdIssue) result.warnings.push(cwdIssue);
   if (json) {
     console.log(JSON.stringify({ ok: true, ...result }));
     return;
@@ -344,6 +348,8 @@ async function cmdSessions(cwd: string, json: boolean, chain?: string): Promise<
   const adapters = listAdapters();
   const store = openStore();
   const warnings: string[] = [];
+  const cwdIssue = await cwdProblem(cwd);
+  if (cwdIssue) warnings.push(cwdIssue);
   // 按链过滤：只显示当前链 switch_events 里绑定过的会话
   const bound = new Map<string, Set<string>>();
   if (!store && chain) {
@@ -433,6 +439,9 @@ async function cmdRecent(cwd: string, json: boolean, limit: number = 8): Promise
   const results: RecentItem[] = [];
   const seen = new Set<string>();
   const unavailable: string[] = [];
+  const warnings: string[] = [];
+  const cwdIssue = await cwdProblem(cwd);
+  if (cwdIssue) warnings.push(cwdIssue);
 
   if (!store) unavailable.push('本地库');
   if (store) {
@@ -492,9 +501,15 @@ async function cmdRecent(cwd: string, json: boolean, limit: number = 8): Promise
   const final = results.slice(0, limit);
 
   if (json) {
-    console.log(JSON.stringify({ ok: true, sessions: final, ...(unavailable.length ? { unavailable } : {}) }));
+    console.log(JSON.stringify({
+      ok: true,
+      sessions: final,
+      ...(unavailable.length ? { unavailable } : {}),
+      ...(warnings.length ? { warnings } : {}),
+    }));
     return;
   }
+  for (const warning of warnings) console.error(`警告: ${warning}`);
   if (unavailable.length) console.error(`未读取: ${unavailable.join('、')}（读取失败，已跳过）`);
   if (!final.length) {
     console.log('暂无最近会话记录');
@@ -595,6 +610,9 @@ async function cmdDoctor(cwd: string, json: boolean): Promise<void> {
 async function cmdNew(cwd: string, providerId: string, json: boolean, chain?: string): Promise<void> {
   const store = openStore();
   const warnings: string[] = [];
+  // 目录不存在也能把会话建出来，但绑定指向一个不存在的项目，resume 时必然进不去
+  const cwdIssue = await cwdProblem(cwd);
+  if (cwdIssue) warnings.push(cwdIssue);
   if (!store) {
     // 会话本身能建出来，但没有 switch_events：后续 switch 不认这条绑定，必须说明
     warnings.push('本地库不可用，本次新会话未写入链记录（后续切换不会认同这条绑定）');
@@ -827,6 +845,8 @@ async function cmdSearch(cwd: string, json: boolean, query: string): Promise<voi
   if (!store) fail(json, storeUnavailableError());
   try {
     const warnings: string[] = [];
+    const cwdIssue = await cwdProblem(cwd);
+    if (cwdIssue) warnings.push(cwdIssue);
     await reindexCwd(cwd, listAdapters(), store, warnings);
     const hits = store.searchMessages(query, cwd);
     if (json) {
