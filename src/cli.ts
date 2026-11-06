@@ -387,6 +387,7 @@ async function cmdRecent(cwd: string, json: boolean, limit: number = 8): Promise
   };
   const results: RecentItem[] = [];
   const seen = new Set<string>();
+  const unavailable: string[] = [];
 
   if (store) {
     try {
@@ -411,7 +412,8 @@ async function cmdRecent(cwd: string, json: boolean, limit: number = 8): Promise
         }
       }
     } catch {
-      // ignore
+      // 本地映射读取失败不影响原生扫描
+      unavailable.push('本地库');
     }
   }
 
@@ -435,7 +437,8 @@ async function cmdRecent(cwd: string, json: boolean, limit: number = 8): Promise
         }
       }
     } catch {
-      // ignore
+      // 单家读失败不拖垮列表，但要披露
+      unavailable.push(adapter.id);
     }
   }
 
@@ -443,9 +446,10 @@ async function cmdRecent(cwd: string, json: boolean, limit: number = 8): Promise
   const final = results.slice(0, limit);
 
   if (json) {
-    console.log(JSON.stringify({ ok: true, sessions: final }));
+    console.log(JSON.stringify({ ok: true, sessions: final, ...(unavailable.length ? { unavailable } : {}) }));
     return;
   }
+  if (unavailable.length) console.error(`未读取: ${unavailable.join('、')}（读取失败，已跳过）`);
   if (!final.length) {
     console.log('暂无最近会话记录');
     return;
