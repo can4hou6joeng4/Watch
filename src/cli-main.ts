@@ -112,6 +112,7 @@ function parseArgs(argv: string[]): {
   to?: string;
   check: boolean;
   limit?: number;
+  usedFlags: string[];
 } {
   const args = argv.slice(2);
   const json = args.includes('--json');
@@ -182,6 +183,16 @@ function parseArgs(argv: string[]): {
     }
     positional.push(a);
   }
+  // 命令层校验要区分「给了但被忽略」与「没给」：takeValue 拒绝空值，所以值存在即代表显式给了
+  const usedFlags = [
+    ...(check ? ['check'] : []),
+    ...(session ? ['session'] : []),
+    ...(chain ? ['chain'] : []),
+    ...(from ? ['from'] : []),
+    ...(provider ? ['provider'] : []),
+    ...(to ? ['to'] : []),
+    ...(limit !== undefined ? ['limit'] : []),
+  ];
   return {
     cmd: positional[0],
     target: positional[1],
@@ -198,6 +209,7 @@ function parseArgs(argv: string[]): {
     to,
     check,
     limit,
+    usedFlags,
   };
 }
 
@@ -837,12 +849,48 @@ async function cmdChain(cwd: string, json: boolean, action?: string, a?: string,
   }
 }
 
+/**
+ * 每个命令真正消费的参数。`parseArgs` 只挡未知 flag（白名单是全局的），
+ * `--chain` 给 `recent`、`--session` 给 `status` 这类「认识但不吃」的组合以前被静默忽略，
+ * 用户会以为已经按链过滤 / 指定了会话。`--cwd` / `--json` 全局有效，不参与校验。
+ */
+const FLAGS_BY_COMMAND: Record<string, string[]> = {
+  status: ['chain'],
+  switch: ['chain'],
+  adopt: ['chain', 'session'],
+  sessions: ['chain'],
+  recent: ['limit'],
+  providers: [],
+  doctor: [],
+  new: ['chain'],
+  chain: [],
+  search: [],
+  usage: ['chain'],
+  open: ['from', 'provider', 'to', 'check'],
+};
+
+function rejectUnusedFlags(cmd: string, usedFlags: string[], json: boolean): void {
+  const allowed = FLAGS_BY_COMMAND[cmd];
+  if (!allowed) return;
+  const bad = usedFlags.find((flag) => !allowed.includes(flag));
+  if (!bad) return;
+  const supports = allowed.length ? allowed.map((flag) => `--${flag}`).join(' / ') : '（无，仅 --cwd / --json）';
+  const message = `--${bad} 不能与 ${cmd} 同用；${cmd} 支持的参数: ${supports}`;
+  if (json) {
+    console.log(JSON.stringify({ ok: false, error: message }));
+    process.exit(1);
+  }
+  console.error(`[watch] ${message}`);
+  usage();
+}
+
 async function main(): Promise<void> {
   if (process.argv[2] === 'import-codex') {
     await runImportCodex(process.argv.slice(3));
     return;
   }
-  const { cmd, target, extra, rest, json, cwd, session, chain, from, provider, to, check, limit } = parseArgs(process.argv);
+  const { cmd, target, extra, rest, json, cwd, session, chain, from, provider, to, check, limit, usedFlags } = parseArgs(process.argv);
+  if (cmd) rejectUnusedFlags(cmd, usedFlags, json);
   if (cmd === 'status') {
     await cmdStatus(cwd, json, chain);
     return;
