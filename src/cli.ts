@@ -313,8 +313,13 @@ async function cmdOpen(
 async function cmdSessions(cwd: string, json: boolean, chain?: string): Promise<void> {
   const adapters = listAdapters();
   const store = openStore();
+  const warnings: string[] = [];
   // 按链过滤：只显示当前链 switch_events 里绑定过的会话
   const bound = new Map<string, Set<string>>();
+  if (!store && chain) {
+    // 用户明确要按链过滤却打不开库：不说是「已忽略」，列表看起来就像链上会话
+    warnings.push(`本地库不可用，--chain ${chain} 过滤已忽略，下面是该目录的全部会话`);
+  }
   if (store) {
     try {
       const chainRow = chain ? store.findActiveChain(cwd, chain) : store.findActiveChain(cwd);
@@ -327,9 +332,12 @@ async function cmdSessions(cwd: string, json: boolean, chain?: string): Promise<
             bound.set(h.toProvider, (bound.get(h.toProvider) ?? new Set()).add(h.toRef.sessionId));
           }
         }
+      } else if (chain) {
+        warnings.push(`未找到链 ${chain}（cwd=${cwd}），已列出该目录全部会话`);
       }
-    } catch {
-      // 无 store 或链查询失败时退化为全量列表
+    } catch (error) {
+      // 链查询失败时退化为全量列表，但要说清楚，否则 --chain 的输出会被误读
+      warnings.push(`链查询失败，已列出该目录全部会话：${error instanceof Error ? error.message : String(error)}`);
     }
   }
   try {
@@ -355,9 +363,16 @@ async function cmdSessions(cwd: string, json: boolean, chain?: string): Promise<
     );
     const result = groups.filter((g) => g.sessions.length > 0);
     if (json) {
-      console.log(JSON.stringify({ ok: true, cwd, providers: result, ...(unavailable.length ? { unavailable } : {}) }));
+      console.log(JSON.stringify({
+        ok: true,
+        cwd,
+        providers: result,
+        ...(unavailable.length ? { unavailable } : {}),
+        ...(warnings.length ? { warnings } : {}),
+      }));
       return;
     }
+    for (const warning of warnings) console.error(`警告: ${warning}`);
     if (!result.length) {
       console.log('未发现会话');
       if (unavailable.length) console.error(`未读取: ${unavailable.join('、')}（原生存储读取失败）`);
