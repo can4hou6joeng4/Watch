@@ -8,6 +8,9 @@ import { getAdapter, listAdapters, listProviders } from './providers/registry.js
 import { checkOpenInProvider, openInProvider, openSession } from './open.js';
 import { PreflightBlockedError } from './providers/adapter.js';
 import { runImportCodex } from './import-codex.js';
+import { ImportJobs } from './core/import-jobs.js';
+import { officialImportJournalRoot } from './providers/codex/official-import.js';
+import { doctorReport } from './core/doctor.js';
 
 function usage(): never {
   console.error(`用法:
@@ -17,6 +20,7 @@ function usage(): never {
   watch sessions [--json] [--cwd <path>] [--chain <id|name>]
   watch recent [--json] [--cwd <path>] [--limit <n>]
   watch providers [--json]
+  watch doctor [--json] [--cwd <path>]   只读环境诊断：Agent 检测、本地库、导入日志（不写盘）
   watch new <provider> [--json] [--cwd <path>] [--chain <id|name>]
   watch chain list|new <name>|rename <id|name> <new>|archive <id|name>|use <id|name> [--json] [--cwd]
   watch search <query> [--json] [--cwd <path>]
@@ -491,6 +495,47 @@ async function cmdProviders(json: boolean): Promise<void> {
   }
 }
 
+async function cmdDoctor(cwd: string, json: boolean): Promise<void> {
+  try {
+    const store = openStore();
+    let importJobs: ImportJobs | null = null;
+    let importJobsError: string | undefined;
+    try {
+      importJobs = new ImportJobs(officialImportJournalRoot());
+    } catch (error) {
+      importJobsError = process.env.WATCH_DB === ':memory:'
+        ? 'WATCH_DB=:memory: 不落盘，没有导入日志'
+        : error instanceof Error ? error.message : String(error);
+    }
+    const report = await doctorReport(cwd, { store, importJobs, importJobsError });
+    if (json) {
+      console.log(JSON.stringify({ ok: true, ...report }));
+      return;
+    }
+    console.log(`诊断 cwd: ${report.cwd}`);
+    console.log('Agent 检测:');
+    for (const p of report.providers) {
+      const state = p.available ? '✓ 已就绪' : p.error ? `✗ 检测失败: ${p.error}` : '✗ 未检测到';
+      console.log(`  ${p.id.padEnd(10)} ${p.displayName.padEnd(12)} ${state}`);
+    }
+    console.log(report.store.available
+      ? `本地库: 可用，本目录 ${report.store.chains} 条链（${report.store.activeChains} 条活跃）`
+      : `本地库: 不可用（${report.store.error}）`);
+    if (report.imports.available) {
+      const i = report.imports;
+      console.log(`导入日志: ${i.total} 条（imported ${i.imported} / associated ${i.associated} / uncertain ${i.uncertain} / prepared ${i.prepared}）`);
+    } else {
+      console.log(`导入日志: 不可用（${report.imports.error}）`);
+    }
+    if (report.warnings.length) {
+      console.error('警告:');
+      for (const w of report.warnings) console.error(`  - ${w}`);
+    }
+  } catch (error) {
+    fail(json, error instanceof Error ? error.message : String(error));
+  }
+}
+
 async function cmdNew(cwd: string, providerId: string, json: boolean, chain?: string): Promise<void> {
   const store = openStore();
   try {
@@ -638,6 +683,10 @@ async function main(): Promise<void> {
   }
   if (cmd === 'providers') {
     await cmdProviders(json);
+    return;
+  }
+  if (cmd === 'doctor') {
+    await cmdDoctor(cwd, json);
     return;
   }
   if (cmd === 'new') {

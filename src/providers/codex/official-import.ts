@@ -283,12 +283,17 @@ export class OfficialCodexImport {
   }
 }
 
+/** 执行日志根目录；官方导入与只读诊断（`watch doctor`）共用同一套推导，改规则只改这里 */
+export function officialImportJournalRoot(home = homedir()): string {
+  const db = process.env.WATCH_DB;
+  if (db === ':memory:') throw new Error('Official imports require a persistent WATCH_DB location');
+  return db ? path.resolve(`${db}.imports`) : path.join(home, '.watch', 'imports');
+}
+
 export function createOfficialCodexImport(): OfficialCodexImport {
   const home = homedir();
   const codexHome = path.resolve(process.env.CODEX_HOME ?? path.join(home, '.codex'));
-  const db = process.env.WATCH_DB;
-  if (db === ':memory:') throw new Error('Official imports require a persistent WATCH_DB location');
-  const root = db ? path.resolve(`${db}.imports`) : path.join(home, '.watch', 'imports');
+  const root = officialImportJournalRoot(home);
   const executable = resolveCli('codex');
   const env = { ...process.env, CODEX_HOME: codexHome };
   return new OfficialCodexImport({

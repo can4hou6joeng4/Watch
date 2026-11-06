@@ -58,6 +58,8 @@ export type ProjectBindingOutcome = {
 
 export type ImportJobPlan = { schema: number; route: string };
 
+export type ImportJournalStatus = 'imported' | 'associated' | 'uncertain' | 'prepared';
+
 export function importPlanId(plan: ImportJobPlan): string {
   return createHash('sha256').update(JSON.stringify(plan)).digest('hex');
 }
@@ -177,6 +179,34 @@ export class ImportJobs {
 
   async save(id: string, outcome: ImportOutcome): Promise<void> {
     await writeFileAtomic(path.join(this.dir(id), 'outcome.json'), JSON.stringify(outcome) + '\n');
+  }
+
+  /** 只读汇总全部执行日志的状态；坏目录 / 坏文件逐条跳过，供诊断命令统计 */
+  async listSummary(): Promise<{ id: string; route: string; status: ImportJournalStatus }[]> {
+    const ids = await readdir(this.root).catch((error: NodeJS.ErrnoException) => {
+      if (error.code === 'ENOENT') return [] as string[];
+      throw error;
+    });
+    const items: { id: string; route: string; status: ImportJournalStatus }[] = [];
+    for (const id of ids) {
+      if (!/^[a-f0-9]{64}$/.test(id)) continue;
+      try {
+        const plan = JSON.parse(await readFile(path.join(this.dir(id), 'plan.json'), 'utf8')) as ImportJobPlan;
+        if (importPlanId(plan) !== id || typeof plan.route !== 'string') continue;
+        // outcome() 只做 JSON.parse，没按 route 校验；未知状态一律当 uncertain，不虚报成功
+        const raw = (await this.outcome(id))?.status as string | undefined;
+        const status: ImportJournalStatus =
+          raw === 'imported' || raw === 'associated'
+            ? raw
+            : raw || (await this.attempted(id))
+              ? 'uncertain'
+              : 'prepared';
+        items.push({ id, route: plan.route, status });
+      } catch {
+        continue; // 写了一半或旧格式：跳过，诊断命令不该因一条坏日志整体失败
+      }
+    }
+    return items;
   }
 
   /**
