@@ -109,6 +109,20 @@ export async function doctorReport(cwd: string, deps: DoctorDeps): Promise<Docto
   const warnings: string[] = [];
   const environment = deps.environment ?? resolveEnvironment(deps.importsRoot ?? null);
 
+  // 路径本身错了，下面每项都会安静地返回 0，看起来像「一切正常」——先把它说清楚
+  try {
+    const probe = await stat(cwd);
+    if (!probe.isDirectory()) {
+      warnings.push(
+        `--cwd 指向的不是目录：${cwd}；会话与链都按路径精确匹配，下面的统计不代表任何真实项目`,
+      );
+    }
+  } catch {
+    warnings.push(
+      `--cwd 目录不存在或无法访问：${cwd}；各 provider 按原生记录的路径字符串精确比较，路径不对会全部显示 0`,
+    );
+  }
+
   const adapters = deps.adapters ?? listAdapters();
   const providers = await listProviders(adapters);
 
