@@ -6,6 +6,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { homedir } from 'node:os';
 import path from 'node:path';
 import { writeFileAtomic } from '../../core/atomic.js';
+import { readTextOrEmpty } from '../../core/read-text.js';
 import { verifyWrittenTurns } from '../../core/verify.js';
 import { mergeConsecutiveAssistant } from '../../core/rich.js';
 import { parseGrokSession } from './parse.js';
@@ -100,7 +101,7 @@ function slugFromCwd(cwd: string): string {
 }
 
 async function readChatLines(filePath: string): Promise<ChatLine[]> {
-  const raw = await readFile(filePath, 'utf8').catch(() => '');
+  const raw = await readTextOrEmpty(filePath, ' chat_history.jsonl ');
   const lines: ChatLine[] = [];
   for (const line of raw.split('\n')) {
     if (!line.trim()) continue;
@@ -447,7 +448,7 @@ function buildReasoningLine(ev: ProcessEvent): ChatLine {
 
 /** updates.jsonl 的非空行（原样保留，用于追加） */
 async function readRawLines(filePath: string): Promise<string[]> {
-  const raw = await readFile(filePath, 'utf8').catch(() => '');
+  const raw = await readTextOrEmpty(filePath, ' updates.jsonl ');
   return raw.split('\n').filter((line) => line.trim() !== '');
 }
 

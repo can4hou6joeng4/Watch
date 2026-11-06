@@ -1,8 +1,9 @@
-import { mkdir, readFile } from 'node:fs/promises';
+import { mkdir } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { homedir } from 'node:os';
 import { randomBytes, randomUUID } from 'node:crypto';
 import { writeFileAtomic } from '../../core/atomic.js';
+import { readTextOrEmpty } from '../../core/read-text.js';
 import { verifyWrittenTurns } from '../../core/verify.js';
 import { parsePiSession } from './parse.js';
 import type { ImportTurnsOpts } from '../adapter.js';
@@ -44,7 +45,7 @@ export async function importTurnsToPi(
   const out: Line[] = [];
 
   if (into && !opts?.replace) {
-    const existing = await readFile(into.filePath, 'utf8').catch(() => '');
+    const existing = await readTextOrEmpty(into.filePath);
     for (const line of existing.split('\n')) {
       if (!line.trim()) continue;
       out.push(JSON.parse(line) as Line);
@@ -54,7 +55,7 @@ export async function importTurnsToPi(
     sessionId = into.sessionId;
     filePath = into.filePath;
   } else if (into && opts?.replace) {
-    const existing = await readFile(into.filePath, 'utf8').catch(() => '');
+    const existing = await readTextOrEmpty(into.filePath);
     const header = existing.split('\n').find((l) => l.includes('"type":"session"'));
     if (header) {
       const h = JSON.parse(header) as Line;
