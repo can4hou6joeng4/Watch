@@ -384,6 +384,8 @@ export async function handoff(
   const guardedWrite = async (turnsToWrite: UnifiedTurn[], opts?: ImportTurnsOpts): Promise<SessionRef> => {
     const guard = into ? await target.acquireWriteLock?.({ ref: into }) : undefined;
     try {
+      // 取锁后再比对指纹：把与原生 writer 的竞态窗口收窄到「快照 → 取锁」之间
+      await assertDestUnchanged();
       return await target.importTurns(turnsToWrite, cwd, into, opts);
     } finally {
       await guard?.release();
@@ -415,7 +417,6 @@ export async function handoff(
     // 损坏，导致 Kimi 无法识别历史；对已有目标 session 强制 rewrite 可修复。
     if (into) {
       try {
-        await assertDestUnchanged();
         await guardedWrite(dedupeCallEvents(turns), { replace: true });
         addFinding(findings, 'handoff.rewrite_only', 'synthesized', 1);
       } catch (error) {
@@ -443,7 +444,6 @@ export async function handoff(
     };
   }
 
-  await assertDestUnchanged();
   const newRef = await guardedWrite(dedupeCallEvents(outgoing), replace ? { replace: true } : undefined);
   if (replace) addFinding(findings, 'handoff.rewrite', 'degraded', destTurns.length);
   else addFinding(findings, 'handoff.append', 'exact', outgoing.length);
