@@ -353,7 +353,8 @@ async function cmdOpen(
       }
       if (!checked.ok) fail(false, checked.error ?? '预检失败');
       const target = checked.sessionId ? `${checked.sessionId}` : '（将新建会话）';
-      console.log(`预检：${checked.plan?.kind ?? '?'} · 目标 ${target} · ${checked.writable ? '可写入' : '暂不可写'}`);
+      // notes[0] 是给人看的计划描述（复用链上会话 / 并入既有 / 新建）；直接打 kind 会把内部枚举露给用户
+      console.log(`预检：${checked.notes?.[0] ?? checked.plan?.kind ?? '?'} · 目标 ${target} · ${checked.writable ? '可写入' : '暂不可写'}`);
       // warnings 是降级原因（复用扫描失败、链上配对读不出等），只出现在 --json 里的话，
       // 文本模式的用户看不到「为什么是新建」
       for (const warning of checked.warnings ?? []) console.error(`提示: ${warning}`);
