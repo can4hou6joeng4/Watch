@@ -860,9 +860,12 @@ async function cmdUsage(cwd: string, json: boolean, chain?: string): Promise<voi
       console.log(result.warnings.length ? '（无可统计的用量；原因见上方警告）' : '无链或该链无绑定会话');
       return;
     }
-    const excluded = result.totalExcluded;
+    // 合计只是「已知用量之和」：读取失败与「原生没有 usage 字段」都不在其中，两种都要说出来
+    const missing: string[] = [];
+    if (result.totalExcluded) missing.push(`${result.totalExcluded} 个读取失败的会话`);
+    if (result.totalMissingUsage) missing.push(`${result.totalMissingUsage} 个无 usage 数据的会话`);
     console.log(
-      `合计${excluded ? `（未含 ${excluded} 个读取失败的会话）` : ''}: in=${result.total.inputTokens}  out=${result.total.outputTokens}`,
+      `合计${missing.length ? `（未含 ${missing.join('、')}）` : ''}: in=${result.total.inputTokens}  out=${result.total.outputTokens}`,
     );
     console.log('');
     console.log('按会话:');
