@@ -84,7 +84,7 @@ Grok 的桌面卡片曾因 `resume` 打开不正常而被移除。2026-09-14 定
 
 **协作写锁（2026-09-16 追加）**：仅靠「探测锁 → 写入」仍有窄竞态窗口。现改为在写入期间以 `fcntl.flock(LOCK_EX|LOCK_NB)` **独占持有同一个原生锁文件**（Node 无 flock API、macOS 无 `flock(1)`，因此用一个 python3 helper 子进程持锁；helper 退出即由内核释放；无 python3 时降级为不影响写入）。实测结论：Watch 持锁期间，真实 `codex app-server` 的 `thread/resume` 被明确拒绝——`{"code":-32600,"message":"thread <id> already has an active writer"}`；Watch 释放后同一调用恢复 `ok`。另外发现原生锁文件会在 writer 退出时被删除，因此取锁改为「按需创建目录/文件再 flock」。取锁失败（已被抢）会转成结构化 `codex_target_busy` 拒绝写入，不留部分写。残留边界：flock 只对“遵守同一把锁”的 writer 有效；未提供强制覆盖开关。
 
-**点击前预检**：`watch open <id> --to <provider> --check --json` 只读解析转入会落到哪种目标（`resume` / `chain` / `reuse` / `new`）并跑一次目标级保护探测，返回 `writable` 与 `blocked`，**不写入任何内容**（回归里用指纹与目录清单断言零写入）。桌面端在（来源会话 + 目标 Agent）变化后去抖调用它，在目标卡片下显示「可写入：将并入既有会话 <id>」「暂不可写入：… 占用者 PID x codex」；预检不可用时只提示不影响转入。
+**点击前预检**：`watch open <id> --to <provider> --check --json` 只读解析转入会落到哪种目标（`resume` / `chain` / `reuse` / `new`）并跑一次目标级保护探测，返回 `writable` 与 `blocked`，**不写目标会话文件**（回归里用指纹与目录清单断言零写入；命中本地映射时仅刷新 `session_locations.lastSeenAt`，属于本地库缓存）。桌面端在（来源会话 + 目标 Agent）变化后去抖调用它，在目标卡片下显示「可写入：将并入既有会话 <id>」「暂不可写入：… · <hint> · 占用者 PID x codex」；预检不可用时只提示不影响转入。
 
 ## 4. 只读本机预检记录
 
