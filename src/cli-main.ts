@@ -406,15 +406,16 @@ async function cmdSessions(cwd: string, json: boolean, chain?: string): Promise<
   const warnings: string[] = [];
   const cwdIssue = await cwdProblem(cwd);
   if (cwdIssue) warnings.push(cwdIssue);
-  // 按链过滤：只显示当前链 switch_events 里绑定过的会话
+  // --chain 才按链过滤；不带 flag 时列出该目录全部原生会话（README 的语义）
   const bound = new Map<string, Set<string>>();
+  let chainRow: import('./core/store.js').Chain | null = null;
   if (!store && chain) {
     // 用户明确要按链过滤却打不开库：不说是「已忽略」，列表看起来就像链上会话
     warnings.push(`本地库不可用，--chain ${chain} 过滤已忽略，下面是该目录的全部会话`);
   }
   if (store) {
     try {
-      const chainRow = chain ? store.findActiveChain(cwd, chain) : store.findActiveChain(cwd);
+      chainRow = chain ? store.findActiveChain(cwd, chain) : null;
       if (chainRow) {
         for (const h of store.listSwitchEvents(chainRow.id)) {
           if (h.fromProvider && h.fromRef) {
@@ -423,6 +424,10 @@ async function cmdSessions(cwd: string, json: boolean, chain?: string): Promise<
           if (h.toRef) {
             bound.set(h.toProvider, (bound.get(h.toProvider) ?? new Set()).add(h.toRef.sessionId));
           }
+        }
+        // 链存在但一条绑定都没有：过滤后必然是空列表，不说原因会被当成「目录里没有会话」
+        if (bound.size === 0) {
+          warnings.push(`链 ${chainRow.name} 还没有绑定会话（可用 watch switch / adopt 先绑定）`);
         }
       } else if (chain) {
         warnings.push(`未找到链 ${chain}（cwd=${cwd}），已列出该目录全部会话`);
@@ -447,11 +452,13 @@ async function cmdSessions(cwd: string, json: boolean, chain?: string): Promise<
             return { provider: a.id, sessions: [] };
           }
           const ids = bound.get(a.id);
+          // --chain 时只保留链上绑定过的会话：没绑定的 provider 不能把自家全部会话混进「这条链」
+          const linked = chainRow ? (ids ? sessions.filter((s) => ids.has(s.ref.sessionId)) : []) : sessions;
           // 撞到适配器上限时列表只是「最近 N 个」：不标出来会被当成全集
           const capped = a.listSessionsCap !== undefined && sessions.length >= a.listSessionsCap;
           return {
             provider: a.id,
-            sessions: ids ? sessions.filter((s) => ids.has(s.ref.sessionId)) : sessions,
+            sessions: linked,
             ...(capped ? { capped: true } : {}),
           };
         }),
