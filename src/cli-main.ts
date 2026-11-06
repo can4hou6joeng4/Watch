@@ -15,6 +15,13 @@ import { officialImportJournalRoot } from './providers/codex/official-import.js'
 import { doctorReport } from './core/doctor.js';
 import { cwdProblem } from './core/cwd.js';
 
+/**
+ * 参数还没解析完就要报用法错误（缺值 / 越界 / 未知 flag）：此时 `--json` 已经能从 argv 看出来。
+ * 用法文本始终走 stderr；带 `--json` 时再补一行 JSON 错误，否则 stdout 为空，
+ * Rust 桥只能把整段用法当错误文本显示给桌面端。
+ */
+const JSON_REQUESTED = process.argv.includes('--json');
+
 function usage(): never {
   console.error(`用法:
   watch status [--json] [--cwd <path>] [--chain <id|name>]
@@ -31,6 +38,15 @@ function usage(): never {
   watch import-codex prepare|confirm|status <id> [--cwd <path>] [--desktop-project] [--experimental] [--json]
   watch import-codex project-prepare|project-confirm|project-status <plan-id> [--project <project-id>] [--experimental] [--json]
   watch open <session-id> [--from <session-id>] [--provider <name>] [--to <provider>] [--check] [--json]  反查 cwd 并输出 cd + 打开命令；带 --from 先并入旧会话；带 --to 把该会话内容转入指定 provider 的新会话；带 --check 只做点击前预检（不写入）`);
+  if (JSON_REQUESTED) {
+    const help = process.argv.includes('--help');
+    console.log(
+      JSON.stringify({
+        ok: false,
+        error: help ? '已打印用法到 stderr（--json 模式下不输出结果）' : '用法错误：参数不完整或不合法（完整用法见 stderr）',
+      }),
+    );
+  }
   process.exit(1);
 }
 
