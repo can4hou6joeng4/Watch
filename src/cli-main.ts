@@ -233,8 +233,11 @@ async function cmdStatus(cwd: string, json: boolean, chain?: string): Promise<vo
 
 async function cmdSwitch(cwd: string, targetId: string, json: boolean, chain?: string): Promise<void> {
   const store = openStore();
+  const cwdIssue = await cwdProblem(cwd);
   try {
     const result = await handoff(targetId, cwd, listAdapters(), getAdapter, store, { chainId: chain });
+    // 路径不对时 handoff 只会说「没有可接力的会话」，补上真正的原因
+    if (cwdIssue) result.warnings.push(cwdIssue);
     if (json) {
       console.log(JSON.stringify({ ok: true, ...result }));
       return;
@@ -254,10 +257,11 @@ async function cmdSwitch(cwd: string, targetId: string, json: boolean, chain?: s
   } catch (error) {
     if (error instanceof HandoffBlockedError || error instanceof PreflightBlockedError) failBlocked(error, json);
     const message = error instanceof Error ? error.message : String(error);
+    // 目录本身有问题时，失败原因先说路径，否则「找不到来源会话」会被当成「目录里没东西」
     if (json) {
-      console.log(JSON.stringify({ ok: false, error: message }));
+      console.log(JSON.stringify({ ok: false, error: cwdIssue ? `${cwdIssue}；${message}` : message }));
     } else {
-      console.error(message);
+      console.error(cwdIssue ? `${cwdIssue}；${message}` : message);
     }
     process.exit(1);
   }
@@ -271,6 +275,7 @@ async function cmdAdopt(
   chain?: string,
 ): Promise<void> {
   const store = openStore();
+  const cwdIssue = await cwdProblem(cwd);
   try {
     let targetRef: SessionRef | undefined;
     if (sessionId) {
@@ -282,6 +287,7 @@ async function cmdAdopt(
       targetRef = hit.ref;
     }
     const result = await adoptIntoChain(providerId, cwd, listAdapters(), store, targetRef, chain);
+    if (cwdIssue) result.warnings.push(cwdIssue);
     if (json) {
       console.log(JSON.stringify({ ok: true, ...result }));
       return;
@@ -292,8 +298,8 @@ async function cmdAdopt(
   } catch (error) {
     if (error instanceof HandoffBlockedError || error instanceof PreflightBlockedError) failBlocked(error, json);
     const message = error instanceof Error ? error.message : String(error);
-    if (json) console.log(JSON.stringify({ ok: false, error: message }));
-    else console.error(message);
+    if (json) console.log(JSON.stringify({ ok: false, error: cwdIssue ? `${cwdIssue}；${message}` : message }));
+    else console.error(cwdIssue ? `${cwdIssue}；${message}` : message);
     process.exit(1);
   }
 }
@@ -678,10 +684,13 @@ async function cmdChain(cwd: string, json: boolean, action?: string, a?: string,
   try {
     if (!action || action === 'list') {
       const chains = store.listChains(cwd);
+      const cwdIssue = await cwdProblem(cwd);
+      const warnings = cwdIssue ? [cwdIssue] : [];
       if (json) {
-        console.log(JSON.stringify({ ok: true, cwd, chains }));
+        console.log(JSON.stringify({ ok: true, cwd, chains, ...(warnings.length ? { warnings } : {}) }));
         return;
       }
+      for (const warning of warnings) console.error(`警告: ${warning}`);
       if (!chains.length) {
         console.log('（无链）');
         return;
@@ -800,6 +809,8 @@ async function cmdUsage(cwd: string, json: boolean, chain?: string): Promise<voi
   const store = openStore();
   try {
     const result = await chainUsage(cwd, listAdapters(), store, chain);
+    const cwdIssue = await cwdProblem(cwd);
+    if (cwdIssue) result.warnings.push(cwdIssue);
     if (json) {
       console.log(JSON.stringify({ ok: true, ...result }));
       return;
