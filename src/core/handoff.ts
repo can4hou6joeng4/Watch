@@ -436,6 +436,16 @@ export async function handoff(
     }
   }
 
+  // 目标侧的坏行同样会让 diffTurns 把「已有但解析不出」的内容当缺失、重复追加一遍
+  if (into) {
+    const badDestLines = await countUnparsableJsonLines(into.filePath);
+    if (badDestLines > 0) {
+      warnings.push(
+        `目标会话 ${into.sessionId}（${target.displayName}）有 ${badDestLines} 行无法解析（截断或损坏）：增量判定可能偏多，可能重复追加既有内容`,
+      );
+    }
+  }
+
   const source = resolve(sourceTip.provider);
   if (!source) throw new Error(`链尾 provider 未注册: ${sourceTip.provider}`);
 

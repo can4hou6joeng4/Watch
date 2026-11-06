@@ -238,6 +238,12 @@ export async function openSession(
         );
       }
       const dstTurns = await target.adapter.parse(target.found.ref);
+      const badDstLines = await countUnparsableJsonLines(target.found.ref.filePath);
+      if (badDstLines > 0) {
+        warnings.push(
+          `目标会话 ${target.found.ref.sessionId} 有 ${badDstLines} 行无法解析（截断或损坏）：增量判定可能偏多，可能重复追加既有内容`,
+        );
+      }
       // 写前快照：与 handoff 一致，写入前再比一次（目标被外部写入则中止）
       const dstDigest = (await target.adapter.contentFingerprint?.(target.found.ref)) ?? null;
       const outgoing = diffTurns(srcTurns, dstTurns);
@@ -375,6 +381,23 @@ type PlannedOpen =
   | { ok: false; error: string };
 
 /**
+ * 目标会话里的坏行会被 parse 跳过，于是 `diffTurns(来源, 目标)` 把「已有但解析不出」的内容
+ * 当成缺失、再追加一遍；round-trip 也查不出来（比对的是解析结果）。只能在这里主动披露。
+ */
+async function warnTargetBadLines(
+  ref: SessionRef,
+  target: ProviderAdapter,
+  diagnostics?: string[],
+): Promise<void> {
+  const bad = await countUnparsableJsonLines(ref.filePath);
+  if (bad > 0) {
+    diagnostics?.push(
+      `目标会话 ${ref.sessionId}（${target.displayName}）有 ${bad} 行无法解析（截断或损坏）：增量判定可能偏多，可能重复追加既有内容`,
+    );
+  }
+}
+
+/**
  * 只读解析「把 sourceId 转入 providerId」会落到哪个目标会话、需要写多少轮。
  * 决策顺序与旧实现一致：属主即目标（resume）→ 链上配对 → 内容复用 → 新建。
  */
@@ -441,6 +464,7 @@ async function planOpenInProvider(
     if (pairTurns) {
       const delta = dedupeCallEvents(diffTurns(turns, pairTurns));
       if (delta.length < turns.length / 2) {
+        await warnTargetBadLines(chainPaired, target, diagnostics);
         const snapshot = (await target.contentFingerprint?.(chainPaired)) ?? null;
         return {
           ...base,
@@ -510,6 +534,7 @@ async function planOpenInProvider(
         error: `目标会话 ${reuse.sessionId} 在写入前读取失败，本次未写入任何内容：${error instanceof Error ? error.message : String(error)}`,
       };
     }
+    await warnTargetBadLines(reuse, target, diagnostics);
     const delta = dedupeCallEvents(diffTurns(turns, destinationTurns));
     const snapshot = (await target.contentFingerprint?.(reuse)) ?? null;
     return {
