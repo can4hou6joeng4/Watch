@@ -6,8 +6,8 @@ import { randomUUID } from 'node:crypto';
 import { normalizePath } from './platform.js';
 import type { ProcessEvent, SessionRef, UnifiedTurn } from './types.js';
 
-const SCHEMA_VERSION = 5;
-const REQUIRED_TABLES = ['sessions', 'turns', 'switch_events', 'turn_events', 'chains', 'messages_fts'] as const;
+const SCHEMA_VERSION = 6;
+const REQUIRED_TABLES = ['sessions', 'turns', 'switch_events', 'turn_events', 'chains', 'messages_fts', 'search_index'] as const;
 const FTS_TEXT_LIMIT = 8192;
 
 export type SearchHit = {
@@ -106,6 +106,7 @@ export class Store {
       2: () => this.migrateV3(),
       3: () => this.migrateV4(),
       4: () => this.migrateV5(),
+      5: () => this.migrateV6(),
     };
     while (version < SCHEMA_VERSION) {
       const step = steps[version];
@@ -215,6 +216,21 @@ export class Store {
     `);
   }
 
+  private migrateV6(): void {
+    // v6: 搜索索引的增量游标（mtime + size）。文件没变就不重新 parse；升级后首轮会全量建一次。
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS search_index (
+        cwd TEXT NOT NULL,
+        provider TEXT NOT NULL,
+        session_id TEXT NOT NULL,
+        file_path TEXT NOT NULL,
+        mtime_ms REAL NOT NULL,
+        size INTEGER NOT NULL,
+        PRIMARY KEY (cwd, provider, session_id)
+      );
+    `);
+  }
+
   private migrateV3(): void {
     const ddl = (tokenizer: string) => `
       CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(
@@ -273,6 +289,9 @@ export class Store {
     provider: string;
     filePath: string;
     texts: string[];
+    /** 提供时记录增量游标：下次 `mtimeMs + size` 未变即跳过重新 parse */
+    mtimeMs?: number;
+    size?: number;
   }): void {
     opts = { ...opts, cwd: normalizePath(opts.cwd) };
     this.db.prepare('DELETE FROM messages_fts WHERE session_id=? AND cwd=?').run(opts.sessionId, opts.cwd);
@@ -284,6 +303,45 @@ export class Store {
       if (text.length < 2) continue;
       ins.run(text, opts.sessionId, opts.provider, opts.cwd, opts.filePath);
     }
+    if (typeof opts.mtimeMs === 'number' && typeof opts.size === 'number') {
+      this.recordIndexedSession(opts.cwd, opts.provider, opts.sessionId, opts.filePath, opts.mtimeMs, opts.size);
+    }
+  }
+
+  /** 记录某会话已索引到哪个文件版本（mtime + size），供下一轮跳过未变化的文件 */
+  recordIndexedSession(
+    cwd: string,
+    provider: string,
+    sessionId: string,
+    filePath: string,
+    mtimeMs: number,
+    size: number,
+  ): void {
+    this.db
+      .prepare(
+        `INSERT INTO search_index (cwd, provider, session_id, file_path, mtime_ms, size)
+         VALUES (?,?,?,?,?,?)
+         ON CONFLICT(cwd, provider, session_id) DO UPDATE SET
+           file_path = excluded.file_path,
+           mtime_ms = excluded.mtime_ms,
+           size = excluded.size`,
+      )
+      .run(this.normCwd(cwd), provider, sessionId, filePath, mtimeMs, size);
+  }
+
+  /** 某 provider/cwd 的索引游标，按 session id 索引 */
+  indexedStats(cwd: string, provider: string): Map<string, { filePath: string; mtimeMs: number; size: number }> {
+    const rows = this.db
+      .prepare('SELECT session_id, file_path, mtime_ms, size FROM search_index WHERE cwd=? AND provider=?')
+      .all(this.normCwd(cwd), provider) as {
+        session_id: string;
+        file_path: string;
+        mtime_ms: number;
+        size: number;
+      }[];
+    return new Map(
+      rows.map((row) => [row.session_id, { filePath: row.file_path, mtimeMs: row.mtime_ms, size: row.size }]),
+    );
   }
 
   /** 某 provider/cwd 已建索引的会话及其原生文件路径（用于核对文件是否还在） */
@@ -298,9 +356,9 @@ export class Store {
 
   /** 删除单个会话在本 provider/cwd 下的全部索引行 */
   removeIndexedSession(cwd: string, provider: string, sessionId: string): void {
-    this.db
-      .prepare('DELETE FROM messages_fts WHERE cwd=? AND provider=? AND session_id=?')
-      .run(this.normCwd(cwd), provider, sessionId);
+    const normalized = this.normCwd(cwd);
+    this.db.prepare('DELETE FROM messages_fts WHERE cwd=? AND provider=? AND session_id=?').run(normalized, provider, sessionId);
+    this.db.prepare('DELETE FROM search_index WHERE cwd=? AND provider=? AND session_id=?').run(normalized, provider, sessionId);
   }
 
   searchMessages(query: string, cwd?: string): SearchHit[] {
