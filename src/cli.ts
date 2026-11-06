@@ -15,7 +15,7 @@ function usage(): never {
   watch switch <provider> [--json] [--cwd <path>] [--chain <id|name>]
   watch adopt <provider> [--json] [--cwd <path>] [--chain <id|name>] [--session <id>]
   watch sessions [--json] [--cwd <path>] [--chain <id|name>]
-  watch recent [--json] [--cwd <path>]
+  watch recent [--json] [--cwd <path>] [--limit <n>]
   watch providers [--json]
   watch new <provider> [--json] [--cwd <path>] [--chain <id|name>]
   watch chain list|new <name>|rename <id|name> <new>|archive <id|name>|use <id|name> [--json] [--cwd]
@@ -77,6 +77,7 @@ function parseArgs(argv: string[]): {
   provider?: string;
   to?: string;
   check: boolean;
+  limit?: number;
 } {
   const args = argv.slice(2);
   const json = args.includes('--json');
@@ -87,6 +88,7 @@ function parseArgs(argv: string[]): {
   let provider: string | undefined;
   let to: string | undefined;
   let check = false;
+  let limit: number | undefined;
   const positional: string[] = [];
   let i = 0;
   /** 取下一个 token 作为参数值；缺值或误吞了下一个 flag 都按用法错误处理 */
@@ -126,6 +128,13 @@ function parseArgs(argv: string[]): {
       to = takeValue();
       continue;
     }
+    if (a === '--limit') {
+      const raw = takeValue();
+      const n = Number(raw);
+      if (!Number.isInteger(n) || n < 1 || n > 50) usage();
+      limit = n;
+      continue;
+    }
     positional.push(a);
   }
   return {
@@ -141,6 +150,7 @@ function parseArgs(argv: string[]): {
     provider,
     to,
     check,
+    limit,
   };
 }
 
@@ -572,7 +582,7 @@ async function main(): Promise<void> {
     await runImportCodex(process.argv.slice(3));
     return;
   }
-  const { cmd, target, extra, rest, json, cwd, session, chain, from, provider, to, check } = parseArgs(process.argv);
+  const { cmd, target, extra, rest, json, cwd, session, chain, from, provider, to, check, limit } = parseArgs(process.argv);
   if (cmd === 'status') {
     await cmdStatus(cwd, json, chain);
     return;
@@ -592,7 +602,7 @@ async function main(): Promise<void> {
     return;
   }
   if (cmd === 'recent') {
-    await cmdRecent(cwd, json);
+    await cmdRecent(cwd, json, limit);
     return;
   }
   if (cmd === 'providers') {
