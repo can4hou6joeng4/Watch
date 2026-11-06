@@ -10,9 +10,43 @@ permissions:
 
 jobs:
   quality:
-    uses: ./.github/workflows/quality.yml
+    runs-on: ubuntu-latest
     permissions:
       contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            desktop/package-lock.json
+
+      - name: 根依赖与类型检查
+        run: |
+          npm ci
+          npm run typecheck
+
+      - name: 前端依赖与构建
+        run: |
+          npm --prefix desktop ci
+          npm --prefix desktop run build
+
+      # cargo test 需要与打包相同的 Tauri Linux 运行时依赖
+      - name: 系统依赖
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            build-essential curl wget file \
+            libxdo-dev libssl-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev
+
+      - name: Rust 桥接测试
+        run: cargo test --manifest-path desktop/src-tauri/Cargo.toml
 
   build:
     needs: quality
