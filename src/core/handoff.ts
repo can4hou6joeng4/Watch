@@ -328,6 +328,10 @@ export async function handoff(
   const target = resolve(targetId);
   if (!target) throw new Error(`未知 provider: ${targetId}`);
   const warnings: string[] = [];
+  if (!store) {
+    // 内容仍会交接，但没有 switch_events：status / 桌面端看不到这次切换，必须说明
+    warnings.push('本地库不可用，本次切换未写入链记录（status 与桌面端不会显示这次切换）');
+  }
   const findings: Finding[] = [];
 
   const tips = await collectTips(cwd, adapters, warnings);
@@ -343,7 +347,7 @@ export async function handoff(
     } catch (error) {
       if (error instanceof Error && /找不到链|已归档/.test(error.message)) throw error;
       history = [];
-      warnings.push('链历史读取失败，按无链处理');
+      warnings.push(`链历史读取失败，按无链处理：${error instanceof Error ? error.message : String(error)}`);
     }
   }
 
