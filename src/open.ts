@@ -376,7 +376,16 @@ async function planOpenInProvider(
     return { ...base, plan: { kind: 'resume', targetRef: sourceRef, turns: [], merged: 0, snapshot: null } };
   }
 
-  const turns = await source.adapter.parse(sourceRef);
+  let turns: UnifiedTurn[];
+  try {
+    turns = await source.adapter.parse(sourceRef);
+  } catch (error) {
+    // 解析不了来源就没有可转入的内容；按错误返回，别让异常穿透到 openInProvider 的调用方
+    return {
+      ok: false,
+      error: `来源会话 ${sourceId} 读取失败：${error instanceof Error ? error.message : String(error)}`,
+    };
+  }
   const outgoing = dedupeCallEvents(turns);
   if (outgoing.length === 0) return { ok: false, error: `来源会话 ${sourceId} 没有可转入的内容` };
 
@@ -385,24 +394,35 @@ async function planOpenInProvider(
   // 必须先做内容校验：配对确实承接了来源主要内容（缺失<一半）才落回，否则退到内容匹配。
   const chainPaired = mapping ? findChainPaired(mapping, sourceProvider, sourceId, providerId, cwd) : null;
   if (chainPaired) {
-    const pairTurns = await target.parse(chainPaired);
-    const delta = dedupeCallEvents(diffTurns(turns, pairTurns));
-    if (delta.length < turns.length / 2) {
-      const snapshot = (await target.contentFingerprint?.(chainPaired)) ?? null;
-      return {
-        ...base,
-        plan: {
-          kind: 'chain',
-          targetRef: chainPaired,
-          turns: delta,
-          merged: delta.length,
-          snapshot,
-          note:
-            delta.length === 0
-              ? `回到链上 ${target.displayName} 会话 ${chainPaired.sessionId}，无需并入`
-              : `已把 ${source.adapter.displayName} 的新增 ${delta.length} 轮并入链上 ${target.displayName} 会话 ${chainPaired.sessionId}`,
-        },
-      };
+    let pairTurns: UnifiedTurn[] | null = null;
+    try {
+      pairTurns = await target.parse(chainPaired);
+    } catch (error) {
+      // 链上配对会话的文件可能已被删掉或截断（doctor 的 brokenTips 报的正是这种情况）：
+      // 退回内容匹配 / 新建，并把原因写进 notes，而不是让整个转入抛出去
+      diagnostics?.push(
+        `链上 ${target.displayName} 会话 ${chainPaired.sessionId} 读取失败，本次不沿用（${error instanceof Error ? error.message : String(error)}）`,
+      );
+    }
+    if (pairTurns) {
+      const delta = dedupeCallEvents(diffTurns(turns, pairTurns));
+      if (delta.length < turns.length / 2) {
+        const snapshot = (await target.contentFingerprint?.(chainPaired)) ?? null;
+        return {
+          ...base,
+          plan: {
+            kind: 'chain',
+            targetRef: chainPaired,
+            turns: delta,
+            merged: delta.length,
+            snapshot,
+            note:
+              delta.length === 0
+                ? `回到链上 ${target.displayName} 会话 ${chainPaired.sessionId}，无需并入`
+                : `已把 ${source.adapter.displayName} 的新增 ${delta.length} 轮并入链上 ${target.displayName} 会话 ${chainPaired.sessionId}`,
+          },
+        };
+      }
     }
   }
 
@@ -445,7 +465,17 @@ async function planOpenInProvider(
     }
   }
   if (reuse) {
-    const destinationTurns = await target.parse(reuse);
+    let destinationTurns: UnifiedTurn[];
+    try {
+      // 扫描时刚解析成功过；这里再读失败说明文件正被并发改写（半截写入 / 被删），
+      // 不能悄悄退成新建（会多出一份重复会话），按错误返回让用户重试
+      destinationTurns = await target.parse(reuse);
+    } catch (error) {
+      return {
+        ok: false,
+        error: `目标会话 ${reuse.sessionId} 在写入前读取失败，本次未写入任何内容：${error instanceof Error ? error.message : String(error)}`,
+      };
+    }
     const delta = dedupeCallEvents(diffTurns(turns, destinationTurns));
     const snapshot = (await target.contentFingerprint?.(reuse)) ?? null;
     return {
