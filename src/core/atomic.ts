@@ -85,10 +85,28 @@ export async function appendFileAtomic(
     }
 
     if (originalExists) {
+      // 末尾没有换行时先补一个：原生文件被截断（进程被杀）后末尾常缺 \n，
+      // 直接追加会把两行 JSON 粘成一行，既有最后一条与新追加的第一条一起失效。
+      let needsNewline = false;
+      try {
+        const handle = await open(filePath, 'r');
+        try {
+          const { size } = await handle.stat();
+          if (size > 0) {
+            const last = Buffer.alloc(1);
+            await handle.read(last, 0, 1, size - 1);
+            needsNewline = last[0] !== 0x0a;
+          }
+        } finally {
+          await handle.close();
+        }
+      } catch {
+        // 读不出末尾字节就不做判断，保持原来的纯追加行为
+      }
       await copyFile(filePath, tmpPath);
       const handle = await open(tmpPath, 'a');
       try {
-        await handle.writeFile(extraContent, 'utf8');
+        await handle.writeFile(needsNewline ? `\n${extraContent}` : extraContent, 'utf8');
         await handle.sync();
       } finally {
         await handle.close();
