@@ -706,10 +706,12 @@ async function cmdNew(cwd: string, providerId: string, json: boolean, chain?: st
 async function cmdChain(cwd: string, json: boolean, action?: string, a?: string, b?: string): Promise<void> {
   const store = openStore();
   if (!store) fail(json, storeUnavailableError());
+  // 链名 / cwd 都是精确匹配：路径写错时 rename / archive / use 只会说「找不到链」，
+  // 跟 switch / adopt 一样先把路径原因带出来，否则会被当成「这条链不存在」
+  const cwdIssue = await cwdProblem(cwd);
   try {
     if (!action || action === 'list') {
       const chains = store.listChains(cwd);
-      const cwdIssue = await cwdProblem(cwd);
       const warnings = cwdIssue ? [cwdIssue] : [];
       if (json) {
         console.log(JSON.stringify({ ok: true, cwd, chains, ...(warnings.length ? { warnings } : {}) }));
@@ -729,8 +731,12 @@ async function cmdChain(cwd: string, json: boolean, action?: string, a?: string,
     if (action === 'new') {
       if (!a) usage();
       const chain = store.createChain(cwd, a);
-      if (json) console.log(JSON.stringify({ ok: true, chain }));
-      else console.log(`已创建链: ${chain.name}  (${chain.id})`);
+      // 与 watch new 同理：路径错了照样建出链，但绑定指向不存在的项目，必须说明
+      if (json) console.log(JSON.stringify({ ok: true, chain, ...(cwdIssue ? { warnings: [cwdIssue] } : {}) }));
+      else {
+        if (cwdIssue) console.error(`警告: ${cwdIssue}`);
+        console.log(`已创建链: ${chain.name}  (${chain.id})`);
+      }
       return;
     }
     if (action === 'rename') {
@@ -763,7 +769,8 @@ async function cmdChain(cwd: string, json: boolean, action?: string, a?: string,
     }
     usage();
   } catch (error) {
-    fail(json, error instanceof Error ? error.message : String(error));
+    const message = error instanceof Error ? error.message : String(error);
+    fail(json, cwdIssue ? `${cwdIssue}；${message}` : message);
   }
 }
 
