@@ -27,9 +27,11 @@ import { codexLineToProcessEvents } from './events.js';
 
 const execFileAsync = promisify(execFile);
 
-/** 按 YYYY/MM/DD 结构扫 rollout，withFileTypes 避免对目录再 stat */
+/** 按 YYYY/MM/DD 结构扫 rollout，withFileTypes 避免对目录再 stat。
+ * `errors` 收集目录 / 文件读不出来的原因：列表与「最新会话」都据此判断结果是完整结论还是「没查成」。 */
 async function collectRecentRolloutFiles(
   sessionsRoot: string,
+  errors?: string[],
 ): Promise<{ filePath: string; mtimeMs: number }[]> {
   const collected: { filePath: string; mtimeMs: number }[] = [];
   let years: string[];
@@ -38,7 +40,12 @@ async function collectRecentRolloutFiles(
       .filter((d) => d.isDirectory() && /^\d{4}$/.test(d.name))
       .map((d) => d.name)
       .sort((a, b) => b.localeCompare(a));
-  } catch {
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    // 根目录不存在 = 这台机器没用过 codex，空结果就是事实；读不出来则必须记下来
+    if (code !== 'ENOENT' && code !== 'ENOTDIR') {
+      errors?.push(`${sessionsRoot}（${error instanceof Error ? error.message : String(error)}）`);
+    }
     return [];
   }
   for (const y of years) {
@@ -48,7 +55,11 @@ async function collectRecentRolloutFiles(
         .filter((d) => d.isDirectory() && /^\d{2}$/.test(d.name))
         .map((d) => d.name)
         .sort((a, b) => b.localeCompare(a));
-    } catch {
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code !== 'ENOENT' && code !== 'ENOTDIR') {
+        errors?.push(`${path.join(sessionsRoot, y)}（${error instanceof Error ? error.message : String(error)}）`);
+      }
       continue;
     }
     for (const m of months) {
@@ -58,7 +69,11 @@ async function collectRecentRolloutFiles(
           .filter((d) => d.isDirectory() && /^\d{2}$/.test(d.name))
           .map((d) => d.name)
           .sort((a, b) => b.localeCompare(a));
-      } catch {
+      } catch (error) {
+        const code = (error as NodeJS.ErrnoException).code;
+        if (code !== 'ENOENT' && code !== 'ENOTDIR') {
+          errors?.push(`${path.join(sessionsRoot, y, m)}（${error instanceof Error ? error.message : String(error)}）`);
+        }
         continue;
       }
       for (const d of dus) {
@@ -66,7 +81,11 @@ async function collectRecentRolloutFiles(
         let entries: import('node:fs').Dirent[];
         try {
           entries = await readdir(dayDir, { withFileTypes: true });
-        } catch {
+        } catch (error) {
+          const code = (error as NodeJS.ErrnoException).code;
+          if (code !== 'ENOENT' && code !== 'ENOTDIR') {
+            errors?.push(`${dayDir}（${error instanceof Error ? error.message : String(error)}）`);
+          }
           continue;
         }
         for (const entry of entries) {
@@ -74,7 +93,11 @@ async function collectRecentRolloutFiles(
           const filePath = path.join(dayDir, entry.name);
           try {
             collected.push({ filePath, mtimeMs: (await stat(filePath)).mtimeMs });
-          } catch {
+          } catch (error) {
+            const code = (error as NodeJS.ErrnoException).code;
+            if (code !== 'ENOENT' && code !== 'ENOTDIR') {
+              errors?.push(`${filePath}（${error instanceof Error ? error.message : String(error)}）`);
+            }
             continue;
           }
         }
@@ -162,7 +185,8 @@ export async function findLatestCodexRollout(
   sessionsRoot?: string,
 ): Promise<{ ref: SessionRef; updatedAt: number } | null> {
   const root = sessionsRoot ?? path.join(codexDir(), 'sessions');
-  const files = await collectRecentRolloutFiles(root);
+  const walkErrors: string[] = [];
+  const files = await collectRecentRolloutFiles(root, walkErrors);
   files.sort((a, b) => b.mtimeMs - a.mtimeMs);
   for (const f of files) {
     const sessionId = sessionIdFromRolloutPath(f.filePath);
@@ -173,6 +197,12 @@ export async function findLatestCodexRollout(
       ref: { provider: 'codex', sessionId, filePath: f.filePath, cwd },
       updatedAt: f.mtimeMs,
     };
+  }
+  if (walkErrors.length) {
+    // 有位置读不出来时「这个目录没有 Codex 会话」不是结论
+    throw new Error(
+      `在 ${root} 下没找到属于 ${cwd} 的 Codex 会话，但有 ${walkErrors.length} 个位置读不出来，无法确认是否存在：${walkErrors[0]}`,
+    );
   }
   return null;
 }
@@ -186,7 +216,8 @@ export async function listCodexRollouts(
   sessionsRoot?: string,
 ): Promise<{ ref: SessionRef; updatedAt: number; preview?: string }[]> {
   const root = sessionsRoot ?? path.join(codexDir(), 'sessions');
-  const files = await collectRecentRolloutFiles(root);
+  const walkErrors: string[] = [];
+  const files = await collectRecentRolloutFiles(root, walkErrors);
   files.sort((a, b) => b.mtimeMs - a.mtimeMs);
   const items: { ref: SessionRef; updatedAt: number }[] = [];
   for (const f of files) {
@@ -195,6 +226,12 @@ export async function listCodexRollouts(
     if ((await rolloutCwd(f.filePath)) !== cwd) continue;
     items.push({ ref: { provider: 'codex', sessionId, filePath: f.filePath, cwd }, updatedAt: f.mtimeMs });
     if (items.length >= CODEX_LIST_LIMIT) break;
+  }
+  if (walkErrors.length) {
+    // 静默少列会被读成「这个目录就这些会话」，必须让 sessions / recent / doctor 披露
+    throw new Error(
+      `列出 Codex 会话时有不完整：有 ${walkErrors.length} 个位置读不出来，列表可能少了几条：${walkErrors[0]}`,
+    );
   }
   return Promise.all(items.map(async (item) => ({ ...item, preview: (await codexFirstUserText(item.ref.filePath)) ?? undefined })));
 }
