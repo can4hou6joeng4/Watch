@@ -3,7 +3,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { readText, writeText } from '@tauri-apps/plugin-clipboard-manager';
 import { ArrowDownLeft, ArrowRight, ArrowUpRight, Check, ChevronDown, ClipboardPaste, Copy, FileText, Folder, History, Info, LoaderCircle, Monitor, Moon, RefreshCw, Search, Settings2, ShieldCheck, Sun, SunMoon, Terminal, Workflow, X } from 'lucide-react';
 import { assertSameCodexImportPlan, beginCodexOpen, completeCodexOpen, failCodexOpen, importedCodexThreadId, parseCodexImportResult, viewForCodexImportResult, type CodexImportResult, type CodexImportView } from './codex-import.js';
-import { AGENTS, buildCommand, handoffRoute, historyView, parsePrecheckBlocked, parseThemePreference, resolveTheme, sourceWarnings, THEME_OPTIONS, type PrecheckResponse, type ThemePreference } from './handoff-ui.js';
+import { AGENTS, buildCommand, handoffRoute, historyView, parsePrecheckBlocked, parseThemePreference, recentView, resolveTheme, sourceWarnings, THEME_OPTIONS, type PrecheckResponse, type ThemePreference } from './handoff-ui.js';
 import './App.css';
 
 type TerminalId = 'terminal' | 'kaku' | 'iterm2' | 'ghostty';
@@ -47,6 +47,8 @@ export default function App() {
   const [recentError, setRecentError] = useState('');
   // `recent` 默认只回最近 8 条：被截断时说明还有多少，别让侧栏看起来像全集
   const [recentOmitted, setRecentOmitted] = useState(0);
+  // 单家会话列表读不出来 / 撞到上限时 recent 会带 warnings：只取 sessions 会把残缺列表当成完整列表
+  const [recentWarnings, setRecentWarnings] = useState<string[]>([]);
   // CLI 桥拉不起来（Node 版本不够 / 核心缺失）时 providers 会是空的：不能让它悄悄显示成「环境未检测」
   const [providersError, setProvidersError] = useState('');
   const [available, setAvailable] = useState<TerminalId[]>(['terminal']);
@@ -90,8 +92,13 @@ export default function App() {
   useEffect(() => () => window.clearTimeout(toastTimer.current), []);
   async function loadRecents() {
     if (!native()) return;
-    try { const data = await invoke<{ ok?: boolean; sessions?: Recent[]; truncated?: boolean; total?: number; error?: string }>('list_recent_sessions'); if (!data.ok || !Array.isArray(data.sessions)) throw new Error(data.error || '无法读取近期会话'); setRecents(data.sessions); setRecentOmitted(data.truncated && typeof data.total === 'number' ? Math.max(0, data.total - data.sessions.length) : 0); setRecentError(''); }
-    catch (error) { setRecentError(message(error)); }
+    try {
+      const data = await invoke<{ ok?: unknown; error?: unknown; sessions?: unknown; warnings?: unknown; unavailable?: unknown; truncated?: unknown; total?: unknown }>('list_recent_sessions');
+      const view = recentView(data);
+      // ok:false / 内容不合契约都走这里：以前只 throw 一句「无法读取」，读不出来的 provider 混在少了几条的列表里
+      if (view.error) { setRecents([]); setRecentOmitted(0); setRecentWarnings(view.warnings); setRecentError(view.error); return; }
+      setRecents(view.items as Recent[]); setRecentOmitted(view.omitted); setRecentWarnings(view.warnings); setRecentError('');
+    } catch (error) { setRecentWarnings([]); setRecentError(message(error)); }
   }
   useEffect(() => {
     if (!native()) return;
@@ -228,7 +235,7 @@ export default function App() {
       <a className="brand" href="#" onClick={(event) => { event.preventDefault(); setPage('handoff'); }}><span className="brand-mark"><img className="mark-light" src="/watch-mark-light.svg" alt="" width="26" height="13" /><img className="mark-dark" src="/watch-mark.svg" alt="" width="26" height="13" /></span><span>Watch<small>值更 / Session Relay</small></span></a>
       <span className="nav-caption">工作空间</span>
       <nav aria-label="主导航">{([{ key: 'handoff', label: '会话接力', icon: Workflow }, { key: 'history', label: '接力记录', icon: History }, { key: 'compatibility', label: '支持路径', icon: ShieldCheck }, { key: 'settings', label: '设置', icon: Settings2 }] as const).map((item) => <button key={item.key} className={`nav-item ${page === item.key ? 'active' : ''}`} onClick={() => setPage(item.key)} title={item.label} aria-label={item.label} aria-current={page === item.key ? 'page' : undefined}><item.icon size={17} /><span>{item.label}</span>{item.key === 'handoff' && <ArrowUpRight size={14} className="nav-trailing" />}</button>)}</nav>
-      <div className="sidebar-recents"><div className="sidebar-heading"><span className="nav-caption">近期会话</span><button className="icon-button" title="刷新近期会话" aria-label="刷新近期会话" onClick={loadRecents}><RefreshCw size={14} /></button></div>{recents.length ? recents.slice(0, 8).map((entry) => <button key={`${entry.provider}-${entry.sessionId}`} className={`recent-item ${entry.sessionId === id ? 'selected' : ''}`} disabled={busy !== null} onClick={() => { setDemo(false); setSessionId(entry.sessionId); setPage('handoff'); }} title={entry.preview || entry.cwd}><img src={`/${entry.provider}.svg`} alt="" /><span>{basename(entry.cwd)}<small>{labels[entry.provider] || entry.provider} · {relativeTime(entry.updatedAt)}</small></span></button>) : <p className="sidebar-empty">{recentError || (native() ? '暂无近期会话' : '浏览器预览 · 本地记录不可访问')}</p>}{recentOmitted > 0 && <p className="sidebar-empty">另有 {recentOmitted} 条更早的会话未列出</p>}</div>
+      <div className="sidebar-recents"><div className="sidebar-heading"><span className="nav-caption">近期会话</span><button className="icon-button" title="刷新近期会话" aria-label="刷新近期会话" onClick={loadRecents}><RefreshCw size={14} /></button></div>{recents.length ? recents.slice(0, 8).map((entry) => <button key={`${entry.provider}-${entry.sessionId}`} className={`recent-item ${entry.sessionId === id ? 'selected' : ''}`} disabled={busy !== null} onClick={() => { setDemo(false); setSessionId(entry.sessionId); setPage('handoff'); }} title={entry.preview || entry.cwd}><img src={`/${entry.provider}.svg`} alt="" /><span>{basename(entry.cwd)}<small>{labels[entry.provider] || entry.provider} · {relativeTime(entry.updatedAt)}</small></span></button>) : <p className="sidebar-empty">{recentError || (native() ? '暂无近期会话' : '浏览器预览 · 本地记录不可访问')}</p>}{recentOmitted > 0 && <p className="sidebar-empty">另有 {recentOmitted} 条更早的会话未列出</p>}{recentWarnings.map((warning, index) => <p className="sidebar-warning" key={`rw${index}`}>{warning}</p>)}</div>
       <div className="sidebar-bottom"><span className="local-status"><span className="status-dot" />{demo ? '合成演示' : native() ? '本地运行' : '浏览器预览'}</span><span className="theme-switch" role="radiogroup" aria-label="外观">{THEME_OPTIONS.map((option) => <button key={option.value} type="button" role="radio" aria-checked={theme === option.value} aria-label={option.label} title={option.label} className={theme === option.value ? 'active' : ''} onClick={() => chooseTheme(option.value)}>{option.value === 'system' ? <SunMoon size={13} /> : option.value === 'light' ? <Sun size={13} /> : <Moon size={13} />}</button>)}</span><span className="version">v0.1.1</span></div>
     </aside>
     <div className="app-content">

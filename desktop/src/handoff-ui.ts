@@ -105,6 +105,53 @@ export function historyView(
   return { entries, warnings, error };
 }
 
+export type RecentView = {
+  items: unknown[];
+  /** 被 `--limit` 截断的条数（0 表示这一份就是全部） */
+  omitted: number;
+  warnings: string[];
+  error: string | null;
+};
+
+/**
+ * 侧边栏「近期会话」的数据（`list_recent_sessions` = `watch recent --json`）。
+ *
+ * CLI 侧会为「单家会话列表读不出来」「映射表读失败」「撞到列表上限 50 条」各写一条
+ * `warnings`，并把跳过的来源记进 `unavailable`；桌面端以前只取 `sessions` / `truncated`，
+ * 于是「有几家没读到」和「更早的会话没进列表」都显示成一份看起来完整的列表。
+ * 这里把 `unavailable` 的名单放最前面（原因由 CLI 写在 `warnings` 里，紧跟其后），
+ * 让「列表不完整」这件事本身可见。
+ */
+export function recentView(
+  data: {
+    ok?: unknown; error?: unknown; sessions?: unknown; warnings?: unknown; unavailable?: unknown;
+    truncated?: unknown; total?: unknown;
+  } | null | undefined,
+): RecentView {
+  const items = Array.isArray(data?.sessions) ? (data!.sessions as unknown[]) : [];
+  const warnings = sourceWarnings(data);
+  const skipped = Array.isArray(data?.unavailable)
+    ? (data!.unavailable as unknown[]).filter((name): name is string => typeof name === 'string' && Boolean(name.trim()))
+    : [];
+  const parts: string[] = [];
+  if (skipped.length) parts.push(`这几家本次没有读出会话：${skipped.join(' / ')}；下面的近期列表因此不完整`);
+  parts.push(...warnings);
+
+  let error: string | null = null;
+  if (data && data.ok === false) {
+    error = typeof data.error === 'string' && data.error.trim()
+      ? data.error.trim()
+      : '读取近期会话失败（recent 没有返回原因）；请用 watch recent --json 查看';
+  } else if (data && data.ok === true && !Array.isArray(data.sessions)) {
+    // ok:true 却没有 sessions：内容不合契约，别渲染成「暂无近期会话」
+    error = '读取近期会话失败（recent 没有返回会话列表）；请用 watch recent --json 查看';
+  }
+
+  const total = typeof data?.total === 'number' ? data.total : 0;
+  const omitted = data?.truncated === true && total > items.length ? total - items.length : 0;
+  return { items, omitted, warnings: parts, error };
+}
+
 export function shellQuote(value: string) { return `'${value.replace(/'/g, `'\\''`)}'`; }export function powershellQuote(value: string) { return `'${value.replace(/'/g, `''`)}'`; }
 export function buildCommand(agent: Agent, id: string, cwd: string | undefined, yolo: boolean, windows = false) {
   // Native IDs are arguments, not shell fragments. Keep ordinary IDs readable.

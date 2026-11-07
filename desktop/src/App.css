@@ -28,6 +28,7 @@ svg { flex-shrink: 0; stroke-width: 1.7; }
 .sidebar-heading { display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px; }
 .sidebar-heading .nav-caption { margin-bottom: 0; }
 .sidebar-empty { padding: 8px 11px; font-size: 11px; color: var(--muted); overflow-wrap: anywhere; }
+.sidebar-warning { padding: 4px 11px; font-size: 10px; line-height: 1.6; color: var(--warn); overflow-wrap: anywhere; }
 .recent-item { display: flex; width: 100%; border: 0; background: transparent; padding: 10px; gap: 9px; text-align: left; border-radius: 5px; transition: background 140ms var(--ease-out); }
 .recent-item:hover, .recent-item.selected { background: var(--hover); }
 .recent-item img { width: 19px; height: 19px; }
