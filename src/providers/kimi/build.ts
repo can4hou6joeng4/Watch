@@ -73,6 +73,9 @@ export async function listKimiSessionsByCwd(
     const wirePath = path.join(sessionDir, 'agents', 'main', 'wire.jsonl');
     try {
       const st = await stat(wirePath);
+      // 同名目录 / 设备文件不是会话：claude / pi / grok 的列表同样按 isFile() 过滤。
+      // 以前只 stat 就 push，列表里会多出打不开的一条，findLatest 还会把它当最新来源
+      if (!st.isFile()) continue;
       items.push({ sessionId, sessionDir, updatedAt: st.mtimeMs });
     } catch (error) {
       const code = (error as NodeJS.ErrnoException).code;
