@@ -266,19 +266,24 @@ export class ImportJobs {
 
   /**
    * 同一来源会话此前「已导入」的执行日志。重复导入会在 Codex 里多出一份会话，
-   * 所以在预览时就提示；坏日志逐条跳过，不影响新的预览与确认。
+   * 所以在预览时就提示；坏日志逐条跳过，不影响新的预览与确认 —— 但必须记进 `skipped`：
+   * 静默跳过等于「重复导入检查看起来通过了」，用户会以为没导过，再导一次多出一份。
    * `excludeId` 用来排除当前计划自己（已导入的计划重复看状态不算重复导入）。
    */
   async priorImports(
     source: SessionRef,
     digest: FileDigest,
     excludeId?: string,
-  ): Promise<{ id: string; outcome: ImportOutcome; sameContent: boolean }[]> {
+  ): Promise<{
+    hits: { id: string; outcome: ImportOutcome; sameContent: boolean }[];
+    skipped: { id: string; reason: string }[];
+  }> {
     const ids = await readdir(this.root).catch((error: NodeJS.ErrnoException) => {
       if (error.code === 'ENOENT') return [] as string[];
       throw error;
     });
-    const prior: { id: string; outcome: ImportOutcome; sameContent: boolean }[] = [];
+    const hits: { id: string; outcome: ImportOutcome; sameContent: boolean }[] = [];
+    const skipped: { id: string; reason: string }[] = [];
     for (const id of ids) {
       if (id === excludeId || !/^[a-f0-9]{64}$/.test(id)) continue;
       let plan: ImportPlan;
@@ -286,14 +291,16 @@ export class ImportJobs {
       try {
         plan = await this.plan(id);
         outcome = await this.outcome(id);
-      } catch {
-        continue; // 旧版本或写了一半的日志：跳过即可，不阻塞预览
+      } catch (error) {
+        // 读不出这一条就说这一条；后面的日志照常检查，不因一条坏日志放弃整次重复导入检查
+        skipped.push({ id, reason: error instanceof Error ? error.message : String(error) });
+        continue;
       }
       if (!outcome || outcome.status !== 'imported') continue;
       if (plan.source.sessionId !== source.sessionId || plan.source.filePath !== source.filePath) continue;
-      prior.push({ id, outcome, sameContent: plan.digest.sha256 === digest.sha256 && plan.digest.sizeBytes === digest.sizeBytes });
+      hits.push({ id, outcome, sameContent: plan.digest.sha256 === digest.sha256 && plan.digest.sizeBytes === digest.sizeBytes });
     }
-    return prior;
+    return { hits, skipped };
   }
 
   async outcome(id: string): Promise<ImportOutcome | null> {

@@ -130,13 +130,23 @@ export class OfficialCodexImport {
       .catch((error: unknown) => ({ error: error instanceof Error ? error.message : String(error) }));
     const warnings = [
       ...WARNINGS,
-      ...(Array.isArray(prior)
-        ? prior.map((p) =>
-            p.sameContent
-              ? `这个会话此前已导入到 Codex 线程 ${p.outcome.target?.sessionId ?? 'unknown'}（计划 ${p.id.slice(0, 8)}）；再次导入会在 Codex 里多出一份会话。`
-              : `这个会话此前以不同内容导入过（计划 ${p.id.slice(0, 8)}，线程 ${p.outcome.target?.sessionId ?? 'unknown'}），来源此后已经变化。`,
-          )
-        : [`读取导入执行日志失败，已跳过重复导入检查：${prior.error}`]),
+      ...('error' in prior
+        ? [`读取导入执行日志失败，已跳过重复导入检查：${prior.error}`]
+        : [
+            ...prior.hits.map((p) =>
+              p.sameContent
+                ? `这个会话此前已导入到 Codex 线程 ${p.outcome.target?.sessionId ?? 'unknown'}（计划 ${p.id.slice(0, 8)}）；再次导入会在 Codex 里多出一份会话。`
+                : `这个会话此前以不同内容导入过（计划 ${p.id.slice(0, 8)}，线程 ${p.outcome.target?.sessionId ?? 'unknown'}），来源此后已经变化。`,
+            ),
+            // 读不出来的那几份没法判断是不是同一个来源：不能说成「确认没导过」
+            ...(prior.skipped.length
+              ? [
+                  `有 ${prior.skipped.length} 份导入执行日志读不出来，无法确认是否重复导入：${prior.skipped
+                    .map((s) => `${s.id.slice(0, 8)}（${s.reason}）`)
+                    .join('；')}`,
+                ]
+              : []),
+          ]),
     ];
     return {
       planId, plan, status: outcome?.status ?? (attempted ? 'uncertain' : 'prepared'),
