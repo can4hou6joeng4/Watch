@@ -153,8 +153,12 @@ export async function resolveById(
       if (loc && filePath && state === 'present') {
         try {
           store.rememberSessionLocation(a.id, loc, Date.now());
-        } catch {
-          /* 映射刷新失败不影响反查 */
+        } catch (error) {
+          // 不影响本次反查，但本地库从此一直记得「很久没见」：只要写不进去就一直命中映射、
+          // 也不会有任何提示。库坏了要让人知道，别等用户自己感觉到「越用越慢」
+          diagnostics?.push(
+            `${a.id} 会话 ${sessionId} 的映射刷新失败（${describeStoreErrorReason(error)}）；本次仍从映射命中，但本地库里的时间戳没更新`,
+          );
         }
         return {
           adapter: a,
@@ -182,8 +186,11 @@ export async function resolveById(
         if (store) {
           try {
             store.rememberSessionLocation(a.id, found.ref);
-          } catch {
-            /* 写失败不影响反查 */
+          } catch (error) {
+            // 同上：写不进去不影响这次打开，但下次仍要重新全盘扫描。不披露就只剩「慢」这一个症状
+            diagnostics?.push(
+              `${a.id} 会话 ${sessionId} 的映射写入失败（${describeStoreErrorReason(error)}）；本次反查结果未记入本地库，下次 open 仍需重新全盘扫描`,
+            );
           }
         }
         return { adapter: a, found };
@@ -373,6 +380,11 @@ export async function openSession(
       );
     }
   }
+
+  // 反查过程中的降级（映射写不进去、某家存储读不出来）在成功路径同样要说：
+  // 只把它们留在「未找到」的错误文案里，一旦找到了就永远看不到——而这些降级恰好
+  // 只会在慢下来、扫不全时才被用户察觉
+  warnings.push(...lookup);
 
   const cd = buildCd(target.found.ref.cwd);
   const resumeCommand = target.adapter.resumeCommand(target.found.ref);
