@@ -371,6 +371,26 @@ async function cmdAdopt(
             `会话 ${sessionId} 属于另一个目录: ${elsewhere}；adopt 按 cwd 绑定，请用 --cwd ${elsewhere}`,
           );
         }
+        // id 属于另一家 provider 时，「在当前目录找不到」会被读成 id 写错：adopt <provider>
+        // 只在这家自己的存储里找，provider 写错（或从 sessions 输出里拿错一行）都会走到这里。
+        // 只在原 provider 没找到时才跨家反查，正常路径不多付一次扫描。
+        for (const other of listAdapters()) {
+          if (other.id === providerId || !other.findById) continue;
+          let found: Awaited<ReturnType<NonNullable<typeof other.findById>>>;
+          try {
+            found = await other.findById(sessionId);
+          } catch {
+            // 别家存储读不出来不能作为结论：本条只是「是不是 provider 写错了」的补充说明
+            continue;
+          }
+          if (found) {
+            throw new Error(
+              `会话 ${sessionId} 属于 ${other.id}，不是 ${providerId}；请改用 watch adopt ${other.id} --session ${sessionId}${
+                found.ref.cwd !== cwd ? `（它属于另一个目录: ${found.ref.cwd}，还要加 --cwd ${found.ref.cwd}）` : ''
+              }`,
+            );
+          }
+        }
         // 列表有上限时，更早的会话根本没被枚举到：直接说「找不到」会让用户以为 id 写错了
         const cap = adapter.listSessionsCap;
         const capped = cap !== undefined && all.length >= cap;
