@@ -103,7 +103,9 @@ function openStore(): Store | null {
 /** 裸「无法打开数据库」不指向任何东西：带上实际路径、失败原因与版本门槛 */
 function storeUnavailableError(): string {
   const db = process.env.WATCH_DB ?? defaultDbPath();
-  if (lastStoreError) return `无法打开本地库：${lastStoreError}；Node ≥ 22.13 才提供 node:sqlite`;
+  // 具体原因已带路径与下一步（权限 / 库损坏 / 被占用 / schema 比本程序新）；此时再补一句 Node 版本
+  // 门槛会把人引去查 Node，而这几类失败与 Node 版本无关
+  if (lastStoreError) return `无法打开本地库：${lastStoreError}`;
   return `无法打开本地库 ${db}；可检查路径与权限，Node ≥ 22.13 才提供 node:sqlite`;
 }
 
