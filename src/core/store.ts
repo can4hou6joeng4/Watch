@@ -844,7 +844,20 @@ export class Store {
     const active = this.db
       .prepare("SELECT COUNT(*) AS n FROM chains WHERE cwd=? AND status='active'")
       .get(chain.cwd) as { n: number };
-    if (active.n <= 1) throw new Error('不能归档最后一条链');
+    if (active.n <= 1) {
+      // 只说「不能归档最后一条链」有两个问题：不回显是哪条，而且本目录已有归档链时这句是错的
+      // （`chain list` 里明明列着多条，用户会以为库坏了）。说清只统计活跃链，并给两条真实出路。
+      const archived = this.db
+        .prepare("SELECT COUNT(*) AS n FROM chains WHERE cwd=? AND status='archived'")
+        .get(chain.cwd) as { n: number };
+      const scope = archived.n
+        ? `本目录只统计活跃链（另有 ${archived.n} 条已归档的链，但归档不参与默认选择）`
+        : '本目录还没有别的链';
+      throw new Error(
+        `不能归档「${chain.name}」：它是本目录唯一的活跃链，归档后 status / switch 就没有默认可用的链了；` +
+          `${scope}。可先 watch chain new <新名字> 建一条，或 watch chain use ${chain.name} 确认它在用`,
+      );
+    }
     this.db.prepare("UPDATE chains SET status='archived' WHERE id=?").run(id);
   }
 
