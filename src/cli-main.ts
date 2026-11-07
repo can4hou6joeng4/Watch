@@ -421,10 +421,14 @@ async function cmdAdopt(
         const lookupNote = lookupError
           ? `；按 id 全局反查也失败：${lookupError}——无法确认它是否属于另一个目录，请先确认该会话存储是否可读`
           : '';
+        // 链 id 也是 UUID，chain list 里就印在同一行：说清它是链并给出链尾绑定，避免反复核对 id
+        const chainUse = store?.describeChainIdMisuse(sessionId, cwd) ?? null;
         throw new Error(
-          (capped
-            ? `在当前目录最近 ${all.length} 个会话里找不到: ${sessionId}（${adapter.id} 列表上限 ${cap}，更早的会话不在其中，可用 watch sessions 或原生 CLI 确认真实 id）`
-            : `在当前目录找不到会话: ${sessionId}`) + lookupNote,
+          (chainUse ? `${chainUse}；` : '') +
+            (capped
+              ? `在当前目录最近 ${all.length} 个会话里找不到: ${sessionId}（${adapter.id} 列表上限 ${cap}，更早的会话不在其中，可用 watch sessions 或原生 CLI 确认真实 id）`
+              : `在当前目录找不到会话: ${sessionId}`) +
+            lookupNote,
         );
       }
       targetRef = hit.ref;

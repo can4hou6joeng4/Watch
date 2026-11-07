@@ -272,9 +272,12 @@ export async function openSession(
     // 映射库打不开也要进「未找到」的说明：否则用户只看到「没找到」，不知道这次是全盘扫描、
     // 也不知道本地库坏了（成功路径走 warnings）
     const detail = [...warnings, ...lookup].length ? `（${[...warnings, ...lookup].join('；')}）` : '';
+    // 链 id 与会话 id 都是 UUID，chain list 里还印在同一行：直接说「未找到会话」会让人
+    // 去核对那串 id 有没有抄错，而链永远不会被反查命中
+    const chainUse = mapping && !provider ? mapping.describeChainIdMisuse(targetId) : null;
     return {
       ok: false,
-      error: `未找到会话: ${targetId}${provider ? `（provider=${provider}）` : ''}。请确认 id 正确且对应 CLI 已安装登录。${detail}`,
+      error: `${chainUse ? `${chainUse}；` : ''}未找到会话: ${targetId}${provider ? `（provider=${provider}）` : ''}。请确认 id 正确且对应 CLI 已安装登录。${detail}`,
     };
   }
   const notes: string[] = [];
@@ -543,7 +546,9 @@ async function planOpenInProvider(
   const source = await resolveById(sourceId, undefined, mapping, undefined, lookup);
   if (!source) {
     const detail = lookup.length ? `（${lookup.join('；')}）` : '';
-    return { ok: false, error: `未找到会话: ${sourceId}${detail}` };
+    // 与 openSession 同理：这条路径也会被链 id 撞上（`open <链 id> --to codex`）
+    const chainUse = mapping ? mapping.describeChainIdMisuse(sourceId) : null;
+    return { ok: false, error: `${chainUse ? `${chainUse}；` : ''}未找到会话: ${sourceId}${detail}` };
   }
   const cwd = source.found.ref.cwd;
   // 预检与写入都用这个目录：它不在了要提前说，别等用户照着一句必失败的 cd 去执行

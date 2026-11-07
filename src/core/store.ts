@@ -780,6 +780,42 @@ export class Store {
     return message;
   }
 
+  /**
+   * 这个 id 是不是本地库里的某条链。
+   *
+   * 链 id 与原生会话 id 都是 UUID，`chain list` 文本模式还把链 id 印在同一行，
+   * 复制到 `watch open` / `watch adopt --session` 里完全看不出区别。链不是会话，
+   * 永远不会被反查命中——只回「未找到会话」会让人反复核对那串 id 有没有抄错，
+   * 而真正该做的是回到 `watch status` / `chain list` 取链上绑定的会话 id。
+   * 命中时带上链名、状态与链尾绑定，让用户能确认自己复制的是哪一行。
+   */
+  describeChainIdMisuse(id: string, cwd?: string, storeError?: string | null): string | null {
+    let row: { id: string; cwd: string; name: string; status: string } | undefined;
+    try {
+      row = this.db.prepare('SELECT id, cwd, name, status FROM chains WHERE id=?').get(id) as
+        | { id: string; cwd: string; name: string; status: string }
+        | undefined;
+    } catch (error) {
+      // 库读不出来不能断言「这不是链」：附上原因，别让人以为 id 抄错了
+      const reason = describeStoreErrorReason(error);
+      return `${id} 是不是链没能确认（本地库读不出来：${reason}）`;
+    }
+    if (!row) return null;
+    const status = row.status === 'archived' ? '已归档' : '活跃';
+    let tip = '';
+    try {
+      const events = this.listSwitchEvents(row.id);
+      const tipRef = events.length ? events[events.length - 1].toRef : null;
+      tip = tipRef
+        ? `；它当前停在这条链尾的 ${tipRef.provider} 会话 ${tipRef.sessionId}`
+        : '；这条链上还没有绑定任何会话（先用 switch / adopt 绑定）';
+    } catch {
+      // 链尾只是补充说明，读不出来不影响「这是链不是会话」这条结论
+    }
+    const where = cwd && this.normCwd(cwd) !== row.cwd ? `（它属于目录 ${row.cwd}，不是你这次的 --cwd）` : '';
+    return `这个 id 是链「${row.name}」（${status}）的 id，不是会话 id${where}${tip}；要打开会话请用 watch status --cwd <目录> 或 watch chain list 里链尾的实际会话 id`;
+  }
+
   listChains(cwd: string): Chain[] {
     cwd = this.normCwd(cwd);
     const rows = this.db
