@@ -20,7 +20,7 @@ const COMPLETED = 'externalAgentConfig/import/completed';
 type Pending = { resolve(value: unknown): void; reject(error: Error): void };
 
 export function asRecord(value: unknown): Record<string, unknown> {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('Unexpected Codex response');
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('Codex 返回的响应结构不符合预期');
   return value as Record<string, unknown>;
 }
 
@@ -36,11 +36,11 @@ export class CodexImportRpc implements ImportRpc {
 
   constructor(private child: ChildProcessWithoutNullStreams, private timeoutMs = 30_000, private profile: RpcProfile = 'import') {
     this.closed = new Promise((resolve) => child.once('close', () => {
-      this.fail(new Error('Codex app-server closed'));
+      this.fail(new Error('Codex app-server 已退出'));
       resolve();
     }));
-    child.once('error', () => this.fail(new Error('Cannot start Codex app-server')));
-    child.stdin.on('error', () => this.fail(new Error('Codex input closed')));
+    child.once('error', () => this.fail(new Error('无法启动 Codex app-server')));
+    child.stdin.on('error', () => this.fail(new Error('Codex 输入通道已关闭')));
     // Drain diagnostics without exposing native configuration or session text.
     child.stderr.resume();
     this.lines = createInterface({ input: child.stdout });
@@ -63,13 +63,13 @@ export class CodexImportRpc implements ImportRpc {
           this.child.stdin.write(JSON.stringify({ id: message.id, error: { code: -32601, message: 'Watch refuses server requests' } }) + '\n');
         } else if (message.method === COMPLETED) {
           const result = asRecord(message.params);
-          if (typeof result.importId !== 'string') throw new Error('Missing import ID');
+          if (typeof result.importId !== 'string') throw new Error('Codex 没有返回导入 ID');
           const waiter = this.waiters.get(result.importId);
           if (waiter) {
             this.waiters.delete(result.importId);
             waiter.resolve(result);
           } else {
-            if (this.completions.size >= 32) throw new Error('Too many import notifications');
+            if (this.completions.size >= 32) throw new Error('Codex 发来的导入通知过多');
             this.completions.set(result.importId, result);
           }
         }
@@ -79,21 +79,21 @@ export class CodexImportRpc implements ImportRpc {
       const entry = this.pending.get(message.id);
       if (!entry) return;
       this.pending.delete(message.id);
-      if (message.error) entry.reject(new Error('Codex rejected the request; do not automatically retry imports'));
+      if (message.error) entry.reject(new Error('Codex 拒绝了该请求；不要自动重试导入'));
       else entry.resolve(message.result);
     } catch {
-      this.fail(new Error('Invalid Codex app-server response'));
+      this.fail(new Error('Codex app-server 的响应无法解析'));
     }
   }
 
   request(method: string, params: unknown): Promise<unknown> {
-    if (!METHODS[this.profile].has(method)) return Promise.reject(new Error('Method is not allowed by this Codex operation'));
+    if (!METHODS[this.profile].has(method)) return Promise.reject(new Error('这次 Codex 操作不允许调用该方法'));
     if (this.failure) return Promise.reject(this.failure);
     const id = ++this.nextId;
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
         this.pending.delete(id);
-        reject(new Error('Codex request timed out'));
+        reject(new Error('Codex 请求超时'));
       }, this.timeoutMs);
       this.pending.set(id, {
         resolve: (value) => { clearTimeout(timer); resolve(value); },
@@ -102,7 +102,7 @@ export class CodexImportRpc implements ImportRpc {
       try {
         this.child.stdin.write(JSON.stringify({ id, method, params }) + '\n');
       } catch {
-        this.fail(new Error('Cannot send Codex request'));
+        this.fail(new Error('无法向 Codex 发送请求'));
       }
     });
   }
@@ -114,11 +114,11 @@ export class CodexImportRpc implements ImportRpc {
       return Promise.resolve(cached);
     }
     if (this.failure) return Promise.reject(this.failure);
-    if (this.waiters.has(importId)) return Promise.reject(new Error('Already waiting for this import'));
+    if (this.waiters.has(importId)) return Promise.reject(new Error('已经在等待这次导入的结果'));
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
         this.waiters.delete(importId);
-        reject(new Error('Import completion timed out; its outcome is uncertain'));
+        reject(new Error('等待导入完成超时，结果未知'));
       }, this.timeoutMs);
       this.waiters.set(importId, {
         resolve: (value) => { clearTimeout(timer); resolve(value); },

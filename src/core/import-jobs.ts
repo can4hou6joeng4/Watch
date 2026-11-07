@@ -120,7 +120,7 @@ export class ImportJobs {
   async routePlan<T extends ImportJobPlan>(id: string, route: string, schema = 1): Promise<T> {
     const plan = JSON.parse(await readFile(path.join(this.dir(id), 'plan.json'), 'utf8')) as T;
     if (importPlanId(plan) !== id || plan.schema !== schema || plan.route !== route) {
-      throw new Error('Import plan does not match the confirmed route');
+      throw new Error('导入计划与确认的路径不匹配');
     }
     return plan;
   }
@@ -141,7 +141,7 @@ export class ImportJobs {
   async projectPlan(id: string): Promise<ProjectBindingPlan> {
     const plan = JSON.parse(await readFile(path.join(this.dir(id), 'plan.json'), 'utf8')) as ProjectBindingPlan;
     if (importPlanId(plan) !== id || plan.schema !== 1 || plan.route !== 'codex-project-association') {
-      throw new Error('Project association plan does not match the confirmed ID');
+      throw new Error('项目关联计划与确认的 id 不匹配');
     }
     return plan;
   }

@@ -19,17 +19,17 @@ async function readCodexDesktopState(codexHome: string): Promise<Record<string, 
     stat = await lstat(statePath);
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
-      throw new Error('Codex Desktop has no local project state; add this folder in the desktop app before importing');
+      throw new Error('找不到 Codex Desktop 的本地项目状态；请先在桌面端把这个目录添加为项目，再导入');
     }
     throw error;
   }
-  if (!stat.isFile() || stat.isSymbolicLink()) throw new Error('Codex Desktop project state must be a regular file');
+  if (!stat.isFile() || stat.isSymbolicLink()) throw new Error('Codex Desktop 项目状态必须是普通文件');
 
   let state: Record<string, unknown>;
   try {
     state = asRecord(JSON.parse(await readFile(statePath, 'utf8')));
   } catch {
-    throw new Error('Cannot read Codex Desktop project state');
+    throw new Error('Codex Desktop 项目状态无法解析');
   }
   return state;
 }
@@ -48,7 +48,7 @@ export async function inspectCodexDesktopProject(codexHome: string, cwd: string)
     return UUID.test(id) && name.length > 0 ? [{ legacyProjectId: id, name, rootPaths }] : [];
   });
   if (matches.length !== 1) {
-    throw new Error('The cwd must match exactly one existing Codex Desktop project before importing');
+    throw new Error('导入前，该目录必须恰好匹配一个已有的 Codex Desktop 项目');
   }
 
   const identity = `local:${codexHome}`;
@@ -56,7 +56,7 @@ export async function inspectCodexDesktopProject(codexHome: string, cwd: string)
   const match = matches[0]!;
   const nativeProjectId = mappings[match.legacyProjectId];
   if (typeof nativeProjectId !== 'string' || !UUID.test(nativeProjectId)) {
-    throw new Error('Codex Desktop has not synchronized this project with the local app-server; reopen the project and retry preview');
+    throw new Error('Codex Desktop 还没有把该项目同步到本地 app-server；请在桌面端重新打开该项目后再预览');
   }
   return {
     policy: 'codex-desktop-project-first-v1',
@@ -70,21 +70,21 @@ export async function assertCodexDesktopThreadPlacement(
   threadId: string,
   project: CodexDesktopProject,
 ): Promise<void> {
-  if (!UUID.test(threadId)) throw new Error('Invalid imported Codex thread ID');
+  if (!UUID.test(threadId)) throw new Error('导入的 Codex 线程 ID 不是合法 UUID');
   const state = await readCodexDesktopState(codexHome);
   const projectless = state['projectless-thread-ids'];
   if (projectless != null && (!Array.isArray(projectless) || projectless.some((id) => typeof id !== 'string'))) {
-    throw new Error('Cannot verify Codex Desktop projectless thread state');
+    throw new Error('无法校验 Codex Desktop 的 projectless 线程状态');
   }
   if ((projectless as string[] | undefined)?.includes(threadId)) {
-    throw new Error('Codex Desktop classifies the imported thread as projectless; public project metadata cannot make it visible');
+    throw new Error('Codex Desktop 把导入的线程归为 projectless（无项目）；公开的项目元数据无法让它显示在项目列表里');
   }
 
   const assignment = asRecord(state['thread-project-assignments'] ?? {})[threadId];
   if (assignment == null) return;
   const value = asRecord(assignment);
   if (value.projectKind !== 'local' || value.projectId !== project.legacyProjectId) {
-    throw new Error('Codex Desktop assigns the imported thread to a different project');
+    throw new Error('Codex Desktop 把导入的线程分配给了另一个项目');
   }
 }
 

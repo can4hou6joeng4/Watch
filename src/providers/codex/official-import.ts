@@ -22,10 +22,11 @@ import { acquireImportTarget, assertImportTarget, assertTargetFile, IMPORT_TARGE
 const SUPPORTED_VERSION = 'codex-cli 0.153.4';
 const UUID = /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i;
 const execFileAsync = promisify(execFile);
+// 用户面文案与仓库其余命令一致用中文：桌面端把它们直接显示在卡片下方，英文会显得像另一个人写的
 const WARNINGS = [
-  'Experimental session-only import; configuration, plugins and permissions are not selected.',
-  'Tool records may become text. Attachments and complete content fidelity are not verified.',
-  'No desktop opening or model continuation has been verified by this command.',
+  '实验性导入：只导入这一个会话，不选择配置、插件与权限。',
+  '工具记录可能降级为文本；附件与完整内容一致性未验证。',
+  '本命令未验证桌面端打开或模型继续。',
 ];
 
 type Dependencies = {
@@ -41,35 +42,35 @@ type Dependencies = {
 
 async function fingerprint(ref: SessionRef): Promise<FileDigest> {
   if (ref.provider !== 'claude' || !UUID.test(ref.sessionId) || !path.isAbsolute(ref.filePath) || !path.isAbsolute(ref.cwd)) {
-    throw new Error('Expected a local Claude Code session');
+    throw new Error('来源必须是本地 Claude Code 会话');
   }
-  if (!(await lstat(ref.filePath)).isFile()) throw new Error('Source must be a regular file, not a symlink');
+  if (!(await lstat(ref.filePath)).isFile()) throw new Error('来源会话必须是普通文件，不能是符号链接');
   const digest = await digestFile(ref.filePath);
-  if (!digest) throw new Error('Cannot fingerprint the source session');
+  if (!digest) throw new Error('无法计算来源会话的指纹');
   return digest;
 }
 
 async function assertSource(plan: ImportPlan): Promise<void> {
   const current = await fingerprint(plan.source);
   if (current.sha256 !== plan.digest.sha256 || current.sizeBytes !== plan.digest.sizeBytes) {
-    throw new Error('Source changed since preview; prepare and review a new plan');
+    throw new Error('来源会话在预览之后已变化；请重新 prepare 并审阅新计划');
   }
 }
 
 function selectedSession(detected: unknown, plan: ImportPlan): Record<string, unknown> {
   const items = asRecord(detected).items;
-  if (!Array.isArray(items)) throw new Error('Codex returned no migration items');
+  if (!Array.isArray(items)) throw new Error('Codex 没有返回可迁移项');
   const matches: Record<string, unknown>[] = [];
   for (const value of items) {
     const item = asRecord(value);
     if (item.itemType !== 'SESSIONS') continue;
     const sessions = asRecord(item.details).sessions;
-    if (!Array.isArray(sessions)) throw new Error('Invalid session migration list');
+    if (!Array.isArray(sessions)) throw new Error('Codex 返回的会话迁移列表格式不对');
     for (const value of sessions) {
       const session = asRecord(value);
       if (session.path !== plan.source.filePath || session.cwd !== plan.source.cwd) continue;
       if (item.cwd !== null && item.cwd !== undefined && item.cwd !== '' && item.cwd !== plan.source.cwd) {
-        throw new Error('Migration scope differs from the confirmed project');
+        throw new Error('迁移范围与已确认的项目不一致');
       }
       // Reconstruct an allowlisted payload. Never forward other detected setup.
       matches.push({
@@ -78,22 +79,22 @@ function selectedSession(detected: unknown, plan: ImportPlan): Record<string, un
       });
     }
   }
-  if (matches.length !== 1) throw new Error('Codex must detect exactly one matching source session');
+  if (matches.length !== 1) throw new Error('Codex 必须恰好识别出一个匹配的来源会话');
   return matches[0]!;
 }
 
 function importedTarget(completion: unknown, importId: string, plan: ImportPlan): string {
   const result = asRecord(completion);
   if (result.importId !== importId || !Array.isArray(result.itemTypeResults) || result.itemTypeResults.length !== 1) {
-    throw new Error('Unexpected import completion');
+    throw new Error('导入完成回执的结构不符合预期');
   }
   const group = asRecord(result.itemTypeResults[0]);
   if (group.itemType !== 'SESSIONS' || !Array.isArray(group.failures) || group.failures.length !== 0 ||
-    !Array.isArray(group.successes) || group.successes.length !== 1) throw new Error('Import reported partial or unexpected results');
+    !Array.isArray(group.successes) || group.successes.length !== 1) throw new Error('导入回执显示部分成功或结果异常');
   const entry = asRecord(group.successes[0]);
   if (entry.itemType !== 'SESSIONS' || (entry.source != null && entry.source !== plan.source.filePath) ||
     (entry.cwd != null && entry.cwd !== plan.source.cwd) ||
-    typeof entry.target !== 'string' || !UUID.test(entry.target)) throw new Error('Import result does not match the confirmed session');
+    typeof entry.target !== 'string' || !UUID.test(entry.target)) throw new Error('导入结果与已确认的会话不一致');
   return entry.target;
 }
 
@@ -102,11 +103,11 @@ export class OfficialCodexImport {
   constructor(private deps: Dependencies) { this.projects = new CodexProjectBinding(deps); }
 
   async prepare(sourceId: string, cwd: string, options: { desktopProject?: boolean } = {}) {
-    if (!UUID.test(sourceId) || !path.isAbsolute(cwd)) throw new Error('A Claude session UUID and absolute --cwd are required');
+    if (!UUID.test(sourceId) || !path.isAbsolute(cwd)) throw new Error('需要 Claude 会话 UUID 与绝对路径 --cwd');
     const version = await this.deps.version();
-    if (version !== SUPPORTED_VERSION) throw new Error(`Experimental route currently requires ${SUPPORTED_VERSION}`);
+    if (version !== SUPPORTED_VERSION) throw new Error(`实验性导入路径目前只支持 ${SUPPORTED_VERSION}`);
     const source = await this.deps.findSource(sourceId, cwd);
-    if (!source || source.sessionId !== sourceId || source.cwd !== cwd) throw new Error('Source session does not match the requested project');
+    if (!source || source.sessionId !== sourceId || source.cwd !== cwd) throw new Error('来源会话不属于指定的项目目录');
     const plan: ImportPlan = {
       schema: 1, route: 'claude-code-to-codex-official', source, digest: await fingerprint(source),
       cliVersion: version, codexHome: this.deps.codexHome, home: this.deps.home,
@@ -132,10 +133,10 @@ export class OfficialCodexImport {
       ...(Array.isArray(prior)
         ? prior.map((p) =>
             p.sameContent
-              ? `This session was already imported to Codex thread ${p.outcome.target?.sessionId ?? 'unknown'} (plan ${p.id.slice(0, 8)}); importing again creates a second copy.`
-              : `This session was imported before from different content (plan ${p.id.slice(0, 8)}, thread ${p.outcome.target?.sessionId ?? 'unknown'}); the source has changed since.`,
+              ? `这个会话此前已导入到 Codex 线程 ${p.outcome.target?.sessionId ?? 'unknown'}（计划 ${p.id.slice(0, 8)}）；再次导入会在 Codex 里多出一份会话。`
+              : `这个会话此前以不同内容导入过（计划 ${p.id.slice(0, 8)}，线程 ${p.outcome.target?.sessionId ?? 'unknown'}），来源此后已经变化。`,
           )
-        : [`Import journal could not be read; the duplicate-import check was skipped: ${prior.error}`]),
+        : [`读取导入执行日志失败，已跳过重复导入检查：${prior.error}`]),
     ];
     return {
       planId, plan, status: outcome?.status ?? (attempted ? 'uncertain' : 'prepared'),
@@ -151,12 +152,12 @@ export class OfficialCodexImport {
   async confirm(planId: string) {
     const previous = await this.status(planId);
     if (previous.status === 'imported') return previous;
-    if (!previous.plan.target) throw new Error('This plan predates target-scoped protection; review a new preview before importing');
-    if (!previous.canConfirm) throw new Error('Import was already attempted; inspect status instead of repeating writes');
+    if (!previous.plan.target) throw new Error('这份计划早于目标级保护；请重新预览后再导入');
+    if (!previous.canConfirm) throw new Error('这次导入已经尝试过；请用 status 查看结果，不要重复写入');
     const { plan } = previous;
     const target = plan.target!;
     if (plan.home !== this.deps.home || plan.codexHome !== this.deps.codexHome || plan.cliVersion !== await this.deps.version()) {
-      throw new Error('Codex version or home changed since preview');
+      throw new Error('Codex 版本或数据目录在预览之后已变化');
     }
     await assertSource(plan);
     await assertImportTarget(this.deps.codexHome, target);
@@ -171,7 +172,7 @@ export class OfficialCodexImport {
       const config = asRecord(asRecord(await rpc.request('config/read', { includeLayers: false })).config);
       if (config.sqlite_home != null && (typeof config.sqlite_home !== 'string' ||
         !path.isAbsolute(config.sqlite_home) || await realpath(config.sqlite_home) !== target.path)) {
-        throw new Error('Separate native SQLite directories require additional validation; no import submitted');
+        throw new Error('原生 SQLite 目录与确认的目标不一致，需要额外验证；未提交导入');
       }
       if (plan.desktopProject) await this.assertNativeProject(rpc, plan.desktopProject, plan.source.cwd);
       const migrationItem = selectedSession(await rpc.request('externalAgentConfig/detect', {
@@ -185,7 +186,7 @@ export class OfficialCodexImport {
       const response = asRecord(await rpc.request('externalAgentConfig/import', {
         migrationItems: [migrationItem], source: 'watch-session-import',
       }));
-      if (typeof response.importId !== 'string' || !UUID.test(response.importId)) throw new Error('Missing native import ID');
+      if (typeof response.importId !== 'string' || !UUID.test(response.importId)) throw new Error('Codex 没有返回原生导入 ID');
       outcome.importId = response.importId;
       await this.deps.jobs.save(planId, outcome);
       const sessionId = importedTarget(await rpc.completion(response.importId), response.importId, plan);
@@ -195,14 +196,14 @@ export class OfficialCodexImport {
       let thread = asRecord(asRecord(await rpc.request('thread/read', { threadId: sessionId, includeTurns: true })).thread);
       if (thread.id !== sessionId || thread.cwd !== plan.source.cwd || typeof thread.path !== 'string' ||
         !path.isAbsolute(thread.path) || !Array.isArray(thread.turns) || thread.turns.length === 0) {
-        throw new Error('Native thread metadata does not match the import');
+        throw new Error('原生线程元数据与本次导入不一致');
       }
       const targetPath = thread.path;
       await assertTargetFile(target, targetPath);
       if (plan.desktopProject) {
         const turnsBefore = JSON.stringify(thread.turns);
         if (thread.projectId != null && thread.projectId !== plan.desktopProject.nativeProjectId) {
-          throw new Error('Imported session unexpectedly belongs to another project');
+          throw new Error('导入的会话意外属于另一个项目');
         }
         if (thread.projectId !== plan.desktopProject.nativeProjectId) {
           await rpc.request('thread/metadata/update', {
@@ -214,7 +215,7 @@ export class OfficialCodexImport {
         if (thread.id !== sessionId || thread.cwd !== plan.source.cwd || thread.path !== targetPath ||
           thread.projectId !== plan.desktopProject.nativeProjectId || JSON.stringify(thread.turns) !== turnsBefore ||
           !await this.listedInProject(rpc, plan.desktopProject.nativeProjectId, sessionId, plan.source.cwd)) {
-          throw new Error('Imported session project verification failed');
+          throw new Error('导入会话的项目归属验证失败');
         }
         await this.assertDesktopProject(plan.desktopProject, plan.source.cwd);
         await (this.deps.assertDesktopThreadPlacement ?? assertCodexDesktopThreadPlacement)(
@@ -251,7 +252,7 @@ export class OfficialCodexImport {
   private async assertDesktopProject(expected: CodexDesktopProject, cwd: string): Promise<void> {
     const current = await (this.deps.inspectDesktopProject ?? inspectCodexDesktopProject)(this.deps.codexHome, cwd);
     if (!sameCodexDesktopProject(current, expected)) {
-      throw new Error('Codex Desktop project changed since preview; prepare and review a new plan');
+      throw new Error('Codex Desktop 项目在预览之后已变化；请重新 prepare 并审阅新计划');
     }
   }
 
@@ -259,7 +260,7 @@ export class OfficialCodexImport {
     const value = asRecord(asRecord(await rpc.request('project/read', { projectId: project.nativeProjectId })).project);
     if (value.id !== project.nativeProjectId || !Array.isArray(value.roots) ||
       !value.roots.some((root) => asRecord(root).path === cwd)) {
-      throw new Error('Codex app-server project no longer matches the desktop project');
+      throw new Error('Codex app-server 的项目已与桌面项目不一致');
     }
   }
 
@@ -270,23 +271,23 @@ export class OfficialCodexImport {
       const result = asRecord(await rpc.request('thread/list', {
         projectId, limit: 100, useStateDbOnly: true, ...(cursor ? { cursor } : {}),
       }));
-      if (!Array.isArray(result.data)) throw new Error('Invalid project thread list');
+      if (!Array.isArray(result.data)) throw new Error('项目线程列表格式不对');
       const rows = result.data.map(asRecord);
-      if (rows.some((row) => row.projectId !== projectId)) throw new Error('Native project filtering is not supported');
+      if (rows.some((row) => row.projectId !== projectId)) throw new Error('原生 app-server 不支持按项目过滤线程');
       if (rows.some((row) => row.id === threadId && row.cwd === cwd)) return true;
       if (result.nextCursor == null) return false;
-      if (typeof result.nextCursor !== 'string' || seen.has(result.nextCursor)) throw new Error('Invalid project thread pagination');
+      if (typeof result.nextCursor !== 'string' || seen.has(result.nextCursor)) throw new Error('项目线程分页游标异常');
       cursor = result.nextCursor;
       seen.add(cursor);
     }
-    throw new Error('Project thread list exceeds the bounded verification limit');
+    throw new Error('项目线程列表超过验证页数上限');
   }
 }
 
 /** 执行日志根目录；官方导入与只读诊断（`watch doctor`）共用同一套推导，改规则只改这里 */
 export function officialImportJournalRoot(home = homedir()): string {
   const db = process.env.WATCH_DB;
-  if (db === ':memory:') throw new Error('Official imports require a persistent WATCH_DB location');
+  if (db === ':memory:') throw new Error('官方导入需要可持久化的 WATCH_DB 路径（不能用 :memory:）');
   return db ? path.resolve(`${db}.imports`) : path.join(home, '.watch', 'imports');
 }
 
@@ -302,7 +303,7 @@ export function createOfficialCodexImport(): OfficialCodexImport {
       try {
         return (await execFileAsync(executable, ['--version'], { env, timeout: 10_000 })).stdout.trim();
       } catch {
-        throw new Error('Cannot determine the installed Codex CLI version');
+        throw new Error('无法确定本机安装的 Codex CLI 版本');
       }
     },
     findSource: async (id, cwd) => {

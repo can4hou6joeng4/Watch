@@ -16,7 +16,7 @@ type Dependencies = {
 };
 
 function historyDigest(thread: Record<string, unknown>): string {
-  if (!Array.isArray(thread.turns) || thread.turns.length === 0) throw new Error('Native thread history is missing');
+  if (!Array.isArray(thread.turns) || thread.turns.length === 0) throw new Error('原生线程历史为空');
   return createHash('sha256').update(JSON.stringify(thread.turns)).digest('hex');
 }
 
@@ -24,20 +24,20 @@ async function inspectAssociation(rpc: ImportRpc, ref: SessionRef, projectId: st
   const config = asRecord(asRecord(await rpc.request('config/read', { includeLayers: false })).config);
   if (config.sqlite_home != null && (typeof config.sqlite_home !== 'string' || !path.isAbsolute(config.sqlite_home) ||
     await realpath(config.sqlite_home) !== target.path)) {
-    throw new Error('Separate native SQLite directories require additional validation');
+    throw new Error('原生 SQLite 目录与确认的目标不一致，需要额外验证');
   }
   const project = asRecord(asRecord(await rpc.request('project/read', { projectId })).project);
   if (project.id !== projectId || typeof project.name !== 'string' || !Array.isArray(project.roots) ||
     project.roots.length !== 1 || asRecord(project.roots[0]).path !== ref.cwd) {
-    throw new Error('The project must contain only the imported session working directory');
+    throw new Error('该项目必须只包含被导入会话的工作目录');
   }
   const thread = asRecord(asRecord(await rpc.request('thread/read', { threadId: ref.sessionId, includeTurns: true })).thread);
   if (thread.id !== ref.sessionId || thread.cwd !== ref.cwd || thread.path !== ref.filePath) {
-    throw new Error('Native session identity differs from the imported result');
+    throw new Error('原生会话身份与导入结果不一致');
   }
   await assertTargetFile(target, ref.filePath);
   if (thread.projectId != null && thread.projectId !== projectId) {
-    throw new Error('The session already belongs to another project; refusing to move it');
+    throw new Error('该会话已属于另一个项目，拒绝迁移');
   }
   return { projectName: project.name, currentProjectId: thread.projectId ?? null, historyDigest: historyDigest(thread) };
 }
@@ -47,16 +47,16 @@ async function listedInProject(rpc: ImportRpc, projectId: string, ref: SessionRe
   const seen = new Set<string>();
   for (let page = 0; page < 20; page++) {
     const result = asRecord(await rpc.request('thread/list', { projectId, limit: 100, useStateDbOnly: true, ...(cursor ? { cursor } : {}) }));
-    if (!Array.isArray(result.data)) throw new Error('Invalid project thread list');
+    if (!Array.isArray(result.data)) throw new Error('项目线程列表格式不对');
     const rows = result.data.map(asRecord);
-    if (rows.some((row) => row.projectId !== projectId)) throw new Error('Native project filtering is not supported');
+    if (rows.some((row) => row.projectId !== projectId)) throw new Error('原生 app-server 不支持按项目过滤线程');
     if (rows.some((row) => row.id === ref.sessionId && row.cwd === ref.cwd)) return true;
     if (result.nextCursor == null) return false;
-    if (typeof result.nextCursor !== 'string' || seen.has(result.nextCursor)) throw new Error('Invalid project thread pagination');
+    if (typeof result.nextCursor !== 'string' || seen.has(result.nextCursor)) throw new Error('项目线程分页游标异常');
     cursor = result.nextCursor;
     seen.add(cursor);
   }
-  throw new Error('Project thread list exceeds the bounded verification limit');
+  throw new Error('项目线程列表超过验证页数上限');
 }
 
 /** Associates an already imported session. This profile cannot import, create projects, or send turns. */
@@ -64,16 +64,16 @@ export class CodexProjectBinding {
   constructor(private deps: Dependencies) {}
 
   async prepare(importId: string, projectId: string) {
-    if (!UUID.test(projectId)) throw new Error('An existing project UUID is required');
+    if (!UUID.test(projectId)) throw new Error('需要一个已存在的项目 UUID');
     const importedPlan = await this.deps.jobs.plan(importId);
     const imported = await this.deps.jobs.outcome(importId);
-    if (imported?.status !== 'imported' || !imported.target || !importedPlan.target) throw new Error('A completed import is required');
+    if (imported?.status !== 'imported' || !imported.target || !importedPlan.target) throw new Error('需要一份已完成的导入');
     const version = await this.deps.version();
     if (version !== 'codex-cli 0.153.4' || version !== importedPlan.cliVersion ||
-      this.deps.codexHome !== importedPlan.codexHome) throw new Error('Codex data directory or CLI version differs from the completed import');
+      this.deps.codexHome !== importedPlan.codexHome) throw new Error('Codex 数据目录或 CLI 版本与那次完成的导入不一致');
     const target = await inspectImportTarget(this.deps.codexHome);
     for (const key of ['path', 'device', 'inode'] as const) {
-      if (target[key] !== importedPlan.target[key]) throw new Error('The imported data directory was replaced');
+      if (target[key] !== importedPlan.target[key]) throw new Error('导入时的数据目录已被替换');
     }
     const lock = await acquireImportTarget(target, `project-preview:${importId}`);
     let rpc: ImportRpc | undefined;
@@ -106,14 +106,14 @@ export class CodexProjectBinding {
   async confirm(planId: string) {
     const previous = await this.status(planId);
     if (previous.status === 'associated') return previous;
-    if (!previous.canConfirm) throw new Error('Project association was already attempted; do not repeat an uncertain update');
+    if (!previous.canConfirm) throw new Error('这次项目关联已经尝试过；结果未知时不要重复写入');
     const { plan } = previous;
     if (plan.home !== this.deps.home || plan.codexHome !== this.deps.codexHome || plan.cliVersion !== await this.deps.version()) {
-      throw new Error('Project association environment changed since preview');
+      throw new Error('项目关联的环境在预览之后已变化');
     }
     const imported = await this.deps.jobs.outcome(plan.importPlanId);
     if (imported?.status !== 'imported' || JSON.stringify(imported.target) !== JSON.stringify(plan.thread)) {
-      throw new Error('The completed import no longer matches this association');
+      throw new Error('那次完成的导入已与本次关联不一致');
     }
     await assertImportTarget(this.deps.codexHome, plan.target);
     const lock = await acquireImportTarget(plan.target, planId);
@@ -124,7 +124,7 @@ export class CodexProjectBinding {
     try {
       rpc = await this.deps.connect(plan.thread.cwd, plan.target.path, 'project-binding');
       const before = await inspectAssociation(rpc, plan.thread, plan.projectId, plan.target);
-      if (before.historyDigest !== plan.historyDigest) throw new Error('Session history changed since the project preview');
+      if (before.historyDigest !== plan.historyDigest) throw new Error('会话历史在项目预览之后已变化');
       await assertImportTarget(this.deps.codexHome, plan.target);
       await this.deps.jobs.claim(planId);
       claimed = true;
@@ -133,7 +133,7 @@ export class CodexProjectBinding {
       }
       const after = await inspectAssociation(rpc, plan.thread, plan.projectId, plan.target);
       if (after.currentProjectId !== plan.projectId || after.historyDigest !== plan.historyDigest ||
-        !await listedInProject(rpc, plan.projectId, plan.thread)) throw new Error('Project association verification failed');
+        !await listedInProject(rpc, plan.projectId, plan.thread)) throw new Error('项目关联验证失败');
       await assertImportTarget(this.deps.codexHome, plan.target);
       outcome = { ...outcome, status: 'associated', membershipVerified: true, historyUnchanged: true };
       await this.deps.jobs.saveProject(planId, outcome);
