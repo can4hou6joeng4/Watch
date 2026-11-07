@@ -377,8 +377,15 @@ async function cmdOpen(
   check?: boolean,
 ): Promise<void> {
   try {
+    // 两个写入方向互斥：--from 是把来源内容并进 <id> 这个目标会话，
+    // --to 是把 <id> 的内容转入另一个 provider。同给时按旧行为只跑 --to，
+    // 用户会以为 --from 也生效了（它的会话根本没被并入）。
+    if (fromId && toId) {
+      fail(json, '--from 与 --to 不能同用：--from 是并入 <id> 这个目标会话，--to 是把 <id> 转入 <provider>；请一次只选一个方向');
+    }
     if (check) {
       if (!toId) fail(json, '--check 需要同时指定 --to <provider>');
+      if (fromId) fail(json, '--from 不能与 --check 同用：预检只针对 --to <provider>');
       const checked = await checkOpenInProvider(targetId, toId);
       if (json) {
         console.log(JSON.stringify(checked));
