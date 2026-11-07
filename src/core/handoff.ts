@@ -23,6 +23,16 @@ function turnKey(t: UnifiedTurn): string {  const callIds = (t.events ?? [])
   return `${t.role}\n${unwrapUserQuery(t.text).trim()}\n${callIds}`;
 }
 
+/** 写入被拒后给用户的下一步：不同 code 的原因完全不同，不能一句「确认停止写入后重试」包打天下 */
+export function blockedHint(code: string): string {
+  if (code === 'target_missing') return '目标会话文件已不存在，本次未写入任何内容；请重新选择目标会话。';
+  if (code === 'target_unreadable') {
+    return '目标会话文件读不出来（多为权限或路径问题），本次未写入任何内容；先确认文件状态再重试。';
+  }
+  if (code === 'target_changed') return '请确认目标会话已停止写入后重试；本次未写入任何内容。';
+  return '未写入任何内容；请确认目标会话停止写入后重试。';
+}
+
 /**
  * 写前 TOCTOU 校验：目标会话指纹与快照不一致（被外部写入）则拒绝。
  * `action` 只影响错误文案（“已中止本次<action>”）。open / switch 两条写入路径共用。
@@ -35,9 +45,26 @@ export async function assertTargetUnchanged(
 ): Promise<void> {
   if (!snapshot) return;
   const current = (await adapter.contentFingerprint?.(ref)) ?? null;
-  if (!current || current.sha256 !== snapshot.sha256 || current.sizeBytes !== snapshot.sizeBytes) {
-    throw new HandoffBlockedError('target_changed', `目标会话正在被外部写入，已中止本次${action}，请稍后重试`);
+  if (current && current.sha256 === snapshot.sha256 && current.sizeBytes === snapshot.sizeBytes) return;
+  // 指纹消失有两种完全不同的原因：文件被删 / 被移走，或只是读不出来（权限、I/O）。
+  // 两种都同样中止写入（fail closed），但「正在被外部写入，请稍后重试」会让用户一直重试
+  // 一个永远不会成功的操作——按实际状态分别说，并给出能落地的一步
+  if (!current) {
+    const presence = await sessionFilePresence(ref.filePath);
+    if (presence.state === 'missing') {
+      throw new HandoffBlockedError(
+        'target_missing',
+        `目标会话文件已不存在：${ref.filePath}；已中止本次${action}（未写入任何内容），请重新选择目标会话`,
+      );
+    }
+    if (presence.state === 'unknown') {
+      throw new HandoffBlockedError(
+        'target_unreadable',
+        `目标会话文件状态无法确认：${presence.reason}；为避免覆盖外部内容，已中止本次${action}（未写入任何内容），请先确认它是否还在再重试`,
+      );
+    }
   }
+  throw new HandoffBlockedError('target_changed', `目标会话正在被外部写入，已中止本次${action}，请稍后重试`);
 }
 
 /** 从 source 里去掉 dest 已有的前缀子序列，只留下待追加增量 */

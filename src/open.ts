@@ -1,6 +1,6 @@
 import { stat } from 'node:fs/promises';
 import type { FileDigest } from './core/atomic.js';
-import { assertTargetUnchanged, diffTurns, HandoffBlockedError } from './core/handoff.js';
+import { assertTargetUnchanged, blockedHint, diffTurns, HandoffBlockedError } from './core/handoff.js';
 import { dedupeCallEvents } from './core/rich.js';
 import { Store, defaultDbPath } from './core/store.js';
 import { IS_WIN, stripDevicePrefix } from './core/platform.js';
@@ -71,7 +71,7 @@ function blockedFrom(error: unknown): OpenSessionResult['blocked'] | undefined {
     return { code, sessionId, holders, hint };
   }
   if (error instanceof HandoffBlockedError) {
-    return { code: error.code, hint: '请确认目标会话已停止写入后重试；本次未写入任何内容。' };
+    return { code: error.code, hint: blockedHint(error.code) };
   }
   return undefined;
 }

@@ -3,7 +3,7 @@ import { stat } from 'node:fs/promises';
 import path from 'node:path';
 import { SEARCH_MAX_HITS, Store, defaultDbPath } from './core/store.js';
 import { describeFindings } from './core/findings.js';
-import { adoptIntoChain, chainStatus, chainUsage, collectTips, createChainSession, handoff, HandoffBlockedError } from './core/handoff.js';
+import { adoptIntoChain, blockedHint, chainStatus, chainUsage, collectTips, createChainSession, handoff, HandoffBlockedError } from './core/handoff.js';
 import { reindexCwd } from './core/search.js';
 import type { SessionRef } from './core/types.js';
 import { getAdapter, listAdapters, listProviders, unknownProviderMessage } from './providers/registry.js';
@@ -76,7 +76,7 @@ function failBlocked(error: HandoffBlockedError | PreflightBlockedError, json: b
     code,
     sessionId: block?.sessionId,
     holders: block?.holders,
-    hint: block?.hint ?? '未写入任何内容；请确认目标会话停止写入后重试。',
+    hint: block?.hint ?? blockedHint(code),
   };
   if (json) console.log(JSON.stringify(payload));
   else console.error(`[blocked:${code}] ${error.message}\n${payload.hint}`);
