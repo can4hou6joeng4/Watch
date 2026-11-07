@@ -5,6 +5,24 @@ import { createOfficialCodexImport } from './providers/codex/official-import.js'
 const IMPORT_BOOLEAN_FLAGS = new Set(['json', 'experimental', 'desktop-project']);
 const IMPORT_VALUE_FLAGS = new Set(['cwd', 'project']);
 const IMPORT_USAGE_HINT = '--json --experimental --cwd <绝对路径> --project <UUID> --desktop-project（详见 docs/import-codex.md）';
+/** 六条子命令：拼错时要照着这张表报「可用」，与 `cmdChain` 的写法一致 */
+const IMPORT_ACTIONS = [
+  'prepare',
+  'confirm',
+  'status',
+  'project-prepare',
+  'project-confirm',
+  'project-status',
+] as const;
+/** 每条子命令缺位置参数时的说法：落到整页用法要用户自己找是哪一条写错 */
+const IMPORT_POSITIONAL_HINT: Record<string, string> = {
+  prepare: 'prepare 需要一个 Claude 会话 UUID；例：watch import-codex prepare <session-id> --cwd /绝对路径 --experimental',
+  confirm: 'confirm 需要一个导入计划 id（watch import-codex prepare 的输出）；例：watch import-codex confirm <plan-id> --experimental',
+  status: 'status 需要一个导入计划 id（watch import-codex prepare 的输出）；例：watch import-codex status <plan-id>',
+  'project-prepare': 'project-prepare 需要一个导入计划 id 与 --project <UUID>；例：watch import-codex project-prepare <plan-id> --project <uuid> --experimental',
+  'project-confirm': 'project-confirm 需要一个项目关联计划 id；例：watch import-codex project-confirm <plan-id> --experimental',
+  'project-status': 'project-status 需要一个项目关联计划 id；例：watch import-codex project-status <plan-id>',
+};
 
 /**
  * 先按白名单自查一遍参数，再把结果交给 `parseArgs`。
@@ -60,14 +78,53 @@ export async function runImportCodex(args: string[]): Promise<void> {
     }
     const { values, positionals } = parsed;
     const [action, id] = positionals;
-    if (positionals.length !== 2 || !id || !['prepare', 'confirm', 'status', 'project-prepare', 'project-confirm', 'project-status'].includes(action!)) {
-      throw new Error('用法：watch import-codex prepare <session-id> --cwd <绝对路径> [--desktop-project] | confirm|status <plan-id> | project-prepare <import-plan-id> --project <project-id> | project-confirm|project-status <association-plan-id>；写操作需要 --experimental（详见 docs/import-codex.md）');
+    // 子命令拼错与「少给位置参数」以前落到同一条整页用法：用户得逐字比对六条子命令才知道
+    // `prepr` 是 `prepare` 打错，还是确实少给了一个参数。两种分开说，与 `cmdChain` 对齐。
+    if (action && !(IMPORT_ACTIONS as readonly string[]).includes(action)) {
+      throw new Error(
+        `未知的 import-codex 子命令: ${action}；可用: ${IMPORT_ACTIONS.join(' / ')}（详见 docs/import-codex.md）`,
+      );
     }
-    if (!action!.endsWith('status') && !values.experimental) throw new Error('这条路径需要 --experimental；请先阅读 docs/import-codex.md');
-    if (action === 'prepare' && (!values.cwd || !path.isAbsolute(values.cwd))) throw new Error('prepare 需要显式给出绝对路径 --cwd');
+    if (!action) {
+      throw new Error(
+        `缺少 import-codex 子命令；可用: ${IMPORT_ACTIONS.join(' / ')}（详见 docs/import-codex.md）`,
+      );
+    }
+    if (!id) {
+      throw new Error(IMPORT_POSITIONAL_HINT[action] ?? `import-codex ${action} 需要一个位置参数`);
+    }
+    if (positionals.length > 2) {
+      throw new Error(
+        `import-codex ${action} 只需要一个位置参数，多给了 ${positionals.length - 2} 个: ${positionals.slice(2).join(' ')}；可用: ${IMPORT_USAGE_HINT}`,
+      );
+    }
+    // 写操作同时缺多个参数时只报一个，会让人改两轮才走到终点：一次说全，
+    // 但「只缺一个」时仍各说各的，不把已经给对的参数一起指认
+    if (action === 'prepare' || action === 'project-prepare') {
+      const missing: string[] = [];
+      if (!values.experimental) missing.push('--experimental（写操作必须显式确认）');
+      if (action === 'project-prepare') {
+        if (!values.project) missing.push('--project <UUID>');
+      } else if (!values.cwd || !path.isAbsolute(values.cwd)) {
+        missing.push(
+          values.cwd ? `--cwd 需要绝对路径，收到: ${values.cwd}` : '--cwd <绝对路径>',
+        );
+      }
+      if (missing.length) {
+        const example = action === 'prepare'
+          ? `watch import-codex prepare ${id} --cwd /绝对路径 --experimental`
+          : `watch import-codex project-prepare ${id} --project <uuid> --experimental`;
+        throw new Error(`${action} 缺少必需的参数：${missing.join('、')}；例：${example}`);
+      }
+    } else if (!values.experimental && action !== 'status' && action !== 'project-status') {
+      // 只剩 confirm / project-confirm 走到这里：只缺 --experimental 一项，谈不上「改两轮」，
+      // 但仍要给一句可以直接照着敲的写法——「请先阅读 docs/import-codex.md」等于没说下一步
+      throw new Error(
+        `${action} 需要 --experimental（写操作必须显式确认）；例：watch import-codex ${action} ${id} --experimental`,
+      );
+    }
     if (action !== 'prepare' && values.cwd) throw new Error('已确认的计划已经绑定工作目录，不要再覆盖');
     if (action !== 'prepare' && values['desktop-project']) throw new Error('--desktop-project 只接受用于 prepare');
-    if (action === 'project-prepare' && !values.project) throw new Error('project-prepare 需要显式给出 --project UUID');
     if (action !== 'project-prepare' && values.project) throw new Error('--project 只接受用于 project-prepare');
     const service = createOfficialCodexImport();
     const result = action === 'prepare'
