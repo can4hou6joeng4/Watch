@@ -15,6 +15,8 @@ import { officialImportJournalRoot } from './providers/codex/official-import.js'
 import { doctorReport } from './core/doctor.js';
 import { cwdProblem } from './core/cwd.js';
 import { describeSessionReadFailureReason, sessionFilePresence } from './core/read-text.js';
+import { describeWriteFailureReason } from './core/atomic.js';
+import { describeSpawnFailure } from './core/platform.js';
 
 /**
  * 参数还没解析完就要报用法错误（缺值 / 越界 / 未知 flag）：此时 `--json` 已经能从 argv 看出来。
@@ -920,19 +922,37 @@ async function cmdNew(cwd: string, providerId: string, json: boolean, chain?: st
       if (!adapter) fail(json, unknownProviderMessage(providerId));
       let ref: import('./core/types.js').SessionRef;
       let turnCount = 0;
+      // 两个分支都会写原生存储（kimi 还要真跑一次 CLI 建会话）：失败时抛的是 Node 原文，
+      // 用户看不出是权限、磁盘还是命令没装。spawn 的 errno 与文件系统同码（都是 ENOENT / EACCES），
+      // 所以先按 syscall 认 spawn，再按写盘翻译，剩下的（适配器自己的中文说明）原样带出。
+      const create = async <T>(run: Promise<T>): Promise<T> => {
+        try {
+          return await run;
+        } catch (error) {
+          const reason = describeSpawnFailure(error) ?? describeWriteFailureReason(error);
+          throw reason ? new Error(`新建 ${providerId} 会话失败：${reason}`) : error;
+        }
+      };
       if (adapter.createEmptySession) {
-        ref = await adapter.createEmptySession(cwd);
+        ref = await create(adapter.createEmptySession(cwd));
       } else if (adapter.start) {
-        const started = await adapter.start(cwd, '我们开始吧。');
+        const started = await create(adapter.start(cwd, '我们开始吧。'));
         ref = started.ref;
         turnCount = 1;
       } else {
         fail(json, `${providerId} 不支持从零开聊`);
       }
       if (store) {
-        const id = store.getOrCreateChainSession(cwd, chain);
-        // 把首开聊记录为链的起点，后续 handoff 才能正确判断链尾
-        store.recordSwitch(id, null, null, providerId, ref);
+        try {
+          const id = store.getOrCreateChainSession(cwd, chain);
+          // 把首开聊记录为链的起点，后续 handoff 才能正确判断链尾
+          store.recordSwitch(id, null, null, providerId, ref);
+        } catch (error) {
+          // 会话已经建出来了，不能因为写链失败整条命令报错（用户拿到的 ref 仍可 resume），
+          // 但后续 switch 不会认这条绑定，必须说明——否则 status 里看不到它却毫无提示
+          console.error('[watch] 记录 switch_events 失败，新会话仍已创建:', error);
+          warnings.push(`链记录失败，后续切换不会认这条绑定：${describeStoreErrorReason(error)}`);
+        }
       }
       const resumeCommand = adapter.resumeCommand(ref);
       for (const warning of warnings) console.error(`警告: ${warning}`);
