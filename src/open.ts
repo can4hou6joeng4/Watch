@@ -779,6 +779,11 @@ export async function openInProvider(
       resumeCommand,
       command: buildCommand(cd, resumeCommand),
       mergedTurns: 0,
+      // 这条快路径什么都不写：目标 provider 就是来源。少了这句，文本模式只剩 cd 与 resume
+      // 两行，看着与一次真的转入一样；而同一个操作的 --check 一直说「来源即目标，直接恢复原会话」
+      // （describePlan），预检与执行对同一件事给出两套说法。mergedTurns:0 分不出
+      // 「没有内容可并入」与「根本没走转入」
+      notes: [describePlan(target, plan)],
       ...(diagnostics.length ? { warnings: [...diagnostics] } : {}),
     };
   }
