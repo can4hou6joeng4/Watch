@@ -51,8 +51,9 @@ export async function listOpencodeSessions(
   const dbPath = opencodeDbPath();
   // 库不存在 = 这台机器没用过 opencode，空列表是事实；
   // 库在却打不开是「读不出来」，必须抛出交给调用方披露，不能返回空列表冒充「这个目录没聊过」
+  let dbStat: Awaited<ReturnType<typeof stat>>;
   try {
-    await stat(dbPath);
+    dbStat = await stat(dbPath);
   } catch (error) {
     const code = (error as NodeJS.ErrnoException).code;
     if (code === 'ENOENT' || code === 'ENOTDIR') return [];
@@ -60,6 +61,9 @@ export async function listOpencodeSessions(
       `无法读取 OpenCode 数据库状态 ${dbPath}：${error instanceof Error ? error.message : String(error)}`,
     );
   }
+  // 路径在但不是普通文件（被同名目录 / 设备文件占住）：直接交给 DatabaseSync 只会得到
+  // 「disk I/O error」这类 SQLite 原文，看不出要修的是这个路径
+  if (!dbStat.isFile()) throw opencodeDbNotFileError(dbPath);
   let db: DatabaseSync | undefined;
   try {
     db = new DatabaseSync(dbPath, { readOnly: true });
@@ -89,8 +93,9 @@ export async function findOpencodeSessionById(
   const dbPath = opencodeDbPath();
   // 库文件不存在 = 从没用过 opencode，是干净的「没有这个会话」；
   // 文件在却打不开（权限 / 锁 / 被占）或查不了，是「读不出来」，不能返回 null 冒充不存在
+  let dbStat: Awaited<ReturnType<typeof stat>>;
   try {
-    await stat(dbPath);
+    dbStat = await stat(dbPath);
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT' || (error as NodeJS.ErrnoException).code === 'ENOTDIR') {
       return null;
@@ -99,6 +104,8 @@ export async function findOpencodeSessionById(
       `无法读取 OpenCode 数据库状态 ${dbPath}：${error instanceof Error ? error.message : String(error)}`,
     );
   }
+  // 同上：先自己说清路径被占住，别把 SQLite 的 disk I/O error 抛给用户
+  if (!dbStat.isFile()) throw opencodeDbNotFileError(dbPath);
   let db: DatabaseSync | undefined;
   try {
     db = new DatabaseSync(dbPath, { readOnly: true });
@@ -132,6 +139,13 @@ function latestSessionVersion(db: DatabaseSync): string {
     if (row?.version) return row.version;
   } catch { /* ignore */ }
   return '1.1.0';
+}
+
+/** 库路径存在但不是普通文件时的说法：SQLite 只会回 `disk I/O error`，看不出该修哪个路径 */
+function opencodeDbNotFileError(dbPath: string): Error {
+  return new Error(
+    `OpenCode 数据库路径不是普通文件（被同名目录或设备文件占住了）：${dbPath}；无法读取会话，请先恢复该路径再重试`,
+  );
 }
 
 function hashCwd(cwd: string): string {
