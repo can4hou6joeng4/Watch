@@ -305,9 +305,16 @@ export async function findGrokSessionById(
   let dirs: import('node:fs').Dirent[];
   try {
     dirs = await readdir(root, { withFileTypes: true });
-  } catch {
-    return null;
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    // 根目录不存在 = 从没用过 grok，是干净的「没有这个会话」；
+    // 其余（权限 / 路径被占）是「读不出来」，不能返回 null 冒充不存在
+    if (code === 'ENOENT' || code === 'ENOTDIR') return null;
+    throw new Error(
+      `无法列出 Grok 会话目录 ${root}：${error instanceof Error ? error.message : String(error)}`,
+    );
   }
+  const unreadable: string[] = [];
   for (const d of dirs) {
     if (!d.isDirectory()) continue;
     let dirCwd: string;
@@ -336,9 +343,19 @@ export async function findGrokSessionById(
         updatedAt: st.mtimeMs,
         preview,
       };
-    } catch {
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      // 这个目录里没有该会话是常态；读不出来（EACCES 等）要记下来，不能当成「没有」
+      if (code !== 'ENOENT' && code !== 'ENOTDIR') {
+        unreadable.push(`${chatPath}（${error instanceof Error ? error.message : String(error)}）`);
+      }
       continue;
     }
+  }
+  if (unreadable.length) {
+    throw new Error(
+      `在 ${root} 下没找到会话 ${sessionId}，但有 ${unreadable.length} 个位置读不出来，无法确认它是否存在：${unreadable[0]}`,
+    );
   }
   return null;
 }

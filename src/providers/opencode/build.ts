@@ -1,5 +1,6 @@
 import { DatabaseSync } from 'node:sqlite';
 import { createHash, randomBytes } from 'node:crypto';
+import { stat } from 'node:fs/promises';
 import path from 'node:path';
 import type { ImportTurnsOpts } from '../adapter.js';
 import type { ProcessEvent, SessionRef, TokenUsage, UnifiedTurn } from '../../core/types.js';
@@ -71,11 +72,24 @@ export async function listOpencodeSessions(
 export async function findOpencodeSessionById(
   sessionId: string,
 ): Promise<{ ref: SessionRef; updatedAt: number } | null> {
+  const dbPath = opencodeDbPath();
+  // 库文件不存在 = 从没用过 opencode，是干净的「没有这个会话」；
+  // 文件在却打不开（权限 / 锁 / 被占）或查不了，是「读不出来」，不能返回 null 冒充不存在
+  try {
+    await stat(dbPath);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT' || (error as NodeJS.ErrnoException).code === 'ENOTDIR') {
+      return null;
+    }
+    throw new Error(
+      `无法读取 OpenCode 数据库状态 ${dbPath}：${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
   let db: DatabaseSync | undefined;
   try {
-    db = new DatabaseSync(opencodeDbPath(), { readOnly: true });
-  } catch {
-    return null;
+    db = new DatabaseSync(dbPath, { readOnly: true });
+  } catch (error) {
+    throw new Error(`无法打开 OpenCode 数据库 ${dbPath}：${error instanceof Error ? error.message : String(error)}`);
   }
   try {
     const row = db
@@ -83,11 +97,11 @@ export async function findOpencodeSessionById(
       .get(sessionId) as { directory: string; time_updated: number } | undefined;
     if (!row) return null;
     return {
-      ref: { provider: 'opencode', sessionId, filePath: opencodeDbPath(), cwd: row.directory },
+      ref: { provider: 'opencode', sessionId, filePath: dbPath, cwd: row.directory },
       updatedAt: row.time_updated,
     };
-  } catch {
-    return null;
+  } catch (error) {
+    throw new Error(`无法查询 OpenCode 数据库 ${dbPath}：${error instanceof Error ? error.message : String(error)}`);
   } finally {
     try {
       db.close();
