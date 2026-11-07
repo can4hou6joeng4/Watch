@@ -93,6 +93,11 @@ export function describeStoreErrorReason(error: unknown): string {
   if (/unable to open database file/i.test(raw)) return '库文件打不开（路径不可用、被同名目录占住或权限不足）';
   if (/not a database|malformed/i.test(raw)) return '库文件不是有效的 SQLite 数据库（可能已损坏或被替换）';
   if (/disk I\/O error/i.test(raw)) return '库文件读写出错（磁盘或文件系统问题）';
+  // schema 被外部改动 / 迁移只做了一半：表还在（REQUIRED_TABLES 只查表名）但列没了，查询时才炸。
+  // 原文是 `no such column: session_id`，既不说是库的问题也不说下一步
+  if (/no such table|no such column|has no column named/i.test(raw)) {
+    return '库结构不完整（缺少表或列，可能只迁移了一半或被外部改动过）';
+  }
   if (/database is locked|database is busy|SQLITE_BUSY/i.test(raw)) return '库文件被其它进程占用（另一个 watch 正在使用）';
   // 已是完整的中文说明（含两个版本号），原样带出，别降级成「库操作失败（…）」
   if (/本地库 schema 版本 \d+ 比本程序支持的 \d+ 更新/.test(raw)) return raw;
@@ -118,6 +123,9 @@ export function describeStoreOpenFailure(dbPath: string, error: unknown): string
   }
   if (/unable to open database file/i.test(raw)) return `${reason}：${dbPath}；先确认该路径可用，再重试`;
   if (/disk I\/O error/i.test(raw)) return `${reason}：${dbPath}；先确认磁盘可用，再重试`;
+  if (/no such table|no such column|has no column named/i.test(raw)) {
+    return `${reason}：${dbPath}；可先备份，再删掉 watch.db / watch.db-wal / watch.db-shm 让它重建（链记录会随之丢失）`;
+  }
   if (/database is locked|database is busy|SQLITE_BUSY/i.test(raw)) return `${reason}：${dbPath}；等它结束或关掉后重试`;
   if (/本地库 schema 版本 \d+ 比本程序支持的 \d+ 更新/.test(raw)) {
     return `${reason}：${dbPath}；请升级 Watch 后再试——旧版本继续写会破坏新版本的数据，临时想让旧版本可用可换一个 WATCH_DB`;
