@@ -87,12 +87,15 @@ export function describeStoreErrorReason(error: unknown): string {
   const code = (error as NodeJS.ErrnoException | undefined)?.code;
   if (code === 'EACCES' || code === 'EPERM') return '无权访问库文件或其所在目录（权限问题，不是路径写错）';
   if (code === 'ENOTDIR') return '库路径上的某一级不是目录（被同名文件占住了）';
+  if (code === 'EEXIST') return '库路径上的某一级是已存在的文件（不是目录）';
   if (code === 'EISDIR') return '库路径是一个目录，不是文件';
   const raw = error instanceof Error ? error.message : String(error);
   if (/unable to open database file/i.test(raw)) return '库文件打不开（路径不可用、被同名目录占住或权限不足）';
   if (/not a database|malformed/i.test(raw)) return '库文件不是有效的 SQLite 数据库（可能已损坏或被替换）';
   if (/disk I\/O error/i.test(raw)) return '库文件读写出错（磁盘或文件系统问题）';
   if (/database is locked|database is busy|SQLITE_BUSY/i.test(raw)) return '库文件被其它进程占用（另一个 watch 正在使用）';
+  // 已是完整的中文说明（含两个版本号），原样带出，别降级成「库操作失败（…）」
+  if (/本地库 schema 版本 \d+ 比本程序支持的 \d+ 更新/.test(raw)) return raw;
   return `库操作失败（${code ?? raw}）`;
 }
 
@@ -107,6 +110,7 @@ export function describeStoreOpenFailure(dbPath: string, error: unknown): string
   const code = (error as NodeJS.ErrnoException | undefined)?.code;
   if (code === 'EACCES' || code === 'EPERM') return `${reason}：${dbPath}；先确认 ${dirname(dbPath)} 可写，再重试`;
   if (code === 'ENOTDIR') return `${reason}：${dbPath}；先删掉占用它的文件再重试`;
+  if (code === 'EEXIST') return `${reason}：${dbPath}；先删掉或挪走占住它的文件，让 watch 重建目录与库`;
   if (code === 'EISDIR') return `${reason}：${dbPath}；先把它挪走，让 watch 重新建库`;
   const raw = error instanceof Error ? error.message : String(error);
   if (/not a database|malformed/i.test(raw)) {
@@ -115,6 +119,9 @@ export function describeStoreOpenFailure(dbPath: string, error: unknown): string
   if (/unable to open database file/i.test(raw)) return `${reason}：${dbPath}；先确认该路径可用，再重试`;
   if (/disk I\/O error/i.test(raw)) return `${reason}：${dbPath}；先确认磁盘可用，再重试`;
   if (/database is locked|database is busy|SQLITE_BUSY/i.test(raw)) return `${reason}：${dbPath}；等它结束或关掉后重试`;
+  if (/本地库 schema 版本 \d+ 比本程序支持的 \d+ 更新/.test(raw)) {
+    return `${reason}：${dbPath}；请升级 Watch 后再试——旧版本继续写会破坏新版本的数据，临时想让旧版本可用可换一个 WATCH_DB`;
+  }
   return `${reason}：${dbPath}`;
 }
 
@@ -157,6 +164,11 @@ export class Store {
   private migrate(): void {
     const row = this.db.prepare('PRAGMA user_version').get() as { user_version: number };
     let version = row.user_version;
+    // 版本号是「装过更新版本的 Watch 后又降级」的唯一线索：迁移只会往上走，旧版本没有回退迁移，
+    // 照常打开就会拿旧 schema 的理解写新版本的库（列含义可能已变），且此处没有任何提示。
+    if (version > SCHEMA_VERSION) {
+      throw new Error(`本地库 schema 版本 ${version} 比本程序支持的 ${SCHEMA_VERSION} 更新（多半是装过更新版本的 Watch）`);
+    }
     const steps: Record<number, () => void> = {
       0: () => this.createV1(),
       1: () => this.migrateV2(),
