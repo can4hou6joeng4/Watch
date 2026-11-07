@@ -1114,6 +1114,17 @@ async function cmdChain(cwd: string, json: boolean, action?: string, a?: string,
       const found = store.findActiveChain(cwd, a);
       if (!found) throw new Error(store.missingChainMessage(cwd, a));
       const wasArchived = found.status === 'archived';
+      // 改成同一个名字时 UPDATE 写的是同一个值，什么都没变，但以前照样报「已重命名」，
+      // 输出与真的改过名一模一样（脚本无法区分）。打这条命令的动机常常是「先把它改成我想要的名字」，
+      // 名字本来就对时，明说「没有改动」才让人敢确认结论
+      if (found.name === b.trim()) {
+        const note =
+          `链「${found.name}」本来就叫这个名字，本次没有做任何改动` +
+          (wasArchived ? `；它是归档状态，可用 watch chain use ${found.name} 恢复成当前链` : '');
+        if (json) console.log(JSON.stringify({ ok: true, unchanged: true, chain: found, warnings: [note] }));
+        else console.log(`未改动: ${found.name}  (${found.id})——${note}`);
+        return;
+      }
       const chain = store.renameChain(found.id, b);
       // 改名不动 status：给归档链改名后它仍是归档的，而 `switch` / `status` 只认活跃链。
       // 只报「已重命名」会让人以为改名之后就切过去了（改名的动机常常就是这个），
