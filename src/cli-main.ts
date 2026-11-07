@@ -350,12 +350,14 @@ async function cmdAdopt(
         // 会话确实存在、只是属于另一个目录时，说「在当前目录找不到」会让人以为 id 写错了。
         // findById 是按 id 全局反查，不受 listSessions 的 cwd 过滤与条数上限影响。
         let elsewhere: string | null = null;
+        let lookupError: string | null = null;
         if (adapter.findById) {
           try {
             const found = await adapter.findById(sessionId);
             if (found && found.ref.cwd !== cwd) elsewhere = found.ref.cwd;
-          } catch {
-            /* 反查失败退回原文案：不能因为补充说明把主错误也丢了 */
+          } catch (error) {
+            // 反查失败不能静默退成「在当前目录找不到会话」：权限、库损坏会被读成 id 写错或会话不存在
+            lookupError = error instanceof Error ? error.message : String(error);
           }
         }
         if (elsewhere) {
@@ -366,10 +368,13 @@ async function cmdAdopt(
         // 列表有上限时，更早的会话根本没被枚举到：直接说「找不到」会让用户以为 id 写错了
         const cap = adapter.listSessionsCap;
         const capped = cap !== undefined && all.length >= cap;
+        const lookupNote = lookupError
+          ? `；按 id 全局反查也失败：${lookupError}——无法确认它是否属于另一个目录，请先确认该会话存储是否可读`
+          : '';
         throw new Error(
-          capped
+          (capped
             ? `在当前目录最近 ${all.length} 个会话里找不到: ${sessionId}（${adapter.id} 列表上限 ${cap}，更早的会话不在其中，可用 watch sessions 或原生 CLI 确认真实 id）`
-            : `在当前目录找不到会话: ${sessionId}`,
+            : `在当前目录找不到会话: ${sessionId}`) + lookupNote,
         );
       }
       targetRef = hit.ref;
