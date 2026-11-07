@@ -25,11 +25,26 @@ async function readCodexDesktopState(codexHome: string): Promise<Record<string, 
   }
   if (!stat.isFile() || stat.isSymbolicLink()) throw new Error('Codex Desktop 项目状态必须是普通文件');
 
+  let raw: string;
+  try {
+    raw = await readFile(statePath, 'utf8');
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === 'ENOENT' || code === 'ENOTDIR') {
+      throw new Error('找不到 Codex Desktop 的本地项目状态；请先在桌面端把这个目录添加为项目，再导入');
+    }
+    // 读不出来 ≠ 内容坏了：把 EACCES 说成「无法解析」会让人去查文件内容，而真正要修的是权限
+    const reason = code === 'EACCES' || code === 'EPERM'
+      ? '无权读取（权限或归属变了，不是文件内容坏了）'
+      : `读不出来（${code ?? (error instanceof Error ? error.message : String(error))}）`;
+    throw new Error(`Codex Desktop 的项目状态文件${reason}：${statePath}；先确认当前用户能读取它，再重新预览`);
+  }
+
   let state: Record<string, unknown>;
   try {
-    state = asRecord(JSON.parse(await readFile(statePath, 'utf8')));
+    state = asRecord(JSON.parse(raw));
   } catch {
-    throw new Error('Codex Desktop 项目状态无法解析');
+    throw new Error(`Codex Desktop 项目状态无法解析（不是合法的 JSON 对象，桌面端可能只写了一半）：${statePath}；在桌面端重新打开该项目后再预览`);
   }
   return state;
 }
