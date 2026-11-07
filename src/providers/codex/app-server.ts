@@ -44,6 +44,11 @@ export class CodexImportRpc implements ImportRpc {
     // Drain diagnostics without exposing native configuration or session text.
     child.stderr.resume();
     this.lines = createInterface({ input: child.stdout });
+    // stdout 的 'error' 会被 readline 转发到 Interface 上，两个地方都可能抛未捕获异常并直接
+    // 终止进程——那时 started.json 已写、导入已是 uncertain，用户却只看到 Node 堆栈而不是结构化结果
+    const outBroken = () => this.fail(new Error('Codex 输出通道已中断'));
+    this.lines.on('error', outBroken);
+    child.stdout.on('error', outBroken);
     this.lines.on('line', (line) => this.receive(line));
   }
 
