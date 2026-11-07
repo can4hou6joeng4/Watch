@@ -56,10 +56,10 @@ type BuildOptions = {
 
 function modelIdentifier(value: unknown, label: string, allowSlash: boolean): string {
   if (typeof value !== 'string' || value.length === 0 || value.length > 512 || value.trim() !== value) {
-    throw new Error(`OpenCode ${label} is invalid`);
+    throw new Error(`OpenCode 的 ${label} 不合法`);
   }
   if (/\s|[\u0000-\u001f\u007f]/u.test(value) || (!allowSlash && value.includes('/'))) {
-    throw new Error(`OpenCode ${label} is invalid`);
+    throw new Error(`OpenCode 的 ${label} 不合法`);
   }
   return value;
 }
@@ -90,7 +90,7 @@ function deterministicId(
 }
 
 export function createOfficialOpenCodeSessionId(seed: string, createdAt: number): string {
-  if (!seed) throw new Error('OpenCode export ID seed is required');
+  if (!seed) throw new Error('OpenCode 导出需要 ID 种子（seed）');
   return deterministicId('ses', createdAt, 1, seed, true);
 }
 
@@ -162,7 +162,7 @@ function eventParts(events: ProcessEvent[], baseTime: number): JsonRecord[] {
         type: 'tool', callID, tool: event.name ?? 'tool',
         state: {
           status: 'error', input: inputRecord(event.input),
-          error: 'Tool result unavailable during transfer', metadata: {}, time: { start: at, end: at + 1 },
+          error: '工具结果在迁移时不可用', metadata: {}, time: { start: at, end: at + 1 },
         },
       };
       parts.push(part);
@@ -234,16 +234,16 @@ export function buildOfficialOpenCodeExport(
   cwd: string,
   options: BuildOptions,
 ): OfficialOpenCodeExport {
-  if (!path.isAbsolute(cwd)) throw new Error('OpenCode official export requires an absolute cwd');
-  if (!options.seed || !options.sourceProvider) throw new Error('OpenCode official export requires source identity');
+  if (!path.isAbsolute(cwd)) throw new Error('OpenCode 官方导出需要绝对路径的 cwd');
+  if (!options.seed || !options.sourceProvider) throw new Error('OpenCode 官方导出需要来源身份（seed 与来源 provider）');
   const targetModel = normalizeOpenCodeTargetModel(options.targetModel);
   const turns = mergeConsecutiveAssistant(dedupeCallEvents(inputTurns));
-  if (turns[0]?.role !== 'user') throw new Error('OpenCode official export cannot start with an assistant turn');
-  if (!turns.some((turn) => turn.role === 'user')) throw new Error('OpenCode official export requires a user turn');
+  if (turns[0]?.role !== 'user') throw new Error('OpenCode 官方导出不能以 assistant 轮开始');
+  if (!turns.some((turn) => turn.role === 'user')) throw new Error('OpenCode 官方导出需要至少一轮 user');
 
   const firstTime = timestamp(turns[0]!.timestamp, 0);
   const sessionID = options.sessionId ?? createOfficialOpenCodeSessionId(options.seed, firstTime);
-  if (!NATIVE_ID.test(sessionID) || !sessionID.startsWith('ses_')) throw new Error('Invalid OpenCode target session ID');
+  if (!NATIVE_ID.test(sessionID) || !sessionID.startsWith('ses_')) throw new Error('OpenCode 目标会话 ID 不合法');
 
   const messages: OfficialOpenCodeMessage[] = [];
   let sequence = 1;
@@ -255,7 +255,7 @@ export function buildOfficialOpenCodeExport(
     raw: JsonRecord[],
     start: number,
   ): OfficialOpenCodeMessage['parts'] => raw.map((part, index) => {
-    if (typeof part.type !== 'string') throw new Error('OpenCode export part type is required');
+    if (typeof part.type !== 'string') throw new Error('OpenCode 导出缺少 part 类型');
     return {
       ...part,
       type: part.type,
@@ -278,7 +278,7 @@ export function buildOfficialOpenCodeExport(
           const value = event.detail ?? event.summary ?? '';
           if (value) rawParts.push({ type: 'text', text: value, synthetic: true });
         } else {
-          throw new Error(`OpenCode official export does not support ${event.kind} events on user turns`);
+          throw new Error(`OpenCode 官方导出不支持 user 轮里的 ${event.kind} 事件`);
         }
       }
       messages.push({
@@ -291,7 +291,7 @@ export function buildOfficialOpenCodeExport(
       });
       continue;
     }
-    if (!lastUserID) throw new Error('OpenCode assistant turn has no parent user message');
+    if (!lastUserID) throw new Error('OpenCode assistant 轮没有对应的 user 消息');
 
     const events = turn.events ?? [];
     const richParts = eventParts(events, created);
@@ -342,38 +342,38 @@ export function buildOfficialOpenCodeExport(
 }
 
 function record(value: unknown, label: string): JsonRecord {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error(`Invalid OpenCode export ${label}`);
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error(`OpenCode 导出字段不合法：${label}`);
   return value as JsonRecord;
 }
 
 function stringField(row: JsonRecord, key: string, label: string): string {
   const value = row[key];
-  if (typeof value !== 'string') throw new Error(`Invalid OpenCode export ${label}`);
+  if (typeof value !== 'string') throw new Error(`OpenCode 导出字段不合法：${label}`);
   return value;
 }
 
 function optionalStringField(row: JsonRecord, key: string, label: string): void {
-  if (row[key] !== undefined && typeof row[key] !== 'string') throw new Error(`Invalid OpenCode export ${label}`);
+  if (row[key] !== undefined && typeof row[key] !== 'string') throw new Error(`OpenCode 导出字段不合法：${label}`);
 }
 
 function optionalBooleanField(row: JsonRecord, key: string, label: string): void {
-  if (row[key] !== undefined && typeof row[key] !== 'boolean') throw new Error(`Invalid OpenCode export ${label}`);
+  if (row[key] !== undefined && typeof row[key] !== 'boolean') throw new Error(`OpenCode 导出字段不合法：${label}`);
 }
 
 function finiteNumber(value: unknown, label: string): number {
-  if (typeof value !== 'number' || !Number.isFinite(value)) throw new Error(`Invalid OpenCode export ${label}`);
+  if (typeof value !== 'number' || !Number.isFinite(value)) throw new Error(`OpenCode 导出字段不合法：${label}`);
   return value;
 }
 
 function nonNegativeInteger(value: unknown, label: string): number {
   const number = finiteNumber(value, label);
-  if (!Number.isInteger(number) || number < 0) throw new Error(`Invalid OpenCode export ${label}`);
+  if (!Number.isInteger(number) || number < 0) throw new Error(`OpenCode 导出字段不合法：${label}`);
   return number;
 }
 
 function nonNegativeFinite(value: unknown, label: string): number {
   const number = finiteNumber(value, label);
-  if (number < 0) throw new Error(`Invalid OpenCode export ${label}`);
+  if (number < 0) throw new Error(`OpenCode 导出字段不合法：${label}`);
   return number;
 }
 
@@ -410,10 +410,10 @@ export function inspectOfficialOpenCodeExport(value: unknown): OfficialOpenCodeE
   const info = record(root.info, 'session info');
   const sessionId = info.id;
   if (typeof sessionId !== 'string' || !NATIVE_ID.test(sessionId) || !sessionId.startsWith('ses_')) {
-    throw new Error('Invalid OpenCode export session ID');
+    throw new Error('OpenCode 导出的会话 ID 不合法');
   }
   if (info.version !== SUPPORTED_OPENCODE_EXPORT_VERSION || typeof info.directory !== 'string' || !path.isAbsolute(info.directory)) {
-    throw new Error('Unsupported OpenCode export version or directory');
+    throw new Error('不支持的 OpenCode 导出格式版本或目录');
   }
   stringField(info, 'slug', 'session slug');
   stringField(info, 'projectID', 'session project ID');
@@ -431,8 +431,8 @@ export function inspectOfficialOpenCodeExport(value: unknown): OfficialOpenCodeE
   const sessionTime = record(info.time, 'session time');
   const sessionCreated = nonNegativeInteger(sessionTime.created, 'session created time');
   const sessionUpdated = nonNegativeInteger(sessionTime.updated, 'session updated time');
-  if (sessionUpdated < sessionCreated) throw new Error('Invalid OpenCode export session timeline');
-  if (!Array.isArray(root.messages) || root.messages.length === 0) throw new Error('OpenCode export has no messages');
+  if (sessionUpdated < sessionCreated) throw new Error('OpenCode 导出的会话时间线不合法');
+  if (!Array.isArray(root.messages) || root.messages.length === 0) throw new Error('OpenCode 导出里没有任何消息');
 
   const ids = new Set<string>([sessionId]);
   const messageIds = new Set<string>();
@@ -449,7 +449,7 @@ export function inspectOfficialOpenCodeExport(value: unknown): OfficialOpenCodeE
       targetModel.modelID !== normalized.modelID ||
       targetModel.variant !== normalized.variant
     )) {
-      throw new Error('OpenCode export messages use inconsistent target models');
+      throw new Error('OpenCode 导出里的消息使用了不一致的目标模型');
     }
     targetModel = normalized;
   };
@@ -459,9 +459,9 @@ export function inspectOfficialOpenCodeExport(value: unknown): OfficialOpenCodeE
     const messageInfo = record(message.info, 'message info');
     const id = messageInfo.id;
     if (typeof id !== 'string' || !NATIVE_ID.test(id) || !id.startsWith('msg_') || ids.has(id)) {
-      throw new Error('Invalid or duplicate OpenCode message ID');
+      throw new Error('OpenCode 消息 ID 无效或重复');
     }
-    if (messageInfo.sessionID !== sessionId) throw new Error('OpenCode message points to another session');
+    if (messageInfo.sessionID !== sessionId) throw new Error('OpenCode 消息指向了另一个会话');
     ids.add(id);
     messageIds.add(id);
     if (messageInfo.role === 'user') {
@@ -479,11 +479,11 @@ export function inspectOfficialOpenCodeExport(value: unknown): OfficialOpenCodeE
         const summary = record(messageInfo.summary, 'user summary');
         optionalStringField(summary, 'title', 'user summary title');
         optionalStringField(summary, 'body', 'user summary body');
-        if (!Array.isArray(summary.diffs)) throw new Error('Invalid OpenCode export user summary diffs');
+        if (!Array.isArray(summary.diffs)) throw new Error('OpenCode 导出的 user 摘要 diffs 不合法');
       }
     } else if (messageInfo.role === 'assistant') {
       assistants += 1;
-      if (!lastUser || messageInfo.parentID !== lastUser) throw new Error('OpenCode assistant parent is invalid');
+      if (!lastUser || messageInfo.parentID !== lastUser) throw new Error('OpenCode assistant 的父消息不合法');
       validateTokens(messageInfo.tokens, 'assistant');
       const assistantPath = record(messageInfo.path, 'assistant path');
       stringField(assistantPath, 'cwd', 'assistant cwd');
@@ -492,10 +492,10 @@ export function inspectOfficialOpenCodeExport(value: unknown): OfficialOpenCodeE
       const assistantCreated = nonNegativeInteger(assistantTime.created, 'assistant created time');
       if (assistantTime.completed !== undefined) {
         const assistantCompleted = nonNegativeInteger(assistantTime.completed, 'assistant completed time');
-        if (assistantCompleted < assistantCreated) throw new Error('Invalid OpenCode export assistant timeline');
+        if (assistantCompleted < assistantCreated) throw new Error('OpenCode 导出的 assistant 时间线不合法');
       }
       for (const field of ['modelID', 'providerID', 'mode', 'agent'] as const) {
-        if (typeof messageInfo[field] !== 'string') throw new Error(`OpenCode assistant ${field} is missing`);
+        if (typeof messageInfo[field] !== 'string') throw new Error(`OpenCode assistant 缺少 ${field}`);
       }
       finiteNumber(messageInfo.cost, 'assistant cost');
       optionalStringField(messageInfo, 'variant', 'assistant variant');
@@ -506,63 +506,63 @@ export function inspectOfficialOpenCodeExport(value: unknown): OfficialOpenCodeE
         ...(typeof messageInfo.variant === 'string' ? { variant: messageInfo.variant } : {}),
       });
     } else {
-      throw new Error('Unsupported OpenCode message role');
+      throw new Error('不支持的 OpenCode 消息角色');
     }
-    if (!Array.isArray(message.parts)) throw new Error('OpenCode message parts must be an array');
+    if (!Array.isArray(message.parts)) throw new Error('OpenCode 消息的 parts 必须是数组');
     for (const rawPart of message.parts) {
       const part = record(rawPart, 'part');
       const partId = part.id;
       if (typeof partId !== 'string' || !NATIVE_ID.test(partId) || !partId.startsWith('prt_') || ids.has(partId)) {
-        throw new Error('Invalid or duplicate OpenCode part ID');
+        throw new Error('OpenCode 片段（part）ID 无效或重复');
       }
       if (part.sessionID !== sessionId || part.messageID !== id || !messageIds.has(id)) {
-        throw new Error('OpenCode part reference is invalid');
+        throw new Error('OpenCode 的 part 引用不合法');
       }
-      if (typeof part.type !== 'string') throw new Error('OpenCode part type is missing');
+      if (typeof part.type !== 'string') throw new Error('OpenCode 缺少 part 类型');
       if (part.type === 'text') {
-        if (typeof part.text !== 'string') throw new Error('OpenCode text part is incomplete');
+        if (typeof part.text !== 'string') throw new Error('OpenCode 的 text part 不完整');
         optionalBooleanField(part, 'synthetic', 'text synthetic flag');
         optionalBooleanField(part, 'ignored', 'text ignored flag');
         if (part.time !== undefined) validateTime(part.time, 'text part', { end: 'optional' });
       } else if (part.type === 'reasoning') {
-        if (typeof part.text !== 'string') throw new Error('OpenCode reasoning part is incomplete');
+        if (typeof part.text !== 'string') throw new Error('OpenCode 的 reasoning part 不完整');
         validateTime(part.time, 'reasoning part', { end: 'optional' });
       } else if (part.type === 'file') {
-        if (typeof part.mime !== 'string' || typeof part.url !== 'string') throw new Error('OpenCode file part is incomplete');
+        if (typeof part.mime !== 'string' || typeof part.url !== 'string') throw new Error('OpenCode 的 file part 不完整');
         optionalStringField(part, 'filename', 'file part filename');
       } else if (part.type === 'tool') {
-        if (typeof part.callID !== 'string' || typeof part.tool !== 'string') throw new Error('OpenCode tool part is incomplete');
+        if (typeof part.callID !== 'string' || typeof part.tool !== 'string') throw new Error('OpenCode 的 tool part 不完整');
         if (part.metadata !== undefined) record(part.metadata, 'tool metadata');
         const state = record(part.state, 'tool state');
         record(state.input, 'tool input');
         if (state.status === 'completed') {
-          if (typeof state.output !== 'string' || typeof state.title !== 'string') throw new Error('Completed OpenCode tool state is incomplete');
+          if (typeof state.output !== 'string' || typeof state.title !== 'string') throw new Error('已完成的 OpenCode 工具状态不完整');
           record(state.metadata, 'tool metadata');
           validateTime(state.time, 'completed tool', { end: 'required' });
         } else if (state.status === 'error') {
-          if (typeof state.error !== 'string') throw new Error('Failed OpenCode tool state is incomplete');
+          if (typeof state.error !== 'string') throw new Error('失败的 OpenCode 工具状态不完整');
           if (state.metadata !== undefined) record(state.metadata, 'failed tool metadata');
           validateTime(state.time, 'failed tool', { end: 'required' });
         } else {
-          throw new Error('Unsupported OpenCode tool state');
+          throw new Error('不支持的 OpenCode 工具状态');
         }
       } else if (part.type === 'step-finish') {
-        if (typeof part.reason !== 'string') throw new Error('OpenCode step finish is incomplete');
+        if (typeof part.reason !== 'string') throw new Error('OpenCode 的 step finish 不完整');
         finiteNumber(part.cost, 'step finish cost');
         validateTokens(part.tokens, 'step finish');
         optionalStringField(part, 'snapshot', 'step finish snapshot');
       } else if (part.type === 'step-start') {
         optionalStringField(part, 'snapshot', 'step start snapshot');
       } else {
-        throw new Error(`Unsupported Watch OpenCode part type: ${part.type}`);
+        throw new Error(`不支持的 Watch OpenCode part 类型：${part.type}`);
       }
       ids.add(partId);
       parts += 1;
       partTypes[part.type] = (partTypes[part.type] ?? 0) + 1;
     }
   }
-  if (users === 0) throw new Error('OpenCode export requires a user message');
-  if (!targetModel) throw new Error('OpenCode export target model is missing');
+  if (users === 0) throw new Error('OpenCode 导出需要至少一条 user 消息');
+  if (!targetModel) throw new Error('OpenCode 导出缺少目标模型');
   return {
     sessionId,
     version: String(info.version),

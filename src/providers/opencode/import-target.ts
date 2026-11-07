@@ -11,12 +11,12 @@ export type OpenCodeImportTarget = {
 export const OPENCODE_IMPORT_TARGET_LOCK = '.watch-opencode-official-import.lock';
 
 export async function inspectOpenCodeImportTarget(directory: string): Promise<OpenCodeImportTarget> {
-  if (!path.isAbsolute(directory)) throw new Error('OpenCode data directory must be absolute');
+  if (!path.isAbsolute(directory)) throw new Error('OpenCode 数据目录必须是绝对路径');
   const canonical = await realpath(directory);
   const info = await lstat(canonical, { bigint: true });
-  if (!info.isDirectory()) throw new Error('OpenCode data target must be a directory');
+  if (!info.isDirectory()) throw new Error('OpenCode 数据目标必须是目录');
   if (process.platform !== 'win32' && ((info.mode & 0o022n) !== 0n || info.uid !== BigInt(process.getuid!()))) {
-    throw new Error('OpenCode data directory must be owned by the current user and not writable by others');
+    throw new Error('OpenCode 数据目录必须属于当前用户，且不能对组或其他用户可写');
   }
   return {
     policy: 'opencode-official-target-v1',
@@ -29,7 +29,7 @@ export async function inspectOpenCodeImportTarget(directory: string): Promise<Op
 export async function assertOpenCodeImportTarget(expected: OpenCodeImportTarget): Promise<void> {
   const current = await inspectOpenCodeImportTarget(expected.path);
   if (JSON.stringify(current) !== JSON.stringify(expected)) {
-    throw new Error('OpenCode target directory changed since preview');
+    throw new Error('OpenCode 目标目录在预览之后已变化；请重新 prepare');
   }
 }
 
@@ -45,7 +45,7 @@ export async function acquireOpenCodeImportTarget(
     handle = await open(file, 'wx', 0o600);
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'EEXIST') {
-      throw new Error('OpenCode target has an active or uncertain Watch import; inspect its journal before retrying');
+      throw new Error('该 OpenCode 目标上还有进行中或结果未知的 Watch 导入；请先查看它的执行日志再重试');
     }
     throw error;
   }
@@ -73,7 +73,7 @@ export async function acquireOpenCodeImportTarget(
         || current.birthtimeNs !== identity.birthtimeNs
         || current.size !== identity.size
       ) {
-        throw new Error('OpenCode import lock changed; manual review is required');
+        throw new Error('OpenCode 导入锁在检测期间发生变化；需要人工复核后再继续');
       }
       await unlink(file);
     },

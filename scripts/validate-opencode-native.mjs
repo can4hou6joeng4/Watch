@@ -246,7 +246,7 @@ async function main() {
     const collisionService = new OfficialOpenCodeImport(dependencies(path.join(isolated.root, 'collision-imports')));
     const collision = await collisionService.prepare(source.sessionId, cwd, targetModel);
     assert.equal(collision.plan.exportSummary.sessionId, targetSessionId);
-    await assert.rejects(collisionService.confirm(collision.planId), /already exists/);
+    await assert.rejects(collisionService.confirm(collision.planId), /目标会话 ID 已存在/);
     assert.equal(await collisionService.status(collision.planId).then((value) => value.status), 'prepared');
     assert.equal(counts.imports, 1, 'Collision preflight submitted another import');
     await assert.rejects(stat(path.join(targetRoot, OPENCODE_IMPORT_TARGET_LOCK)), { code: 'ENOENT' });

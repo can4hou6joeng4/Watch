@@ -48,10 +48,10 @@ const BOUND_NATIVE_ENV = [
   'OPENCODE_TEST_HOME',
 ] as const;
 const WARNINGS = [
-  'Experimental OpenCode 1.18.29 session-only import; no UI route is enabled.',
-  'Target model metadata is explicitly selected and catalog-validated; credentials and successful continuation are not verified.',
-  'Interrupted tool calls are retained as failed tool parts; unsupported source internals are not promised.',
-  'Web, attached TUI, IDE visibility and native continuation remain unverified.',
+  'OpenCode 1.18.29 官方导入仍属实验性、只覆盖单会话；没有开启任何 UI 入口。',
+  '目标模型元数据由显式指定并在模型目录里校验；凭据与模型能否继续对话未经验证。',
+  '被中断的工具调用会保留为失败的 tool part；来源里不受支持的内部结构不作保证。',
+  'Web、attach 的 TUI、IDE 可见性与原生继续对话仍未验证。',
 ];
 
 export type OpenCodeImportPlan = ImportJobPlan & {
@@ -111,7 +111,7 @@ function hash(value: unknown): string {
 
 function nativeEnvironment(source: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   if (source.OPENCODE_DB) {
-    throw new Error('Official OpenCode imports do not support OPENCODE_DB overrides');
+    throw new Error('OpenCode 官方导入不支持用 OPENCODE_DB 覆盖数据库路径：请先取消该环境变量');
   }
   const env: NodeJS.ProcessEnv = {
     ...source,
@@ -131,18 +131,18 @@ export function opencodeNativeConfigDigest(source: NodeJS.ProcessEnv = process.e
 
 async function fingerprint(ref: SessionRef): Promise<FileDigest> {
   if (ref.provider === 'opencode' || !path.isAbsolute(ref.cwd) || !path.isAbsolute(ref.filePath)) {
-    throw new Error('Expected a non-OpenCode local source session');
+    throw new Error(`来源会话必须是本地非 OpenCode 会话（provider=${ref.provider}，路径=${ref.filePath}）`);
   }
-  if (!(await lstat(ref.filePath)).isFile()) throw new Error('Source must be a regular file, not a symlink');
+  if (!(await lstat(ref.filePath)).isFile()) throw new Error(`来源会话必须是普通文件，不能是符号链接：${ref.filePath}`);
   const value = await digestFile(ref.filePath);
-  if (!value) throw new Error('Cannot fingerprint the source session');
+  if (!value) throw new Error(`无法读取来源会话的文件摘要（读不出来或内容为空）：${ref.filePath}；请确认文件仍存在且可读`);
   return value;
 }
 
 async function assertSource(plan: OpenCodeImportPlan): Promise<void> {
   const current = await fingerprint(plan.source);
   if (current.sha256 !== plan.digest.sha256 || current.sizeBytes !== plan.digest.sizeBytes) {
-    throw new Error('Source changed since preview; prepare and review a new plan');
+    throw new Error('来源会话在预览之后已被改动；请重新 prepare 并审阅新计划（旧计划 id 不再可用）');
   }
 }
 
@@ -180,7 +180,7 @@ function buildFromPlan(plan: OpenCodeImportPlan, turns: UnifiedTurn[]): Official
 function assertRebuiltExport(plan: OpenCodeImportPlan, value: OfficialOpenCodeExport): void {
   const summary = inspectOfficialOpenCodeExport(value);
   if (hash(value) !== plan.exportDigest || canonical(summary) !== canonical(plan.exportSummary)) {
-    throw new Error('Source conversion changed since preview; prepare and review a new plan');
+    throw new Error('来源会话的转换结果在预览之后发生变化；请重新 prepare 并审阅新计划');
   }
 }
 
@@ -197,17 +197,17 @@ function assertNativeExport(
     canonical(summary) !== canonical(plan.exportSummary) ||
     hash(data.messages) !== hash(expected.messages)
   ) {
-    throw new Error('Native OpenCode export does not match the confirmed import');
+    throw new Error('OpenCode 返回的原生导出与确认的导入不一致；不要重复导入，先查看执行日志');
   }
 }
 
 async function assertBoundTarget(plan: OpenCodeImportPlan, deps: Dependencies): Promise<void> {
   if (plan.nativeConfigDigest !== deps.nativeConfigDigest) {
-    throw new Error('OpenCode native configuration changed since preview');
+    throw new Error('OpenCode 的原生环境与配置在预览之后已变化；请重新 prepare');
   }
   const current = await inspectOpenCodeImportTarget(deps.targetRoot);
   if (canonical(current) !== canonical(plan.target)) {
-    throw new Error('OpenCode target configuration changed since preview');
+    throw new Error('OpenCode 目标目录或配置在预览之后已变化；请重新 prepare');
   }
 }
 
@@ -217,7 +217,7 @@ function modelCatalogDigest(models: string[]): string {
 
 function assertTargetModelAvailable(target: OpenCodeTargetModel, models: string[]): void {
   if (!models.includes(target.modelID)) {
-    throw new Error(`OpenCode target model ${target.providerID}/${target.modelID} is not available in the current catalog`);
+    throw new Error(`OpenCode 目标模型 ${target.providerID}/${target.modelID} 不在当前模型目录里；请换成目录中已有的模型`);
   }
 }
 
@@ -225,7 +225,7 @@ async function assertBoundModel(plan: OpenCodeImportPlan, deps: Dependencies): P
   const models = await deps.native.listModels(plan.targetModel.providerID);
   assertTargetModelAvailable(plan.targetModel, models);
   if (modelCatalogDigest(models) !== plan.modelCatalogDigest) {
-    throw new Error('OpenCode target model catalog changed since preview');
+    throw new Error('OpenCode 模型目录在预览之后已变化；请重新 prepare');
   }
 }
 
@@ -233,17 +233,17 @@ export class OfficialOpenCodeImport {
   constructor(private deps: Dependencies) {}
 
   async prepare(sourceId: string, cwd: string, requestedTargetModel: OpenCodeTargetModel) {
-    if (!sourceId || !path.isAbsolute(cwd)) throw new Error('A source session ID and absolute --cwd are required');
+    if (!sourceId || !path.isAbsolute(cwd)) throw new Error('需要来源会话 ID 与绝对路径的 --cwd');
     const targetModel = normalizeOpenCodeTargetModel(requestedTargetModel);
     const version = await this.deps.native.version();
     if (version !== SUPPORTED_OPENCODE_EXPORT_VERSION) {
-      throw new Error(`Experimental route currently requires OpenCode ${SUPPORTED_OPENCODE_EXPORT_VERSION}`);
+      throw new Error(`当前实验路径要求 OpenCode ${SUPPORTED_OPENCODE_EXPORT_VERSION}，与本机版本不符`);
     }
     const models = await this.deps.native.listModels(targetModel.providerID);
     assertTargetModelAvailable(targetModel, models);
     const source = await this.deps.findSource(sourceId, cwd);
     if (!source || source.sessionId !== sourceId || source.cwd !== cwd || source.provider === 'opencode') {
-      throw new Error('Source session does not match the requested non-OpenCode project');
+      throw new Error('来源会话与请求的项目（非 OpenCode 工程）不匹配');
     }
     const digest = await fingerprint(source);
     const exportSeed = seedFor(source, digest, version, targetModel);
@@ -293,10 +293,10 @@ export class OfficialOpenCodeImport {
   async confirm(planId: string) {
     const previous = await this.status(planId);
     if (previous.status === 'imported') return previous;
-    if (!previous.canConfirm) throw new Error('Import was already attempted; inspect status instead of repeating writes');
+    if (!previous.canConfirm) throw new Error('这次导入已经尝试过（已有 started.json）；请用 status 查看结果，不要重复写入');
     const { plan } = previous;
     if (plan.home !== this.deps.home || plan.cliVersion !== await this.deps.native.version()) {
-      throw new Error('OpenCode version or home changed since preview');
+      throw new Error('OpenCode 版本或数据目录在预览之后已变化；请重新 prepare');
     }
     await assertSource(plan);
     await assertBoundTarget(plan, this.deps);
@@ -311,7 +311,7 @@ export class OfficialOpenCodeImport {
     let outcome: OpenCodeImportOutcome = { status: 'uncertain', code: 'import_outcome_unknown' };
     try {
       if (await this.deps.native.readSession(plan.exportSummary.sessionId, plan.source.cwd)) {
-        throw new Error('OpenCode target session ID already exists; no import submitted');
+        throw new Error('目标会话 ID 已存在，本次没有提交导入；请重新 prepare 得到新的计划');
       }
       await assertSource(plan);
       await assertBoundTarget(plan, this.deps);
@@ -328,7 +328,7 @@ export class OfficialOpenCodeImport {
 
       const importedId = await this.deps.native.importSession(exportFile, plan.source.cwd);
       if (importedId !== plan.exportSummary.sessionId || !NATIVE_SESSION_ID.test(importedId)) {
-        throw new Error('OpenCode returned an unexpected imported session ID');
+        throw new Error('OpenCode 返回的导入会话 ID 不符合预期；不要重复导入，先查看执行日志');
       }
       outcome.target = {
         provider: 'opencode',
@@ -338,7 +338,7 @@ export class OfficialOpenCodeImport {
       };
       await this.deps.jobs.saveRouteOutcome(planId, outcome);
       const native = await this.deps.native.readSession(importedId, plan.source.cwd);
-      if (!native) throw new Error('Imported OpenCode session is not readable through official export');
+      if (!native) throw new Error('导入后的 OpenCode 会话读不出来（官方导出取不到）；不要重复导入，先检查目标库');
       assertNativeExport(plan, finalValue, native);
       await assertSource(plan);
       await assertBoundTarget(plan, this.deps);
@@ -375,13 +375,13 @@ export function parseOpenCodeVersion(stdout: string): string {
   const matches = [...stdout.matchAll(/v?(\d+\.\d+\.\d+)/g)];
   const versions = new Set(matches.map((match) => match[1]!));
   const version = [...versions][0];
-  if (versions.size !== 1 || !version) throw new Error('Cannot determine the installed OpenCode version');
+  if (versions.size !== 1 || !version) throw new Error('无法确定已安装的 OpenCode 版本（opencode --version 没有输出可识别的版本号）');
   return version;
 }
 
 export function parseOpenCodeImportOutput(stdout: string): string {
   const match = stdout.trim().match(/^Imported session: (ses_[0-9a-f]{12}[0-9A-Za-z]{14})$/);
-  if (!match) throw new Error('OpenCode import did not return one exact target session ID');
+  if (!match) throw new Error('OpenCode 导入没有返回唯一的目标会话 ID');
   return match[1]!;
 }
 
@@ -393,13 +393,13 @@ export function parseOpenCodeModels(stdout: string, providerID: string): string[
     .split(/\r?\n/)
     .map((line) => line.trim())
     .filter(Boolean);
-  if (lines.length === 0) throw new Error(`OpenCode returned no models for provider ${provider}`);
+  if (lines.length === 0) throw new Error(`OpenCode 模型目录里没有 provider ${provider} 的模型`);
   const models = lines.map((line) => {
-    if (!line.startsWith(prefix)) throw new Error('OpenCode model catalog returned an unexpected provider');
+    if (!line.startsWith(prefix)) throw new Error('OpenCode 模型目录里出现了非预期的 provider');
     return normalizeOpenCodeTargetModel({ providerID: provider, modelID: line.slice(prefix.length) }).modelID;
   });
   const unique = [...new Set(models)].sort();
-  if (unique.length !== models.length) throw new Error('OpenCode model catalog contains duplicate models');
+  if (unique.length !== models.length) throw new Error('OpenCode 模型目录里有重复的模型条目');
   return unique;
 }
 
@@ -436,7 +436,7 @@ export function createOpenCodeNative(
         const result = await execFileAsync(executable, ['--version'], { env, timeout: 10_000 });
         return parseOpenCodeVersion(result.stdout);
       } catch {
-        throw new Error('Cannot determine the installed OpenCode version');
+        throw new Error('无法确定已安装的 OpenCode 版本（opencode --version 没有输出可识别的版本号）');
       }
     },
     listModels: async (providerID) => {
@@ -448,7 +448,7 @@ export function createOpenCodeNative(
         return parseOpenCodeModels(result.stdout, target.providerID);
       } catch (error) {
         if (error instanceof Error && error.message.startsWith('OpenCode ')) throw error;
-        throw new Error('OpenCode model catalog lookup failed');
+        throw new Error('OpenCode 模型目录查询失败');
       }
     },
     readSession: async (sessionId, cwd) => {
@@ -459,7 +459,7 @@ export function createOpenCodeNative(
         return JSON.parse(result.stdout) as unknown;
       } catch (error) {
         if (isExactOpenCodeSessionNotFound(error, sessionId)) return null;
-        throw new Error('OpenCode official export failed');
+        throw new Error('OpenCode 官方导出失败');
       }
     },
     importSession: async (file, cwd) => {
@@ -469,7 +469,7 @@ export function createOpenCodeNative(
         });
         return parseOpenCodeImportOutput(result.stdout);
       } catch {
-        throw new Error('OpenCode official import failed');
+        throw new Error('OpenCode 官方导入失败');
       }
     },
   };
@@ -479,7 +479,7 @@ export function createOfficialOpenCodeImport(): OfficialOpenCodeImport {
   const environment = { ...process.env };
   const home = homedir();
   const db = environment.WATCH_DB;
-  if (db === ':memory:') throw new Error('Official imports require a persistent WATCH_DB location');
+  if (db === ':memory:') throw new Error('官方导入需要可持久化的 WATCH_DB 路径（不能用 :memory:）');
   const jobsRoot = db ? path.resolve(`${db}.imports`) : path.join(home, '.watch', 'imports');
   const native = createOpenCodeNative(resolveCli('opencode'), environment);
   return new OfficialOpenCodeImport({
@@ -494,7 +494,7 @@ export function createOfficialOpenCodeImport(): OfficialOpenCodeImport {
     },
     parseSource: async (ref) => {
       const adapter = getAdapter(ref.provider);
-      if (!adapter || adapter.id === 'opencode') throw new Error('Unsupported OpenCode import source');
+      if (!adapter || adapter.id === 'opencode') throw new Error('不支持的 OpenCode 导入来源');
       return adapter.parse(ref);
     },
   });
