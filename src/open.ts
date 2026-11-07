@@ -2,14 +2,14 @@ import { stat } from 'node:fs/promises';
 import type { FileDigest } from './core/atomic.js';
 import { assertTargetUnchanged, blockedHint, diffTurns, HandoffBlockedError } from './core/handoff.js';
 import { dedupeCallEvents } from './core/rich.js';
-import { Store, defaultDbPath } from './core/store.js';
+import { Store, defaultDbPath, describeStoreErrorReason, describeStoreOpenFailure } from './core/store.js';
 import { IS_WIN, stripDevicePrefix } from './core/platform.js';
 import type { SessionRef, TokenUsage, UnifiedTurn } from './core/types.js';
 import type { ProviderAdapter } from './providers/adapter.js';
 import { PreflightBlockedError } from './providers/adapter.js';
 import { getAdapter, listAdapters, unknownProviderMessage } from './providers/registry.js';
 import { countUnparsableJsonLines } from './core/jsonl.js';
-import { describeSessionReadFailure } from './core/read-text.js';
+import { describeSessionReadFailure, describeSessionReadFailureReason } from './core/read-text.js';
 import { sessionCwdProblem } from './core/cwd.js';
 
 /** `watch open` 的返回协议：桌面 GUI 通过 CLI `--json` 消费 */
@@ -92,11 +92,20 @@ async function probeMappedFile(p: string): Promise<'present' | 'gone' | 'not-fil
   }
 }
 
-/** 映射库可用则打开（默认 ~/.watch/watch.db）；打不开返回 null 降级纯扫描，不阻塞反查 */
-function openMappingDb(): Store | null {
+/**
+ * 映射库可用则打开（默认 ~/.watch/watch.db）；打不开返回 null 降级纯扫描，不阻塞反查。
+ *
+ * 降级本身是设计（接力照常），但不能静默：打不开意味着这次反查是全盘扫描、命中也不会写回映射，
+ * 用户只会觉得「每次都很慢」而不知道本地库坏了。原因经 `describeStoreOpenFailure()` 说清。
+ */
+function openMappingDb(warnings?: string[]): Store | null {
+  const dbPath = process.env.WATCH_DB ?? defaultDbPath();
   try {
-    return new Store(process.env.WATCH_DB ?? defaultDbPath());
-  } catch {
+    return new Store(dbPath);
+  } catch (error) {
+    warnings?.push(
+      `本地映射库打不开（${describeStoreOpenFailure(dbPath, error)}）；本次反查为全盘扫描，结果也不会写回映射，下次仍需重新扫描`,
+    );
     return null;
   }
 }
@@ -120,36 +129,46 @@ export async function resolveById(
 
   if (store) {
     for (const a of candidates) {
+      // 库查询与「探测映射文件」分开 catch：前者是本地库问题（按库的说法翻），后者是会话
+      // 文件问题（按会话文件的说法翻），混成一句会把「文件没权限」讲成「本地库坏了」
+      let loc: ReturnType<Store['getSessionLocation']>;
       try {
-        const loc = store.getSessionLocation(a.id, sessionId);
-        // Windows canonicalize 会给路径加 `\\?\` 前缀，探测其去前缀形式
-        const filePath = loc && IS_WIN ? stripDevicePrefix(loc.filePath) : loc?.filePath;
-        const state = loc && filePath ? await probeMappedFile(filePath) : 'gone';
-        if (loc && filePath && state === 'present') {
-          try {
-            store.rememberSessionLocation(a.id, loc, Date.now());
-          } catch {
-            /* 映射刷新失败不影响反查 */
-          }
-          return {
-            adapter: a,
-            found: {
-              ref: { provider: a.id, sessionId, filePath: loc.filePath, cwd: loc.cwd },
-              updatedAt: loc.lastSeenAt,
-            },
-          };
-        }
-        if (loc && filePath && state === 'not-file') {
-          // 与 `recent` / `sessions --chain` / `search` 索引清理同一档说法：路径被同名目录或
-          // 设备文件占住既不是「会话没了」也不是可用文件，全扫也找不到时要能说清原因
-          diagnostics?.push(
-            `${a.id} 会话 ${sessionId} 的映射记录指向的路径现在不是普通文件（被同名目录或设备文件占住了）：${loc.filePath}；已改为全盘扫描`,
-          );
-        }
+        loc = store.getSessionLocation(a.id, sessionId);
       } catch (error) {
-        // 映射读失败不能等同「没有这个会话」：记进 diagnostics，全扫也没找到时能说清原因
+        diagnostics?.push(`${a.id} 映射读失败：${describeStoreErrorReason(error)}`);
+        continue;
+      }
+      // Windows canonicalize 会给路径加 `\\?\` 前缀，探测其去前缀形式
+      const filePath = loc && IS_WIN ? stripDevicePrefix(loc.filePath) : loc?.filePath;
+      let state: 'gone' | 'present' | 'not-file';
+      try {
+        state = loc && filePath ? await probeMappedFile(filePath) : 'gone';
+      } catch (error) {
+        // 读不出来不能等同「没有这个会话」：记进 diagnostics，全扫也没找到时能说清原因
         diagnostics?.push(
-          `${a.id} 映射读失败：${error instanceof Error ? error.message : String(error)}`,
+          `${a.id} 会话 ${sessionId} 的映射记录指向的文件状态读不出来（${filePath}）：${describeSessionReadFailureReason(error)}；已改为全盘扫描`,
+        );
+        continue;
+      }
+      if (loc && filePath && state === 'present') {
+        try {
+          store.rememberSessionLocation(a.id, loc, Date.now());
+        } catch {
+          /* 映射刷新失败不影响反查 */
+        }
+        return {
+          adapter: a,
+          found: {
+            ref: { provider: a.id, sessionId, filePath: loc.filePath, cwd: loc.cwd },
+            updatedAt: loc.lastSeenAt,
+          },
+        };
+      }
+      if (loc && filePath && state === 'not-file') {
+        // 与 `recent` / `sessions --chain` / `search` 索引清理同一档说法：路径被同名目录或
+        // 设备文件占住既不是「会话没了」也不是可用文件，全扫也找不到时要能说清原因
+        diagnostics?.push(
+          `${a.id} 会话 ${sessionId} 的映射记录指向的路径现在不是普通文件（被同名目录或设备文件占住了）：${loc.filePath}；已改为全盘扫描`,
         );
       }
     }
@@ -220,18 +239,20 @@ export async function openSession(
       error: unknownProviderMessage(provider, adapters),
     };
   }
-  const mapping = store ?? openMappingDb();
+  const warnings: string[] = [];
+  const mapping = store ?? openMappingDb(warnings);
   const lookup: string[] = [];
   const target = await resolveById(targetId, provider, mapping, adapters, lookup);
   if (!target) {
-    const detail = lookup.length ? `（${lookup.join('；')}）` : '';
+    // 映射库打不开也要进「未找到」的说明：否则用户只看到「没找到」，不知道这次是全盘扫描、
+    // 也不知道本地库坏了（成功路径走 warnings）
+    const detail = [...warnings, ...lookup].length ? `（${[...warnings, ...lookup].join('；')}）` : '';
     return {
       ok: false,
       error: `未找到会话: ${targetId}${provider ? `（provider=${provider}）` : ''}。请确认 id 正确且对应 CLI 已安装登录。${detail}`,
     };
   }
   const notes: string[] = [];
-  const warnings: string[] = [];
   let merged = 0;
   let sourceUsage: TokenUsage | null = null;
   // 记录的目录可能已被移动 / 删除：会话内容照常可读、转入也能写成，但返回的 cd 会在第一步失败
@@ -654,8 +675,8 @@ export async function openInProvider(
   providerId: string,
   store?: Store | null,
 ): Promise<OpenSessionResult> {
-  const mapping = store ?? openMappingDb();
   const diagnostics: string[] = [];
+  const mapping = store ?? openMappingDb(diagnostics);
   const planned = await planOpenInProvider(sourceId, providerId, mapping, diagnostics);
   if (!planned.ok) return { ok: false, error: planned.error };
   const { adapter: target, sourceRef, sourceProvider, cwd, plan } = planned;
@@ -786,8 +807,8 @@ export async function checkOpenInProvider(
   providerId: string,
   store?: Store | null,
 ): Promise<OpenSessionResult> {
-  const mapping = store ?? openMappingDb();
   const diagnostics: string[] = [];
+  const mapping = store ?? openMappingDb(diagnostics);
   const planned = await planOpenInProvider(sourceId, providerId, mapping, diagnostics);
   if (!planned.ok) return { ok: false, error: planned.error };
   const { adapter: target, cwd, plan } = planned;

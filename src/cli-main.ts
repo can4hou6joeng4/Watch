@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { stat } from 'node:fs/promises';
 import path from 'node:path';
-import { SEARCH_MAX_HITS, Store, defaultDbPath, describeStoreOpenFailure } from './core/store.js';
+import { SEARCH_MAX_HITS, Store, defaultDbPath, describeStoreErrorReason, describeStoreOpenFailure } from './core/store.js';
 import { describeFindings } from './core/findings.js';
 import { adoptIntoChain, blockedHint, chainStatus, chainUsage, collectTips, createChainSession, handoff, HandoffBlockedError } from './core/handoff.js';
 import { reindexCwd } from './core/search.js';
@@ -683,7 +683,7 @@ async function cmdRecent(cwd: string, json: boolean, limit: number = 8, cwdGiven
     } catch (error) {
       // 本地映射读取失败不影响原生扫描，但只记一个「本地库」看不出为什么
       unavailable.push('本地库');
-      warnings.push(`本地映射表读取失败：${error instanceof Error ? error.message : String(error)}；已只按原生存储扫描`);
+      warnings.push(`本地映射表读取失败：${describeStoreErrorReason(error)}；已只按原生存储扫描`);
     }
   }
 

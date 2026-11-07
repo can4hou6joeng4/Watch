@@ -80,38 +80,42 @@ export const CHAIN_SESSION_TITLE = 'tui-chain';
 export const defaultDbPath = (): string => join(homedir(), '.watch', 'watch.db');
 
 /**
+ * 本地库相关失败的原因（不带路径与下一步）：SQLite 与文件系统的原文既不说该修哪个路径，
+ * 也不说下一步。打开失败用 `describeStoreOpenFailure()`，查询 / 读写失败单独拼上下文用这个。
+ */
+export function describeStoreErrorReason(error: unknown): string {
+  const code = (error as NodeJS.ErrnoException | undefined)?.code;
+  if (code === 'EACCES' || code === 'EPERM') return '无权访问库文件或其所在目录（权限问题，不是路径写错）';
+  if (code === 'ENOTDIR') return '库路径上的某一级不是目录（被同名文件占住了）';
+  if (code === 'EISDIR') return '库路径是一个目录，不是文件';
+  const raw = error instanceof Error ? error.message : String(error);
+  if (/unable to open database file/i.test(raw)) return '库文件打不开（路径不可用、被同名目录占住或权限不足）';
+  if (/not a database|malformed/i.test(raw)) return '库文件不是有效的 SQLite 数据库（可能已损坏或被替换）';
+  if (/disk I\/O error/i.test(raw)) return '库文件读写出错（磁盘或文件系统问题）';
+  if (/database is locked|database is busy|SQLITE_BUSY/i.test(raw)) return '库文件被其它进程占用（另一个 watch 正在使用）';
+  return `库操作失败（${code ?? raw}）`;
+}
+
+/**
  * 打开本地库失败的说明：带路径、原因与下一步。
  *
- * SQLite 自己的原文（`unable to open database file` / `file is not a database` /
- * `database is locked`）既不说该修哪个路径，也不说下一步；`mkdirSync` 抛的 errno 同理。
  * 这些字符串会原样进 `chain` / `search` 的 `{ ok:false, error }`、stderr 的降级提示与
  * `watch doctor` 的「本地库: 不可用（…）」，所以先翻成中文再抛给上层。
  */
 export function describeStoreOpenFailure(dbPath: string, error: unknown): string {
+  const reason = describeStoreErrorReason(error);
   const code = (error as NodeJS.ErrnoException | undefined)?.code;
-  if (code === 'EACCES' || code === 'EPERM') {
-    return `无权访问库文件或其所在目录（权限问题，不是路径写错）：${dbPath}；先确认 ${dirname(dbPath)} 可写，再重试`;
-  }
-  if (code === 'ENOTDIR') {
-    return `库路径上的某一级不是目录（被同名文件占住了）：${dbPath}；先删掉占用它的文件再重试`;
-  }
-  if (code === 'EISDIR') {
-    return `库路径是一个目录，不是文件：${dbPath}；先把它挪走，让 watch 重新建库`;
-  }
+  if (code === 'EACCES' || code === 'EPERM') return `${reason}：${dbPath}；先确认 ${dirname(dbPath)} 可写，再重试`;
+  if (code === 'ENOTDIR') return `${reason}：${dbPath}；先删掉占用它的文件再重试`;
+  if (code === 'EISDIR') return `${reason}：${dbPath}；先把它挪走，让 watch 重新建库`;
   const raw = error instanceof Error ? error.message : String(error);
-  if (/unable to open database file/i.test(raw)) {
-    return `库文件打不开（路径不可用、被同名目录占住或权限不足）：${dbPath}；先确认该路径可用，再重试`;
-  }
   if (/not a database|malformed/i.test(raw)) {
-    return `库文件不是有效的 SQLite 数据库（可能已损坏或被替换）：${dbPath}；可先备份，再删掉 watch.db / watch.db-wal / watch.db-shm 让它重建（链记录会随之丢失）`;
+    return `${reason}：${dbPath}；可先备份，再删掉 watch.db / watch.db-wal / watch.db-shm 让它重建（链记录会随之丢失）`;
   }
-  if (/disk I\/O error/i.test(raw)) {
-    return `库文件读写出错（磁盘或文件系统问题）：${dbPath}；先确认磁盘可用，再重试`;
-  }
-  if (/database is locked|database is busy|SQLITE_BUSY/i.test(raw)) {
-    return `库文件被其它进程占用（另一个 watch 正在使用）：${dbPath}；等它结束或关掉后重试`;
-  }
-  return `打开库失败（${code ?? raw}）：${dbPath}`;
+  if (/unable to open database file/i.test(raw)) return `${reason}：${dbPath}；先确认该路径可用，再重试`;
+  if (/disk I\/O error/i.test(raw)) return `${reason}：${dbPath}；先确认磁盘可用，再重试`;
+  if (/database is locked|database is busy|SQLITE_BUSY/i.test(raw)) return `${reason}：${dbPath}；等它结束或关掉后重试`;
+  return `${reason}：${dbPath}`;
 }
 
 /**
