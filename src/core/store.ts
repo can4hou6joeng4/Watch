@@ -743,6 +743,12 @@ export class Store {
    * 链按 cwd 精确匹配：在 A 目录建的链，拿到 B 目录下用只会得到「找不到链」，
    * 用户会去核对名字有没有打错，其实该查的是 `--cwd`。
    * 这里跨目录找同名 / 同 id 的链，命中就说明它在哪个目录。
+   *
+   * 跨目录也不命中时，用户还剩两种打错：拼错 / 看清了大小写，或把另一条链的名字记混了。
+   * 只说「找不到链: nope」时，明明目录里躺着 `alpha` / `beta`，用户也看不出该不该改名重试
+   * ——与 `unknownProviderMessage()` 修过的是同一件事。所以带上本目录的可用链名；
+   * 大小写只差一个字母时单独点出来（链名是大小写敏感的精确匹配，`Alpha` 与 `alpha` 是两条链，
+   * 光列清单还不够，用户会以为自己已经打对了）。
    */
   missingChainMessage(cwd: string, chainId: string): string {
     const base = `找不到链: ${chainId}`;
@@ -758,9 +764,20 @@ export class Store {
         name: string;
         status: string;
       }[])[0];
-    if (!hit || hit.cwd === normalized) return base;
-    const status = hit.status === 'archived' ? '（已归档）' : '';
-    return `${base}——链「${hit.name}」${status}属于另一个目录: ${hit.cwd}；请用 --cwd ${hit.cwd}`;
+    if (hit && hit.cwd !== normalized) {
+      const status = hit.status === 'archived' ? '（已归档）' : '';
+      return `${base}——链「${hit.name}」${status}属于另一个目录: ${hit.cwd}；请用 --cwd ${hit.cwd}`;
+    }
+    // 本目录里一条链都没有：没有可列的清单，也不该暗示「你有别的链可选」
+    const local = this.listChains(cwd);
+    if (local.length === 0) return base;
+    // listChains 按状态与最近使用时间排，文案里再按名字排一次，同一份状态每次说法一致
+    const names = local.map((c) => c.name).sort((a, b) => a.localeCompare(b));
+    let message = `${base}；本目录的链: ${names.join(' / ')}`;
+    // 链名精确匹配、大小写敏感：`Alpha` 不会落到 `alpha`，不点出来用户只会反复重打同一个词
+    const cased = names.find((n) => n !== chainId && n.toLowerCase() === chainId.toLowerCase());
+    if (cased) message += `——注意大小写：链名区分大小写，应为 ${cased}`;
+    return message;
   }
 
   listChains(cwd: string): Chain[] {
