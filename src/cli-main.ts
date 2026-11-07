@@ -6,7 +6,7 @@ import { describeFindings } from './core/findings.js';
 import { adoptIntoChain, chainStatus, chainUsage, collectTips, createChainSession, handoff, HandoffBlockedError } from './core/handoff.js';
 import { reindexCwd } from './core/search.js';
 import type { SessionRef } from './core/types.js';
-import { getAdapter, listAdapters, listProviders } from './providers/registry.js';
+import { getAdapter, listAdapters, listProviders, unknownProviderMessage } from './providers/registry.js';
 import { checkOpenInProvider, openInProvider, openSession } from './open.js';
 import { PreflightBlockedError } from './providers/adapter.js';
 import { runImportCodex } from './import-codex.js';
@@ -329,7 +329,7 @@ async function cmdAdopt(
     let targetRef: SessionRef | undefined;
     if (sessionId) {
       const adapter = listAdapters().find((a) => a.id === providerId);
-      if (!adapter?.listSessions) throw new Error(`未知 provider: ${providerId}`);
+      if (!adapter?.listSessions) throw new Error(unknownProviderMessage(providerId));
       const all = await adapter.listSessions(cwd);
       const hit = all.find((s) => s.ref.sessionId === sessionId);
       if (!hit) {
@@ -765,7 +765,7 @@ async function cmdNew(cwd: string, providerId: string, json: boolean, chain?: st
     // 没有 createEmptySession 的 provider 才回退到 start（exec 等首条回复，慢）。
     if (historyLen === 0) {
       const adapter = getAdapter(providerId);
-      if (!adapter) fail(json, `未知 provider: ${providerId}`);
+      if (!adapter) fail(json, unknownProviderMessage(providerId));
       let ref: import('./core/types.js').SessionRef;
       let turnCount = 0;
       if (adapter.createEmptySession) {

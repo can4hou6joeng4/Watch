@@ -6,6 +6,7 @@ import { dedupeCallEvents, mergeTurns, shouldReplacePairedSession, unwrapUserQue
 import type { FileDigest } from './atomic.js';
 import { addFinding, type Finding } from './findings.js';
 import { countUnparsableJsonLines } from './jsonl.js';
+import { unknownProviderMessage } from '../providers/registry.js';
 
 /** 写回被阻断（如 TOCTOU 检测到目标被外部修改）：一票否决，不产生部分写 */
 export class HandoffBlockedError extends Error {
@@ -69,7 +70,7 @@ export async function adoptIntoChain(
 ): Promise<{ adoptedRef: SessionRef; replacedRef: SessionRef | null; warnings: string[] }> {
   const warnings: string[] = [];
   const adapter = adapters.find((a) => a.id === providerId);
-  if (!adapter?.findLatestSession) throw new Error(`未知 provider: ${providerId}`);
+  if (!adapter?.findLatestSession) throw new Error(unknownProviderMessage(providerId, adapters));
   const found = targetRef
     ? { ref: targetRef }
     : await adapter.findLatestSession(cwd);
@@ -357,7 +358,7 @@ export async function handoff(
   opts?: { forceNew?: boolean; chainId?: string },
 ): Promise<HandoffResult> {
   const target = resolve(targetId);
-  if (!target) throw new Error(`未知 provider: ${targetId}`);
+  if (!target) throw new Error(unknownProviderMessage(targetId, adapters));
   const warnings: string[] = [];
   if (!store) {
     // 内容仍会交接，但没有 switch_events：status / 桌面端看不到这次切换，必须说明

@@ -25,6 +25,16 @@ export function listAdapters(): ProviderAdapter[] {
   return [...adapters];
 }
 
+/**
+ * 未知 provider 的统一文案。只写「未知 provider: codx」时，用户看不出是拼错、
+ * 大小写不对（`Claude`）还是这家没接进来；把可用清单一起给出。
+ * `adapters` 传进来是为了与调用方实际使用的适配器表一致（测试注入 / 子集）。
+ */
+export function unknownProviderMessage(id: string, adapters: ProviderAdapter[] = listAdapters()): string {
+  const known = adapters.map((a) => a.id).join(' / ');
+  return `未知 provider: ${id}${known ? `；可用: ${known}` : ''}`;
+}
+
 /** `overrides` 只给测试注入假适配器用；默认读注册表 */
 export async function listProviders(overrides?: ProviderAdapter[]): Promise<ProviderInfo[]> {
   return Promise.all(

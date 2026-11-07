@@ -7,7 +7,7 @@ import { IS_WIN, stripDevicePrefix } from './core/platform.js';
 import type { SessionRef, TokenUsage, UnifiedTurn } from './core/types.js';
 import type { ProviderAdapter } from './providers/adapter.js';
 import { PreflightBlockedError } from './providers/adapter.js';
-import { getAdapter, listAdapters } from './providers/registry.js';
+import { getAdapter, listAdapters, unknownProviderMessage } from './providers/registry.js';
 import { countUnparsableJsonLines } from './core/jsonl.js';
 
 /** `watch open` 的返回协议：桌面 GUI 通过 CLI `--json` 消费 */
@@ -192,6 +192,14 @@ export async function openSession(
   adapters: ProviderAdapter[] = listAdapters(),
 ): Promise<OpenSessionResult> {
   const { from, provider } = opts ?? {};
+  // --provider 拼错（如 Claude / codx）时 resolveById 会一家都不查就返回 null，
+  // 报「未找到会话」会让人以为会话没了；先在注册表里确认这家存在。
+  if (provider && !adapters.some((a) => a.id === provider)) {
+    return {
+      ok: false,
+      error: unknownProviderMessage(provider, adapters),
+    };
+  }
   const mapping = store ?? openMappingDb();
   const lookup: string[] = [];
   const target = await resolveById(targetId, provider, mapping, adapters, lookup);
@@ -407,6 +415,10 @@ async function planOpenInProvider(
   mapping: Store | null,
   diagnostics?: string[],
 ): Promise<PlannedOpen> {
+  // 先校验目标 provider：拼错时再怎么说「未找到会话」都跑偏了，
+  // 用户会去查会话 id，而不是回头看 --to 的拼写。
+  const target = getAdapter(providerId);
+  if (!target) return { ok: false, error: unknownProviderMessage(providerId) };
   // 反查失败原因只在「真的没找到」时报；命中了就别拿别家存储的毛病打扰用户
   const lookup: string[] = [];
   const source = await resolveById(sourceId, undefined, mapping, undefined, lookup);
@@ -414,8 +426,6 @@ async function planOpenInProvider(
     const detail = lookup.length ? `（${lookup.join('；')}）` : '';
     return { ok: false, error: `未找到会话: ${sourceId}${detail}` };
   }
-  const target = getAdapter(providerId);
-  if (!target) return { ok: false, error: `未知 provider: ${providerId}` };
   const cwd = source.found.ref.cwd;
   const sourceRef = source.found.ref;
   const sourceProvider = source.adapter.id;
