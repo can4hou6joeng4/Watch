@@ -198,6 +198,11 @@ export async function chainUsage(
   const warnings: string[] = [];
   const chain = store.findActiveChain(cwd, chainId);
   if (chainId && !chain) throw new Error(store.missingChainMessage(cwd, chainId));
+  // 归档链照样给用量（历史记录有用），但要说清它已不是当前链：
+  // `--json` 里虽有 status，文本模式只印名字，容易被当成「现在还在用这条」
+  if (chain?.status === 'archived') {
+    warnings.push(`链 ${chain.name} 已归档（不再是本目录的当前链），下面的用量是历史记录`);
+  }
   const history = chain ? store.listSwitchEvents(chain.id) : [];
   const byProvider: { provider: string; sessionId: string; usage: TokenUsage | null; error?: string }[] = [];
   let total = { ...empty };
@@ -377,8 +382,17 @@ export async function handoff(
 
   // 先确认 --chain 指得到，再扫会话：目录里恰好没有原生会话时，
   // 后面的「未发现原生会话」会把 --chain 写错说成「这个目录没东西」。
-  if (store && opts?.chainId && !store.findActiveChain(cwd, opts.chainId)) {
+  const chainRow = store && opts?.chainId ? store.findActiveChain(cwd, opts.chainId) : null;
+  if (store && opts?.chainId && !chainRow) {
     throw new Error(store.missingChainMessage(cwd, opts.chainId));
+  }
+  // findActiveChain 按名字 / id 查时不看 status，归档链照样返回；真到写入才由
+  // getOrCreateChainSession 报「链已归档」。这里提前拦住，否则空归档链会先撞下面的
+  // 「未发现原生会话」，把「链已归档」讲成「目录里没东西」。
+  if (chainRow?.status === 'archived') {
+    throw new Error(
+      `链已归档: ${chainRow.name}；可 watch chain use ${chainRow.name} 恢复，或省略 --chain 用当前链`,
+    );
   }
 
   const tips = await collectTips(cwd, adapters, warnings);

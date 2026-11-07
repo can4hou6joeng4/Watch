@@ -707,6 +707,17 @@ export class Store {
     this.db.prepare("UPDATE chains SET status='archived' WHERE id=?").run(id);
   }
 
+  /**
+   * 取消归档：`chain use <已归档链>` 用它恢复成当前链。
+   * 归档只是「不再是默认链」，链记录与 switch_events 都还在，没有理由不可逆。
+   */
+  restoreChain(id: string): void {
+    const chain = this.mustChain(id);
+    if (chain.status === 'active') return;
+    this.db.prepare("UPDATE chains SET status='active' WHERE id=?").run(id);
+    this.touchChain(id);
+  }
+
   touchChain(id: string): void {
     const chain = this.mustChain(id);
     const at = Math.max(Date.now(), chain.lastUsedAt + 1);
@@ -717,7 +728,9 @@ export class Store {
   getOrCreateChainSession(cwd: string, chainId?: string): string {
     const found = this.findActiveChain(cwd, chainId);
     if (found) {
-      if (found.status === 'archived') throw new Error(`链已归档: ${found.name}`);
+      if (found.status === 'archived') {
+        throw new Error(`链已归档: ${found.name}；可 watch chain use ${found.name} 恢复成当前链`);
+      }
       this.touchChain(found.id);
       return found.id;
     }

@@ -499,6 +499,11 @@ async function cmdSessions(cwd: string, json: boolean, chain?: string): Promise<
             bound.set(ref.provider, group);
           }
         }
+        // findActiveChain 按名 / id 查时不看 status：归档链照样能过滤，
+        // 但它已不是本目录的当前链，不说明会被当成「现在还在用这条」
+        if (chainRow.status === 'archived') {
+          warnings.push(`链 ${chainRow.name} 已归档（不再是本目录的当前链），下面按它的绑定过滤`);
+        }
         // 链存在但一条绑定都没有：过滤后必然是空列表，不说原因会被当成「目录里没有会话」
         if (bound.size === 0) {
           warnings.push(`链 ${chainRow.name} 还没有绑定会话（可用 watch switch / adopt 先绑定）`);
@@ -954,14 +959,22 @@ async function cmdChain(cwd: string, json: boolean, action?: string, a?: string,
       if (!found) throw new Error(store.missingChainMessage(cwd, a));
       store.archiveChain(found.id);
       if (json) console.log(JSON.stringify({ ok: true, id: found.id }));
-      else console.log(`已归档: ${found.name}`);
+      else console.log(`已归档: ${found.name}（可用 watch chain use ${found.name} 恢复）`);
       return;
     }
     if (action === 'use') {
       if (!a) usage();
       const found = store.findActiveChain(cwd, a);
       if (!found) throw new Error(store.missingChainMessage(cwd, a));
-      if (found.status === 'archived') throw new Error(`链已归档: ${found.name}`);
+      // 归档只是「不再是默认链」，链记录与历史都还在：以前这里直接报「链已归档」，
+      // 却没有任何命令能把它恢复回来（rename / archive / use 三条路全堵死）
+      if (found.status === 'archived') {
+        store.restoreChain(found.id);
+        const restored = store.findActiveChain(cwd, found.id) ?? { ...found, status: 'active' };
+        if (json) console.log(JSON.stringify({ ok: true, restored: true, chain: restored }));
+        else console.log(`已恢复并设为当前链: ${restored.name}  (${restored.id})`);
+        return;
+      }
       store.touchChain(found.id);
       if (json) console.log(JSON.stringify({ ok: true, chain: { ...found, lastUsedAt: Date.now() } }));
       else console.log(`当前链: ${found.name}  (${found.id})`);
