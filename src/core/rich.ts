@@ -242,6 +242,18 @@ export function danglingToolCalls(turns: UnifiedTurn[]): string[] {
   return [...called].filter((id) => !finished.has(id));
 }
 
+/**
+ * 交接前的披露文案（`open` 与 `switch` 共用一份措辞）：没有未完成的调用时返回 null。
+ * `label` 由调用方给（「来源会话 <id>（<provider>）」/「会话 <id>（<provider>）」），
+ * 两条路径各写一套会让同一件事在桌面端和 CLI 里说法不一致。
+ */
+export function describeDanglingToolCalls(turns: UnifiedTurn[], label: string): string | null {
+  const dangling = danglingToolCalls(turns);
+  if (dangling.length === 0) return null;
+  const shown = dangling.slice(0, 3).join(', ');
+  return `${label}有 ${dangling.length} 次工具调用没有结果（callId: ${shown}${dangling.length > 3 ? ' 等' : ''}），可能在中断或仍在运行：交接后那一轮不完整，先在原生 CLI 里确认再继续`;
+}
+
 export function ensureAssistant(turns: UnifiedTurn[], timestamp: string, provider: string): UnifiedTurn {  const last = turns.at(-1);
   if (last?.role === 'assistant') return last;
   const created: UnifiedTurn = { role: 'assistant', text: '', timestamp, provider, events: [] };

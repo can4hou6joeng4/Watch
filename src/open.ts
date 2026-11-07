@@ -1,7 +1,7 @@
 import { stat } from 'node:fs/promises';
 import { describeWriteFailureReason, type FileDigest } from './core/atomic.js';
 import { assertTargetUnchanged, blockedHint, diffTurns, HandoffBlockedError } from './core/handoff.js';
-import { danglingToolCalls, dedupeCallEvents } from './core/rich.js';
+import { describeDanglingToolCalls, dedupeCallEvents } from './core/rich.js';
 import { Store, defaultDbPath, describeStoreErrorReason, describeStoreOpenFailure } from './core/store.js';
 import { IS_WIN, stripDevicePrefix } from './core/platform.js';
 import type { SessionRef, TokenUsage, UnifiedTurn } from './core/types.js';
@@ -482,12 +482,8 @@ type PlannedOpen =
  * 但接手的一侧会停在做了一半的那一轮，`diffTurns` 与 round-trip 都查不出来——只能主动披露。
  */
 function warnDanglingToolCalls(turns: UnifiedTurn[], label: string, push: (msg: string) => void): void {
-  const dangling = danglingToolCalls(turns);
-  if (dangling.length === 0) return;
-  const shown = dangling.slice(0, 3).join(', ');
-  push(
-    `${label}有 ${dangling.length} 次工具调用没有结果（callId: ${shown}${dangling.length > 3 ? ' 等' : ''}），可能在中断或仍在运行：交接后那一轮不完整，先在原生 CLI 里确认再继续`,
-  );
+  const message = describeDanglingToolCalls(turns, label);
+  if (message) push(message);
 }
 
 /**
