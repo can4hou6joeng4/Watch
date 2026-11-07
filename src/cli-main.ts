@@ -114,6 +114,8 @@ function parseArgs(argv: string[]): {
   limit?: number;
   usedFlags: string[];
   cwdGiven: boolean;
+  /** 去掉命令名之后的全部位置参数（含 provider / 链名等）：命令层要数「多给了几条」 */
+  positional: string[];
 } {
   const args = argv.slice(2);
   const json = args.includes('--json');
@@ -216,6 +218,7 @@ function parseArgs(argv: string[]): {
     limit,
     usedFlags,
     cwdGiven,
+    positional: positional.slice(1),
   };
 }
 
@@ -921,13 +924,53 @@ function rejectUnusedFlags(cmd: string, usedFlags: string[], json: boolean): voi
   usage();
 }
 
+/**
+ * 每个命令接受的位置参数（命令名之后）。`rejectUnusedFlags` 只管 `--flag`；
+ * `watch recent 3`（本意是 `--limit 3`）、`watch status foo` 这类多给的位置参数
+ * 以前被静默吞掉、照样 exit 0，用户会以为参数生效了。`search` 不限：查询词本身就是位置参数。
+ */
+const POSITIONAL_BY_COMMAND: Record<string, { max: number; hint: string }> = {
+  status: { max: 0, hint: '无位置参数（目录用 --cwd 传）' },
+  switch: { max: 1, hint: '<provider>' },
+  adopt: { max: 1, hint: '<provider>（会话用 --session 传）' },
+  sessions: { max: 0, hint: '无位置参数（目录用 --cwd 传）' },
+  recent: { max: 0, hint: '无位置参数（条数用 --limit 传）' },
+  providers: { max: 0, hint: '无位置参数' },
+  doctor: { max: 0, hint: '无位置参数（目录用 --cwd 传）' },
+  new: { max: 1, hint: '<provider>' },
+  chain: { max: Infinity, hint: '<list|new|rename|archive|use> [名字或 id] [新名字]' },
+  usage: { max: 0, hint: '无位置参数' },
+  open: { max: 1, hint: '<session-id>' },
+};
+
+/** `chain` 各子命令吃的位置参数个数；未知子命令交给 cmdChain 自己报错，这里不拦 */
+const CHAIN_POSITIONAL: Record<string, number> = { list: 1, new: 2, rename: 3, archive: 2, use: 2 };
+
+function rejectExtraPositionals(cmd: string, positional: string[], json: boolean): void {
+  const spec = POSITIONAL_BY_COMMAND[cmd];
+  if (!spec) return;
+  const max = cmd === 'chain' ? (CHAIN_POSITIONAL[positional[0] ?? ''] ?? Infinity) : spec.max;
+  if (positional.length <= max) return;
+  const overflow = positional.slice(max);
+  const message = `多余的参数: ${overflow.join(' ')}；${cmd} 接受的位置参数: ${spec.hint}`;
+  if (json) {
+    console.log(JSON.stringify({ ok: false, error: message }));
+    process.exit(1);
+  }
+  console.error(`[watch] ${message}`);
+  usage();
+}
+
 async function main(): Promise<void> {
   if (process.argv[2] === 'import-codex') {
     await runImportCodex(process.argv.slice(3));
     return;
   }
-  const { cmd, target, extra, rest, json, cwd, session, chain, from, provider, to, check, limit, usedFlags, cwdGiven } = parseArgs(process.argv);
-  if (cmd) rejectUnusedFlags(cmd, usedFlags, json);
+  const { cmd, target, extra, rest, json, cwd, session, chain, from, provider, to, check, limit, usedFlags, cwdGiven, positional } = parseArgs(process.argv);
+  if (cmd) {
+    rejectUnusedFlags(cmd, usedFlags, json);
+    rejectExtraPositionals(cmd, positional, json);
+  }
   if (cmd === 'status') {
     await cmdStatus(cwd, json, chain);
     return;
