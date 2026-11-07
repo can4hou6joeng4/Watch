@@ -2,13 +2,63 @@ import path from 'node:path';
 import { parseArgs } from 'node:util';
 import { createOfficialCodexImport } from './providers/codex/official-import.js';
 
+const IMPORT_BOOLEAN_FLAGS = new Set(['json', 'experimental', 'desktop-project']);
+const IMPORT_VALUE_FLAGS = new Set(['cwd', 'project']);
+const IMPORT_USAGE_HINT = '--json --experimental --cwd <绝对路径> --project <UUID> --desktop-project（详见 docs/import-codex.md）';
+
+/**
+ * 先按白名单自查一遍参数，再把结果交给 `parseArgs`。
+ *
+ * 直接让 `parseArgs` 报错会把 Node 的英文原文塞给用户（`Unknown option '--desktop'` /
+ * `Option '--cwd' argument is ambiguous.\nDid you forget …`），与这条路径 2026-11-07 起
+ * 统一中文的文案不一致，也看不出正确写法。措辞与 `cli-main.ts` 的「未知参数: …」
+ * 「--cwd 缺少取值（后面跟着 …）」保持一致。
+ */
+function validateImportArgs(args: string[]): void {
+  for (let i = 0; i < args.length; i += 1) {
+    const arg = args[i]!;
+    if (arg === '--') return; // 之后都是位置参数，交给 parseArgs
+    if (!arg.startsWith('-') || arg === '-') continue;
+    const eq = arg.indexOf('=');
+    const flag = eq === -1 ? arg : arg.slice(0, eq);
+    const inline = eq === -1 ? undefined : arg.slice(eq + 1);
+    const name = flag.replace(/^-+/, '');
+    if (IMPORT_VALUE_FLAGS.has(name)) {
+      if (inline !== undefined) continue;
+      const next = args[i + 1];
+      // 下一个 token 仍是 flag：说明取值漏了，别把它吞成值
+      if (next === undefined) throw new Error(`${flag} 缺少取值；可用: ${IMPORT_USAGE_HINT}`);
+      if (next.startsWith('-')) throw new Error(`${flag} 缺少取值（后面跟着 ${next}）；可用: ${IMPORT_USAGE_HINT}`);
+      i += 1;
+      continue;
+    }
+    if (IMPORT_BOOLEAN_FLAGS.has(name) && flag.startsWith('--')) {
+      if (inline === undefined) continue;
+      throw new Error(`${flag} 不接受取值，写成 ${flag} 即可；可用: ${IMPORT_USAGE_HINT}`);
+    }
+    throw new Error(`未知参数: ${arg}；可用: ${IMPORT_USAGE_HINT}`);
+  }
+}
+
 export async function runImportCodex(args: string[]): Promise<void> {
   const json = args.includes('--json');
   try {
-    const { values, positionals } = parseArgs({
-      args, allowPositionals: true, strict: true,
-      options: { json: { type: 'boolean' }, experimental: { type: 'boolean' }, cwd: { type: 'string' }, project: { type: 'string' }, 'desktop-project': { type: 'boolean' } },
-    });
+    validateImportArgs(args);
+    let parsed;
+    try {
+      parsed = parseArgs({
+        args, allowPositionals: true, strict: true,
+        options: { json: { type: 'boolean' }, experimental: { type: 'boolean' }, cwd: { type: 'string' }, project: { type: 'string' }, 'desktop-project': { type: 'boolean' } },
+      });
+    } catch (error) {
+      // 兜底：白名单没覆盖到的解析错误（如 Node 版本差异）同样不能把英文原文抛给用户
+      const code = (error as NodeJS.ErrnoException).code;
+      if (typeof code === 'string' && code.startsWith('ERR_PARSE_ARGS')) {
+        throw new Error(`参数不合法（${code}）；可用: ${IMPORT_USAGE_HINT}`);
+      }
+      throw error;
+    }
+    const { values, positionals } = parsed;
     const [action, id] = positionals;
     if (positionals.length !== 2 || !id || !['prepare', 'confirm', 'status', 'project-prepare', 'project-confirm', 'project-status'].includes(action!)) {
       throw new Error('用法：watch import-codex prepare <session-id> --cwd <绝对路径> [--desktop-project] | confirm|status <plan-id> | project-prepare <import-plan-id> --project <project-id> | project-confirm|project-status <association-plan-id>；写操作需要 --experimental（详见 docs/import-codex.md）');
