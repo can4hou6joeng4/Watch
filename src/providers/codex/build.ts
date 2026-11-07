@@ -5,6 +5,7 @@ import { randomUUID } from 'node:crypto';
 import { appendFileAtomic, writeFileAtomic } from '../../core/atomic.js';
 import { verifyWrittenTurns } from '../../core/verify.js';
 import { ENCRYPTED_THINKING, codexToolInput, toCodexToolName, turnHasContent } from '../../core/rich.js';
+import { isMissingPathError } from '../../core/read-text.js';
 import { parseCodexSession } from './parse.js';
 import type { ProcessEvent, SessionRef, TokenUsage, UnifiedTurn } from '../../core/types.js';
 import type { ImportTurnsOpts } from '../adapter.js';
@@ -58,7 +59,8 @@ async function detectCodexIdentity(sessionsDir: string): Promise<CodexIdentity> 
 
 /** 按 mtime 倒序取 sessions 下的 rollout .jsonl（最多 max 个）。
  * `errors` 收集遍历失败的位置：反查靠「找不到」下结论，读不出来的目录必须先记下来，
- * 否则权限 / 路径错误会被讲成「这个会话不存在」 */
+ * 否则权限 / 路径错误会被讲成「这个会话不存在」。`ENOENT` / `ENOTDIR` 不算失败——
+ * sessions 根目录在没用过 Codex 的机器上本来就不存在，逐级目录也可能边扫边被删。 */
 async function newestJsonlPaths(sessionsDir: string, max: number, errors?: string[]): Promise<string[]> {
   const collected: string[] = [];
   const walk = async (dir: string, depth: number): Promise<void> => {
@@ -67,7 +69,9 @@ async function newestJsonlPaths(sessionsDir: string, max: number, errors?: strin
     try {
       entries = await readdir(dir);
     } catch (error) {
-      errors?.push(`${dir}（${error instanceof Error ? error.message : String(error)}）`);
+      if (!isMissingPathError(error)) {
+        errors?.push(`${dir}（${error instanceof Error ? error.message : String(error)}）`);
+      }
       return;
     }
     for (const entry of entries) {
@@ -79,7 +83,9 @@ async function newestJsonlPaths(sessionsDir: string, max: number, errors?: strin
           collected.push(p);
         }
       } catch (error) {
-        errors?.push(`${p}（${error instanceof Error ? error.message : String(error)}）`);
+        if (!isMissingPathError(error)) {
+          errors?.push(`${p}（${error instanceof Error ? error.message : String(error)}）`);
+        }
         continue;
       }
     }

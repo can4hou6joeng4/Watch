@@ -18,6 +18,18 @@ export async function readTextOrEmpty(filePath: string, label = '既有会话文
 }
 
 /**
+ * 路径不存在（`ENOENT` / `ENOTDIR`）。
+ *
+ * 全局反查（`findById`）把扫描根目录的失败当异常抛出，是为了不把权限 / I/O 问题讲成
+ * 「这个会话不存在」；但原生会话根目录在从未用过该 Agent 的机器上本来就不存在，
+ * 那是正常事实、不是故障。两者都返回 `null`/空结果时，用户看到的才是干净的「没找到」。
+ */
+export function isMissingPathError(error: unknown): boolean {
+  const code = (error as NodeJS.ErrnoException).code;
+  return code === 'ENOENT' || code === 'ENOTDIR';
+}
+
+/**
  * 只读路径（用量统计、摘要）读取失败时的中文说明：按 errno 分开说。
  *
  * 只有 `ENOENT` / `ENOTDIR` 能说「已不存在」，`EACCES` / `EPERM` 是权限问题（先修权限，

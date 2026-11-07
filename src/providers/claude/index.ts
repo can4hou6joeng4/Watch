@@ -5,6 +5,7 @@ import path from 'node:path';
 import { promisify } from 'node:util';
 import { digestFile } from '../../core/atomic.js';
 import type { FileDigest } from '../../core/atomic.js';
+import { isMissingPathError } from '../../core/read-text.js';
 import type { ProviderAdapter } from '../adapter.js';
 import type { ProcessEvent, SessionRef, UnifiedTurn } from '../../core/types.js';
 import { streamCommand } from '../../core/streamCommand.js';
@@ -117,7 +118,9 @@ export async function findClaudeSessionById(
   try {
     dirs = await readdir(root);
   } catch (error) {
-    // 扫不了根目录时不能返回 null（= 没有这个会话）：原因要交给 resolveById 的 diagnostics
+    // 根目录不存在 = 这台机器没用过 Claude Code，按「没有这个会话」处理；
+    // 其余（权限 / I/O）读不出来照常抛，原因交给 resolveById 的 diagnostics
+    if (isMissingPathError(error)) return null;
     throw new Error(
       `无法列出 Claude 会话目录 ${root}：${error instanceof Error ? error.message : String(error)}`,
     );

@@ -5,6 +5,7 @@ import { promisify } from 'node:util';
 import path from 'node:path';
 import { digestFile } from '../../core/atomic.js';
 import type { FileDigest } from '../../core/atomic.js';
+import { isMissingPathError } from '../../core/read-text.js';
 import type { ProviderAdapter } from '../adapter.js';
 import type { ProcessEvent, SessionRef, TokenUsage, UnifiedTurn } from '../../core/types.js';
 import { parseKimiSession } from './parse.js';
@@ -149,7 +150,9 @@ export async function findKimiSessionById(
   try {
     raw = await readFile(idxFile, 'utf8');
   } catch (error) {
-    // 索引读不出来时不能返回 null（= 没有这个会话）：原因要交给 resolveById 的 diagnostics
+    // 索引不存在 = 这台机器没用过 Kimi（或从未建过会话），按「没有这个会话」处理；
+    // 其余（权限 / I/O）读不出来照常抛，原因交给 resolveById 的 diagnostics
+    if (isMissingPathError(error)) return null;
     throw new Error(
       `无法读取 Kimi 会话索引 ${idxFile}：${error instanceof Error ? error.message : String(error)}`,
     );
