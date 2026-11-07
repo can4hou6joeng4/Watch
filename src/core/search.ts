@@ -39,9 +39,22 @@ export async function reindexCwd(
     }
     let failed = 0;
     let firstError = '';
+    let unreadable = 0;
+    let firstUnreadable = '';
     for (const s of list) {
-      const st = await stat(s.ref.filePath).catch(() => null);
-      if (!st?.isFile()) continue;
+      let st;
+      try {
+        st = await stat(s.ref.filePath);
+      } catch (error) {
+        // 列表里有、stat 不到：ENOENT 是这一瞬间被删掉，交给下面的清理；
+        // 其余（ENOTDIR / EACCES / EIO…）不能当成没事跳过 —— 这一轮就没更新它，必须披露
+        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+          unreadable += 1;
+          firstUnreadable ||= `${s.ref.filePath}（${error instanceof Error ? error.message : String(error)}）`;
+        }
+        continue;
+      }
+      if (!st.isFile()) continue;
       const cached = stats.get(s.ref.sessionId);
       if (cached && cached.filePath === s.ref.filePath && cached.mtimeMs === st.mtimeMs && cached.size === st.size) {
         continue; // 文件没变，复用既有索引
@@ -67,9 +80,31 @@ export async function reindexCwd(
     if (failed > 0) {
       warnings?.push(`${adapter.id} 有 ${failed} 个会话解析失败，索引未更新（首个错误：${firstError}）`);
     }
+    if (unreadable > 0) {
+      warnings?.push(`${adapter.id} 有 ${unreadable} 个会话读不出文件状态，索引未更新（首个：${firstUnreadable}）`);
+    }
+    let keepFailed = 0;
+    let firstKeepError = '';
     for (const indexed of store.indexedSessions(cwd, adapter.id)) {
-      const exists = await stat(indexed.filePath).then((st) => st.isFile(), () => false);
-      if (!exists) store.removeIndexedSession(cwd, adapter.id, indexed.sessionId);
+      let gone = false;
+      try {
+        gone = !(await stat(indexed.filePath)).isFile();
+      } catch (error) {
+        // 只有 ENOENT 才算「文件已不存在」。权限 / 路径错误下删索引，等于把「读不到」
+        // 当成「没有聊过」：搜索结果会静默变少，权限恢复后还得重新全量解析
+        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+          keepFailed += 1;
+          firstKeepError ||= `${indexed.filePath}（${error instanceof Error ? error.message : String(error)}）`;
+          continue;
+        }
+        gone = true;
+      }
+      if (gone) store.removeIndexedSession(cwd, adapter.id, indexed.sessionId);
+    }
+    if (keepFailed > 0) {
+      warnings?.push(
+        `${adapter.id} 有 ${keepFailed} 个已索引会话读不出文件状态，索引保留未清理（首个：${firstKeepError}）`,
+      );
     }
   }
   return n;
