@@ -333,6 +333,22 @@ async function cmdAdopt(
       const all = await adapter.listSessions(cwd);
       const hit = all.find((s) => s.ref.sessionId === sessionId);
       if (!hit) {
+        // 会话确实存在、只是属于另一个目录时，说「在当前目录找不到」会让人以为 id 写错了。
+        // findById 是按 id 全局反查，不受 listSessions 的 cwd 过滤与条数上限影响。
+        let elsewhere: string | null = null;
+        if (adapter.findById) {
+          try {
+            const found = await adapter.findById(sessionId);
+            if (found && found.ref.cwd !== cwd) elsewhere = found.ref.cwd;
+          } catch {
+            /* 反查失败退回原文案：不能因为补充说明把主错误也丢了 */
+          }
+        }
+        if (elsewhere) {
+          throw new Error(
+            `会话 ${sessionId} 属于另一个目录: ${elsewhere}；adopt 按 cwd 绑定，请用 --cwd ${elsewhere}`,
+          );
+        }
         // 列表有上限时，更早的会话根本没被枚举到：直接说「找不到」会让用户以为 id 写错了
         const cap = adapter.listSessionsCap;
         const capped = cap !== undefined && all.length >= cap;
@@ -378,7 +394,13 @@ async function cmdOpen(
   providerId?: string,
   toId?: string,
   check?: boolean,
+  cwdGiven = false,
 ): Promise<void> {
+  // open 按 session id 全局反查，目录由会话自身记录决定；显式给的 --cwd 不参与任何一步。
+  // 静默忽略会让人以为「只在某个目录里查」——必须说出来。
+  const cwdIgnored = cwdGiven
+    ? '--cwd 不参与 open：目录来自会话自身记录（反查是全局的），它只影响 status / sessions / recent 这类按目录枚举的命令'
+    : null;
   try {
     // 两个写入方向互斥：--from 是把来源内容并进 <id> 这个目标会话，
     // --to 是把 <id> 的内容转入另一个 provider。同给时按旧行为只跑 --to，
@@ -390,6 +412,7 @@ async function cmdOpen(
       if (!toId) fail(json, '--check 需要同时指定 --to <provider>');
       if (fromId) fail(json, '--from 不能与 --check 同用：预检只针对 --to <provider>');
       const checked = await checkOpenInProvider(targetId, toId);
+      if (cwdIgnored) checked.warnings = [...(checked.warnings ?? []), cwdIgnored];
       if (json) {
         console.log(JSON.stringify(checked));
         process.exit(checked.ok ? 0 : 1);
@@ -410,6 +433,7 @@ async function cmdOpen(
     const result = toId
       ? await openInProvider(targetId, toId)
       : await openSession(targetId, { from: fromId, provider: providerId });
+    if (result.ok && cwdIgnored) result.warnings = [...(result.warnings ?? []), cwdIgnored];
     if (!result.ok) {
       // 目标被占用等写入拒绝：带上结构化原因，供桌面端/脚本给出可操作提示（未写入任何内容）
       const extra = result.blocked ? { blocked: true, ...result.blocked } : undefined;
@@ -1023,7 +1047,7 @@ async function main(): Promise<void> {
   }
   if (cmd === 'open') {
     if (!target) usage();
-    await cmdOpen(target, json, from, provider, to, check);
+    await cmdOpen(target, json, from, provider, to, check, cwdGiven);
     return;
   }
   usage();
