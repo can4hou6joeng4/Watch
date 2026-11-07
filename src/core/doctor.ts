@@ -10,6 +10,7 @@ import type { SessionRef } from './types.js';
 import { readWatchVersion } from './watch-version.js';
 import { cwdProblem } from './cwd.js';
 import { countUnparsableJsonLines } from './jsonl.js';
+import { describeSessionReadFailureReason } from './read-text.js';
 
 export type BrokenTip = {
   chainId: string;
@@ -107,15 +108,20 @@ type PathPresence =
 /**
  * 只有 ENOENT / ENOTDIR 才算「文件不在」。EACCES / EIO 等读不出来时不能说成已删除，
  * 否则权限问题会被讲成「下次切换会失败，先 adopt」，把人引去白换一次绑定。
+ * 路径存在但不是普通文件（被同名目录 / 设备文件占住）同样不是「还在」：说成 present
+ * 会让后面的 parse 抛出裸 `EISDIR: illegal operation on a directory, read`，
+ * 而 `type: 'present'` 也不该用来表示「读不出内容」——`watch chain list` 对同一状态
+ * 说的是「该路径现在不是普通文件」，两处要一致。
  */
 async function pathPresence(filePath: string): Promise<PathPresence> {
   try {
-    await stat(filePath);
-    return { state: 'present' };
+    const info = await stat(filePath);
+    if (info.isFile()) return { state: 'present' };
+    return { state: 'unknown', reason: '该路径现在不是普通文件（被同名目录或设备文件占住了）' };
   } catch (error) {
     const code = (error as NodeJS.ErrnoException).code;
     if (code === 'ENOENT' || code === 'ENOTDIR') return { state: 'missing', code };
-    return { state: 'unknown', reason: error instanceof Error ? error.message : String(error) };
+    return { state: 'unknown', reason: describeSessionReadFailureReason(error) };
   }
 }
 
@@ -215,7 +221,7 @@ export async function doctorReport(cwd: string, deps: DoctorDeps): Promise<Docto
             );
           } else {
             warnings.push(
-              `链「${chain.name}」的链尾会话文件状态无法确认：${tip.filePath}（${tip.provider}）；读不出来（${error}），可能只是权限或路径问题，先确认再决定是否 adopt`,
+              `链「${chain.name}」的链尾会话文件状态无法确认：${tip.filePath}（${tip.provider}）；${error}；先确认它是否还在、是否是普通文件，再决定是否 adopt`,
             );
           }
         }

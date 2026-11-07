@@ -36,11 +36,19 @@ export function isMissingPathError(error: unknown): boolean {
  * 不要去重新绑定或换会话），其余带上 code / 原文。读不出来不等于「这家原生没有这项数据」。
  */
 export function describeSessionReadFailure(filePath: string, error: unknown): string {
+  return `${describeSessionReadFailureReason(error)}：${filePath}`;
+}
+
+/**
+ * 同上，但不带路径。调用方已经在前文给过路径时用它，避免同一句话里出现两次路径
+ * （`watch doctor` 的「链尾会话文件状态无法确认：<路径>；<原因>」就是这种）。
+ */
+export function describeSessionReadFailureReason(error: unknown): string {
   const code = (error as NodeJS.ErrnoException).code;
-  if (code === 'ENOENT' || code === 'ENOTDIR') return `会话文件已不存在：${filePath}`;
-  if (code === 'EACCES' || code === 'EPERM') return `会话文件无权读取（权限问题，不是被删除）：${filePath}`;
+  if (code === 'ENOENT' || code === 'ENOTDIR') return '会话文件已不存在';
+  if (code === 'EACCES' || code === 'EPERM') return '会话文件无权读取（权限问题，不是被删除）';
   const reason = code ?? (error instanceof Error ? error.message : String(error));
-  return `会话文件读不出来（${reason}）：${filePath}`;
+  return `会话文件读不出来（${reason}）`;
 }
 
 export type SessionFilePresence =
