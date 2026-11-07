@@ -905,6 +905,8 @@ async function cmdNew(cwd: string, providerId: string, json: boolean, chain?: st
   }
 }
 
+const CHAIN_SUBCOMMANDS = 'list / new <名字> / rename <名字或 id> <新名字> / archive <名字或 id> / use <名字或 id>';
+
 async function cmdChain(cwd: string, json: boolean, action?: string, a?: string, b?: string): Promise<void> {
   const store = openStore();
   if (!store) fail(json, storeUnavailableError());
@@ -989,7 +991,7 @@ async function cmdChain(cwd: string, json: boolean, action?: string, a?: string,
       return;
     }
     if (action === 'new') {
-      if (!a) usage();
+      if (!a) throw new Error(`chain new 需要一个链名；可用: ${CHAIN_SUBCOMMANDS}`);
       const chain = store.createChain(cwd, a);
       // 与 watch new 同理：路径错了照样建出链，但绑定指向不存在的项目，必须说明
       if (json) console.log(JSON.stringify({ ok: true, chain, ...(cwdIssue ? { warnings: [cwdIssue] } : {}) }));
@@ -1000,7 +1002,7 @@ async function cmdChain(cwd: string, json: boolean, action?: string, a?: string,
       return;
     }
     if (action === 'rename') {
-      if (!a || !b) usage();
+      if (!a || !b) throw new Error('chain rename 需要两个位置参数：<链名或 id> <新名字>；例：watch chain rename tui-chain 前端');
       const found = store.findActiveChain(cwd, a);
       if (!found) throw new Error(store.missingChainMessage(cwd, a));
       const chain = store.renameChain(found.id, b);
@@ -1009,7 +1011,7 @@ async function cmdChain(cwd: string, json: boolean, action?: string, a?: string,
       return;
     }
     if (action === 'archive') {
-      if (!a) usage();
+      if (!a) throw new Error('chain archive 需要一个链名或 id；例：watch chain archive tui-chain');
       const found = store.findActiveChain(cwd, a);
       if (!found) throw new Error(store.missingChainMessage(cwd, a));
       store.archiveChain(found.id);
@@ -1018,7 +1020,7 @@ async function cmdChain(cwd: string, json: boolean, action?: string, a?: string,
       return;
     }
     if (action === 'use') {
-      if (!a) usage();
+      if (!a) throw new Error('chain use 需要一个链名或 id；例：watch chain use tui-chain');
       const found = store.findActiveChain(cwd, a);
       if (!found) throw new Error(store.missingChainMessage(cwd, a));
       // 归档只是「不再是默认链」，链记录与历史都还在：以前这里直接报「链已归档」，
@@ -1035,7 +1037,9 @@ async function cmdChain(cwd: string, json: boolean, action?: string, a?: string,
       else console.log(`当前链: ${found.name}  (${found.id})`);
       return;
     }
-    usage();
+    // 拼错的子命令（`chain lsit`）以前一律落到通用用法错误「参数不完整或不合法」，
+    // 用户看不出是子命令写错、也不知道有哪几个，得自己翻整页用法
+    throw new Error(`未知的 chain 子命令: ${action}；可用: ${CHAIN_SUBCOMMANDS}`);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     fail(json, cwdIssue ? `${cwdIssue}；${message}` : message);
