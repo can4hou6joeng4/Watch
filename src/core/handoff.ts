@@ -515,12 +515,17 @@ export async function handoff(
   try {
     turns = await source.parse(sourceTip.ref);
   } catch (error) {
-    // 链尾指向的会话文件被删 / 截断时，裸 ENOENT 看不出下一步该做什么（doctor 的 brokenTips 报的正是这种）
+    // 链尾指向的会话文件被删 / 截断时，裸 ENOENT 看不出下一步该做什么（doctor 的 brokenTips 报的正是这种）。
+    // 但「读不出来」（EACCES 等）不是「被删」：直接建议 adopt 会让人白换一次绑定，下一次照样失败
     const raw = error instanceof Error ? error.message : String(error);
-    throw new Error(
-      `来源会话 ${sourceTip.ref.sessionId}（${source.displayName}）读取失败：${raw}。` +
-        `文件 ${sourceTip.ref.filePath} 可能已被删除或截断，而链记录仍指向它：可用 watch adopt 重新绑定，或用 watch sessions 查看该目录还有哪些可接力的会话`,
-    );
+    const code = (error as NodeJS.ErrnoException).code;
+    const gone = code === 'ENOENT' || code === 'ENOTDIR';
+    const reason = gone
+      ? `文件 ${sourceTip.ref.filePath} 已不存在，而链记录仍指向它：可用 watch adopt 重新绑定，或用 watch sessions 查看该目录还有哪些可接力的会话`
+      : code === 'EACCES' || code === 'EPERM'
+        ? `文件 ${sourceTip.ref.filePath} 无权读取（权限问题，不是被删除）：先修权限或换一个有权限的路径，再重试`
+        : `文件 ${sourceTip.ref.filePath} 读不出来：如果只是格式坏掉可先确认文件内容；确认文件确实没了再 watch adopt 重新绑定`;
+    throw new Error(`来源会话 ${sourceTip.ref.sessionId}（${source.displayName}）读取失败：${raw}。${reason}`);
   }
   // 各家 parse 对坏行一律跳过：跳过的内容既不在 turns 里，也不会被 round-trip 查出（两边都按解析结果比），
   // 不主动扫一遍就会把「少了几轮」当成完整交接
