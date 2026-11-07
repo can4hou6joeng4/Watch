@@ -496,8 +496,23 @@ export const codexAdapter: ProviderAdapter = {
     // 显式的新建会话（有 ctx、无 ref）：没有可冲突的既有文件，放行
     if (!ref) return;
     const lockPath = threadWriterLockPath(ref.sessionId);
-    const lockExists = (await stat(lockPath).catch(() => undefined))?.isFile() ?? false;
-    if (!lockExists) return; // 无 writer 登记：无共享文件可冲突
+    // stat 失败不等于「没有锁」：只有 ENOENT 才是「没有 writer 登记，无共享文件可冲突」。
+    // 路径被同名文件占住（ENOTDIR）/ 没有权限（EACCES）时读不出来 = 无法判定，按有锁处理
+    let lockState: 'absent' | 'present' | 'unreadable' = 'absent';
+    try {
+      lockState = (await stat(lockPath)).isFile() ? 'present' : 'absent';
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') lockState = 'unreadable';
+    }
+    if (lockState === 'absent') return; // 无 writer 登记：无共享文件可冲突
+    if (lockState === 'unreadable') {
+      throw new PreflightBlockedError({
+        code: 'codex_lock_unreadable',
+        sessionId: ref.sessionId,
+        message: `无法读取 Codex 会话 ${ref.sessionId} 的 writer 锁状态（${lockPath}），已保守拒绝写入`,
+        hint: '检查该路径的权限，或是否有同名文件占住了 thread-writer-locks 目录后重试；本次未写入任何内容。',
+      });
+    }
     const holders = await probeThreadWriterHolders(lockPath);
     if (holders?.length) {
       const who = holders.map((h) => `PID ${h.pid} ${h.command}`).join('、');
