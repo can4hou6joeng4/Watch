@@ -321,6 +321,7 @@ export async function findGrokSessionById(
     );
   }
   const unreadable: string[] = [];
+  const notRegularFile: string[] = [];
   for (const d of dirs) {
     if (!d.isDirectory()) continue;
     let dirCwd: string;
@@ -333,7 +334,12 @@ export async function findGrokSessionById(
     const chatPath = path.join(sessionDir, 'chat_history.jsonl');
     try {
       const st = await stat(chatPath);
-      if (!st.isFile()) continue;
+      // 路径在但不是普通文件（被同名目录 / 设备文件占住）：会话确实存在，只是读不出来。
+      // 静默 continue 会让最终返回 null 变成「这家没有这个会话」
+      if (!st.isFile()) {
+        notRegularFile.push(chatPath);
+        continue;
+      }
       const summary = await readSummary(path.join(sessionDir, 'summary.json'));
       const info = summary?.info;
       const summaryCwd = typeof info === 'object' && info !== null ? (info as { cwd?: unknown }).cwd : undefined;
@@ -357,6 +363,11 @@ export async function findGrokSessionById(
       }
       continue;
     }
+  }
+  if (notRegularFile.length) {
+    throw new Error(
+      `会话 ${sessionId} 的路径现在不是普通文件（被同名目录或设备文件占住了）：${notRegularFile[0]}；无法把它当作会话读取，请先恢复该路径再重试`,
+    );
   }
   if (unreadable.length) {
     throw new Error(

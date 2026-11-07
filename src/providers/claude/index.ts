@@ -127,6 +127,7 @@ export async function findClaudeSessionById(
   }
   const unreadable: string[] = [];
   const foundButUnreadable: string[] = [];
+  const notRegularFile: string[] = [];
   for (const dir of dirs) {
     const filePath = path.join(root, dir, `${sessionId}.jsonl`);
     let st;
@@ -140,11 +141,21 @@ export async function findClaudeSessionById(
       }
       continue;
     }
-    if (!st.isFile()) continue;
+    // 路径在但不是普通文件（被同名目录 / 设备文件占住）：会话确实存在，只是读不出来。
+    // 静默 continue 会让最终返回 null 变成「这家没有这个会话」，把人引去核对 id
+    if (!st.isFile()) {
+      notRegularFile.push(filePath);
+      continue;
+    }
     const { cwd, error } = await claudeSessionCwdDetail(filePath);
     if (cwd) return { ref: { provider: 'claude', sessionId, filePath, cwd }, updatedAt: st.mtimeMs };
     // 文件确实在，只是读不出 cwd：继续找同名副本，但结论不能是「会话不存在」
     foundButUnreadable.push(`${filePath}（${error ?? '原因未知'}）`);
+  }
+  if (notRegularFile.length) {
+    throw new Error(
+      `会话 ${sessionId} 的路径现在不是普通文件（被同名目录或设备文件占住了）：${notRegularFile[0]}；无法把它当作会话读取，请先恢复该路径再重试`,
+    );
   }
   if (foundButUnreadable.length) {
     throw new Error(`找到会话文件 ${foundButUnreadable[0]}，但读不出它的工作目录，无法确认会话 ${sessionId}`);
