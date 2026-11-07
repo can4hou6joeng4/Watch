@@ -48,8 +48,14 @@ export async function listKimiSessionsByCwd(
   let raw: string;
   try {
     raw = await readFile(indexPath, 'utf8');
-  } catch {
-    return [];
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    // 索引不存在 = 这台机器没用过 kimi；读不出来要抛出交给调用方披露，
+    // 否则「索引损坏 / 没权限」会被讲成「这个目录没聊过」
+    if (code === 'ENOENT' || code === 'ENOTDIR') return [];
+    throw new Error(
+      `无法读取 Kimi 会话索引 ${indexPath}：${error instanceof Error ? error.message : String(error)}`,
+    );
   }
   for (const line of raw.split('\n')) {
     if (!line.trim()) continue;
@@ -67,8 +73,13 @@ export async function listKimiSessionsByCwd(
     try {
       const st = await stat(wirePath);
       items.push({ sessionId, sessionDir, updatedAt: st.mtimeMs });
-    } catch {
-      // wire.jsonl 已删，跳过
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      // wire 已删（索引陈旧）就跳过；其余读不出来不能静默丢——列表会少掉一条却毫无提示
+      if (code === 'ENOENT' || code === 'ENOTDIR') continue;
+      throw new Error(
+        `无法读取 Kimi 会话文件状态 ${wirePath}：${error instanceof Error ? error.message : String(error)}`,
+      );
     }
   }
   items.sort((a, b) => b.updatedAt - a.updatedAt);

@@ -30,8 +30,14 @@ export async function listPiSessions(
   let entries: string[];
   try {
     entries = await readdir(dir);
-  } catch {
-    return [];
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    // 这个 cwd 没聊过 = 目录不存在；读不出来要抛出，让 sessions / recent / doctor 披露，
+    // 否则权限或路径出错会被讲成「这个目录没聊过」
+    if (code === 'ENOENT' || code === 'ENOTDIR') return [];
+    throw new Error(
+      `无法读取 Pi 会话目录 ${dir}：${error instanceof Error ? error.message : String(error)}`,
+    );
   }
   const items: { ref: SessionRef; updatedAt: number }[] = [];
   for (const entry of entries) {
@@ -45,8 +51,13 @@ export async function listPiSessions(
         ref: { provider: 'pi', sessionId, filePath, cwd },
         updatedAt: st.mtimeMs,
       });
-    } catch {
-      continue;
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      // 列目录到取状态之间被删掉算正常；其余读不出来不能静默跳过——列表因此不完整
+      if (code === 'ENOENT' || code === 'ENOTDIR') continue;
+      throw new Error(
+        `无法读取 Pi 会话文件状态 ${filePath}：${error instanceof Error ? error.message : String(error)}`,
+      );
     }
   }
   items.sort((a, b) => b.updatedAt - a.updatedAt);
