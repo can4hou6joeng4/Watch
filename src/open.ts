@@ -726,7 +726,19 @@ export async function newSessionCliBlock(
   plan: Pick<OpenPlan, 'kind'>,
 ): Promise<{ code: string; hint: string; error: string } | undefined> {
   if (plan.kind !== 'new' || !target.requiresCliForNewSession) return undefined;
-  const available = await target.detect().catch(() => false);
+  let available: boolean;
+  try {
+    available = await target.detect();
+  } catch (error) {
+    // 检测本身失败 ≠ 没装：以前 `catch(() => false)` 会把它说成 cli_missing，
+    // 用户被引去重装一个可能装着、只是 PATH / 权限 / 配置读不出来的 CLI
+    const reason = error instanceof Error ? error.message : String(error);
+    return {
+      code: 'cli_detect_failed',
+      hint: `未写入任何内容；无法确认 ${target.id} CLI 是否可用（${reason}）。先修好检测问题（PATH、权限或客户端配置）再重试。`,
+      error: `${target.displayName} CLI 检测失败（不是「未安装」）：${reason}`,
+    };
+  }
   if (available) return undefined;
   return {
     code: 'cli_missing',
