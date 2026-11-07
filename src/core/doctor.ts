@@ -195,6 +195,8 @@ export async function doctorReport(cwd: string, deps: DoctorDeps): Promise<Docto
   let store: DoctorReport['store'];
   if (!deps.store) {
     store = { available: false, error: deps.storeError ?? '本地库未打开' };
+    // 只写「未打开」看不出是权限、库损坏还是被占用；doctor 是排障入口，原因必须带出来
+    if (deps.storeError) warnings.push(`本地库不可用，无法列出链与做内容对账：${deps.storeError}`);
   } else {
     try {
       const chains = deps.store.listChains(cwd);

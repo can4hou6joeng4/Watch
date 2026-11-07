@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { stat } from 'node:fs/promises';
 import path from 'node:path';
-import { SEARCH_MAX_HITS, Store, defaultDbPath } from './core/store.js';
+import { SEARCH_MAX_HITS, Store, defaultDbPath, describeStoreOpenFailure } from './core/store.js';
 import { describeFindings } from './core/findings.js';
 import { adoptIntoChain, blockedHint, chainStatus, chainUsage, collectTips, createChainSession, handoff, HandoffBlockedError } from './core/handoff.js';
 import { reindexCwd } from './core/search.js';
@@ -88,11 +88,13 @@ function failBlocked(error: HandoffBlockedError | PreflightBlockedError, json: b
 let lastStoreError: string | null = null;
 
 function openStore(): Store | null {
+  const dbPath = process.env.WATCH_DB ?? defaultDbPath();
   try {
     lastStoreError = null;
-    return new Store(process.env.WATCH_DB ?? defaultDbPath());
+    return new Store(dbPath);
   } catch (error) {
-    lastStoreError = error instanceof Error ? error.message : String(error);
+    // SQLite / mkdir 的原文既不指路径也不说下一步，先翻成中文（`chain` / `search` / `doctor` 都会显示它）
+    lastStoreError = describeStoreOpenFailure(dbPath, error);
     console.error('[watch] 打开数据库失败，以降级无库模式继续:', lastStoreError);
     return null;
   }
@@ -101,7 +103,8 @@ function openStore(): Store | null {
 /** 裸「无法打开数据库」不指向任何东西：带上实际路径、失败原因与版本门槛 */
 function storeUnavailableError(): string {
   const db = process.env.WATCH_DB ?? defaultDbPath();
-  return `无法打开本地库 ${db}${lastStoreError ? `（${lastStoreError}）` : ''}；可检查路径与权限，Node ≥ 22.13 才提供 node:sqlite`;
+  if (lastStoreError) return `无法打开本地库：${lastStoreError}；Node ≥ 22.13 才提供 node:sqlite`;
+  return `无法打开本地库 ${db}；可检查路径与权限，Node ≥ 22.13 才提供 node:sqlite`;
 }
 
 function fmtTime(ms: number): string {
@@ -777,7 +780,7 @@ async function cmdDoctor(cwd: string, json: boolean): Promise<void> {
         ? 'WATCH_DB=:memory: 不落盘，没有导入日志'
         : error instanceof Error ? error.message : String(error);
     }
-    const report = await doctorReport(cwd, { store, importJobs, importJobsError, importsRoot });
+    const report = await doctorReport(cwd, { store, storeError: lastStoreError ?? undefined, importJobs, importJobsError, importsRoot });
     if (json) {
       console.log(JSON.stringify({ ok: true, ...report }));
       return;
