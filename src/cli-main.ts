@@ -874,8 +874,38 @@ async function cmdChain(cwd: string, json: boolean, action?: string, a?: string,
     if (!action || action === 'list') {
       const chains = store.listChains(cwd);
       const warnings = cwdIssue ? [cwdIssue] : [];
+      // 链尾 = 最后一条 switch_event 的 toRef。只给名字 + id 时看不出这条链停在哪一家，
+      // 也看不出链尾文件是否还在（在的话下次 switch 才接得上，不在就是 doctor 的 brokenTips）
+      const tips = new Map<string, { provider: string; sessionId: string; filePath: string; missing: boolean }>();
+      for (const c of chains) {
+        let last: ReturnType<typeof store.listSwitchEvents>[number] | undefined;
+        try {
+          last = store.listSwitchEvents(c.id).at(-1);
+        } catch (error) {
+          warnings.push(`链「${c.name}」的切换记录读不出来：${error instanceof Error ? error.message : String(error)}`);
+          continue;
+        }
+        if (!last?.toRef) continue;
+        const missing = !(await stat(last.toRef.filePath).then(() => true, () => false));
+        tips.set(c.id, {
+          provider: last.toRef.provider,
+          sessionId: last.toRef.sessionId,
+          filePath: last.toRef.filePath,
+          missing,
+        });
+        if (missing && c.status === 'active') {
+          warnings.push(
+            `链「${c.name}」的链尾会话文件已不存在（${last.toRef.provider}:${last.toRef.sessionId}）：下次切换会失败，可先 watch adopt ${last.toRef.provider} --session <id> 重新绑定`,
+          );
+        }
+      }
       if (json) {
-        console.log(JSON.stringify({ ok: true, cwd, chains, ...(warnings.length ? { warnings } : {}) }));
+        console.log(JSON.stringify({
+          ok: true,
+          cwd,
+          chains: chains.map((c) => ({ ...c, ...(tips.has(c.id) ? { tip: tips.get(c.id) } : {}) })),
+          ...(warnings.length ? { warnings } : {}),
+        }));
         return;
       }
       for (const warning of warnings) console.error(`警告: ${warning}`);
@@ -890,7 +920,11 @@ async function cmdChain(cwd: string, json: boolean, action?: string, a?: string,
       for (const c of chains) {
         const mark = c.status === 'archived' ? ' [归档]' : '';
         const here = current && c.id === current.id ? ' ← 当前' : '';
-        console.log(`  ${c.name}${mark}${here}  ${c.id}  lastUsed=${fmtTime(c.lastUsedAt)}`);
+        const tip = tips.get(c.id);
+        const tipText = tip
+          ? `  → ${tip.provider}:${tip.sessionId}${tip.missing ? '（链尾文件已不存在）' : ''}`
+          : '';
+        console.log(`  ${c.name}${mark}${here}  ${c.id}  lastUsed=${fmtTime(c.lastUsedAt)}${tipText}`);
       }
       return;
     }
