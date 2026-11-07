@@ -787,6 +787,10 @@ async function cmdDoctor(cwd: string, json: boolean): Promise<void> {
       for (const id of i.uncertainIds) {
         console.log(`  结果未知: ${id}（用 watch import-codex status ${id} 查看；勿重试、勿删日志）`);
       }
+      // 读不出来的日志没进 total，不逐条说就只是「总数比实际少」，看不出是哪几份
+      for (const j of i.skippedJournals) {
+        console.log(`  读取失败（未计入上面的统计）: ${j.id}（${j.reason}）`);
+      }
     } else {
       console.log(`导入日志: 不可用（${report.imports.error}）`);
     }

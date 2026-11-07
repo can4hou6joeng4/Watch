@@ -213,32 +213,55 @@ export class ImportJobs {
     await writeFileAtomic(path.join(this.dir(id), 'outcome.json'), JSON.stringify(outcome) + '\n');
   }
 
-  /** 只读汇总全部执行日志的状态；坏目录 / 坏文件逐条跳过，供诊断命令统计 */
-  async listSummary(): Promise<{ id: string; route: string; status: ImportJournalStatus }[]> {
+  /**
+   * 只读汇总全部执行日志的状态。坏目录 / 坏文件逐条跳过（不因一条坏日志整体失败），
+   * 但要记进 `skipped`：只报「总数少了」的话，用户不知道少的那些是读不出来还是本来就不存在。
+   */
+  async listSummary(): Promise<{
+    items: { id: string; route: string; status: ImportJournalStatus }[];
+    skipped: { id: string; reason: string }[];
+  }> {
     const ids = await readdir(this.root).catch((error: NodeJS.ErrnoException) => {
       if (error.code === 'ENOENT') return [] as string[];
       throw error;
     });
     const items: { id: string; route: string; status: ImportJournalStatus }[] = [];
+    const skipped: { id: string; reason: string }[] = [];
     for (const id of ids) {
       if (!/^[a-f0-9]{64}$/.test(id)) continue;
       try {
-        const plan = JSON.parse(await readFile(path.join(this.dir(id), 'plan.json'), 'utf8')) as ImportJobPlan;
-        if (importPlanId(plan) !== id || typeof plan.route !== 'string') continue;
+        // 这里不按 route 分支校验（导入与项目关联共用一份汇总），只确认 id 对得上，
+        // 但读取仍走 readText / parseJson：坏日志被跳过时要说清是哪份、下一步做什么
+        const file = path.join(this.dir(id), 'plan.json');
+        const raw = await this.readText(file);
+        if (raw === null) {
+          skipped.push({ id, reason: `plan.json 不存在：${file}（日志目录不完整，可删除后重新 prepare）` });
+          continue;
+        }
+        const plan = this.parseJson<ImportJobPlan>(raw, file, '导入日志的 plan.json ', '可删除该日志目录后重新 prepare（会得到新的计划 id）');
+        if (importPlanId(plan) !== id) {
+          skipped.push({ id, reason: 'plan.json 与目录名不匹配（被改动，或与其他计划混在了一起）' });
+          continue;
+        }
+        if (typeof plan.route !== 'string') {
+          skipped.push({ id, reason: 'plan.json 里没有 route 字段（被改动，或来自更早的格式）' });
+          continue;
+        }
         // outcome() 只做 JSON.parse，没按 route 校验；未知状态一律当 uncertain，不虚报成功
-        const raw = (await this.outcome(id))?.status as string | undefined;
+        const outcomeStatus = (await this.outcome(id))?.status as string | undefined;
         const status: ImportJournalStatus =
-          raw === 'imported' || raw === 'associated'
-            ? raw
-            : raw || (await this.attempted(id))
+          outcomeStatus === 'imported' || outcomeStatus === 'associated'
+            ? outcomeStatus
+            : outcomeStatus || (await this.attempted(id))
               ? 'uncertain'
               : 'prepared';
         items.push({ id, route: plan.route, status });
-      } catch {
-        continue; // 写了一半或旧格式：跳过，诊断命令不该因一条坏日志整体失败
+      } catch (error) {
+        // 写了一半或旧格式：跳过，但要说清是这一条读不出来
+        skipped.push({ id, reason: error instanceof Error ? error.message : String(error) });
       }
     }
-    return items;
+    return { items, skipped };
   }
 
   /**

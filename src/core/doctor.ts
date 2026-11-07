@@ -66,6 +66,10 @@ export type DoctorReport = {
         prepared: number;
         /** 结果未知的计划 id（最多 10 个）：文本模式要能直接照着跑 status，不能只报个数 */
         uncertainIds: string[];
+        /** 读不出来被跳过的日志条数：不计入上面的统计，否则用户只会看到总数凭空少了 */
+        skipped: number;
+        /** 被跳过的日志与原因（最多 10 个）：只说「有 N 条读不出」同样没法排查 */
+        skippedJournals: { id: string; reason: string }[];
       }
     | { available: false; error: string };
   warnings: string[];
@@ -269,7 +273,7 @@ export async function doctorReport(cwd: string, deps: DoctorDeps): Promise<Docto
     imports = { available: false, error: deps.importJobsError ?? '导入日志目录不可用' };
   } else {
     try {
-      const items = await deps.importJobs.listSummary();
+      const { items, skipped } = await deps.importJobs.listSummary();
       const count = (status: string) => items.filter((i) => i.status === status).length;
       imports = {
         available: true,
@@ -280,9 +284,19 @@ export async function doctorReport(cwd: string, deps: DoctorDeps): Promise<Docto
         prepared: count('prepared'),
         // 「不要重试」只有配上 planId 才可执行
         uncertainIds: items.filter((i) => i.status === 'uncertain').map((i) => i.id).slice(0, 10),
+        skipped: skipped.length,
+        skippedJournals: skipped.slice(0, 10),
       };
       if (imports.uncertain > 0) {
         warnings.push(`有 ${imports.uncertain} 个导入/关联计划结果未知（uncertain）：不要重试，也不要删除其执行日志`);
+      }
+      // 被跳过的日志不进 total：只报「共 N 条」会被读成「这些就是全部」，坏的那几份就此消失。
+      // 原因已逐条在 skippedJournals 里，警告只给 id，别把同一段长文案印两遍
+      if (imports.skipped > 0) {
+        const ids = imports.skippedJournals.map((j) => j.id.slice(0, 8)).join('、');
+        warnings.push(
+          `有 ${imports.skipped} 份导入日志读不出来，已跳过（不计入上面的统计）：${ids}${imports.skipped > 10 ? ' 等' : ''}`,
+        );
       }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
