@@ -1102,15 +1102,33 @@ async function cmdChain(cwd: string, json: boolean, action?: string, a?: string,
       if (!a || !b) throw new Error('chain rename 需要两个位置参数：<链名或 id> <新名字>；例：watch chain rename tui-chain 前端');
       const found = store.findActiveChain(cwd, a);
       if (!found) throw new Error(store.missingChainMessage(cwd, a));
+      const wasArchived = found.status === 'archived';
       const chain = store.renameChain(found.id, b);
-      if (json) console.log(JSON.stringify({ ok: true, chain }));
-      else console.log(`已重命名: ${chain.name}  (${chain.id})`);
+      // 改名不动 status：给归档链改名后它仍是归档的，而 `switch` / `status` 只认活跃链。
+      // 只报「已重命名」会让人以为改名之后就切过去了（改名的动机常常就是这个），
+      // 接下来发现 `switch` 仍然忽略它，只会以为改名没生效。
+      const renameHint = wasArchived
+        ? `这条链是归档状态，改名不会让它变成当前链；可用 watch chain use ${chain.name} 恢复`
+        : null;
+      if (json) console.log(JSON.stringify({ ok: true, chain, ...(renameHint ? { warnings: [renameHint] } : {}) }));
+      else {
+        console.log(`已重命名: ${chain.name}  (${chain.id})`);
+        if (renameHint) console.log(`  ${renameHint}`);
+      }
       return;
     }
     if (action === 'archive') {
       if (!a) throw new Error('chain archive 需要一个链名或 id；例：watch chain archive tui-chain');
       const found = store.findActiveChain(cwd, a);
       if (!found) throw new Error(store.missingChainMessage(cwd, a));
+      // 已是归档状态时 `archiveChain()` 直接 return，什么都没做。
+      // 照旧打「已归档」会让用户以为刚刚归档成功，看不出本次是空操作。
+      if (found.status === 'archived') {
+        const note = `链「${found.name}」本来就是归档状态，本次没有做任何改动；可用 watch chain use ${found.name} 把它恢复成当前链`;
+        if (json) console.log(JSON.stringify({ ok: true, unchanged: true, id: found.id, warnings: [note] }));
+        else console.log(`已归档: ${found.name}（${note}）`);
+        return;
+      }
       store.archiveChain(found.id);
       if (json) console.log(JSON.stringify({ ok: true, id: found.id }));
       else console.log(`已归档: ${found.name}（可用 watch chain use ${found.name} 恢复）`);
