@@ -64,6 +64,25 @@ export function importPlanId(plan: ImportJobPlan): string {
   return createHash('sha256').update(JSON.stringify(plan)).digest('hex');
 }
 
+/**
+ * 读取执行日志文件时的非 ENOENT 失败。裸 `ENOTDIR: not a directory, open '…'` /
+ * `EACCES: permission denied` 只会出现在 `watch doctor` 的「读取失败」行里，
+ * 既不说是哪一种情况，也不给下一步。这里按常见的 errno 翻成「哪里坏了 + 怎么办」。
+ */
+function describeReadError(error: unknown, file: string): string {
+  const code = (error as NodeJS.ErrnoException).code;
+  if (code === 'ENOTDIR') {
+    return `日志路径上的某一级不是目录（被同名文件占住了？）：${file}；删掉占用它的文件后重试，或按下面的 id 手动核对`;
+  }
+  if (code === 'EACCES' || code === 'EPERM') {
+    return `没有权限读取执行日志（权限或归属变了？）：${file}`;
+  }
+  if (code === 'EISDIR') {
+    return `该路径是目录而不是日志文件：${file}`;
+  }
+  return `${error instanceof Error ? error.message : String(error)}：${file}`;
+}
+
 /** An exclusive, persistent claim survives crashes. Never erase it to retry a write. */
 export class ImportJobs {
   constructor(private root: string) {}
@@ -83,7 +102,7 @@ export class ImportJobs {
       return await readFile(file, 'utf8');
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
-      throw error;
+      throw new Error(describeReadError(error, file));
     }
   }
 
