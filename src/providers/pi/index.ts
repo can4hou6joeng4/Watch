@@ -59,13 +59,14 @@ function sessionIdFromName(name: string): string {
   return us >= 0 ? base.slice(us + 1) : base;
 }
 
-/** 读 jsonl 首条可解析记录拿 cwd（session 头事件带 cwd，目录名编码不可逆） */
-async function piSessionCwd(filePath: string): Promise<string | null> {
+/** 读 jsonl 首条可解析记录拿 cwd（session 头事件带 cwd，目录名编码不可逆）。
+ * `error` 区分「文件读不出来」与「内容里没有 cwd」——反查时前者不能说成「会话不存在」 */
+async function piSessionCwdDetail(filePath: string): Promise<{ cwd: string | null; error?: string }> {
   let raw: string;
   try {
     raw = await readFile(filePath, 'utf8');
-  } catch {
-    return null;
+  } catch (error) {
+    return { cwd: null, error: error instanceof Error ? error.message : String(error) };
   }
   for (const line of raw.split('\n')) {
     if (!line.trim()) continue;
@@ -75,10 +76,10 @@ async function piSessionCwd(filePath: string): Promise<string | null> {
     } catch {
       continue;
     }
-    if (typeof rec.cwd === 'string' && rec.cwd) return rec.cwd;
+    if (typeof rec.cwd === 'string' && rec.cwd) return { cwd: rec.cwd };
     break;
   }
-  return null;
+  return { cwd: null, error: '首条可解析记录里没有 cwd 字段' };
 }
 
 /** 按原生 session id 全局反查 Pi 会话：扫各 cwd 目录匹配 `<timestamp>_<id>.jsonl`，cwd 从文件头读；sessionsRoot 可注入 */
@@ -90,27 +91,50 @@ export async function findPiSessionById(
   let dirs: string[];
   try {
     dirs = await readdir(root);
-  } catch {
-    return null;
+  } catch (error) {
+    // 扫不了根目录时不能返回 null（= 没有这个会话）：原因要交给 resolveById 的 diagnostics
+    throw new Error(
+      `无法列出 Pi 会话目录 ${root}：${error instanceof Error ? error.message : String(error)}`,
+    );
   }
+  const unreadable: string[] = [];
+  const foundButUnreadable: string[] = [];
   for (const dir of dirs) {
     let files: string[];
     try {
       files = await readdir(path.join(root, dir));
-    } catch {
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code !== 'ENOENT' && code !== 'ENOTDIR') {
+        unreadable.push(`${path.join(root, dir)}（${error instanceof Error ? error.message : String(error)}）`);
+      }
       continue;
     }
     const hit = files.find((f) => f.endsWith('.jsonl') && f.slice(0, -'.jsonl'.length).endsWith(`_${sessionId}`));
     if (!hit) continue;
     const filePath = path.join(root, dir, hit);
+    let st;
     try {
-      const st = await stat(filePath);
-      const cwd = await piSessionCwd(filePath);
-      if (!cwd) continue;
-      return { ref: { provider: 'pi', sessionId, filePath, cwd }, updatedAt: st.mtimeMs };
-    } catch {
+      st = await stat(filePath);
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code !== 'ENOENT' && code !== 'ENOTDIR') {
+        unreadable.push(`${filePath}（${error instanceof Error ? error.message : String(error)}）`);
+      }
       continue;
     }
+    const { cwd, error } = await piSessionCwdDetail(filePath);
+    if (cwd) return { ref: { provider: 'pi', sessionId, filePath, cwd }, updatedAt: st.mtimeMs };
+    // 文件确实在，只是读不出 cwd：结论不能是「会话不存在」
+    foundButUnreadable.push(`${filePath}（${error ?? '原因未知'}）`);
+  }
+  if (foundButUnreadable.length) {
+    throw new Error(`找到会话文件 ${foundButUnreadable[0]}，但读不出它的工作目录，无法确认会话 ${sessionId}`);
+  }
+  if (unreadable.length) {
+    throw new Error(
+      `在 ${root} 下没找到会话 ${sessionId}，但有 ${unreadable.length} 个位置读不出来，无法确认它是否存在：${unreadable[0]}`,
+    );
   }
   return null;
 }

@@ -147,9 +147,13 @@ export async function findKimiSessionById(
   let raw: string;
   try {
     raw = await readFile(idxFile, 'utf8');
-  } catch {
-    return null;
+  } catch (error) {
+    // 索引读不出来时不能返回 null（= 没有这个会话）：原因要交给 resolveById 的 diagnostics
+    throw new Error(
+      `无法读取 Kimi 会话索引 ${idxFile}：${error instanceof Error ? error.message : String(error)}`,
+    );
   }
+  const unreadable: string[] = [];
   for (const line of raw.split('\n')) {
     if (!line.trim()) continue;
     let rec: Record<string, unknown>;
@@ -161,14 +165,27 @@ export async function findKimiSessionById(
     if (rec.sessionId !== sessionId) continue;
     const sessionDir = typeof rec.sessionDir === 'string' ? rec.sessionDir : '';
     const workDir = typeof rec.workDir === 'string' ? rec.workDir : '';
-    if (!sessionDir || !workDir) continue;
+    if (!sessionDir || !workDir) {
+      unreadable.push(`${idxFile} 里该会话缺少 sessionDir / workDir`);
+      continue;
+    }
     const wirePath = path.join(sessionDir, 'agents', 'main', 'wire.jsonl');
     try {
       const st = await stat(wirePath);
       return { ref: { provider: 'kimi', sessionId, filePath: wirePath, cwd: workDir }, updatedAt: st.mtimeMs };
-    } catch {
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      // 索引里明确记着这个会话，wire 却没了 / 读不出来：都不是「会话不存在」
+      unreadable.push(
+        code === 'ENOENT' || code === 'ENOTDIR'
+          ? `${wirePath} 不存在（索引里有这条会话，可能已被删除）`
+          : `${wirePath}（${error instanceof Error ? error.message : String(error)}）`,
+      );
       continue;
     }
+  }
+  if (unreadable.length) {
+    throw new Error(`Kimi 索引里有会话 ${sessionId}，但读不出它的会话文件，无法确认它是否可用：${unreadable[0]}`);
   }
   return null;
 }
