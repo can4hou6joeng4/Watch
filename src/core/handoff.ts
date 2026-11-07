@@ -395,10 +395,8 @@ export async function handoff(
     );
   }
 
-  const tips = await collectTips(cwd, adapters, warnings);
-  const mtimeTip = pickChainTip(tips);
-  if (!mtimeTip) throw new Error('未发现原生会话，请先在 Claude Code 或 Codex TUI 里开聊');
-
+  // 链记录先读：下面「未发现原生会话」要先看一眼链尾是不是指向了一个已被删掉的文件，
+  // 否则用户刚切过链、只是链尾文件被删，却被告知「请先在 TUI 里开聊」
   let history: SwitchRecord[] = [];
   if (store) {
     try {
@@ -410,6 +408,19 @@ export async function handoff(
       history = [];
       warnings.push(`链历史读取失败，按无链处理：${error instanceof Error ? error.message : String(error)}`);
     }
+  }
+
+  const tips = await collectTips(cwd, adapters, warnings);
+  const mtimeTip = pickChainTip(tips);
+  if (!mtimeTip) {
+    const chainTipRef = history.at(-1)?.toRef ?? null;
+    if (chainTipRef && !(await stat(chainTipRef.filePath).then(() => true, () => false))) {
+      throw new Error(
+        `未发现原生会话；而链尾记录的 ${chainTipRef.provider} 会话 ${chainTipRef.sessionId} 文件已不存在（${chainTipRef.filePath}）：` +
+          `可先 watch adopt ${chainTipRef.provider} --session <id> 重新绑定，或在原生 CLI 里新开一个会话`,
+      );
+    }
+    throw new Error('未发现原生会话，请先在 Claude Code 或 Codex TUI 里开聊');
   }
 
   let sourceTip: ProviderTip | null = null;
@@ -438,9 +449,13 @@ export async function handoff(
           destTurns = await target.parse(boundTarget);
           into = boundTarget;
           destDigest = (await target.contentFingerprint?.(boundTarget)) ?? null;
-        } catch {
+        } catch (error) {
           into = undefined;
-          warnings.push(`目标会话 ${boundTarget.sessionId} 解析失败，改为新建会话承接内容`);
+          // 「解析失败」把 ENOENT（文件被删）和格式问题讲成同一件事：带上真实原因，
+          // 否则用户以为只是格式不认识，不会想到文件已经没了
+          warnings.push(
+            `目标会话 ${boundTarget.sessionId} 无法沿用（${error instanceof Error ? error.message : String(error)}），改为新建会话承接内容`,
+          );
         }
       }
     }
@@ -469,9 +484,11 @@ export async function handoff(
         destTurns = await target.parse(mtimeTip.ref);
         into = mtimeTip.ref;
         destDigest = (await target.contentFingerprint?.(mtimeTip.ref)) ?? null;
-      } catch {
+      } catch (error) {
         into = undefined;
-        warnings.push(`目标会话 ${mtimeTip.ref.sessionId} 解析失败，改为新建会话承接内容`);
+        warnings.push(
+          `目标会话 ${mtimeTip.ref.sessionId} 无法沿用（${error instanceof Error ? error.message : String(error)}），改为新建会话承接内容`,
+        );
       }
     }
   }
