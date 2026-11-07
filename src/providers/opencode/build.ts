@@ -48,21 +48,35 @@ export async function findLatestOpencodeSession(
 export async function listOpencodeSessions(
   cwd: string,
 ): Promise<{ ref: SessionRef; updatedAt: number; preview?: string }[]> {
+  const dbPath = opencodeDbPath();
+  // 库不存在 = 这台机器没用过 opencode，空列表是事实；
+  // 库在却打不开是「读不出来」，必须抛出交给调用方披露，不能返回空列表冒充「这个目录没聊过」
+  try {
+    await stat(dbPath);
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === 'ENOENT' || code === 'ENOTDIR') return [];
+    throw new Error(
+      `无法读取 OpenCode 数据库状态 ${dbPath}：${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
   let db: DatabaseSync | undefined;
   try {
-    db = new DatabaseSync(opencodeDbPath(), { readOnly: true });
-  } catch {
-    return [];
+    db = new DatabaseSync(dbPath, { readOnly: true });
+  } catch (error) {
+    throw new Error(`无法打开 OpenCode 数据库 ${dbPath}：${error instanceof Error ? error.message : String(error)}`);
   }
   try {
     const rows = db
       .prepare('SELECT id, directory, title, time_updated FROM session WHERE directory = ? ORDER BY time_updated DESC')
       .all(cwd) as { id: string; directory: string; title: string; time_updated: number }[];
     return rows.map((r) => ({
-      ref: { provider: 'opencode', sessionId: r.id, filePath: opencodeDbPath(), cwd: r.directory },
+      ref: { provider: 'opencode', sessionId: r.id, filePath: dbPath, cwd: r.directory },
       updatedAt: r.time_updated,
       preview: r.title,
     }));
+  } catch (error) {
+    throw new Error(`无法查询 OpenCode 数据库 ${dbPath}：${error instanceof Error ? error.message : String(error)}`);
   } finally {
     try { db.close(); } catch { /* ignore */ }
   }

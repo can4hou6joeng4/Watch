@@ -254,11 +254,17 @@ export async function listGrokSessions(
   const dir = path.join(root, encodeGrokProjectDir(cwd));
   let entries: string[] = [];
   try {
-    entries = (await (await import('node:fs/promises')).readdir(dir, { withFileTypes: true }))
+    entries = (await readdir(dir, { withFileTypes: true }))
       .filter((d) => d.isDirectory())
       .map((d) => d.name);
-  } catch {
-    return [];
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    // 这个 cwd 没聊过 = 目录不存在（空列表是事实）；读不出来则必须抛出，
+    // 否则「权限 / 路径出错」会被讲成「这个目录没聊过」
+    if (code === 'ENOENT' || code === 'ENOTDIR') return [];
+    throw new Error(
+      `无法读取 Grok 会话目录 ${dir}：${error instanceof Error ? error.message : String(error)}`,
+    );
   }
 
   const items: { ref: SessionRef; updatedAt: number; preview?: string }[] = [];
