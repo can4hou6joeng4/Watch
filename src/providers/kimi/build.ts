@@ -7,6 +7,7 @@ import path from 'node:path';
 import { promisify } from 'node:util';
 import { createHash, randomUUID } from 'node:crypto';
 import { writeFileAtomic } from '../../core/atomic.js';
+import { inspectCwd, type CwdInspection } from '../../core/cwd.js';
 import { verifyWrittenTurns } from '../../core/verify.js';
 import { parseKimiSession } from './parse.js';
 import type { ImportTurnsOpts } from '../adapter.js';
@@ -87,20 +88,36 @@ export async function listKimiSessionsByCwd(
 }
 
 /**
+ * 新建会话前目标目录不可用时的说法。按 `inspectCwd()` 的分档各说一句：
+ * 「不存在」让人去核对路径，「无权访问」让人去修权限，把两者混成一句
+ * 「不存在或不是目录」会让权限问题被当成路径写错，白改一遍 `--cwd`。
+ */
+function describeUnusableTargetCwd(cwd: string, probe: Exclude<CwdInspection, { state: 'ok' }>): string {
+  const tail = '新建 Kimi 会话需要在目标目录里运行 kimi CLI';
+  switch (probe.state) {
+    case 'missing':
+      return `目标工作目录不存在（路径上的某一级可能被同名文件占住）：${cwd}；${tail}`;
+    case 'not-directory':
+      return `目标工作目录不是目录（被同名文件占住了）：${cwd}；${tail}`;
+    case 'denied':
+      return `目标工作目录无权访问（权限问题，不是路径写错）：${cwd}；${tail}`;
+    case 'unknown':
+      return `无法确认目标工作目录能否使用（${probe.reason}）：${cwd}；${tail}`;
+  }
+}
+
+/**
  * 新建一个真实的 Kimi 会话（用最小提示词），然后截断 wire.jsonl 到只剩头部事件。
  * 返回 sessionId 与 wire.jsonl 路径。
  * 依赖原生 CLI 登记会话目录与 `session_index.jsonl`；需要已登录，且会产生一次模型调用。
  */
 async function createRealKimiSession(cwd: string): Promise<{ sessionId: string; filePath: string }> {
-  // cwd 不存在 / 不是目录 与「PATH 里没有 kimi」在 spawn 层都是 ENOENT，先分开判定再给准确报错
-  let cwdUsable = false;
-  try {
-    cwdUsable = (await stat(cwd)).isDirectory();
-  } catch {
-    cwdUsable = false;
-  }
-  if (!cwdUsable) {
-    throw new Error(`目标工作目录不存在或不是目录，无法新建 Kimi 会话: ${cwd}`);
+  // 目录不可用与「PATH 里没有 kimi」在 spawn 层都是 ENOENT，先分开判定再给准确报错。
+  // 这里以前是 `catch { cwdUsable = false }`，EACCES（父目录不可搜索 / 权限被收走）会被讲成
+  // 「不存在或不是目录」——用户会去核对路径，而真正要修的是权限
+  const probe = await inspectCwd(cwd);
+  if (probe.state !== 'ok') {
+    throw new Error(describeUnusableTargetCwd(cwd, probe));
   }
 
   let stdout: string;
