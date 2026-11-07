@@ -3,7 +3,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { readText, writeText } from '@tauri-apps/plugin-clipboard-manager';
 import { ArrowDownLeft, ArrowRight, ArrowUpRight, Check, ChevronDown, ClipboardPaste, Copy, FileText, Folder, History, Info, LoaderCircle, Monitor, Moon, RefreshCw, Search, Settings2, ShieldCheck, Sun, SunMoon, Terminal, Workflow, X } from 'lucide-react';
 import { assertSameCodexImportPlan, beginCodexOpen, completeCodexOpen, failCodexOpen, importedCodexThreadId, parseCodexImportResult, viewForCodexImportResult, type CodexImportResult, type CodexImportView } from './codex-import.js';
-import { AGENTS, buildCommand, handoffRoute, parsePrecheckBlocked, parseThemePreference, resolveTheme, THEME_OPTIONS, type PrecheckResponse, type ThemePreference } from './handoff-ui.js';
+import { AGENTS, buildCommand, handoffRoute, parsePrecheckBlocked, parseThemePreference, resolveTheme, sourceWarnings, THEME_OPTIONS, type PrecheckResponse, type ThemePreference } from './handoff-ui.js';
 import './App.css';
 
 type TerminalId = 'terminal' | 'kaku' | 'iterm2' | 'ghostty';
@@ -13,7 +13,7 @@ type Recent = { provider: string; sessionId: string; cwd: string; updatedAt: num
 type Provider = { id: string; available: boolean };
 type Record = { id: string; fromProvider?: string; toProvider: string; toRef?: { sessionId?: string }; createdAt: number };
 type Summary = { turnCount: number; userTurnCount: number; assistantTurnCount: number; lastUserPrompt?: string; lastAssistantReply?: string; hasThinking: boolean; hasTools: boolean; hasAttachments: boolean; toolNames: string[]; toolCount: number };
-type Source = { cwd: string; provider: string | null; sessionId?: string; usage?: { inputTokens: number; outputTokens: number } | null; summary?: Summary | null };
+type Source = { cwd: string; provider: string | null; sessionId?: string; usage?: { inputTokens: number; outputTokens: number } | null; summary?: Summary | null; warnings?: string[] };
 type Detect = { status: 'idle' | 'loading' } | { status: 'ok'; source: Source } | { status: 'error'; error: string };
 type Blocked = { code: string; sessionId?: string; holders?: { pid: number; command: string }[]; hint?: string };
 type Precheck = { status: 'idle' | 'checking' | 'ok' | 'blocked' | 'error'; writable?: boolean; note?: string; notes?: string[]; warnings?: string[]; blocked?: Blocked; error?: string };
@@ -232,6 +232,7 @@ export default function App() {
           {detect.status === 'error' && <div className="state-message error" role="alert"><Info size={18} /><span>{detect.error}</span><button className="text-button" onClick={startDemo}>载入演示</button></div>}
           {source && <div className="source-details"><div className="source-identity"><span className="provider-label"><img src={`/${owner || 'claude'}.svg`} alt="" />{labels[owner || ''] || owner || '未知来源'}</span><code>{source.sessionId || id}</code><button className="icon-button" title="复制来源 ID" aria-label="复制来源 ID" onClick={() => copyFeedback(source.sessionId || id)}><Copy size={14} /></button></div><button className="cwd-row" title="复制完整工作目录" onClick={() => copyFeedback(source.cwd)}><Folder size={16} /><code>{source.cwd}</code><Copy size={13} /></button>
             <div className="session-metrics"><div><span>消息</span><strong>{source.summary?.turnCount ?? '—'}<small>条</small></strong></div><div><span><ArrowDownLeft size={13} />输入 Tokens</span><strong>{tokens(source.usage?.inputTokens)}</strong></div><div><span><ArrowUpRight size={13} />输出 Tokens</span><strong>{tokens(source.usage?.outputTokens)}</strong></div><div><span>来源内容</span><div className="content-flags">{source.summary?.hasThinking && <span>思考记录</span>}{source.summary?.hasTools && <span>工具调用</span>}{source.summary?.hasAttachments && <span>附件</span>}{!source.summary && <span>未提供摘要</span>}</div></div></div>
+            {sourceWarnings(source).map((warning, index) => <p className="warning-message" key={`sw${index}`}><Info size={15} />{warning}</p>)}
             {source.summary && <div className="context-section"><div className="section-heading"><h3>上下文摘录</h3><button className="text-button" aria-expanded={expanded} onClick={() => setExpanded(!expanded)}>{expanded ? '收起' : '展开'}<ChevronDown size={14} className={expanded ? 'rotate' : ''} /></button></div>{source.summary.lastUserPrompt && <div className="excerpt-row"><span className="role-label">用户</span><p className={expanded ? '' : 'clamped'}>{source.summary.lastUserPrompt}</p></div>}{source.summary.lastAssistantReply && <div className="excerpt-row"><span className="role-label assistant">助手</span><p className={expanded ? '' : 'clamped'}>{source.summary.lastAssistantReply}</p></div>}{!!source.summary.toolNames.length && <div className="tool-list"><span>工具</span>{source.summary.toolNames.map((tool) => <code key={tool}>{tool}</code>)}{source.summary.toolCount > source.summary.toolNames.length && <span>等 {source.summary.toolCount} 种</span>}</div>}</div>}
           </div>}
         </section>

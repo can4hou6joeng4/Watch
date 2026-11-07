@@ -55,8 +55,29 @@ export function parsePrecheckBlocked(data: PrecheckResponse): PrecheckBlocked | 
     hint: detail.hint,
   };
 }
-export function shellQuote(value: string) { return `'${value.replace(/'/g, `'\\''`)}'`; }
-export function powershellQuote(value: string) { return `'${value.replace(/'/g, `''`)}'`; }
+/**
+ * `resolve_cwd`（= `watch open <id> --json`）带回的降级原因，供来源面板展示。
+ *
+ * CLI 侧在摘要 / 用量 / 来源解析读不出来时会写 `warnings`；桌面端此前只取 cwd / provider /
+ * usage / summary，把这些警告丢掉后，读失败就只剩「未提供摘要」和「—」，和「原生确实没有」
+ * 分不开。空串、非字符串条目直接丢弃，重复项只留一条。
+ */
+export function sourceWarnings(data: { warnings?: unknown } | null | undefined): string[] {
+  const raw = data?.warnings;
+  if (!Array.isArray(raw)) return [];
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const entry of raw) {
+    if (typeof entry !== 'string') continue;
+    const text = entry.trim();
+    if (!text || seen.has(text)) continue;
+    seen.add(text);
+    out.push(text);
+  }
+  return out;
+}
+
+export function shellQuote(value: string) { return `'${value.replace(/'/g, `'\\''`)}'`; }export function powershellQuote(value: string) { return `'${value.replace(/'/g, `''`)}'`; }
 export function buildCommand(agent: Agent, id: string, cwd: string | undefined, yolo: boolean, windows = false) {
   // Native IDs are arguments, not shell fragments. Keep ordinary IDs readable.
   const argument = /^[a-zA-Z0-9_.:-]+$/.test(id) ? id : windows ? powershellQuote(id) : shellQuote(id);
