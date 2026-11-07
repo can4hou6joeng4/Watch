@@ -988,6 +988,11 @@ async function cmdUsage(cwd: string, json: boolean, chain?: string): Promise<voi
     // 警告必须先打：本地库不可用时 byProvider 也是空的，先 return 会把「读不出来」说成「没有绑定会话」
     for (const warning of result.warnings) console.error(`警告: ${warning}`);
     if (!result.byProvider.length) {
+      if (result.unsupported?.length) {
+        // 链上有绑定、只是这家适配器不给用量：说成「无链」会把有链的工作当成没链
+        console.log(`链上有绑定（${result.unsupported.join('、')}），但这些适配器不提供用量数据`);
+        return;
+      }
       console.log(result.warnings.length ? '（无可统计的用量；原因见上方警告）' : '无链或该链无绑定会话');
       return;
     }
@@ -995,6 +1000,7 @@ async function cmdUsage(cwd: string, json: boolean, chain?: string): Promise<voi
     const missing: string[] = [];
     if (result.totalExcluded) missing.push(`${result.totalExcluded} 个读取失败的会话`);
     if (result.totalMissingUsage) missing.push(`${result.totalMissingUsage} 个无 usage 数据的会话`);
+    if (result.unsupported?.length) missing.push(`${result.unsupported.join('、')}（适配器不提供用量）`);
     console.log(
       `合计${missing.length ? `（未含 ${missing.join('、')}）` : ''}: in=${result.total.inputTokens}  out=${result.total.outputTokens}`,
     );
