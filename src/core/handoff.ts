@@ -224,6 +224,15 @@ export async function chainUsage(
       totalExcluded += 1;
       continue;
     }
+    // null 在适配器里同时表示「这家原生没有 usage 字段」与「文件读不出」（各家的读失败被吞成 null）：
+    // 再 stat 一次分开，否则 `usage` 的合计会把「链尾文件已经没了」讲成「这些会话没有用量数据」
+    if (usage === null && !(await stat(ref.filePath).then(() => true, () => false))) {
+      const msg = `会话文件已不存在：${ref.filePath}`;
+      warnings.push(`${adapter.id} 用量读取失败：${msg}`);
+      byProvider.push({ provider: adapter.id, sessionId: ref.sessionId, usage: null, error: msg });
+      totalExcluded += 1;
+      continue;
+    }
     byProvider.push({ provider: adapter.id, sessionId: ref.sessionId, usage });
     if (usage === null) totalMissingUsage += 1;
     if (usage) {

@@ -480,7 +480,8 @@ async function cmdSessions(cwd: string, json: boolean, chain?: string): Promise<
   const cwdIssue = await cwdProblem(cwd);
   if (cwdIssue) warnings.push(cwdIssue);
   // --chain 才按链过滤；不带 flag 时列出该目录全部原生会话（README 的语义）
-  const bound = new Map<string, Set<string>>();
+  // 存 ref（不只 sessionId）：会话没被列出来时还要 stat 它的文件，判断是「太老没进列表」还是「文件已经没了」
+  const bound = new Map<string, Map<string, SessionRef>>();
   let chainRow: import('./core/store.js').Chain | null = null;
   if (!store && chain) {
     // 用户明确要按链过滤却打不开库：不说是「已忽略」，列表看起来就像链上会话
@@ -491,11 +492,11 @@ async function cmdSessions(cwd: string, json: boolean, chain?: string): Promise<
       chainRow = chain ? store.findActiveChain(cwd, chain) : null;
       if (chainRow) {
         for (const h of store.listSwitchEvents(chainRow.id)) {
-          if (h.fromProvider && h.fromRef) {
-            bound.set(h.fromProvider, (bound.get(h.fromProvider) ?? new Set()).add(h.fromRef.sessionId));
-          }
-          if (h.toRef) {
-            bound.set(h.toProvider, (bound.get(h.toProvider) ?? new Set()).add(h.toRef.sessionId));
+          for (const ref of [h.fromProvider && h.fromRef ? h.fromRef : null, h.toRef]) {
+            if (!ref) continue;
+            const group = bound.get(ref.provider) ?? new Map<string, SessionRef>();
+            group.set(ref.sessionId, ref);
+            bound.set(ref.provider, group);
           }
         }
         // 链存在但一条绑定都没有：过滤后必然是空列表，不说原因会被当成「目录里没有会话」
@@ -530,14 +531,25 @@ async function cmdSessions(cwd: string, json: boolean, chain?: string): Promise<
           const linked = chainRow ? (ids ? sessions.filter((s) => ids.has(s.ref.sessionId)) : []) : sessions;
           // 撞到适配器上限时列表只是「最近 N 个」：不标出来会被当成全集
           const capped = a.listSessionsCap !== undefined && sessions.length >= a.listSessionsCap;
-          // 链上绑定的会话可能比列表上限更老：过滤后整个 provider 组都会消失，
-          // 不说就像「这条链没绑定它」——尤其 `--chain` 时整组被 filter 掉，更容易误读
-          if (chainRow && ids && capped) {
+          // 链上绑定了、但这次没被列出来：整组被 filter 掉后看起来就像「这条链没绑定它」。
+          // 两种原因必须分开说——文件已经没了（下次切换必然失败，可先 adopt），还是只是排在上限之外。
+          if (chainRow && ids) {
             const listed = new Set(sessions.map((s) => s.ref.sessionId));
-            const hidden = [...ids].filter((id) => !listed.has(id));
-            if (hidden.length) {
+            const missingFiles: string[] = [];
+            const tooOld: string[] = [];
+            for (const [id, ref] of ids) {
+              if (listed.has(id)) continue;
+              const alive = await stat(ref.filePath).then(() => true, () => false);
+              (alive ? tooOld : missingFiles).push(id);
+            }
+            if (missingFiles.length) {
               warnings.push(
-                `链 ${chainRow.name} 绑定的 ${a.id} 会话 ${hidden.join('、')} 不在最近 ${sessions.length} 个里（已达列表上限），本次未列出；可用 watch doctor 或原生 CLI 确认该会话是否还在`,
+                `链 ${chainRow.name} 绑定的 ${a.id} 会话 ${missingFiles.join('、')} 文件已不存在，本次未列出；下次切换会失败，可先 watch adopt ${a.id} --session <id> 重新绑定`,
+              );
+            }
+            if (tooOld.length) {
+              warnings.push(
+                `链 ${chainRow.name} 绑定的 ${a.id} 会话 ${tooOld.join('、')} 不在最近 ${sessions.length} 个里${capped ? '（已达列表上限）' : '（可能属于另一个目录）'}，本次未列出；可用 watch doctor 或原生 CLI 确认该会话`,
               );
             }
           }
