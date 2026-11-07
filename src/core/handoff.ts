@@ -6,7 +6,7 @@ import { dedupeCallEvents, describeDanglingToolCalls, mergeTurns, shouldReplaceP
 import { describeWriteFailureReason, type FileDigest } from './atomic.js';
 import { addFinding, type Finding } from './findings.js';
 import { countUnparsableJsonLines } from './jsonl.js';
-import { sessionFilePresence } from './read-text.js';
+import { describePathReadFailureReason, describeReadFailureOrSelf, sessionFilePresence } from './read-text.js';
 import { unknownProviderMessage } from '../providers/registry.js';
 
 /** 写回被阻断（如 TOCTOU 检测到目标被外部修改）：一票否决，不产生部分写 */
@@ -187,7 +187,7 @@ export async function createChainSession(
     const message = error instanceof Error ? error.message : String(error);
     if (/找不到链|已归档/.test(message)) throw error;
     // 读库失败不能退成空历史：下面会报「还没有切换链」，把用户引去建一条新链，真实原因丢失
-    throw new Error(`读取链记录失败，无法确认当前链状态：${message}`);
+    throw new Error(`读取链记录失败，无法确认当前链状态：${describeStoreErrorReason(error)}`);
   }
   if (!history.length) throw new Error('当前目录还没有切换链，请先执行一次 Switch 建链');
   const tail = history.at(-1)!;
@@ -268,8 +268,9 @@ export async function chainUsage(
     try {
       usage = await adapter.sessionUsage(ref);
     } catch (error) {
-      // 读失败不能和「这家原生格式没有 usage」混为一谈（grok 本机无数据也是 null）
-      const msg = error instanceof Error ? error.message : String(error);
+      // 读失败不能和「这家原生格式没有 usage」混为一谈（grok 本机无数据也是 null）；
+      // 适配器可能直接把 fs errno 抛出来，按「读不出来」翻成中文再披露
+      const msg = describeReadFailureOrSelf(error);
       warnings.push(`${adapter.id} 用量读取失败：${msg}`);
       byProvider.push({ provider: adapter.id, sessionId: ref.sessionId, usage: null, error: msg });
       totalExcluded += 1;
@@ -342,8 +343,9 @@ export async function collectTips(
     try {
       found = await adapter.findLatestSession(cwd);
     } catch (error) {
-      // 单个 provider 的原生存储读不出来时跳过，不影响其它家，但要披露
-      warnings?.push(`${adapter.id} 原生会话读取失败，已跳过：${error instanceof Error ? error.message : String(error)}`);
+      // 单个 provider 的原生存储读不出来时跳过，不影响其它家，但要披露；原因按路径说（这里
+      // 可能是目录 / 索引 / 库），不能把 `EACCES: permission denied, scandir '…'` 原文交给用户
+      warnings?.push(`${adapter.id} 原生会话读取失败，已跳过：${describePathReadFailureReason(error)}`);
       continue;
     }
     if (found) tips.push({ provider: adapter.id, ref: found.ref, updatedAt: found.updatedAt });
@@ -537,9 +539,9 @@ export async function handoff(
         } catch (error) {
           into = undefined;
           // 「解析失败」把 ENOENT（文件被删）和格式问题讲成同一件事：带上真实原因，
-          // 否则用户以为只是格式不认识，不会想到文件已经没了
+          // 否则用户以为只是格式不认识，不会想到文件已经没了；fs 错误要翻成中文
           warnings.push(
-            `目标会话 ${boundTarget.sessionId} 无法沿用（${error instanceof Error ? error.message : String(error)}），改为新建会话承接内容`,
+            `目标会话 ${boundTarget.sessionId} 无法沿用（${describeReadFailureOrSelf(error)}），改为新建会话承接内容`,
           );
         }
       }
@@ -572,7 +574,7 @@ export async function handoff(
       } catch (error) {
         into = undefined;
         warnings.push(
-          `目标会话 ${mtimeTip.ref.sessionId} 无法沿用（${error instanceof Error ? error.message : String(error)}），改为新建会话承接内容`,
+          `目标会话 ${mtimeTip.ref.sessionId} 无法沿用（${describeReadFailureOrSelf(error)}），改为新建会话承接内容`,
         );
       }
     }
@@ -674,7 +676,8 @@ export async function handoff(
       } catch (error) {
         if (error instanceof HandoffBlockedError) throw error;
         console.error('[watch] 重写目标 session 失败，仍尝试 resume:', error);
-        warnings.push(`重写目标会话失败，目标内容可能未更新: ${error instanceof Error ? error.message : String(error)}`);
+        const reason = describeWriteFailureReason(error) ?? (error instanceof Error ? error.message : String(error));
+        warnings.push(`重写目标会话失败，目标内容可能未更新: ${reason}`);
       }
     }
     if (store && sourceTip) {

@@ -78,6 +78,21 @@ export function isFileSystemErrorCode(code: unknown): code is string {
   return typeof code === 'string' && /^E[A-Z]+$/.test(code);
 }
 
+/**
+ * 「读不出来」的原因：文件系统错误按 errno 说中文，其余保留适配器 / 业务自己的说明。
+ *
+ * `parse` / `sessionUsage` / `listSessions` 既可能因权限 / 路径抛 fs 错误（原文是
+ * `EACCES: permission denied, open '…'`），也可能自己抛出已经写好的中文错误（格式坏、
+ * 库打不开）。统一走这里，就不会出现「把权限问题讲成格式问题」或半句英文 errno。
+ */
+export function describeReadFailureOrSelf(error: unknown): string {
+  return isFileSystemErrorCode((error as NodeJS.ErrnoException).code)
+    ? describeSessionReadFailureReason(error)
+    : error instanceof Error
+      ? error.message
+      : String(error);
+}
+
 export type SessionFilePresence =
   | { state: 'present'; isFile: boolean }
   | { state: 'missing' }

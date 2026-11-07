@@ -9,7 +9,7 @@ import type { ProviderAdapter } from './providers/adapter.js';
 import { PreflightBlockedError } from './providers/adapter.js';
 import { getAdapter, listAdapters, unknownProviderMessage } from './providers/registry.js';
 import { countUnparsableJsonLines } from './core/jsonl.js';
-import { describeSessionReadFailure, describeSessionReadFailureReason, isFileSystemErrorCode } from './core/read-text.js';
+import { describeReadFailureOrSelf, describeSessionReadFailure, describeSessionReadFailureReason } from './core/read-text.js';
 import { sessionCwdProblem } from './core/cwd.js';
 
 /** `watch open` 的返回协议：桌面 GUI 通过 CLI `--json` 消费 */
@@ -212,11 +212,7 @@ export async function resolveById(
  * 原样塞进 warnings 会让人以为会话坏了，实际要修的是权限。
  */
 function fileReadReason(error: unknown): string {
-  return isFileSystemErrorCode((error as NodeJS.ErrnoException).code)
-    ? describeSessionReadFailureReason(error)
-    : error instanceof Error
-      ? error.message
-      : String(error);
+  return describeReadFailureOrSelf(error);
 }
 
 /** POSIX 单引号包裹（含单引号转义），供拼接可复制的 cd / command */
