@@ -22,7 +22,12 @@ import { cwdProblem } from './core/cwd.js';
  */
 const JSON_REQUESTED = process.argv.includes('--json');
 
-function usage(): never {
+/**
+ * `reason` 用来把「哪里不对」讲清楚：只打一整段用法时，
+ * `--limit 51` 与「少给了子命令」在 `--json` 下是同一句「参数不完整或不合法」。
+ */
+function usage(reason?: string): never {
+  if (reason) console.error(`[watch] ${reason}`);
   console.error(`用法:
   watch status [--json] [--cwd <path>] [--chain <id|name>]
   watch switch <provider> [--json] [--cwd <path>] [--chain <id|name>]
@@ -43,7 +48,11 @@ function usage(): never {
     console.log(
       JSON.stringify({
         ok: false,
-        error: help ? '已打印用法到 stderr（--json 模式下不输出结果）' : '用法错误：参数不完整或不合法（完整用法见 stderr）',
+        error: help
+          ? '已打印用法到 stderr（--json 模式下不输出结果）'
+          : reason
+            ? `用法错误：${reason}（完整用法见 stderr）`
+            : '用法错误：参数不完整或不合法（完整用法见 stderr）',
       }),
     );
   }
@@ -133,9 +142,11 @@ function parseArgs(argv: string[]): {
   const positional: string[] = [];
   let i = 0;
   /** 取下一个 token 作为参数值；缺值或误吞了下一个 flag 都按用法错误处理 */
-  const takeValue = (): string => {
+  const takeValue = (flag: string): string => {
     const next = args[++i];
-    if (!next || next.startsWith('--')) usage();
+    if (!next) usage(`${flag} 缺少取值`);
+    // 下一个 token 仍是 flag：说明取值漏了，别把它吞成值
+    if (next.startsWith('--')) usage(`${flag} 缺少取值（后面跟着 ${next}）`);
     return next;
   };
   for (i = 0; i < args.length; i++) {
@@ -146,34 +157,37 @@ function parseArgs(argv: string[]): {
       continue;
     }
     if (a === '--cwd') {
-      cwd = takeValue();
+      cwd = takeValue('--cwd');
       cwdGiven = true;
       continue;
     }
     if (a === '--session') {
-      session = takeValue();
+      session = takeValue('--session');
       continue;
     }
     if (a === '--chain') {
-      chain = takeValue();
+      chain = takeValue('--chain');
       continue;
     }
     if (a === '--from') {
-      from = takeValue();
+      from = takeValue('--from');
       continue;
     }
     if (a === '--provider') {
-      provider = takeValue();
+      provider = takeValue('--provider');
       continue;
     }
     if (a === '--to') {
-      to = takeValue();
+      to = takeValue('--to');
       continue;
     }
     if (a === '--limit') {
-      const raw = takeValue();
-      const n = Number(raw);
-      if (!Number.isInteger(n) || n < 1 || n > 50) usage();
+      const raw = takeValue('--limit');
+      // Number() 会接受 '0x10'（16）与 ' 3'（3）：用户只想给十进制条数，别猜他的意思
+      const n = /^\d+$/.test(raw) ? Number(raw) : NaN;
+      if (!Number.isInteger(n) || n < 1 || n > 50) {
+        usage(`--limit 需要 1–50 之间的整数，收到: ${raw}`);
+      }
       limit = n;
       continue;
     }

@@ -215,6 +215,12 @@ export async function openSession(
   let merged = 0;
   let sourceUsage: TokenUsage | null = null;
 
+  // 来源与目标是同一个会话：diffTurns 必然为空，旧实现会报「已全部包含在自身中，无需并入」，
+  // 看着像成功、实际什么都没做。这是参数错误，直接说清楚。
+  if (from && from === targetId) {
+    return { ok: false, error: `--from 与 <session-id> 是同一个会话: ${targetId}；请把来源换成另一侧的会话` };
+  }
+
   if (from) {
     const source = await resolveById(from, undefined, mapping, adapters, lookup);
     if (!source) {
