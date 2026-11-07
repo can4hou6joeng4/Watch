@@ -9,7 +9,12 @@ import type { ProviderAdapter } from './providers/adapter.js';
 import { PreflightBlockedError } from './providers/adapter.js';
 import { getAdapter, listAdapters, unknownProviderMessage } from './providers/registry.js';
 import { countUnparsableJsonLines } from './core/jsonl.js';
-import { describeReadFailureOrSelf, describeSessionReadFailure, describeSessionReadFailureReason } from './core/read-text.js';
+import {
+  describePathReadFailureReason,
+  describeReadFailureOrSelf,
+  describeSessionReadFailure,
+  describeSessionReadFailureReason,
+} from './core/read-text.js';
 import { sessionCwdProblem } from './core/cwd.js';
 
 /** `watch open` 的返回协议：桌面 GUI 通过 CLI `--json` 消费 */
@@ -306,14 +311,32 @@ export async function openSession(
           );
         }
       }
-      const srcTurns = await source.adapter.parse(source.found.ref);
+      // 来源 / 目标解析各自捕获：它们都是「读」，让它们落进下面管写入的 catch 会被
+      // 说成「并入新内容失败：无权写入」，把读失败讲成写失败、还指向错误的下一步
+      let srcTurns: UnifiedTurn[];
+      try {
+        srcTurns = await source.adapter.parse(source.found.ref);
+      } catch (error) {
+        return {
+          ok: false,
+          error: `来源会话 ${source.found.ref.sessionId}（${source.adapter.displayName}）读取失败：${describeReadFailureOrSelf(error)}；本次未写入任何内容`,
+        };
+      }
       const badSrcLines = await countUnparsableJsonLines(source.found.ref.filePath);
       if (badSrcLines > 0) {
         warnings.push(
           `来源会话 ${source.found.ref.sessionId} 有 ${badSrcLines} 行无法解析（截断或损坏），已跳过；并入内容可能不完整`,
         );
       }
-      const dstTurns = await target.adapter.parse(target.found.ref);
+      let dstTurns: UnifiedTurn[];
+      try {
+        dstTurns = await target.adapter.parse(target.found.ref);
+      } catch (error) {
+        return {
+          ok: false,
+          error: `目标会话 ${target.found.ref.sessionId}（${target.adapter.displayName}）读取失败：${describeReadFailureOrSelf(error)}；本次未写入任何内容`,
+        };
+      }
       warnDanglingToolCalls(
         srcTurns,
         `来源会话 ${source.found.ref.sessionId}（${source.adapter.displayName}）`,
@@ -540,7 +563,7 @@ async function planOpenInProvider(
     // 解析不了来源就没有可转入的内容；按错误返回，别让异常穿透到 openInProvider 的调用方
     return {
       ok: false,
-      error: `来源会话 ${sourceId} 读取失败：${error instanceof Error ? error.message : String(error)}`,
+      error: `来源会话 ${sourceId} 读取失败：${describeReadFailureOrSelf(error)}；本次未写入任何内容`,
     };
   }
   // parse 跳过坏行不会报错，round-trip 也比的是解析结果：不扫一遍就会把「少了几轮」当完整转入
@@ -639,7 +662,7 @@ async function planOpenInProvider(
     } catch (error) {
       // 扫不动只能新建：会多出一份会话，必须说明原因，而不是让用户以为 「本该复用却新建」
       diagnostics?.push(
-        `目标 ${target.displayName} 会话列表读取失败，未能复用既有会话（将新建）：${error instanceof Error ? error.message : String(error)}`,
+        `目标 ${target.displayName} 会话列表读取失败，未能复用既有会话（将新建）：${describePathReadFailureReason(error)}`,
       );
     }
     if (parseFailed > 0) {
@@ -663,7 +686,7 @@ async function planOpenInProvider(
     } catch (error) {
       return {
         ok: false,
-        error: `目标会话 ${reuse.sessionId} 在写入前读取失败，本次未写入任何内容：${error instanceof Error ? error.message : String(error)}`,
+        error: `目标会话 ${reuse.sessionId} 在写入前读取失败，本次未写入任何内容：${describeReadFailureOrSelf(error)}`,
       };
     }
     await warnTargetBadLines(reuse, target, diagnostics);
