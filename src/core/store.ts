@@ -809,7 +809,7 @@ export class Store {
       this.db.exec('COMMIT');
     } catch (error) {
       this.db.exec('ROLLBACK');
-      throw uniqueChainName(error, trimmed);
+      throw uniqueChainName(error, trimmed, () => this.chainNameHolder(cwd, trimmed));
     }
     return this.mustChain(id);
   }
@@ -821,9 +821,21 @@ export class Store {
     try {
       this.db.prepare('UPDATE chains SET name=? WHERE id=?').run(trimmed, id);
     } catch (error) {
-      throw uniqueChainName(error, trimmed);
+      // 改自己名字不算冲突；只有别的链占着这个名字才需要给下一步
+      throw uniqueChainName(error, trimmed, () => {
+        const holder = this.chainNameHolder(existing.cwd, trimmed);
+        return holder && holder.id !== id ? holder : undefined;
+      });
     }
     return { ...existing, name: trimmed };
+  }
+
+  /** 本目录里占用该名字的链（含归档链）。给 `uniqueChainName()` 查冲突对象用。 */
+  chainNameHolder(cwd: string, name: string): Chain | undefined {
+    const row = this.db
+      .prepare('SELECT * FROM chains WHERE cwd=? AND name=?')
+      .get(this.normCwd(cwd), name) as ChainRow | undefined;
+    return row ? rowToChain(row) : undefined;
   }
 
   archiveChain(id: string): void {
@@ -1005,8 +1017,29 @@ function rowToChain(row: ChainRow): Chain {
   };
 }
 
-function uniqueChainName(error: unknown, name: string): Error {
+/**
+ * 撞上 UNIQUE(chains.name) 时把 SQLite 的原文换成可执行的中文。
+ *
+ * 链名在 cwd 内唯一，**归档的链也占着名字**（UNIQUE 约束不看 status）。用户刚
+ * `chain archive beta` 完、想重新建一条同名链，看到「链名已存在: beta」只会以为库坏了：
+ * `chain list` 里它明明标着 `[归档]`，名字却回收不了。所以冲突对象要查出来，按它现在的
+ * 状态给下一步——归档链能 `chain use` 恢复（等于重新启用那一条），在用的链只能换名。
+ *
+ * `findHolder` 由调用方注入：只有它知道本目录与当前链 id（改自己名字撞自己不算冲突）。
+ */
+function uniqueChainName(error: unknown, name: string, findHolder?: () => Chain | undefined): Error {
   const msg = error instanceof Error ? error.message : String(error);
-  if (/UNIQUE|unique/i.test(msg)) return new Error(`链名已存在: ${name}`);
-  return error instanceof Error ? error : new Error(msg);
+  if (!/UNIQUE|unique/i.test(msg)) return error instanceof Error ? error : new Error(msg);
+  const base = `链名已存在: ${name}`;
+  const holder = findHolder?.();
+  if (!holder) return new Error(base);
+  if (holder.status === 'archived') {
+    return new Error(
+      `${base}——这条链已归档（不再参与 status / switch 的默认选择），但归档只表示「不是当前链」，` +
+        `名字仍被占用；可用 watch chain use ${holder.name} 把它恢复成当前链，或换一个名字`,
+    );
+  }
+  return new Error(
+    `${base}——这条链正在使用中；可用 watch chain rename ${holder.name} <新名字> 先给它改名，或换一个名字`,
+  );
 }
