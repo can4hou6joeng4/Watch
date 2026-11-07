@@ -176,6 +176,12 @@ export async function findKimiSessionById(
     const wirePath = path.join(sessionDir, 'agents', 'main', 'wire.jsonl');
     try {
       const st = await stat(wirePath);
+      // 路径在但不是普通文件（被同名目录 / 设备文件占住）：不能返回一个指向目录的 ref，
+      // 否则这里报「找到了」，下游 parse / usage 才抛出裸 EISDIR（英文）
+      if (!st.isFile()) {
+        unreadable.push(`${wirePath} 现在不是普通文件（被同名目录或设备文件占住了）`);
+        continue;
+      }
       return { ref: { provider: 'kimi', sessionId, filePath: wirePath, cwd: workDir }, updatedAt: st.mtimeMs };
     } catch (error) {
       const code = (error as NodeJS.ErrnoException).code;
