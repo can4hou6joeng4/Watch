@@ -312,7 +312,18 @@ async function cmdSwitch(cwd: string, targetId: string, json: boolean, chain?: s
     // 走 stderr：stdout 留给结果，重定向 / 管道时警告不该混进正文（与 status / new / usage 一致）
     for (const warning of result.warnings) console.error(`警告: ${warning}`);
     if (result.alreadyAtTarget) {
-      console.log(`链尾已在 ${targetId}，直接打开即可。`);
+      // 链记录里可能根本没有链尾（chain new 之后没切过），也可能读不出来：这时一律说
+      // 「链尾已在 X」会让人以为链已经绑到 X，而 status 里还是空的
+      if (result.chainTipState === 'empty') {
+        console.log('当前链还没有绑定任何会话（没有可交接的来源，本次未写入链记录）。');
+        console.log(
+          `已找到 ${targetId} 的最新会话，可直接打开；要让链记录指向它，可用 watch adopt ${targetId} --session ${result.newRef.sessionId}`,
+        );
+      } else if (result.chainTipState === 'recorded') {
+        console.log(`链尾已在 ${targetId}，直接打开即可。`);
+      } else {
+        console.log(`无法确认链尾（本次未写入链记录），已找到 ${targetId} 的最新会话，可直接打开。`);
+      }
       console.log(`resume: ${result.resumeCommand}`);
       return;
     }

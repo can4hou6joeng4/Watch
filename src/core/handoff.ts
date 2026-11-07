@@ -323,6 +323,12 @@ export type HandoffResult = {
   turnCount: number;
   /** 链尾已经是目标 provider，没有发生真正的内容交接，调用方直接 resume 即可 */
   alreadyAtTarget?: boolean;
+  /**
+   * alreadyAtTarget 时链记录的实际状态：recorded = 链尾确实停在这家（watch new / 之前的切换写过记录）；
+   * empty = 链上还没有任何绑定（chain new 之后没切过）；unknown = 本地库不可用或链历史读不出来。
+   * 只有 recorded 才谈得上「链尾已在 X」，其余两档要说明没有可交接的来源、本次未写入链记录。
+   */
+  chainTipState?: 'recorded' | 'empty' | 'unknown';
   /** 全部 catch-继续路径的降级披露（recordSwitch/parse/rewrite 失败等） */
   warnings: string[];
   /** 内容处置披露（追加/去重/重写计数） */
@@ -466,6 +472,7 @@ export async function handoff(
   // 链记录先读：下面「未发现原生会话」要先看一眼链尾是不是指向了一个已被删掉的文件，
   // 否则用户刚切过链、只是链尾文件被删，却被告知「请先在 TUI 里开聊」
   let history: SwitchRecord[] = [];
+  let historyFailed = false;
   if (store) {
     try {
       const id = store.findActiveChain(cwd, opts?.chainId)?.id ?? null;
@@ -474,6 +481,7 @@ export async function handoff(
     } catch (error) {
       if (error instanceof Error && /找不到链|已归档/.test(error.message)) throw error;
       history = [];
+      historyFailed = true;
       warnings.push(`链历史读取失败，按无链处理：${describeStoreErrorReason(error)}`);
     }
   }
@@ -552,7 +560,20 @@ export async function handoff(
     const other = tips.find((t) => t.provider !== targetId);
     sourceTip = mtimeTip.provider === targetId ? (other ?? null) : mtimeTip;
     if (!sourceTip) {
-      // 链尾已在目标 provider。优先使用链上绑定的会话，避免同目录存在多个目标
+      // 这里能确定的只有「没有可交接的来源」。能不能说「链尾已在目标 provider」要看链记录：
+      // 链刚建好还没绑过时链尾根本不存在，说成「已在 X」会让人以为链已经指向 X（status 里仍是空链）；
+      // 链历史读不出来时更是无从判断，不能把读不出来讲成空链。
+      const chainTipRef = history.at(-1)?.toRef ?? null;
+      const chainTipState: NonNullable<HandoffResult['chainTipState']> = !store || historyFailed
+        ? 'unknown'
+        : chainTipRef
+          ? chainTipRef.provider === targetId
+            ? 'recorded'
+            : 'unknown'
+          : history.length === 0
+            ? 'empty'
+            : 'unknown';
+      // 优先使用链上绑定的会话，避免同目录存在多个目标
       // provider 会话时打开到非链尾会话（用户看到的就会是“没有历史”）。
       const boundTarget = pairedRef(history, targetId);
       const resumeRef = boundTarget ?? mtimeTip.ref;
@@ -562,6 +583,7 @@ export async function handoff(
         fromProvider: targetId,
         turnCount: 0,
         alreadyAtTarget: true,
+        chainTipState,
         warnings,
         findings,
       };
