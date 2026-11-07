@@ -113,10 +113,14 @@ function parseArgs(argv: string[]): {
   check: boolean;
   limit?: number;
   usedFlags: string[];
+  cwdGiven: boolean;
 } {
   const args = argv.slice(2);
   const json = args.includes('--json');
   let cwd = process.cwd();
+  // 是否显式给了 --cwd：`recent` 的映射表分支只在显式指定时才按目录过滤，
+  // 否则桌面桥（不传 cwd）会从「这个目录的会话」退化成「只有 CORE_ROOT 的会话」
+  let cwdGiven = false;
   let session: string | undefined;
   let chain: string | undefined;
   let from: string | undefined;
@@ -141,6 +145,7 @@ function parseArgs(argv: string[]): {
     }
     if (a === '--cwd') {
       cwd = takeValue();
+      cwdGiven = true;
       continue;
     }
     if (a === '--session') {
@@ -210,6 +215,7 @@ function parseArgs(argv: string[]): {
     check,
     limit,
     usedFlags,
+    cwdGiven,
   };
 }
 
@@ -523,7 +529,7 @@ async function cmdSessions(cwd: string, json: boolean, chain?: string): Promise<
   }
 }
 
-async function cmdRecent(cwd: string, json: boolean, limit: number = 8): Promise<void> {
+async function cmdRecent(cwd: string, json: boolean, limit: number = 8, cwdGiven = false): Promise<void> {
   const store = openStore();
   type RecentItem = {
     provider: string;
@@ -543,7 +549,9 @@ async function cmdRecent(cwd: string, json: boolean, limit: number = 8): Promise
   if (!store) unavailable.push('本地库');
   if (store) {
     try {
-      const locations = store.listSessionLocations({ limit: limit * 2 });
+      // 显式 --cwd 时映射表也要按目录过滤：原生扫描一直按 cwd 精确匹配，
+      // 映射表不过滤会把别的项目的会话混进「这个目录的近期会话」
+      const locations = store.listSessionLocations({ limit: limit * 2, ...(cwdGiven ? { cwd } : {}) });
       for (const loc of locations) {
         const key = `${loc.provider}:${loc.sessionId}`;
         try {
@@ -911,7 +919,7 @@ async function main(): Promise<void> {
     await runImportCodex(process.argv.slice(3));
     return;
   }
-  const { cmd, target, extra, rest, json, cwd, session, chain, from, provider, to, check, limit, usedFlags } = parseArgs(process.argv);
+  const { cmd, target, extra, rest, json, cwd, session, chain, from, provider, to, check, limit, usedFlags, cwdGiven } = parseArgs(process.argv);
   if (cmd) rejectUnusedFlags(cmd, usedFlags, json);
   if (cmd === 'status') {
     await cmdStatus(cwd, json, chain);
@@ -932,7 +940,7 @@ async function main(): Promise<void> {
     return;
   }
   if (cmd === 'recent') {
-    await cmdRecent(cwd, json, limit);
+    await cmdRecent(cwd, json, limit, cwdGiven);
     return;
   }
   if (cmd === 'providers') {
