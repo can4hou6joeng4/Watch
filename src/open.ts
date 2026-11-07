@@ -75,11 +75,17 @@ function blockedFrom(error: unknown): OpenSessionResult['blocked'] | undefined {
   return undefined;
 }
 
+/** 映射快返的「文件还在吗」：只有 ENOENT（`throwIfNoEntry: false` 返回 undefined）才是「不在了」。
+ * `EACCES` 等读不出来的情况照常抛出，由 resolveById 记进 diagnostics —— 把权限问题当成文件被删，
+ * 会让人以为是会话丢了，而不是去看目录权限。 */
 async function fileExists(p: string): Promise<boolean> {
   try {
     return (await stat(p)).isFile();
-  } catch {
-    return false;
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    // 只有「路径上确实没有东西」算不存在；EACCES 等读不出来照常抛，由调用方记进 diagnostics
+    if (code === 'ENOENT' || code === 'ENOTDIR') return false;
+    throw error;
   }
 }
 
