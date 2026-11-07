@@ -549,18 +549,20 @@ async function cmdSessions(cwd: string, json: boolean, chain?: string): Promise<
           if (chainRow && ids) {
             const listed = new Set(sessions.map((s) => s.ref.sessionId));
             const missingFiles: string[] = [];
-            const unreadableFiles: string[] = [];
+            const unreadableFiles: { id: string; reason: string }[] = [];
+            const occupiedFiles: string[] = [];
             const tooOld: string[] = [];
             for (const [id, ref] of ids) {
               if (listed.has(id)) continue;
-              // 只有 ENOENT / ENOTDIR 才算文件不在；EACCES 等读不出来时状态未知，
-              // 说成「已不存在」会把人引去重新 adopt（下一次照样读不出来）
-              const presence = await stat(ref.filePath).then(
-                () => 'present' as const,
-                (error: NodeJS.ErrnoException) =>
-                  error.code === 'ENOENT' || error.code === 'ENOTDIR' ? ('missing' as const) : ('unknown' as const),
-              );
-              (presence === 'missing' ? missingFiles : presence === 'unknown' ? unreadableFiles : tooOld).push(id);
+              // 与 status / chain list / doctor 共用同一判定：只有 ENOENT / ENOTDIR 才算文件不在，
+              // EACCES 等读不出来时状态未知——说成「已不存在」会把人引去重新 adopt（下一次照样读不出来）。
+              // 路径被同名目录占住既不算「还在」也不算「没了」：混进 tooOld 会被报成
+              // 「不在最近 N 个里（可能属于另一个目录）」，让人去核对 --cwd，而实际要恢复的是这个路径
+              const presence = await sessionFilePresence(ref.filePath);
+              if (presence.state === 'missing') missingFiles.push(id);
+              else if (presence.state === 'unknown') unreadableFiles.push({ id, reason: presence.reason });
+              else if (!presence.isFile) occupiedFiles.push(id);
+              else tooOld.push(id);
             }
             if (missingFiles.length) {
               warnings.push(
@@ -569,7 +571,12 @@ async function cmdSessions(cwd: string, json: boolean, chain?: string): Promise<
             }
             if (unreadableFiles.length) {
               warnings.push(
-                `链 ${chainRow.name} 绑定的 ${a.id} 会话 ${unreadableFiles.join('、')} 文件状态无法确认（读不出来），本次未列出；先确认文件是否还在，再决定是否需要重新 adopt`,
+                `链 ${chainRow.name} 绑定的 ${a.id} 会话 ${unreadableFiles.map((u) => u.id).join('、')} 文件状态无法确认，本次未列出；首个原因：${unreadableFiles[0]!.reason}；先确认文件是否还在，再决定是否需要重新 adopt`,
+              );
+            }
+            if (occupiedFiles.length) {
+              warnings.push(
+                `链 ${chainRow.name} 绑定的 ${a.id} 会话 ${occupiedFiles.join('、')} 的路径现在不是普通文件（被同名目录或设备文件占住了），本次未列出；先恢复该路径，再决定是否需要重新 adopt`,
               );
             }
             if (tooOld.length) {
