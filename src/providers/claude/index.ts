@@ -30,8 +30,14 @@ export async function findLatestClaudeSession(
   let entries: string[];
   try {
     entries = await readdir(projectDir);
-  } catch {
-    return null;
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    // 这个 cwd 没聊过 = 目录不存在（null 是事实）；读不出来必须抛出，
+    // 否则「权限 / 路径出错」会被讲成「这个目录没有会话」
+    if (code === 'ENOENT' || code === 'ENOTDIR') return null;
+    throw new Error(
+      `无法列出 Claude 会话目录 ${projectDir}：${error instanceof Error ? error.message : String(error)}`,
+    );
   }
   let best: { filePath: string; sessionId: string; updatedAt: number } | null = null;
   for (const entry of entries) {
@@ -153,8 +159,13 @@ export async function listClaudeSessions(
   let entries: string[];
   try {
     entries = await readdir(projectDir);
-  } catch {
-    return [];
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    // 目录不存在 = 这个 cwd 没聊过；读不出来要抛出，让 sessions / recent / doctor 披露
+    if (code === 'ENOENT' || code === 'ENOTDIR') return [];
+    throw new Error(
+      `无法读取 Claude 会话目录 ${projectDir}：${error instanceof Error ? error.message : String(error)}`,
+    );
   }
   const items: { ref: SessionRef; updatedAt: number }[] = [];
   for (const entry of entries) {
