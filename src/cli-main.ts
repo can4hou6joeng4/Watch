@@ -26,8 +26,8 @@ import { describeSpawnFailure } from './core/platform.js';
 const JSON_REQUESTED = process.argv.includes('--json');
 
 /**
- * `reason` 用来把「哪里不对」讲清楚：只打一整段用法时，
- * `--limit 51` 与「少给了子命令」在 `--json` 下是同一句「参数不完整或不合法」。
+ * `reason` 用来把「哪里不对」讲清楚：只打一整段用法时，用户得自己翻整页才知道
+ * 是命令名拼错了、少了 provider，还是 `--limit` 越界。
  */
 function usage(reason?: string): never {
   if (reason) console.error(`[watch] ${reason}`);
@@ -1131,6 +1131,9 @@ async function cmdChain(cwd: string, json: boolean, action?: string, a?: string,
  * `--chain` 给 `recent`、`--session` 给 `status` 这类「认识但不吃」的组合以前被静默忽略，
  * 用户会以为已经按链过滤 / 指定了会话。`--cwd` / `--json` 全局有效，不参与校验。
  */
+/** 顶层命令清单：命令名拼错时要能列出可用的那几个（`import-codex` 在 parseArgs 之前就分派了，单独标注） */
+const COMMANDS = 'status / switch / adopt / sessions / recent / providers / doctor / new / chain / search / usage / open';
+
 const FLAGS_BY_COMMAND: Record<string, string[]> = {
   status: ['chain'],
   switch: ['chain'],
@@ -1213,12 +1216,12 @@ async function main(): Promise<void> {
     return;
   }
   if (cmd === 'switch') {
-    if (!target) usage();
+    if (!target) usage('switch 需要指定目标 provider；例：watch switch codex');
     await cmdSwitch(cwd, target, json, chain);
     return;
   }
   if (cmd === 'adopt') {
-    if (!target) usage();
+    if (!target) usage('adopt 需要指定 provider；例：watch adopt codex --session <会话 id>');
     await cmdAdopt(cwd, target, json, session, chain);
     return;
   }
@@ -1239,7 +1242,7 @@ async function main(): Promise<void> {
     return;
   }
   if (cmd === 'new') {
-    if (!target) usage();
+    if (!target) usage('new 需要指定 provider；例：watch new codex');
     await cmdNew(cwd, target, json, chain);
     return;
   }
@@ -1249,7 +1252,7 @@ async function main(): Promise<void> {
   }
   if (cmd === 'search') {
     const q = [target, ...rest].filter(Boolean).join(' ');
-    if (!q) usage();
+    if (!q) usage('search 需要查询词；例：watch search 迁移');
     await cmdSearch(cwd, json, q);
     return;
   }
@@ -1258,11 +1261,14 @@ async function main(): Promise<void> {
     return;
   }
   if (cmd === 'open') {
-    if (!target) usage();
+    if (!target) usage('open 需要会话 id；例：watch open <会话 id>');
     await cmdOpen(target, json, from, provider, to, check, cwdGiven);
     return;
   }
-  usage();
+  // 命令名拼错时参数其实是完整的，说「参数不完整或不合法」会让人去补参数；
+  // 与 cmdChain 的「未知的 chain 子命令」保持一致，直接列出可用命令
+  if (cmd) usage(`未知命令: ${cmd}；可用: ${COMMANDS} / import-codex`);
+  usage(`缺少子命令；可用: ${COMMANDS} / import-codex`);
 }
 
 async function cmdUsage(cwd: string, json: boolean, chain?: string): Promise<void> {
