@@ -106,6 +106,16 @@ type PathPresence =
   | { state: 'unknown'; reason: string };
 
 /**
+ * Node 文件系统错误的 `code`（`EACCES` / `EISDIR` / `EIO`…）。
+ *
+ * 用来区分「文件读不出来」与「文件读出来了但内容解析不了」：前者要说权限 / 路径，
+ * 后者才该说内容。只认 `E` + 大写的形状，别把适配器自己造的错误码（如 `parse_failed`）误判成 fs 错误。
+ */
+function isFileSystemErrorCode(code: unknown): code is string {
+  return typeof code === 'string' && /^E[A-Z]+$/.test(code);
+}
+
+/**
  * 只有 ENOENT / ENOTDIR 才算「文件不在」。EACCES / EIO 等读不出来时不能说成已删除，
  * 否则权限问题会被讲成「下次切换会失败，先 adopt」，把人引去白换一次绑定。
  * 路径存在但不是普通文件（被同名目录 / 设备文件占住）同样不是「还在」：说成 present
@@ -297,8 +307,17 @@ export async function doctorReport(cwd: string, deps: DoctorDeps): Promise<Docto
             );
           }
         } catch (error) {
-          const message = error instanceof Error ? error.message : String(error);
-          warnings.push(`链「${chain.name}」的内容对账失败：${message}`);
+          // parse 顺带把文件读进来：EACCES / EIO / EMFILE 这类 fs 错误是「读不出来」，
+          // 不是「内容对不上」。原样塞进警告只剩一句英文 errno（`EACCES: permission denied, open '…'`），
+          // 用户既看不出该修权限还是该查内容，也不知道这一项其实没做成。
+          if (isFileSystemErrorCode((error as NodeJS.ErrnoException).code)) {
+            warnings.push(
+              `链「${chain.name}」的内容对账未进行：${describeSessionReadFailureReason(error)}；先确认来源 / 链尾会话文件是否可读，再重跑 watch doctor`,
+            );
+          } else {
+            const message = error instanceof Error ? error.message : String(error);
+            warnings.push(`链「${chain.name}」的内容对账失败：${message}`);
+          }
         }
       }
       store = { available: true, chains: chains.length, activeChains: activeChains.length, brokenTips, driftedPairs };
