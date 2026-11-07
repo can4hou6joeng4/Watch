@@ -117,6 +117,14 @@ export async function adoptIntoChain(
   const warnings: string[] = [];
   const adapter = adapters.find((a) => a.id === providerId);
   if (!adapter?.findLatestSession) throw new Error(unknownProviderMessage(providerId, adapters));
+  // 归档链以前要等 recordSwitch 才被拒绝，而那时已返回 adoptedRef：用户看到 ok:true，
+  // 链上却什么都没写，警告还被包装成「库操作失败」引去查库。原因这里就能确定，先拒绝
+  if (store && chainId) {
+    const archived = store.archivedChainName(cwd, chainId);
+    if (archived) {
+      throw new Error(`链已归档: ${archived}；可 watch chain use ${archived} 恢复，或省略 --chain 用当前链`);
+    }
+  }
   const found = targetRef
     ? { ref: targetRef }
     : await adapter.findLatestSession(cwd);

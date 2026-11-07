@@ -914,6 +914,26 @@ export class Store {
     this.db.prepare('UPDATE chains SET last_used_at=? WHERE id=?').run(at, id);
   }
 
+  /**
+   * 写入类命令（`new` / `adopt` / `switch`）在动手之前确认 `--chain` 可用。
+   *
+   * `findActiveChain` 按名字 / id 查时不看 status，归档链照样返回；真到写 `switch_events`
+   * 才由 `getOrCreateChainSession()` 拒绝。对 `switch` 已经是「先拦住再干活」，但 `new` / `adopt`
+   * 以前把活干完才撞上这道墙：`new` 会在原生存储里留下一个谁也没绑定的会话文件
+   * （再跑一次又多一个），然后返回 `ok:true` 加一条「链记录失败: 库操作失败（链已归档: …）」的警告
+   * —— 用户看到的是成功，链上却什么也没有，还把一句业务判断包装成了数据库故障。
+   * 失败原因在第一行就能确定，不该先建会话。
+   *
+   * `chainId` 为空（用当前链）时只做「链存在则必须活跃」这一半：没有链是正常的，
+   * 由各命令自己走建链路径。返回归档链的名字，供调用方拼文案；可用则返回 null。
+   */
+  archivedChainName(cwd: string, chainId?: string): string | null {
+    if (!chainId) return null;
+    const found = this.findActiveChain(cwd, chainId);
+    if (!found) throw new Error(this.missingChainMessage(cwd, chainId));
+    return found.status === 'archived' ? found.name : null;
+  }
+
   /** 纯 CLI 场景：选定或创建链，挂 switch_events */
   getOrCreateChainSession(cwd: string, chainId?: string): string {
     const found = this.findActiveChain(cwd, chainId);

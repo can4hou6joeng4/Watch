@@ -933,6 +933,13 @@ async function cmdNew(cwd: string, providerId: string, json: boolean, chain?: st
     if (store) {
       const id = store.findActiveChain(cwd, chain)?.id ?? null;
       if (chain && !id) failWithCwd(json, cwdIssue, store.missingChainMessage(cwd, chain));
+      // 归档链以前要等建完会话、写完 switch_events 才被拒：原生存储里于是留下一个谁也没绑定的
+      // 会话文件（每跑一次多一个），命令还返回 ok:true + 「链记录失败…库操作失败（链已归档）」。
+      // 失败原因在第一行就能确定，不能先建会话
+      const archived = store.archivedChainName(cwd, chain);
+      if (archived) {
+        failWithCwd(json, cwdIssue, `链已归档: ${archived}；可 watch chain use ${archived} 恢复，或省略 --chain 用当前链`);
+      }
       historyLen = id ? store.listSwitchEvents(id).length : 0;
     }
     // 空链：优先用 nezha 式 createEmptySession 预创建可 resume 的空会话，
