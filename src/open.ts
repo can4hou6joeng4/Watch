@@ -201,8 +201,10 @@ export async function resolveById(
         return { adapter: a, found };
       }
     } catch (error) {
-      // 一家存储读失败不该拖垮反查，但必须披露：否则「没找到」和「没查成」分不清
-      diagnostics?.push(`${a.id} 反查失败：${error instanceof Error ? error.message : String(error)}`);
+      // 一家存储读失败不该拖垮反查，但必须披露：否则「没找到」和「没查成」分不清。
+      // 这里不假定对象是会话文件（findById 可能死在目录 / 索引 / 库上），所以按路径来说；
+      // 适配器自己写好的中文原因原样保留，只有漏网的 fs errno 才翻成中文。
+      diagnostics?.push(`${a.id} 反查失败：${describePathReadFailureReason(error)}`);
       continue;
     }
   }
