@@ -94,18 +94,19 @@ function sessionIdFromRolloutPath(filePath: string): string | null {
   return stem.slice(-36);
 }
 
-/** 读取 filePath 的第一行 JSON 记录，返回 session_meta 的 cwd；首行可能超过 4KB（base_instructions 等长字段）
- * 因此不能截断固定字节，须读到首个换行符为止再解析 */
-async function rolloutCwd(filePath: string): Promise<string | null> {
+/** 读 filePath 首个换行前的整行；首行可能超过 4KB（base_instructions 等长字段），不能截断固定字节。
+ * readline 的 `'error'` 是异步事件，外层的 try/catch 接不住：没有监听器时 Node 以未捕获异常
+ * 直接崩掉整个 CLI（`'close'` 也不保证触发，光等它会把命令挂死）。所以必须自己监听并结算。 */
+async function readFirstLine(filePath: string): Promise<string> {
+  const stream = createReadStream(filePath);
+  const lines = readline.createInterface({ input: stream, crlfDelay: Infinity });
   try {
-    const lines = readline.createInterface({ input: createReadStream(filePath), crlfDelay: Infinity });
-    const first = (await new Promise<string>((resolve) => {
+    return await new Promise<string>((resolve, reject) => {
       let settled = false;
       lines.on('line', (l) => {
         if (!settled) {
           settled = true;
           resolve(l);
-          lines.close();
         }
       });
       lines.on('close', () => {
@@ -114,15 +115,45 @@ async function rolloutCwd(filePath: string): Promise<string | null> {
           resolve('');
         }
       });
-    })) as string;
-    if (!first) return null;
-    const record = JSON.parse(first) as Record<string, unknown>;
-    if (record.type !== 'session_meta') return null;
-    const payload = record.payload as Record<string, unknown> | undefined;
-    return typeof payload?.cwd === 'string' ? payload.cwd : null;
-  } catch {
-    return null;
+      lines.on('error', (error) => {
+        if (!settled) {
+          settled = true;
+          reject(error);
+        }
+      });
+    });
+  } finally {
+    lines.close();
+    stream.destroy();
   }
+}
+
+/** 读 rollout 首行的 session_meta.cwd，并带出读不出来的原因（`cwd === null` 且 `error` 有值） */
+async function rolloutCwdDetail(filePath: string): Promise<{ cwd: string | null; error?: string }> {
+  let first: string;
+  try {
+    first = await readFirstLine(filePath);
+  } catch (error) {
+    return { cwd: null, error: error instanceof Error ? error.message : String(error) };
+  }
+  if (!first) return { cwd: null, error: '文件是空的（没有 session_meta 首行）' };
+  let record: Record<string, unknown>;
+  try {
+    record = JSON.parse(first) as Record<string, unknown>;
+  } catch {
+    return { cwd: null, error: '首行不是合法 JSON' };
+  }
+  if (record.type !== 'session_meta') return { cwd: null, error: '首行不是 session_meta 记录' };
+  const payload = record.payload as Record<string, unknown> | undefined;
+  if (typeof payload?.cwd !== 'string' || !payload.cwd) {
+    return { cwd: null, error: 'session_meta 缺少 cwd' };
+  }
+  return { cwd: payload.cwd };
+}
+
+/** 扫描列表时用：任何失败都按「不是本 cwd 的会话」跳过，原因由调用方按需另取 */
+async function rolloutCwd(filePath: string): Promise<string | null> {
+  return (await rolloutCwdDetail(filePath)).cwd;
 }
 
 /** 在 sessionsRoot 下按 mtime 降序找 cwd 匹配的最新 rollout；目录不存在返回 null */
@@ -176,8 +207,12 @@ export async function findCodexSessionById(
   const root = sessionsRoot ?? path.join(codexDir(), 'sessions');
   const filePath = await findRolloutBySessionId(root, sessionId);
   if (!filePath) return null;
-  const cwd = await rolloutCwd(filePath);
-  if (!cwd) return null;
+  // 文件是按名字精确命中的，读不出 cwd 不等于「会话不存在」：抛给 resolveById 记进 diagnostics，
+  // 否则用户会去核对 id 或以为 Codex 没装，而不是检查这个文件的权限 / 内容
+  const { cwd, error } = await rolloutCwdDetail(filePath);
+  if (!cwd) {
+    throw new Error(`找到 rollout 文件 ${filePath}，但读不出它的工作目录：${error ?? '原因未知'}`);
+  }
   const fileRef: SessionRef = { provider: 'codex', sessionId, filePath, cwd };
   return { ref: fileRef, updatedAt: (await stat(filePath).catch(() => undefined))?.mtimeMs ?? 0 };
 }
