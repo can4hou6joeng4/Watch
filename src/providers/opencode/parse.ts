@@ -1,7 +1,7 @@
 import { DatabaseSync } from 'node:sqlite';
 import { normalizeUserText } from '../../core/rich.js';
 import type { ProcessEvent, SessionRef, TokenUsage, UnifiedTurn } from '../../core/types.js';
-import { opencodeDbPath } from './paths.js';
+import { opencodeDbPath, opencodeDbSqliteError, probeOpencodeDbFile } from './paths.js';
 
 type MessageRow = {
   id: string;
@@ -216,11 +216,14 @@ function messageToTurn(
 /** 读 SQLite 把 OpenCode session 解析为 UnifiedTurn[] */
 export async function parseOpencodeSession(ref: SessionRef): Promise<UnifiedTurn[]> {
   const dbPath = ref.filePath || opencodeDbPath();
-  let db: DatabaseSync | undefined;
+  // 库文件不存在 = 还没有内容（库被清 / 会话刚建）；但路径被占住、库打不开、查不了
+  // 都不是「这个会话是空的」——返回 [] 会让 diffTurns 把目标当成空会话，把来源整段再追加一遍
+  if ((await probeOpencodeDbFile(dbPath)) === 'missing') return [];
+  let db: DatabaseSync;
   try {
     db = new DatabaseSync(dbPath, { readOnly: true });
-  } catch {
-    return [];
+  } catch (error) {
+    throw opencodeDbSqliteError(dbPath, '打开', error);
   }
 
   try {
@@ -247,6 +250,9 @@ export async function parseOpencodeSession(ref: SessionRef): Promise<UnifiedTurn
       if (turn) turns.push(turn);
     }
     return turns;
+  } catch (error) {
+    // 「file is not a database」是在 prepare 时才抛的：打开成功不代表库可用，也要翻成中文
+    throw opencodeDbSqliteError(dbPath, '查询', error);
   } finally {
     try {
       db.close();

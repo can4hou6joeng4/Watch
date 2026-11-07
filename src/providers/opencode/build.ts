@@ -1,10 +1,13 @@
 import { DatabaseSync } from 'node:sqlite';
 import { createHash, randomBytes } from 'node:crypto';
-import { stat } from 'node:fs/promises';
 import path from 'node:path';
 import type { ImportTurnsOpts } from '../adapter.js';
 import type { ProcessEvent, SessionRef, TokenUsage, UnifiedTurn } from '../../core/types.js';
-import { opencodeDbPath } from './paths.js';
+import {
+  opencodeDbPath,
+  opencodeDbSqliteError,
+  probeOpencodeDbFile,
+} from './paths.js';
 
 export { opencodeDbPath, opencodeSessionsRoot } from './paths.js';
 
@@ -51,24 +54,12 @@ export async function listOpencodeSessions(
   const dbPath = opencodeDbPath();
   // 库不存在 = 这台机器没用过 opencode，空列表是事实；
   // 库在却打不开是「读不出来」，必须抛出交给调用方披露，不能返回空列表冒充「这个目录没聊过」
-  let dbStat: Awaited<ReturnType<typeof stat>>;
-  try {
-    dbStat = await stat(dbPath);
-  } catch (error) {
-    const code = (error as NodeJS.ErrnoException).code;
-    if (code === 'ENOENT' || code === 'ENOTDIR') return [];
-    throw new Error(
-      `无法读取 OpenCode 数据库状态 ${dbPath}：${error instanceof Error ? error.message : String(error)}`,
-    );
-  }
-  // 路径在但不是普通文件（被同名目录 / 设备文件占住）：直接交给 DatabaseSync 只会得到
-  // 「disk I/O error」这类 SQLite 原文，看不出要修的是这个路径
-  if (!dbStat.isFile()) throw opencodeDbNotFileError(dbPath);
+  if ((await probeOpencodeDbFile(dbPath)) === 'missing') return [];
   let db: DatabaseSync | undefined;
   try {
     db = new DatabaseSync(dbPath, { readOnly: true });
   } catch (error) {
-    throw new Error(`无法打开 OpenCode 数据库 ${dbPath}：${error instanceof Error ? error.message : String(error)}`);
+    throw opencodeDbSqliteError(dbPath, '打开', error);
   }
   try {
     const rows = db
@@ -80,7 +71,7 @@ export async function listOpencodeSessions(
       preview: r.title,
     }));
   } catch (error) {
-    throw new Error(`无法查询 OpenCode 数据库 ${dbPath}：${error instanceof Error ? error.message : String(error)}`);
+    throw opencodeDbSqliteError(dbPath, '查询', error);
   } finally {
     try { db.close(); } catch { /* ignore */ }
   }
@@ -93,24 +84,12 @@ export async function findOpencodeSessionById(
   const dbPath = opencodeDbPath();
   // 库文件不存在 = 从没用过 opencode，是干净的「没有这个会话」；
   // 文件在却打不开（权限 / 锁 / 被占）或查不了，是「读不出来」，不能返回 null 冒充不存在
-  let dbStat: Awaited<ReturnType<typeof stat>>;
-  try {
-    dbStat = await stat(dbPath);
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT' || (error as NodeJS.ErrnoException).code === 'ENOTDIR') {
-      return null;
-    }
-    throw new Error(
-      `无法读取 OpenCode 数据库状态 ${dbPath}：${error instanceof Error ? error.message : String(error)}`,
-    );
-  }
-  // 同上：先自己说清路径被占住，别把 SQLite 的 disk I/O error 抛给用户
-  if (!dbStat.isFile()) throw opencodeDbNotFileError(dbPath);
+  if ((await probeOpencodeDbFile(dbPath)) === 'missing') return null;
   let db: DatabaseSync | undefined;
   try {
     db = new DatabaseSync(dbPath, { readOnly: true });
   } catch (error) {
-    throw new Error(`无法打开 OpenCode 数据库 ${dbPath}：${error instanceof Error ? error.message : String(error)}`);
+    throw opencodeDbSqliteError(dbPath, '打开', error);
   }
   try {
     const row = db
@@ -122,7 +101,7 @@ export async function findOpencodeSessionById(
       updatedAt: row.time_updated,
     };
   } catch (error) {
-    throw new Error(`无法查询 OpenCode 数据库 ${dbPath}：${error instanceof Error ? error.message : String(error)}`);
+    throw opencodeDbSqliteError(dbPath, '查询', error);
   } finally {
     try {
       db.close();
@@ -139,13 +118,6 @@ function latestSessionVersion(db: DatabaseSync): string {
     if (row?.version) return row.version;
   } catch { /* ignore */ }
   return '1.1.0';
-}
-
-/** 库路径存在但不是普通文件时的说法：SQLite 只会回 `disk I/O error`，看不出该修哪个路径 */
-function opencodeDbNotFileError(dbPath: string): Error {
-  return new Error(
-    `OpenCode 数据库路径不是普通文件（被同名目录或设备文件占住了）：${dbPath}；无法读取会话，请先恢复该路径再重试`,
-  );
 }
 
 function hashCwd(cwd: string): string {
@@ -220,9 +192,18 @@ function ensureMinimalSchema(db: DatabaseSync): void {
 
 export async function createEmptyOpencodeSession(cwd: string): Promise<SessionRef> {
   if (!path.isAbsolute(cwd)) throw new Error(`cwd 必须是绝对路径: ${cwd}`);
+  const dbPath = opencodeDbPath();
+  // 库不存在就让它新建；路径被同名目录占住要在这里说清，否则 SQLite 只回一句英文
+  // `unable to open database file`，看不出要修的是那个路径
+  await probeOpencodeDbFile(dbPath);
   const t = nowMs();
   const sessionId = sortableId('ses', t, 1, true);
-  const db = new DatabaseSync(opencodeDbPath());
+  let db: DatabaseSync;
+  try {
+    db = new DatabaseSync(dbPath);
+  } catch (error) {
+    throw opencodeDbSqliteError(dbPath, '打开', error);
+  }
   try {
     ensureMinimalSchema(db);
     let projectId = 'global';
@@ -254,7 +235,7 @@ export async function createEmptyOpencodeSession(cwd: string): Promise<SessionRe
   } finally {
     try { db.close(); } catch { /* ignore */ }
   }
-  return { provider: 'opencode', sessionId, filePath: opencodeDbPath(), cwd };
+  return { provider: 'opencode', sessionId, filePath: dbPath, cwd };
 }
 
 type OpencodeModelInfo = { providerID?: string; modelID?: string; variant?: string };
@@ -348,8 +329,16 @@ export async function importTurnsToOpencode(
   opts?: ImportTurnsOpts,
 ): Promise<SessionRef> {
   if (!path.isAbsolute(cwd)) throw new Error(`cwd 必须是绝对路径: ${cwd}`);
+  const dbPath = opencodeDbPath();
+  // 写入前先确认库路径可用：被同名目录 / 设备文件占住时这里就要说清，不把 SQLite 原文抛给用户
+  await probeOpencodeDbFile(dbPath);
   const ref = into ?? (await createEmptyOpencodeSession(cwd));
-  const db = new DatabaseSync(opencodeDbPath());
+  let db: DatabaseSync;
+  try {
+    db = new DatabaseSync(dbPath);
+  } catch (error) {
+    throw opencodeDbSqliteError(dbPath, '打开', error);
+  }
   try {
     ensureMinimalSchema(db); // into 指向的库若被清库/重装，兜底建表
     db.exec('BEGIN');
