@@ -9,6 +9,7 @@ import type { ProviderAdapter } from './providers/adapter.js';
 import { PreflightBlockedError } from './providers/adapter.js';
 import { getAdapter, listAdapters, unknownProviderMessage } from './providers/registry.js';
 import { countUnparsableJsonLines } from './core/jsonl.js';
+import { describeSessionReadFailure } from './core/read-text.js';
 
 /** `watch open` 的返回协议：桌面 GUI 通过 CLI `--json` 消费 */
 export type SessionSummary = {
@@ -481,9 +482,13 @@ async function planOpenInProvider(
       pairTurns = await target.parse(chainPaired);
     } catch (error) {
       // 链上配对会话的文件可能已被删掉或截断（doctor 的 brokenTips 报的正是这种情况）：
-      // 退回内容匹配 / 新建，并把原因写进 notes，而不是让整个转入抛出去
+      // 退回内容匹配 / 新建，并把原因写进 notes，而不是让整个转入抛出去。
+      // 原因按 errno 说清楚：权限问题会被「已不存在」引去白换一次绑定。
       diagnostics?.push(
-        `链上 ${target.displayName} 会话 ${chainPaired.sessionId} 读取失败，本次不沿用（${error instanceof Error ? error.message : String(error)}）`,
+        `链上 ${target.displayName} 会话 ${chainPaired.sessionId} 本次不沿用：${describeSessionReadFailure(
+          chainPaired.filePath,
+          error,
+        )}（改用内容匹配或新建）`,
       );
     }
     if (pairTurns) {
@@ -515,6 +520,7 @@ async function planOpenInProvider(
   let reuseMissing = Infinity;
   let reuseAt = -1;
   let parseFailed = 0;
+  const unreadableCandidates: string[] = [];
   if (typeof target.listSessions === 'function') {
     try {
       const sessions = await target.listSessions(cwd);
@@ -522,8 +528,14 @@ async function planOpenInProvider(
         let destTurns: UnifiedTurn[];
         try {
           destTurns = await target.parse(s.ref);
-        } catch {
+        } catch (error) {
           parseFailed += 1;
+          // 列目录到解析之间被删掉算正常（这条本来也无法复用）；其余读不出来要记原因：
+          // 只报「N 个解析失败」会被读成「候选都不匹配」，实际可能是权限问题
+          const code = (error as NodeJS.ErrnoException).code;
+          if (code !== 'ENOENT' && code !== 'ENOTDIR') {
+            unreadableCandidates.push(`${s.ref.sessionId}：${describeSessionReadFailure(s.ref.filePath, error)}`);
+          }
           continue;
         }
         const missing = diffTurns(turns, destTurns);
@@ -544,7 +556,15 @@ async function planOpenInProvider(
       );
     }
     if (parseFailed > 0) {
-      diagnostics?.push(`目标 ${target.displayName} 有 ${parseFailed} 个候选会话解析失败，未参与复用匹配`);
+      const detail =
+        unreadableCandidates.length > 0
+          ? `（读不出来的：${unreadableCandidates[0]}${
+              unreadableCandidates.length > 1 ? ` 等 ${unreadableCandidates.length} 个` : ''
+            }）`
+          : '';
+      diagnostics?.push(
+        `目标 ${target.displayName} 有 ${parseFailed} 个候选会话解析失败，未参与复用匹配${detail}`,
+      );
     }
   }
   if (reuse) {
