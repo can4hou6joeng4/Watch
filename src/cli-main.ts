@@ -573,6 +573,13 @@ async function cmdRecent(cwd: string, json: boolean, limit: number = 8): Promise
     if (!adapter.listSessions) continue;
     try {
       const sessions = await adapter.listSessions(cwd);
+      // 撞上适配器上限时枚举到的只是「最近 N 个」：更早的会话根本没进结果，
+      // truncated / total 都会低估，不说明就会被当成「这个目录只有这些会话」
+      const cap = adapter.listSessionsCap;
+      if (cap !== undefined && sessions.length >= cap) {
+        // 不承诺「用某命令看全集」：sessions / doctor 同样走这个上限，指过去只会再撞一次
+        warnings.push(`${adapter.id} 已达列表上限 ${cap} 个，更早的会话不在「近期」里；这一条列表不完整`);
+      }
       for (const s of sessions) {
         // 与映射表重叠时覆盖：原生这边带 preview，顺序也直接来自文件 mtime
         merged.set(`${s.ref.provider}:${s.ref.sessionId}`, {
