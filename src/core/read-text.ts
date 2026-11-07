@@ -1,4 +1,4 @@
-import { readFile } from 'node:fs/promises';
+import { readFile, stat } from 'node:fs/promises';
 
 /**
  * 读文本；文件不存在按空串处理（新建分支依赖这个语义）。
@@ -29,4 +29,27 @@ export function describeSessionReadFailure(filePath: string, error: unknown): st
   if (code === 'EACCES' || code === 'EPERM') return `会话文件无权读取（权限问题，不是被删除）：${filePath}`;
   const reason = code ?? (error instanceof Error ? error.message : String(error));
   return `会话文件读不出来（${reason}）：${filePath}`;
+}
+
+export type SessionFilePresence =
+  | { state: 'present'; isFile: boolean }
+  | { state: 'missing' }
+  | { state: 'unknown'; reason: string };
+
+/**
+ * `stat` 一次会话文件，判断它「确实不在了」还是「只是读不出来」。
+ *
+ * 只有 `ENOENT` / `ENOTDIR` 是 missing；`EACCES` / `EIO` 等返回 unknown 并给出原因，
+ * 调用方必须把这类当成「状态无法确认」，不能讲成「文件已被删除」——否则权限问题
+ * 会被读成会话丢了，人会去重新绑定或重建，而不是修权限。
+ */
+export async function sessionFilePresence(filePath: string): Promise<SessionFilePresence> {
+  try {
+    const info = await stat(filePath);
+    return { state: 'present', isFile: info.isFile() };
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === 'ENOENT' || code === 'ENOTDIR') return { state: 'missing' };
+    return { state: 'unknown', reason: describeSessionReadFailure(filePath, error) };
+  }
 }

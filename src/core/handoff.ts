@@ -1,4 +1,3 @@
-import { stat } from 'node:fs/promises';
 import type { ImportTurnsOpts, ProviderAdapter } from '../providers/adapter.js';
 import type { SessionRef, TokenUsage, UnifiedTurn } from './types.js';
 import type { Chain, Store, SwitchRecord } from './store.js';
@@ -6,6 +5,7 @@ import { dedupeCallEvents, mergeTurns, shouldReplacePairedSession, unwrapUserQue
 import type { FileDigest } from './atomic.js';
 import { addFinding, type Finding } from './findings.js';
 import { countUnparsableJsonLines } from './jsonl.js';
+import { sessionFilePresence } from './read-text.js';
 import { unknownProviderMessage } from '../providers/registry.js';
 
 /** 写回被阻断（如 TOCTOU 检测到目标被外部修改）：一票否决，不产生部分写 */
@@ -231,12 +231,17 @@ export async function chainUsage(
     }
     // null 在适配器里同时表示「这家原生没有 usage 字段」与「文件读不出」（各家的读失败被吞成 null）：
     // 再 stat 一次分开，否则 `usage` 的合计会把「链尾文件已经没了」讲成「这些会话没有用量数据」
-    if (usage === null && !(await stat(ref.filePath).then(() => true, () => false))) {
-      const msg = `会话文件已不存在：${ref.filePath}`;
-      warnings.push(`${adapter.id} 用量读取失败：${msg}`);
-      byProvider.push({ provider: adapter.id, sessionId: ref.sessionId, usage: null, error: msg });
-      totalExcluded += 1;
-      continue;
+    if (usage === null) {
+      const presence = await sessionFilePresence(ref.filePath);
+      if (presence.state !== 'present') {
+        // 只有 ENOENT / ENOTDIR 才能说「不存在」：EACCES 等读不出来时照实说，
+        // 否则权限问题会被讲成会话丢了，用户会去重新绑定而不是修权限
+        const msg = presence.state === 'missing' ? `会话文件已不存在：${ref.filePath}` : presence.reason;
+        warnings.push(`${adapter.id} 用量读取失败：${msg}`);
+        byProvider.push({ provider: adapter.id, sessionId: ref.sessionId, usage: null, error: msg });
+        totalExcluded += 1;
+        continue;
+      }
     }
     byProvider.push({ provider: adapter.id, sessionId: ref.sessionId, usage });
     if (usage === null) totalMissingUsage += 1;
@@ -337,19 +342,20 @@ export async function chainStatus(
     const last = history.at(-1)!;
     chainTip = { provider: last.toProvider, ref: last.toRef, updatedAt: last.createdAt, onChain: true };
     // 链尾指向的会话文件被删/被移走时，status 不能假装一切正常：下次 switch 会在这里失败
-    let tipProblem: string | null = null;
-    try {
-      const info = await stat(last.toRef.filePath);
-      // 路径被同名目录占住时 isFile() 为 false：直接拼进警告就成了英文「not a regular file」
-      if (!info.isFile()) tipProblem = '该路径现在不是普通文件';
-    } catch (error) {
-      const code = (error as NodeJS.ErrnoException).code;
-      // ENOENT 的原文会把同一个路径再说一遍（路径已经在前面了），其余错误才值得带原文
-      tipProblem = code === 'ENOENT' ? '文件不存在' : error instanceof Error ? error.message : String(error);
-    }
-    if (tipProblem) {
+    // 只有 ENOENT / ENOTDIR 才能说「已不存在」；EACCES 等读不出来照实说「状态无法确认」，
+    // 否则权限问题会被讲成会话丢了，把人引去白换一次绑定
+    const tipPresence = await sessionFilePresence(last.toRef.filePath);
+    if (tipPresence.state === 'missing') {
       warnings.push(
-        `链尾会话文件已不存在：${last.toRef.filePath}（${last.toProvider} ${last.toRef.sessionId}，${tipProblem}）；下次切换会失败，可先 adopt 该 provider 的新会话`,
+        `链尾会话文件已不存在：${last.toRef.filePath}（${last.toProvider} ${last.toRef.sessionId}，文件不存在）；下次切换会失败，可先 adopt 该 provider 的新会话`,
+      );
+    } else if (tipPresence.state === 'present' && !tipPresence.isFile) {
+      warnings.push(
+        `链尾会话文件已不存在：${last.toRef.filePath}（${last.toProvider} ${last.toRef.sessionId}，该路径现在不是普通文件）；下次切换会失败，可先 adopt 该 provider 的新会话`,
+      );
+    } else if (tipPresence.state === 'unknown') {
+      warnings.push(
+        `链尾会话文件状态无法确认：${last.toProvider} ${last.toRef.sessionId}；${tipPresence.reason}；可能是权限或路径问题，先确认它是否还在，再决定是否需要 adopt`,
       );
     }
   }
@@ -419,11 +425,22 @@ export async function handoff(
   const mtimeTip = pickChainTip(tips);
   if (!mtimeTip) {
     const chainTipRef = history.at(-1)?.toRef ?? null;
-    if (chainTipRef && !(await stat(chainTipRef.filePath).then(() => true, () => false))) {
-      throw new Error(
-        `未发现原生会话；而链尾记录的 ${chainTipRef.provider} 会话 ${chainTipRef.sessionId} 文件已不存在（${chainTipRef.filePath}）：` +
-          `可先 watch adopt ${chainTipRef.provider} --session <id> 重新绑定，或在原生 CLI 里新开一个会话`,
-      );
+    if (chainTipRef) {
+      // 同样只把 ENOENT / ENOTDIR 当「文件已不存在」：读不出来时要说清是权限还是路径，
+      // 不能让人以为会话丢了、急着重新 adopt
+      const tipPresence = await sessionFilePresence(chainTipRef.filePath);
+      if (tipPresence.state === 'missing') {
+        throw new Error(
+          `未发现原生会话；而链尾记录的 ${chainTipRef.provider} 会话 ${chainTipRef.sessionId} 文件已不存在（${chainTipRef.filePath}）：` +
+            `可先 watch adopt ${chainTipRef.provider} --session <id> 重新绑定，或在原生 CLI 里新开一个会话`,
+        );
+      }
+      if (tipPresence.state === 'unknown') {
+        throw new Error(
+          `未发现原生会话；链尾记录的 ${chainTipRef.provider} 会话 ${chainTipRef.sessionId} 状态无法确认：${chainTipRef.filePath}；${tipPresence.reason}` +
+            `——可能是权限或路径问题，先确认它是否还在，再决定是否 watch adopt 重新绑定`,
+        );
+      }
     }
     throw new Error('未发现原生会话，请先在 Claude Code 或 Codex TUI 里开聊');
   }
