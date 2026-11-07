@@ -41,6 +41,8 @@ export async function reindexCwd(
     let firstError = '';
     let unreadable = 0;
     let firstUnreadable = '';
+    let occupied = 0;
+    let firstOccupied = '';
     for (const s of list) {
       let st;
       try {
@@ -54,7 +56,13 @@ export async function reindexCwd(
         }
         continue;
       }
-      if (!st.isFile()) continue;
+      // 路径在、但被同名目录 / 设备文件占住：既不是「已删除」，也读不出内容。
+      // 静默 `continue` 会让这一轮索引不生效且没人知道——与 `doctor` / `chain list` 的说法保持一致
+      if (!st.isFile()) {
+        occupied += 1;
+        firstOccupied ||= s.ref.filePath;
+        continue;
+      }
       const cached = stats.get(s.ref.sessionId);
       if (cached && cached.filePath === s.ref.filePath && cached.mtimeMs === st.mtimeMs && cached.size === st.size) {
         continue; // 文件没变，复用既有索引
@@ -83,12 +91,26 @@ export async function reindexCwd(
     if (unreadable > 0) {
       warnings?.push(`${adapter.id} 有 ${unreadable} 个会话读不出文件状态，索引未更新（首个：${firstUnreadable}）`);
     }
+    if (occupied > 0) {
+      warnings?.push(
+        `${adapter.id} 有 ${occupied} 个会话路径不是普通文件（被同名目录或设备文件占住了），本次未更新其索引（首个：${firstOccupied}）`,
+      );
+    }
     let keepFailed = 0;
     let firstKeepError = '';
+    let keepOccupied = 0;
+    let firstKeepOccupied = '';
     for (const indexed of store.indexedSessions(cwd, adapter.id)) {
       let gone = false;
       try {
-        gone = !(await stat(indexed.filePath)).isFile();
+        const st = await stat(indexed.filePath);
+        // 路径被同名目录 / 设备文件占住，不等于「会话已被删除」：按 gone 删索引会让搜索结果
+        // 静默变少，而用户看到的只是「这个目录没聊过」。保留旧行并披露
+        if (!st.isFile()) {
+          keepOccupied += 1;
+          firstKeepOccupied ||= indexed.filePath;
+          continue;
+        }
       } catch (error) {
         // 只有 ENOENT 才算「文件已不存在」。权限 / 路径错误下删索引，等于把「读不到」
         // 当成「没有聊过」：搜索结果会静默变少，权限恢复后还得重新全量解析
@@ -104,6 +126,11 @@ export async function reindexCwd(
     if (keepFailed > 0) {
       warnings?.push(
         `${adapter.id} 有 ${keepFailed} 个已索引会话读不出文件状态，索引保留未清理（首个：${firstKeepError}）`,
+      );
+    }
+    if (keepOccupied > 0) {
+      warnings?.push(
+        `${adapter.id} 有 ${keepOccupied} 个已索引会话的路径不是普通文件（被同名目录或设备文件占住了），索引保留未清理（首个：${firstKeepOccupied}）；恢复该路径后重新 search 即可对齐`,
       );
     }
   }
