@@ -535,9 +535,15 @@ async function cmdSessions(cwd: string, json: boolean, chain?: string): Promise<
   // 存 ref（不只 sessionId）：会话没被列出来时还要 stat 它的文件，判断是「太老没进列表」还是「文件已经没了」
   const bound = new Map<string, Map<string, SessionRef>>();
   let chainRow: import('./core/store.js').Chain | null = null;
-  if (!store && chain) {
-    // 用户明确要按链过滤却打不开库：不说是「已忽略」，列表看起来就像链上会话
-    warnings.push(`本地库不可用，--chain ${chain} 过滤已忽略，下面是该目录的全部会话`);
+  if (!store) {
+    // 用户明确要按链过滤却打不开库：不说是「已忽略」，列表看起来就像链上会话。
+    // 不带 --chain 时同样要披露：列表只来自原生扫描，本地库里的映射与链信息都没参与，
+    // 否则降级后的「未发现会话」会被读成「这个目录确实没有会话」——`status` / `usage` / `recent` 都会说明
+    warnings.push(
+      chain
+        ? `本地库不可用，--chain ${chain} 过滤已忽略，下面是该目录的全部会话`
+        : '本地库不可用，会话列表只来自原生存储（本地库里的映射与链信息未参与；可检查 WATCH_DB 路径与库状态）',
+    );
   }
   if (store) {
     try {
