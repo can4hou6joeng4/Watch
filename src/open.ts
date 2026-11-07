@@ -129,8 +129,11 @@ export async function resolveById(
             },
           };
         }
-      } catch {
-        /* 映射读失败继续全扫 */
+      } catch (error) {
+        // 映射读失败不能等同「没有这个会话」：记进 diagnostics，全扫也没找到时能说清原因
+        diagnostics?.push(
+          `${a.id} 映射读失败：${error instanceof Error ? error.message : String(error)}`,
+        );
       }
     }
   }
