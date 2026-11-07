@@ -151,13 +151,21 @@ async function readFirstLine(filePath: string): Promise<string> {
   }
 }
 
-/** 读 rollout 首行的 session_meta.cwd，并带出读不出来的原因（`cwd === null` 且 `error` 有值） */
-async function rolloutCwdDetail(filePath: string): Promise<{ cwd: string | null; error?: string }> {
+/** 读 rollout 首行的 session_meta.cwd，并带出读不出来的原因（`cwd === null` 且 `error` 有值）。
+ * `code` 只在「文件读不出来」时给（I/O 错误码），内容层面的问题（空文件 / 首行不是 JSON）不给：
+ * 前者说明这个会话可能存在却没查成，后者说明会话文件本身不可用。 */
+async function rolloutCwdDetail(
+  filePath: string,
+): Promise<{ cwd: string | null; error?: string; code?: string }> {
   let first: string;
   try {
     first = await readFirstLine(filePath);
   } catch (error) {
-    return { cwd: null, error: error instanceof Error ? error.message : String(error) };
+    return {
+      cwd: null,
+      error: error instanceof Error ? error.message : String(error),
+      code: (error as NodeJS.ErrnoException).code ?? 'EIO',
+    };
   }
   if (!first) return { cwd: null, error: '文件是空的（没有 session_meta 首行）' };
   let record: Record<string, unknown>;
@@ -174,11 +182,6 @@ async function rolloutCwdDetail(filePath: string): Promise<{ cwd: string | null;
   return { cwd: payload.cwd };
 }
 
-/** 扫描列表时用：任何失败都按「不是本 cwd 的会话」跳过，原因由调用方按需另取 */
-async function rolloutCwd(filePath: string): Promise<string | null> {
-  return (await rolloutCwdDetail(filePath)).cwd;
-}
-
 /** 在 sessionsRoot 下按 mtime 降序找 cwd 匹配的最新 rollout；目录不存在返回 null */
 export async function findLatestCodexRollout(
   cwd: string,
@@ -186,22 +189,30 @@ export async function findLatestCodexRollout(
 ): Promise<{ ref: SessionRef; updatedAt: number } | null> {
   const root = sessionsRoot ?? path.join(codexDir(), 'sessions');
   const walkErrors: string[] = [];
+  const unreadCwd: string[] = [];
   const files = await collectRecentRolloutFiles(root, walkErrors);
   files.sort((a, b) => b.mtimeMs - a.mtimeMs);
   for (const f of files) {
     const sessionId = sessionIdFromRolloutPath(f.filePath);
     if (!sessionId) continue;
-    const metaCwd = await rolloutCwd(f.filePath);
+    const { cwd: metaCwd, error: cwdError, code } = await rolloutCwdDetail(f.filePath);
+    if (!metaCwd) {
+      // 读不出来（EACCES 等）时它可能是本 cwd 的会话，不能当成「不属于这里」直接跳过；
+      // 空文件 / 首行不是 JSON 属于会话内容不可用，跳过是既有语义
+      if (code) unreadCwd.push(`${f.filePath}（${cwdError ?? code}）`);
+      continue;
+    }
     if (metaCwd !== cwd) continue;
     return {
       ref: { provider: 'codex', sessionId, filePath: f.filePath, cwd },
       updatedAt: f.mtimeMs,
     };
   }
-  if (walkErrors.length) {
+  const incomplete = walkErrors.length + unreadCwd.length;
+  if (incomplete) {
     // 有位置读不出来时「这个目录没有 Codex 会话」不是结论
     throw new Error(
-      `在 ${root} 下没找到属于 ${cwd} 的 Codex 会话，但有 ${walkErrors.length} 个位置读不出来，无法确认是否存在：${walkErrors[0]}`,
+      `在 ${root} 下没找到属于 ${cwd} 的 Codex 会话，但有 ${incomplete} 个位置读不出来，无法确认是否存在：${walkErrors[0] ?? unreadCwd[0]}`,
     );
   }
   return null;
@@ -217,20 +228,28 @@ export async function listCodexRollouts(
 ): Promise<{ ref: SessionRef; updatedAt: number; preview?: string }[]> {
   const root = sessionsRoot ?? path.join(codexDir(), 'sessions');
   const walkErrors: string[] = [];
+  const unreadCwd: string[] = [];
   const files = await collectRecentRolloutFiles(root, walkErrors);
   files.sort((a, b) => b.mtimeMs - a.mtimeMs);
   const items: { ref: SessionRef; updatedAt: number }[] = [];
   for (const f of files) {
     const sessionId = sessionIdFromRolloutPath(f.filePath);
     if (!sessionId) continue;
-    if ((await rolloutCwd(f.filePath)) !== cwd) continue;
+    const { cwd: metaCwd, error: cwdError, code } = await rolloutCwdDetail(f.filePath);
+    if (!metaCwd) {
+      // 读不出来时可能正是本 cwd 的会话：静默跳过会让列表少一条且毫无提示
+      if (code) unreadCwd.push(`${f.filePath}（${cwdError ?? code}）`);
+      continue;
+    }
+    if (metaCwd !== cwd) continue;
     items.push({ ref: { provider: 'codex', sessionId, filePath: f.filePath, cwd }, updatedAt: f.mtimeMs });
     if (items.length >= CODEX_LIST_LIMIT) break;
   }
-  if (walkErrors.length) {
+  const incomplete = walkErrors.length + unreadCwd.length;
+  if (incomplete) {
     // 静默少列会被读成「这个目录就这些会话」，必须让 sessions / recent / doctor 披露
     throw new Error(
-      `列出 Codex 会话时有不完整：有 ${walkErrors.length} 个位置读不出来，列表可能少了几条：${walkErrors[0]}`,
+      `列出 Codex 会话时有不完整：有 ${incomplete} 个位置读不出来，列表可能少了几条：${walkErrors[0] ?? unreadCwd[0]}`,
     );
   }
   return Promise.all(items.map(async (item) => ({ ...item, preview: (await codexFirstUserText(item.ref.filePath)) ?? undefined })));
