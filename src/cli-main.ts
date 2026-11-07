@@ -527,8 +527,10 @@ async function cmdSessions(cwd: string, json: boolean, chain?: string): Promise<
           let sessions: Awaited<ReturnType<NonNullable<typeof a.listSessions>>> = [];
           try {
             sessions = await a.listSessions!(cwd);
-          } catch {
+          } catch (error) {
             unavailable.push(a.id);
+            // 只报 provider id，用户看不出是权限、库损坏还是路径问题，也就无从修
+            warnings.push(`${a.id} 会话列表读取失败：${error instanceof Error ? error.message : String(error)}`);
             return { provider: a.id, sessions: [] };
           }
           const ids = bound.get(a.id);
@@ -541,15 +543,27 @@ async function cmdSessions(cwd: string, json: boolean, chain?: string): Promise<
           if (chainRow && ids) {
             const listed = new Set(sessions.map((s) => s.ref.sessionId));
             const missingFiles: string[] = [];
+            const unreadableFiles: string[] = [];
             const tooOld: string[] = [];
             for (const [id, ref] of ids) {
               if (listed.has(id)) continue;
-              const alive = await stat(ref.filePath).then(() => true, () => false);
-              (alive ? tooOld : missingFiles).push(id);
+              // 只有 ENOENT / ENOTDIR 才算文件不在；EACCES 等读不出来时状态未知，
+              // 说成「已不存在」会把人引去重新 adopt（下一次照样读不出来）
+              const presence = await stat(ref.filePath).then(
+                () => 'present' as const,
+                (error: NodeJS.ErrnoException) =>
+                  error.code === 'ENOENT' || error.code === 'ENOTDIR' ? ('missing' as const) : ('unknown' as const),
+              );
+              (presence === 'missing' ? missingFiles : presence === 'unknown' ? unreadableFiles : tooOld).push(id);
             }
             if (missingFiles.length) {
               warnings.push(
                 `链 ${chainRow.name} 绑定的 ${a.id} 会话 ${missingFiles.join('、')} 文件已不存在，本次未列出；下次切换会失败，可先 watch adopt ${a.id} --session <id> 重新绑定`,
+              );
+            }
+            if (unreadableFiles.length) {
+              warnings.push(
+                `链 ${chainRow.name} 绑定的 ${a.id} 会话 ${unreadableFiles.join('、')} 文件状态无法确认（读不出来），本次未列出；先确认文件是否还在，再决定是否需要重新 adopt`,
               );
             }
             if (tooOld.length) {
@@ -631,13 +645,21 @@ async function cmdRecent(cwd: string, json: boolean, limit: number = 8, cwdGiven
             // 反复 open 一个老会话会让它排到最前面，和原生扫描的 updatedAt 也不是一回事
             updatedAt: st.mtimeMs,
           });
-        } catch {
-          // 文件没了或读不到：交给原生扫描，它还能按目录重新列出来
+        } catch (error) {
+          // 文件确实没了：交给原生扫描，它还能按目录重新列出来。
+          // 但读不出来（EACCES 等）不是「没了」，要披露，否则这条会话会静默消失在「近期」里
+          const code = (error as NodeJS.ErrnoException).code;
+          if (code !== 'ENOENT' && code !== 'ENOTDIR') {
+            warnings.push(
+              `${loc.provider} 会话 ${loc.sessionId} 的映射记录无法确认文件状态（${loc.filePath}）：${error instanceof Error ? error.message : String(error)}；已跳过映射命中`,
+            );
+          }
         }
       }
-    } catch {
-      // 本地映射读取失败不影响原生扫描
+    } catch (error) {
+      // 本地映射读取失败不影响原生扫描，但只记一个「本地库」看不出为什么
       unavailable.push('本地库');
+      warnings.push(`本地映射表读取失败：${error instanceof Error ? error.message : String(error)}；已只按原生存储扫描`);
     }
   }
 
@@ -664,9 +686,10 @@ async function cmdRecent(cwd: string, json: boolean, limit: number = 8, cwdGiven
           preview: s.preview,
         });
       }
-    } catch {
-      // 单家读失败不拖垮列表，但要披露
+    } catch (error) {
+      // 单家读失败不拖垮列表，但要披露原因（「各 provider 按路径精确比较」这一步出错时尤其看不出）
       unavailable.push(adapter.id);
+      warnings.push(`${adapter.id} 会话列表读取失败：${error instanceof Error ? error.message : String(error)}`);
     }
   }
 
