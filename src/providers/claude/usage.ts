@@ -1,12 +1,14 @@
 import { readFile } from 'node:fs/promises';
 import type { SessionRef, TokenUsage } from '../../core/types.js';
+import { describeSessionReadFailure } from '../../core/read-text.js';
 
 export async function claudeSessionUsage(ref: SessionRef): Promise<TokenUsage | null> {
   let raw: string;
   try {
     raw = await readFile(ref.filePath, 'utf8');
-  } catch {
-    return null;
+  } catch (error) {
+    // 读不出来不等于「这家原生没有 usage 字段」：交给调用方按原因披露（chainUsage / open 都会写进 warnings）
+    throw new Error(describeSessionReadFailure(ref.filePath, error));
   }
   let input = 0;
   let output = 0;
