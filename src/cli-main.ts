@@ -885,7 +885,10 @@ async function cmdChain(cwd: string, json: boolean, action?: string, a?: string,
       const warnings = cwdIssue ? [cwdIssue] : [];
       // 链尾 = 最后一条 switch_event 的 toRef。只给名字 + id 时看不出这条链停在哪一家，
       // 也看不出链尾文件是否还在（在的话下次 switch 才接得上，不在就是 doctor 的 brokenTips）
-      const tips = new Map<string, { provider: string; sessionId: string; filePath: string; missing: boolean }>();
+      const tips = new Map<
+        string,
+        { provider: string; sessionId: string; filePath: string; missing: boolean; error?: string }
+      >();
       for (const c of chains) {
         let last: ReturnType<typeof store.listSwitchEvents>[number] | undefined;
         try {
@@ -895,16 +898,32 @@ async function cmdChain(cwd: string, json: boolean, action?: string, a?: string,
           continue;
         }
         if (!last?.toRef) continue;
-        const missing = !(await stat(last.toRef.filePath).then(() => true, () => false));
+        // 只有 ENOENT 才算「文件已不存在」。权限 / 路径错误（EACCES、ENOTDIR…）下说成
+        // 「已不存在」会把人引去重新 adopt，而真正的问题是读不出来
+        let missing = false;
+        let tipError: string | null = null;
+        try {
+          if (!(await stat(last.toRef.filePath)).isFile()) tipError = '该路径现在不是普通文件';
+        } catch (error) {
+          const code = (error as NodeJS.ErrnoException).code;
+          if (code === 'ENOENT') missing = true;
+          else tipError = error instanceof Error ? error.message : String(error);
+        }
         tips.set(c.id, {
           provider: last.toRef.provider,
           sessionId: last.toRef.sessionId,
           filePath: last.toRef.filePath,
           missing,
+          ...(tipError ? { error: tipError } : {}),
         });
         if (missing && c.status === 'active') {
           warnings.push(
             `链「${c.name}」的链尾会话文件已不存在（${last.toRef.provider}:${last.toRef.sessionId}）：下次切换会失败，可先 watch adopt ${last.toRef.provider} --session <id> 重新绑定`,
+          );
+        } else if (tipError && c.status === 'active') {
+          // 读不出来 ≠ 文件没了：不标 missing，也不能当成「一切正常」而不出声
+          warnings.push(
+            `链「${c.name}」的链尾会话文件无法确认是否还在（${last.toRef.provider}:${last.toRef.sessionId}）：${tipError}`,
           );
         }
       }
@@ -931,7 +950,7 @@ async function cmdChain(cwd: string, json: boolean, action?: string, a?: string,
         const here = current && c.id === current.id ? ' ← 当前' : '';
         const tip = tips.get(c.id);
         const tipText = tip
-          ? `  → ${tip.provider}:${tip.sessionId}${tip.missing ? '（链尾文件已不存在）' : ''}`
+          ? `  → ${tip.provider}:${tip.sessionId}${tip.missing ? '（链尾文件已不存在）' : tip.error ? '（链尾文件状态无法确认）' : ''}`
           : '';
         console.log(`  ${c.name}${mark}${here}  ${c.id}  lastUsed=${fmtTime(c.lastUsedAt)}${tipText}`);
       }
