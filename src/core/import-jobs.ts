@@ -77,6 +77,25 @@ export class ImportJobs {
     return path.join(this.root, id);
   }
 
+  /** 文件不存在返回 null（执行日志里「还没写」是正常状态），其它读取失败照常抛出 */
+  private async readText(file: string): Promise<string | null> {
+    try {
+      return await readFile(file, 'utf8');
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
+      throw error;
+    }
+  }
+
+  /** 写了一半或被外部改动时，裸 SyntaxError 既不说是哪个文件也不说下一步 */
+  private parseJson<T>(raw: string, file: string, what: string, hint: string): T {
+    try {
+      return JSON.parse(raw) as T;
+    } catch {
+      throw new Error(`${what}无法解析（可能上次只写了一半，或被外部改动）：${file}；${hint}`);
+    }
+  }
+
   private async exclusive(file: string, value: unknown): Promise<void> {
     const handle = await open(file, 'wx', 0o600);
     try {
@@ -118,7 +137,10 @@ export class ImportJobs {
   }
 
   async routePlan<T extends ImportJobPlan>(id: string, route: string, schema = 1): Promise<T> {
-    const plan = JSON.parse(await readFile(path.join(this.dir(id), 'plan.json'), 'utf8')) as T;
+    const file = path.join(this.dir(id), 'plan.json');
+    const raw = await this.readText(file);
+    if (raw === null) throw new Error(`找不到 ${route} 计划 ${id}：${file} 不存在`);
+    const plan = this.parseJson<T>(raw, file, `导入计划 ${id} 的 plan.json `, '可删除该日志目录后重新 prepare（会得到新的计划 id）');
     if (importPlanId(plan) !== id || plan.schema !== schema || plan.route !== route) {
       throw new Error('导入计划与确认的路径不匹配');
     }
@@ -130,16 +152,19 @@ export class ImportJobs {
   }
 
   async routeOutcome<T>(id: string): Promise<T | null> {
-    try {
-      return JSON.parse(await readFile(path.join(this.dir(id), 'outcome.json'), 'utf8')) as T;
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
-      throw error;
-    }
+    const file = path.join(this.dir(id), 'outcome.json');
+    const raw = await this.readText(file);
+    // 还没有结果时返回 null 是正常状态；文件存在但读不出来才是异常
+    return raw === null ? null : this.parseJson<T>(raw, file, `导入执行结果 ${id} 的 outcome.json `, '结果以同目录的 started.json 与目标锁为准，不要重复导入，也不要删除日志');
   }
 
   async projectPlan(id: string): Promise<ProjectBindingPlan> {
-    const plan = JSON.parse(await readFile(path.join(this.dir(id), 'plan.json'), 'utf8')) as ProjectBindingPlan;
+    const file = path.join(this.dir(id), 'plan.json');
+    const raw = await this.readText(file);
+    if (raw === null) {
+      throw new Error(`找不到项目关联计划 ${id}：${file} 不存在（计划 id 来自 watch import-codex project-prepare 的输出）`);
+    }
+    const plan = this.parseJson<ProjectBindingPlan>(raw, file, `项目关联计划 ${id} 的 plan.json `, '可删除该日志目录后重新 prepare（会得到新的计划 id）');
     if (importPlanId(plan) !== id || plan.schema !== 1 || plan.route !== 'codex-project-association') {
       throw new Error('项目关联计划与确认的 id 不匹配');
     }
@@ -151,33 +176,19 @@ export class ImportJobs {
   }
 
   async projectOutcome(id: string): Promise<ProjectBindingOutcome | null> {
-    try {
-      return JSON.parse(await readFile(path.join(this.dir(id), 'outcome.json'), 'utf8')) as ProjectBindingOutcome;
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
-      throw error;
-    }
+    const file = path.join(this.dir(id), 'outcome.json');
+    const raw = await this.readText(file);
+    return raw === null ? null : this.parseJson<ProjectBindingOutcome>(raw, file, `项目关联结果 ${id} 的 outcome.json `, '结果以同目录的 started.json 与目标锁为准，不要重复导入，也不要删除日志');
   }
 
   async plan(id: string): Promise<ImportPlan> {
     const file = path.join(this.dir(id), 'plan.json');
-    let raw: string;
-    try {
-      raw = await readFile(file, 'utf8');
-    } catch (error) {
-      // 裸 ENOENT 只说「没有这个文件」，用户看不出下一句该干嘛
-      if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
-        throw new Error(`找不到导入计划 ${id}：${file} 不存在（计划 id 来自 watch import-codex prepare 的输出）`);
-      }
-      throw error;
+    // 裸 ENOENT 只说「没有这个文件」，用户看不出下一句该干嘛
+    const raw = await this.readText(file);
+    if (raw === null) {
+      throw new Error(`找不到导入计划 ${id}：${file} 不存在（计划 id 来自 watch import-codex prepare 的输出）`);
     }
-    let plan: ImportPlan;
-    try {
-      plan = JSON.parse(raw) as ImportPlan;
-    } catch {
-      // 上次写了一半 / 被外部改动：fail closed，但要讲清是哪一种
-      throw new Error(`导入计划 ${id} 的 plan.json 无法解析（可能上次只写了一半，或文件被改动）`);
-    }
+    const plan = this.parseJson<ImportPlan>(raw, file, `导入计划 ${id} 的 plan.json `, '可删除该日志目录后重新 prepare（会得到新的计划 id）');
     if (importPlanId(plan) !== id || plan.schema !== 1 || plan.route !== 'claude-code-to-codex-official') {
       throw new Error(`导入计划与确认的 id 不匹配（plan.json 被改动，或与其他计划混在了一起）：${id}`);
     }
@@ -263,11 +274,9 @@ export class ImportJobs {
   }
 
   async outcome(id: string): Promise<ImportOutcome | null> {
-    try {
-      return JSON.parse(await readFile(path.join(this.dir(id), 'outcome.json'), 'utf8')) as ImportOutcome;
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
-      throw error;
-    }
+    const file = path.join(this.dir(id), 'outcome.json');
+    // 没有 outcome.json 是「还没跑完」的正常状态，不能当成日志损坏
+    const raw = await this.readText(file);
+    return raw === null ? null : this.parseJson<ImportOutcome>(raw, file, `导入执行结果 ${id} 的 outcome.json `, '结果以同目录的 started.json 与目标锁为准，不要重复导入，也不要删除日志');
   }
 }
