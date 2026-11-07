@@ -3,14 +3,14 @@ import { invoke } from '@tauri-apps/api/core';
 import { readText, writeText } from '@tauri-apps/plugin-clipboard-manager';
 import { ArrowDownLeft, ArrowRight, ArrowUpRight, Check, ChevronDown, ClipboardPaste, Copy, FileText, Folder, History, Info, LoaderCircle, Monitor, Moon, RefreshCw, Search, Settings2, ShieldCheck, Sun, SunMoon, Terminal, Workflow, X } from 'lucide-react';
 import { assertSameCodexImportPlan, beginCodexOpen, completeCodexOpen, failCodexOpen, importedCodexThreadId, parseCodexImportResult, viewForCodexImportResult, type CodexImportResult, type CodexImportView } from './codex-import.js';
-import { AGENTS, buildCommand, handoffRoute, historyView, parsePrecheckBlocked, parseThemePreference, recentView, resolveTheme, sourceWarnings, THEME_OPTIONS, type PrecheckResponse, type ThemePreference } from './handoff-ui.js';
+import { AGENTS, buildCommand, handoffRoute, historyView, parsePrecheckBlocked, parseThemePreference, providerDetectFailures, recentView, resolveTheme, sourceWarnings, THEME_OPTIONS, type ProviderDetectFailure, type PrecheckResponse, type ThemePreference } from './handoff-ui.js';
 import './App.css';
 
 type TerminalId = 'terminal' | 'kaku' | 'iterm2' | 'ghostty';
 type LaunchMode = TerminalId | 'copy';
 type Page = 'handoff' | 'history' | 'compatibility' | 'settings';
 type Recent = { provider: string; sessionId: string; cwd: string; updatedAt: number; preview?: string };
-type Provider = { id: string; available: boolean };
+type Provider = { id: string; available: boolean; error?: string };
 type Record = { id: string; fromProvider?: string; toProvider: string; toRef?: { sessionId?: string }; createdAt: number };
 type Summary = { turnCount: number; userTurnCount: number; assistantTurnCount: number; lastUserPrompt?: string; lastAssistantReply?: string; hasThinking: boolean; hasTools: boolean; hasAttachments: boolean; toolNames: string[]; toolCount: number };
 type Source = { cwd: string; provider: string | null; sessionId?: string; usage?: { inputTokens: number; outputTokens: number } | null; summary?: Summary | null; warnings?: string[] };
@@ -51,6 +51,8 @@ export default function App() {
   const [recentWarnings, setRecentWarnings] = useState<string[]>([]);
   // CLI 桥拉不起来（Node 版本不够 / 核心缺失）时 providers 会是空的：不能让它悄悄显示成「环境未检测」
   const [providersError, setProvidersError] = useState('');
+  // 单家 detect() 抛错时 CLI 会给 available:false + error：混进「CLI 未检测到」会被当成没装
+  const [providerFailures, setProviderFailures] = useState<ProviderDetectFailure[]>([]);
   const [available, setAvailable] = useState<TerminalId[]>(['terminal']);
   const [mode, setMode] = useState<LaunchMode>(initialMode);
   const [target, setTarget] = useState('codex');
@@ -104,7 +106,7 @@ export default function App() {
     if (!native()) return;
     let cancelled = false;
     void loadRecents();
-    void invoke<{ providers?: Provider[] }>('list_available_providers').then((data) => { if (!cancelled && Array.isArray(data.providers)) { setProviders(data.providers); setProvidersError(''); } }).catch((error) => { if (!cancelled) setProvidersError(message(error)); });
+    void invoke<{ providers?: Provider[] }>('list_available_providers').then((data) => { if (cancelled) return; if (Array.isArray(data.providers)) { setProviders(data.providers); setProviderFailures(providerDetectFailures(data.providers)); setProvidersError(''); } else { setProviderFailures([]); setProvidersError('providers 没有返回列表'); } }).catch((error) => { if (!cancelled) { setProviderFailures([]); setProvidersError(message(error)); } });
     void invoke<string[]>('list_terminals').then((list) => {
       if (cancelled) return;
       const ids = list.filter((entry): entry is TerminalId => entry !== 'copy' && entry in terminalLabels);
@@ -254,15 +256,16 @@ export default function App() {
             {source.summary && <div className="context-section"><div className="section-heading"><h3>上下文摘录</h3><button className="text-button" aria-expanded={expanded} onClick={() => setExpanded(!expanded)}>{expanded ? '收起' : '展开'}<ChevronDown size={14} className={expanded ? 'rotate' : ''} /></button></div>{source.summary.lastUserPrompt && <div className="excerpt-row"><span className="role-label">用户</span><p className={expanded ? '' : 'clamped'}>{source.summary.lastUserPrompt}</p></div>}{source.summary.lastAssistantReply && <div className="excerpt-row"><span className="role-label assistant">助手</span><p className={expanded ? '' : 'clamped'}>{source.summary.lastAssistantReply}</p></div>}{!!source.summary.toolNames.length && <div className="tool-list"><span>工具</span>{source.summary.toolNames.map((tool) => <code key={tool}>{tool}</code>)}{source.summary.toolCount > source.summary.toolNames.length && <span>等 {source.summary.toolCount} 种</span>}</div>}</div>}
           </div>}
         </section>
-        <section className="target-section" aria-labelledby="target-title"><div className="section-heading"><h2 id="target-title">接力目标</h2><span>06 AGENTS</span></div><div className="agent-selector" role="radiogroup" aria-label="接力目标 Agent">{AGENTS.map((entry, index) => { const installed = providers.find((provider) => provider.id === entry.id); return <button role="radio" aria-checked={target === entry.id} tabIndex={target === entry.id ? 0 : -1} key={entry.id} className={`agent-option ${target === entry.id ? 'selected' : ''}`} disabled={busy !== null} onClick={() => setTarget(entry.id)} onKeyDown={(event) => {
+        <section className="target-section" aria-labelledby="target-title"><div className="section-heading"><h2 id="target-title">接力目标</h2><span>06 AGENTS</span></div><div className="agent-selector" role="radiogroup" aria-label="接力目标 Agent">{AGENTS.map((entry, index) => { const installed = providers.find((provider) => provider.id === entry.id); return <button role="radio" aria-checked={target === entry.id} tabIndex={target === entry.id ? 0 : -1} key={entry.id} title={providerFailures.find((failure) => failure.id === entry.id)?.error} className={`agent-option ${target === entry.id ? 'selected' : ''}`} disabled={busy !== null} onClick={() => setTarget(entry.id)} onKeyDown={(event) => {
           const direction = ['ArrowRight', 'ArrowDown'].includes(event.key) ? 1 : ['ArrowLeft', 'ArrowUp'].includes(event.key) ? -1 : 0;
           if (!direction && event.key !== 'Home' && event.key !== 'End') return;
           event.preventDefault();
           const next = event.key === 'Home' ? 0 : event.key === 'End' ? AGENTS.length - 1 : (index + direction + AGENTS.length) % AGENTS.length;
           setTarget(AGENTS[next].id);
           (event.currentTarget.parentElement?.querySelectorAll<HTMLButtonElement>('[role="radio"]')[next])?.focus();
-        }}><img src={`/${entry.id}.svg`} alt="" /><span>{entry.label}<small>{owner === entry.id ? '来源 Agent' : installed ? installed.available ? 'CLI 已检测到' : 'CLI 未检测到' : '环境未检测'}</small></span>{target === entry.id && <Check size={15} />}</button>; })}</div>
+        }}><img src={`/${entry.id}.svg`} alt="" /><span>{entry.label}<small>{owner === entry.id ? '来源 Agent' : installed ? installed.available ? 'CLI 已检测到' : providerFailures.some((failure) => failure.id === entry.id) ? '检测失败' : 'CLI 未检测到' : '环境未检测'}</small></span>{target === entry.id && <Check size={15} />}</button>; })}</div>
               {providersError && <p className="precheck blocked" role="status"><Info size={13} />无法检测本机 Agent：{providersError}（仍可选择目标）</p>}
+              {providerFailures.map((failure) => (<p className="warning-message" key={`pf-${failure.id}`}><Info size={15} />{`${failure.label} 检测失败：${failure.error}；这不等于没装 CLI，先修好它再重新检测`}</p>))}
           {precheck.status !== 'idle' && <p className={`precheck${precheck.status === 'blocked' ? ' blocked' : ''}`} role="status">{precheck.status === 'checking' ? <><LoaderCircle className="spin" size={13} />正在预检目标会话…</> : precheck.status === 'error' ? <><Info size={13} />预检不可用：{precheck.error}（不影响转入）</> : precheck.status === 'blocked' ? <><Info size={13} />暂不可写入：{precheck.note}{precheck.blocked?.hint ? ` · ${precheck.blocked.hint}` : precheck.error ? ` · ${precheck.error}` : ''}{!!precheck.blocked?.holders?.length && ` · 占用者 ${precheck.blocked.holders.map((holder) => `PID ${holder.pid} ${holder.command}`).join('、')}`}</> : <><Check size={13} />可写入：{precheck.note}</>}</p>}
           {!!precheck.warnings?.length && <p className="muted precheck-notes">{precheck.warnings.join('；')}</p>}
         <div className="handoff-tool"><div className="handoff-tool-heading"><span className="route-label"><span className="status-dot" />{route === 'official-codex' ? '官方桌面导入' : route === 'resume' ? '原会话恢复' : '本地格式转换'}</span><span className="client-label">{route === 'official-codex' ? <Monitor size={14} /> : <Terminal size={14} />}{route === 'official-codex' ? 'Codex Desktop' : terminalLabels[mode]}</span></div>

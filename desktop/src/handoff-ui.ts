@@ -105,6 +105,30 @@ export function historyView(
   return { entries, warnings, error };
 }
 
+export type ProviderDetectFailure = { id: string; label: string; error: string };
+
+/**
+ * `list_available_providers`（= `watch providers --json`）里 detect() 抛错的那几家。
+ *
+ * 契约是「一家检测崩掉不影响整体」：该项 `available:false` 并带 `error`。桌面端此前只读
+ * `available`，把「读不出来 / 探测失败」和「没装 CLI」渲染成同一句「CLI 未检测到」——
+ * 用户会去重装一个其实装着、只是配置读不出来的客户端。
+ */
+export function providerDetectFailures(providers: unknown): ProviderDetectFailure[] {
+  if (!Array.isArray(providers)) return [];
+  const out: ProviderDetectFailure[] = [];
+  for (const entry of providers) {
+    if (!entry || typeof entry !== 'object') continue;
+    const record = entry as { id?: unknown; available?: unknown; error?: unknown };
+    const id = typeof record.id === 'string' ? record.id.trim() : '';
+    const error = typeof record.error === 'string' ? record.error.trim() : '';
+    if (!id || record.available !== false || !error) continue;
+    const label = AGENTS.find((agent) => agent.id === id)?.label ?? id;
+    out.push({ id, label, error });
+  }
+  return out;
+}
+
 export type RecentView = {
   items: unknown[];
   /** 被 `--limit` 截断的条数（0 表示这一份就是全部） */
