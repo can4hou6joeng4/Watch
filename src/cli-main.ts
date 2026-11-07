@@ -521,8 +521,9 @@ async function cmdRecent(cwd: string, json: boolean, limit: number = 8): Promise
     updatedAt: number;
     preview?: string;
   };
-  const results: RecentItem[] = [];
-  const seen = new Set<string>();
+  // 用 Map 而不是数组 + Set：同一会话可能先由映射表命中、再被原生扫描命中，
+  // 原生那边的 mtime 与 preview 更准，合并时不能被「先到先得」丢掉（以前映射先入就丢 preview）。
+  const merged = new Map<string, RecentItem>();
   const unavailable: string[] = [];
   const warnings: string[] = [];
   const cwdIssue = await cwdProblem(cwd);
@@ -533,22 +534,20 @@ async function cmdRecent(cwd: string, json: boolean, limit: number = 8): Promise
     try {
       const locations = store.listSessionLocations({ limit: limit * 2 });
       for (const loc of locations) {
-        if (results.length >= limit) break;
         const key = `${loc.provider}:${loc.sessionId}`;
-        if (seen.has(key)) continue;
         try {
           const st = await stat(loc.filePath);
-          if (st.isFile()) {
-            seen.add(key);
-            results.push({
-              provider: loc.provider,
-              sessionId: loc.sessionId,
-              cwd: loc.cwd,
-              updatedAt: loc.lastSeenAt || st.mtimeMs,
-            });
-          }
+          if (!st.isFile()) continue;
+          merged.set(key, {
+            provider: loc.provider,
+            sessionId: loc.sessionId,
+            cwd: loc.cwd,
+            // 用文件 mtime 而不是 last_seen_at：后者是「Watch 上次反查它的时间」，
+            // 反复 open 一个老会话会让它排到最前面，和原生扫描的 updatedAt 也不是一回事
+            updatedAt: st.mtimeMs,
+          });
         } catch {
-          // File not found or inaccessible
+          // 文件没了或读不到：交给原生扫描，它还能按目录重新列出来
         }
       }
     } catch {
@@ -564,17 +563,14 @@ async function cmdRecent(cwd: string, json: boolean, limit: number = 8): Promise
     try {
       const sessions = await adapter.listSessions(cwd);
       for (const s of sessions) {
-        const key = `${s.ref.provider}:${s.ref.sessionId}`;
-        if (!seen.has(key)) {
-          seen.add(key);
-          results.push({
-            provider: s.ref.provider,
-            sessionId: s.ref.sessionId,
-            cwd: s.ref.cwd,
-            updatedAt: s.updatedAt,
-            preview: s.preview,
-          });
-        }
+        // 与映射表重叠时覆盖：原生这边带 preview，顺序也直接来自文件 mtime
+        merged.set(`${s.ref.provider}:${s.ref.sessionId}`, {
+          provider: s.ref.provider,
+          sessionId: s.ref.sessionId,
+          cwd: s.ref.cwd,
+          updatedAt: s.updatedAt,
+          preview: s.preview,
+        });
       }
     } catch {
       // 单家读失败不拖垮列表，但要披露
@@ -582,6 +578,7 @@ async function cmdRecent(cwd: string, json: boolean, limit: number = 8): Promise
     }
   }
 
+  const results = [...merged.values()];
   results.sort((a, b) => b.updatedAt - a.updatedAt);
   const final = results.slice(0, limit);
   // 列表被 --limit（默认 8）截断时要说出来，否则用户会把「最近 8 条」当成全部
