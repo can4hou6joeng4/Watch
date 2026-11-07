@@ -1,5 +1,6 @@
 import type { ImportTurnsOpts, ProviderAdapter } from '../providers/adapter.js';
 import type { SessionRef, TokenUsage, UnifiedTurn } from './types.js';
+import { describeStoreErrorReason } from './store.js';
 import type { Chain, Store, SwitchRecord } from './store.js';
 import { dedupeCallEvents, mergeTurns, shouldReplacePairedSession, unwrapUserQuery } from './rich.js';
 import type { FileDigest } from './atomic.js';
@@ -134,7 +135,7 @@ export async function adoptIntoChain(
     } catch (error) {
       if (error instanceof Error && /找不到链|已归档/.test(error.message)) throw error;
       history = [];
-      warnings.push(`链历史读取失败，按无链处理：${error instanceof Error ? error.message : String(error)}`);
+      warnings.push(`链历史读取失败，按无链处理：${describeStoreErrorReason(error)}`);
     }
   }
   if (history.some((h) => h.toProvider === providerId && h.toRef?.sessionId === found.ref.sessionId)) {
@@ -158,7 +159,7 @@ export async function adoptIntoChain(
       store.recordSwitch(id, providerId, replaced, providerId, found.ref);
     } catch (error) {
       console.error('[watch] 记录接入失败:', error);
-      warnings.push(`链记录失败: ${error instanceof Error ? error.message : String(error)}`);
+      warnings.push(`链记录失败: ${describeStoreErrorReason(error)}`);
     }
   }
   return { adoptedRef: found.ref, replacedRef: replaced, warnings };
@@ -383,7 +384,7 @@ export async function chainStatus(
     } catch (error) {
       if (error instanceof Error && /找不到链/.test(error.message)) throw error;
       history = [];
-      warnings.push(`链历史读取失败，按无链处理：${error instanceof Error ? error.message : String(error)}`);
+      warnings.push(`链历史读取失败，按无链处理：${describeStoreErrorReason(error)}`);
     }
   } else {
     warnings.push('本地库不可用，链信息与链尾无法显示（只列出原生会话；可检查 WATCH_DB 路径与 Node 版本）');
@@ -471,7 +472,7 @@ export async function handoff(
     } catch (error) {
       if (error instanceof Error && /找不到链|已归档/.test(error.message)) throw error;
       history = [];
-      warnings.push(`链历史读取失败，按无链处理：${error instanceof Error ? error.message : String(error)}`);
+      warnings.push(`链历史读取失败，按无链处理：${describeStoreErrorReason(error)}`);
     }
   }
 
@@ -667,7 +668,7 @@ export async function handoff(
         store.recordSwitch(id, sourceTip.provider, sourceTip.ref, targetId, resumeRef);
       } catch (error) {
         console.error('[watch] 记录 switch_events 失败，交接仍完成:', error);
-        warnings.push(`链记录失败: ${error instanceof Error ? error.message : String(error)}`);
+        warnings.push(`链记录失败: ${describeStoreErrorReason(error)}`);
       }
     }
     return {
@@ -690,7 +691,7 @@ export async function handoff(
       store.recordSwitch(id, sourceTip.provider, sourceTip.ref, targetId, newRef);
     } catch (error) {
       console.error('[watch] 记录 switch_events 失败，交接仍完成:', error);
-      warnings.push(`链记录失败: ${error instanceof Error ? error.message : String(error)}`);
+      warnings.push(`链记录失败: ${describeStoreErrorReason(error)}`);
     }
   }
 
