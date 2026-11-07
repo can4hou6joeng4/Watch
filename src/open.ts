@@ -9,7 +9,7 @@ import type { ProviderAdapter } from './providers/adapter.js';
 import { PreflightBlockedError } from './providers/adapter.js';
 import { getAdapter, listAdapters, unknownProviderMessage } from './providers/registry.js';
 import { countUnparsableJsonLines } from './core/jsonl.js';
-import { describeSessionReadFailure, describeSessionReadFailureReason } from './core/read-text.js';
+import { describeSessionReadFailure, describeSessionReadFailureReason, isFileSystemErrorCode } from './core/read-text.js';
 import { sessionCwdProblem } from './core/cwd.js';
 
 /** `watch open` 的返回协议：桌面 GUI 通过 CLI `--json` 消费 */
@@ -204,6 +204,21 @@ export async function resolveById(
   return null;
 }
 
+/**
+ * 读会话文件失败的用户面原因：fs 错误（EACCES / EIO…）说成「读不出来」，
+ * 其余保留适配器自己给的说明（内容格式问题本来就是中文）。
+ *
+ * 用量 / 摘要都是附加信息，失败不阻断打开；但把 `EACCES: permission denied, open '…'`
+ * 原样塞进 warnings 会让人以为会话坏了，实际要修的是权限。
+ */
+function fileReadReason(error: unknown): string {
+  return isFileSystemErrorCode((error as NodeJS.ErrnoException).code)
+    ? describeSessionReadFailureReason(error)
+    : error instanceof Error
+      ? error.message
+      : String(error);
+}
+
 /** POSIX 单引号包裹（含单引号转义），供拼接可复制的 cd / command */
 export function shellQuote(s: string): string {
   return `'${s.replace(/'/g, `'\\''`)}'`;
@@ -285,7 +300,7 @@ export async function openSession(
           (await source.adapter.sessionUsage(source.found.ref).catch((error: unknown) => {
             // 与目标侧一致：读失败不能和「原生没有 usage」一样静默成 null
             warnings.push(
-              `来源 ${source.adapter.displayName} 用量读取失败：${error instanceof Error ? error.message : String(error)}`,
+              `来源 ${source.adapter.displayName} 用量读取失败：${fileReadReason(error)}`,
             );
             return null;
           })) ?? null;
@@ -342,7 +357,7 @@ export async function openSession(
         (await target.adapter.sessionUsage(target.found.ref).catch((error: unknown) => {
           // 「原生没有 usage」与「读取失败」都是 null，后者必须说明
           warnings.push(
-            `${target.adapter.displayName} 用量读取失败：${error instanceof Error ? error.message : String(error)}`,
+            `${target.adapter.displayName} 用量读取失败：${fileReadReason(error)}`,
           );
           return null;
         })) ?? null;
@@ -376,7 +391,7 @@ export async function openSession(
     } catch (error) {
       // 摘要只是附加信息，解析失败不阻断打开，但不能让用户以为这个会话没有内容
       warnings.push(
-        `会话摘要解析失败，未展示轮次与工具信息：${error instanceof Error ? error.message : String(error)}`,
+        `会话摘要解析失败，未展示轮次与工具信息：${fileReadReason(error)}`,
       );
     }
   }
@@ -724,7 +739,7 @@ export async function openInProvider(
       sourceUsage =
         (await source.sessionUsage(sourceRef).catch((error: unknown) => {
           warnings.push(
-            `来源 ${source.displayName} 用量读取失败：${error instanceof Error ? error.message : String(error)}`,
+            `来源 ${source.displayName} 用量读取失败：${fileReadReason(error)}`,
           );
           return null;
         })) ?? null;
@@ -741,8 +756,12 @@ export async function openInProvider(
     if (mapping) {
       try {
         mapping.rememberSessionLocation(providerId, newRef, Date.now());
-      } catch {
-        /* location remember failure does not block transfer */
+      } catch (error) {
+        // 与 resolveById 的两处写回一致：不影响这次转入，但本地库从此记不住这条新会话，
+        // 下次仍要全盘扫描。不披露就只剩「慢」这一个症状
+        warnings.push(
+          `转入的 ${providerId} 会话 ${newRef.sessionId} 未记入本地映射（${describeStoreErrorReason(error)}）；不影响本次打开，但下次 open 仍需重新全盘扫描`,
+        );
       }
     }
     const resumeCommand = target.resumeCommand(newRef);
