@@ -270,7 +270,7 @@ async function cmdStatus(cwd: string, json: boolean, chain?: string): Promise<vo
     console.log(JSON.stringify({ ok: true, ...result }));
     return;
   }
-  const { tips, chainTip, history, chain: current, warnings } = result;
+  const { tips, chainTip, chainTipUnusable, history, chain: current, warnings } = result;
   for (const warning of warnings) console.error(`警告: ${warning}`);
   if (current) console.log(`链: ${current.name}${current.status === 'archived' ? ' [归档]' : ''}  (${current.id})`);
   // 同一目录可能有多条链：只显示当前这条会让文本用户以为没有别的（--json 的 chains 一直是全量）
@@ -281,7 +281,16 @@ async function cmdStatus(cwd: string, json: boolean, chain?: string): Promise<vo
     const parts = [active ? `${active} 条活跃` : '', archived ? `${archived} 条归档` : ''].filter(Boolean);
     console.log(`另有 ${otherChains.length} 条链（${parts.join('、')}）；用 --chain <名或 id> 查看`);
   }
-  if (!tips.length) {
+  if (!tips.length && chainTip && chainTipUnusable) {
+    // 目录里没有可列出的原生会话，但链上明明绑着一个（链尾）：文件被删、被同名目录占住或读不出来。
+    // 以前这里照样说「请先在任一受支持的 Agent 里开聊」，上一行警告刚说链尾文件取不到、
+    // 下一行就让人去开新会话，用户会照做，原链于是白白断掉。
+    // 具体原因已由警告给出（三档措辞不同），这里只指认链尾并给下一步
+    console.log(
+      `未发现可列出的原生会话；链尾记录的是 ${chainTip.provider} 会话 ${chainTip.ref.sessionId}，` +
+        `其文件当前不可用（原因见上方警告）——可先恢复该文件，或 watch adopt ${chainTip.provider} --session ${chainTip.ref.sessionId} 重新绑定`,
+    );
+  } else if (!tips.length) {
     console.log(`未发现会话（${noSessionHint()}）`);
   } else {
     console.log(`cwd: ${cwd}`);

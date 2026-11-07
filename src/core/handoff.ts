@@ -399,6 +399,12 @@ export async function chainStatus(
 ): Promise<{
   tips: ProviderTip[];
   chainTip: ProviderTip | null;
+  /**
+   * 链尾已经绑定、但它的文件现在不可用（不存在 / 不是普通文件 / 状态无法确认）。
+   * 文本模式拿不到 warnings 的结构化版本，靠它区分「这个目录真没聊过」与「链尾文件坏了」，
+   * 否则 `status` 会在警告之后照样说「请先在任一受支持的 Agent 里开聊」。
+   */
+  chainTipUnusable: boolean;
   history: SwitchRecord[];
   chain: Chain | null;
   chains: Chain[];
@@ -430,6 +436,7 @@ export async function chainStatus(
   }
   // 链尾只以当前链的 switch_events 最后一条为准；不再 fallback 到目录全局最新会话
   let chainTip: ProviderTip | null = null;
+  let chainTipUnusable = false;
   if (history.length) {
     const last = history.at(-1)!;
     chainTip = { provider: last.toProvider, ref: last.toRef, updatedAt: last.createdAt, onChain: true };
@@ -438,16 +445,19 @@ export async function chainStatus(
     // 否则权限问题会被讲成会话丢了，把人引去白换一次绑定
     const tipPresence = await sessionFilePresence(last.toRef.filePath);
     if (tipPresence.state === 'missing') {
+      chainTipUnusable = true;
       warnings.push(
         `链尾会话文件已不存在：${last.toRef.filePath}（${last.toProvider} ${last.toRef.sessionId}，文件不存在）；下次切换会失败，可先 adopt 该 provider 的新会话`,
       );
     } else if (tipPresence.state === 'present' && !tipPresence.isFile) {
       // 路径还在、只是不是普通文件：说成「文件已不存在」自相矛盾，还会把人引去 adopt；
       // 与 chain list / doctor 的「该路径现在不是普通文件」保持同一说法
+      chainTipUnusable = true;
       warnings.push(
         `链尾会话文件的路径现在不是普通文件（被同名目录或设备文件占住了）：${last.toRef.filePath}（${last.toProvider} ${last.toRef.sessionId}）；下次切换会失败，先恢复该路径，再决定是否需要 adopt 该 provider 的新会话`,
       );
     } else if (tipPresence.state === 'unknown') {
+      chainTipUnusable = true;
       warnings.push(
         `链尾会话文件状态无法确认：${last.toProvider} ${last.toRef.sessionId}；${tipPresence.reason}；可能是权限或路径问题，先确认它是否还在，再决定是否需要 adopt`,
       );
@@ -464,7 +474,7 @@ export async function chainStatus(
     }
   }
   const tips = allTips.map((t) => ({ ...t, onChain: boundIds.get(t.provider)?.has(t.ref.sessionId) ?? false }));
-  return { tips, chainTip, history, chain, chains, warnings };
+  return { tips, chainTip, chainTipUnusable, history, chain, chains, warnings };
 }
 
 /** 把链尾会话转换到 targetId，落 switch_events（store 可选）；opts.forceNew 强制新建目标会话（不追加既有配对） */
