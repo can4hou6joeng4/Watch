@@ -1,6 +1,8 @@
 import { homedir } from 'node:os';
+import { accessSync, constants, mkdirSync } from 'node:fs';
 import { stat } from 'node:fs/promises';
 import path from 'node:path';
+import { describeWriteFailureReason } from '../../core/atomic.js';
 import { isMissingPathError } from '../../core/read-text.js';
 import { probeSqliteTables, readSqliteFileHead } from '../../core/sqlite-file.js';
 
@@ -34,27 +36,92 @@ export function opencodeDbNotFileError(dbPath: string): Error {
   );
 }
 
-/** SQLite 原文翻成中文：库打不开 / 不是数据库 / 被占用 / 磁盘错误各说一句，看不出原因时才带原文 */
-function describeSqliteFailure(raw: string): string {
-  if (/unable to open database file/i.test(raw)) return '库文件打不开（路径不可用、被占住或权限不足）';
-  if (/not a database/i.test(raw)) return '库文件不是有效的 SQLite 数据库（可能已损坏或被替换）';
-  if (/disk I\/O error/i.test(raw)) return '库文件读写出错（磁盘或文件系统问题）';
-  if (/database is locked|^database is busy/i.test(raw)) return '库文件被其它进程占用（正在使用中）';
-  if (/no such table/i.test(raw)) return '库结构不完整（缺少预期的表，可能还没被 opencode 正式初始化）';
-  return `无法识别的 SQLite 错误：${raw}`;
+/**
+ * SQLite 原文翻成中文，并各给一步对应的处置。
+ *
+ * 以前所有打开失败都接同一句「可先关闭占用它的 opencode 进程重试；仍不行就备份该文件」——
+ * 只有「被占用」那一档适用。`unable to open database file` 在全新机器上其实是**上级目录
+ * 还不存在**（写入路径现在会先建目录，读到这一句多半是目录不可写或路径被占住），让人去关
+ * 一个没运行的进程、再备份一个不存在的文件，是两步都错的指引。
+ */
+function describeSqliteFailure(raw: string): { reason: string; hint: string } {
+  if (/unable to open database file/i.test(raw)) {
+    return {
+      reason: '库文件打不开（路径不可用、被占住或权限不足）',
+      hint: '先确认该路径的目录存在且可写、没有被同名目录或设备文件占住',
+    };
+  }
+  if (/not a database/i.test(raw)) {
+    return {
+      reason: '库文件不是有效的 SQLite 数据库（可能已损坏或被替换）',
+      hint: '备份该文件后挪走它，让 opencode 重建后再试',
+    };
+  }
+  if (/disk I\/O error/i.test(raw)) {
+    return { reason: '库文件读写出错（磁盘或文件系统问题）', hint: '先确认磁盘可用、文件系统没有只读挂载，再重试' };
+  }
+  if (/database is locked|^database is busy/i.test(raw)) {
+    return { reason: '库文件被其它进程占用（正在使用中）', hint: '等占用它的进程结束或先关闭它，再重试' };
+  }
+  if (/no such table/i.test(raw)) {
+    return {
+      reason: '库结构不完整（缺少预期的表，可能还没被 opencode 正式初始化）',
+      hint: '先用 opencode 正常打开一次该目录，让它把库结构迁移完',
+    };
+  }
+  return { reason: `无法识别的 SQLite 错误：${raw}`, hint: '确认该库文件是否可读，必要时先备份再让 opencode 重建' };
 }
 
 /** 打开 / 查询库失败：SQLite 的错误不带 errno，也不说该修哪个路径 */
 export function opencodeDbSqliteError(dbPath: string, action: '打开' | '查询', error: unknown): Error {
   const raw = error instanceof Error ? error.message : String(error);
-  return new Error(
-    `无法${action} OpenCode 数据库 ${dbPath}：${describeSqliteFailure(raw)}——可先关闭占用它的 opencode 进程重试；` +
-      '仍不行就备份该文件，让 opencode 重建后再试',
-  );
+  const { reason, hint } = describeSqliteFailure(raw);
+  return new Error(`无法${action} OpenCode 数据库 ${dbPath}：${reason}——${hint}`);
 }
 
 /** 一张都没有就可能不是 opencode 的库；只要命中任意必备表就按 opencode 的库处理 */
 const OPENCODE_KNOWN_TABLES = ['project', 'session', 'message', 'part'];
+
+/**
+ * 写入前准备数据目录：不存在就建，存在就确认可写。
+ *
+ * `~/.local/share/opencode/` 在从没跑过 opencode 的机器上根本不存在，而 SQLite 只会报
+ * `unable to open database file`——旧文案把它解释成「路径被占住或权限不足…先关闭占用它的
+ * opencode 进程」，可真正的原因是**上级目录还没建**，用户会跑去关一个根本没运行的进程。
+ * 目录存在但不可写时同样是这一句，也同样给不出下一步。
+ *
+ * 这与 `Store` 构造函数里的 `mkdirSync(dirname(dbPath), { recursive: true, mode: 0o700 })`
+ * 对齐：库该不该存在由调用方判定，目录由我们建；建不出来 / 不可写时这里就带 errno 说清，
+ * 不让 SQLite 把文件系统问题揉成一句英文。
+ */
+export function ensureOpencodeDbDir(dbPath: string): void {
+  const dir = path.dirname(dbPath);
+  try {
+    // 0700 与 ~/.watch 一致：这里放的是会话内容，不需要给同机其它用户读
+    mkdirSync(dir, { recursive: true, mode: 0o700 });
+    // 目录早就在、只是不可写时 mkdirSync 是空操作，得单独探一次，否则要等到 SQLite 才失败
+    accessSync(dir, constants.W_OK);
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    // `mkdirSync(recursive)` 撞上「某一级是普通文件」报的是 EEXIST，不是 ENOTDIR；
+    // 落到下面的通用分支会变成「写入失败（EEXIST）」，看不出该挪走什么
+    if (code === 'EEXIST') {
+      throw new Error(
+        `无法使用 OpenCode 数据目录：${dir}——路径上的某一级是已存在的文件（不是目录）；` +
+          `本次未写入任何内容，先挪走占住它的文件再重试`,
+      );
+    }
+    const reason = describeWriteFailureReason(error);
+    if (!reason) {
+      const raw = error instanceof Error ? error.message : String(error);
+      throw new Error(`无法使用 OpenCode 数据目录：${dir}（${raw}）；本次未写入任何内容`);
+    }
+    // describeWriteFailureReason 的几条里只有部分带了「本次未写入」，补齐一次别再重复
+    throw new Error(
+      `无法使用 OpenCode 数据目录——${reason}${reason.includes('本次未写入') ? '' : '；本次未写入任何内容'}`,
+    );
+  }
+}
 
 /**
  * 往 `opencode.db` 写之前，先确认这个文件是 opencode 的库。
@@ -82,7 +149,7 @@ export function assertUsableOpencodeDb(dbPath: string): void {
   if ('error' in probe) {
     throw new Error(
       `无法确认 OpenCode 数据库是不是 opencode 的库（表结构读不出来）：${dbPath}；` +
-        `本次未写入任何内容——可先关闭占用它的 opencode 进程再重试，仍不行就确认该文件是否可读`,
+        `本次未写入任何内容——先确认该文件可读、并关掉可能占用它的 opencode 进程，再重试`,
     );
   }
   if (probe.tables.length === 0) return;
