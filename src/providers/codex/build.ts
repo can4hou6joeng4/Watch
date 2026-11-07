@@ -56,15 +56,18 @@ async function detectCodexIdentity(sessionsDir: string): Promise<CodexIdentity> 
   return { ...DEFAULT_IDENTITY };
 }
 
-/** 按 mtime 倒序取 sessions 下的 rollout .jsonl（最多 max 个） */
-async function newestJsonlPaths(sessionsDir: string, max: number): Promise<string[]> {
+/** 按 mtime 倒序取 sessions 下的 rollout .jsonl（最多 max 个）。
+ * `errors` 收集遍历失败的位置：反查靠「找不到」下结论，读不出来的目录必须先记下来，
+ * 否则权限 / 路径错误会被讲成「这个会话不存在」 */
+async function newestJsonlPaths(sessionsDir: string, max: number, errors?: string[]): Promise<string[]> {
   const collected: string[] = [];
   const walk = async (dir: string, depth: number): Promise<void> => {
     if (depth > 3) return;
     let entries: string[];
     try {
       entries = await readdir(dir);
-    } catch {
+    } catch (error) {
+      errors?.push(`${dir}（${error instanceof Error ? error.message : String(error)}）`);
       return;
     }
     for (const entry of entries) {
@@ -75,7 +78,8 @@ async function newestJsonlPaths(sessionsDir: string, max: number): Promise<strin
         } else if (entry.endsWith('.jsonl')) {
           collected.push(p);
         }
-      } catch {
+      } catch (error) {
+        errors?.push(`${p}（${error instanceof Error ? error.message : String(error)}）`);
         continue;
       }
     }
@@ -117,10 +121,15 @@ export async function readModelProvider(codexDirPath: string): Promise<string> {
   return m?.[1] ?? DEFAULT_PROVIDER;
 }
 
-/** 按 session id 定位 rollout 文件（sessions/YYYY/MM/DD/rollout-*-<id>.jsonl），找不到返回 null */
-export async function findRolloutBySessionId(sessionsDir: string, sessionId: string): Promise<string | null> {
+/** 按 session id 定位 rollout 文件（sessions/YYYY/MM/DD/rollout-*-<id>.jsonl），找不到返回 null。
+ * `errors` 传出去后，调用方能区分「确实没有这个会话」与「有位置读不出来、无法确认」 */
+export async function findRolloutBySessionId(
+  sessionsDir: string,
+  sessionId: string,
+  errors?: string[],
+): Promise<string | null> {
   const suffix = `-${sessionId}.jsonl`;
-  const files = await newestJsonlPaths(sessionsDir, Number.MAX_SAFE_INTEGER);
+  const files = await newestJsonlPaths(sessionsDir, Number.MAX_SAFE_INTEGER, errors);
   return files.find((f) => f.endsWith(suffix)) ?? null;
 }
 

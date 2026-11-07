@@ -205,8 +205,18 @@ export async function findCodexSessionById(
   sessionsRoot?: string,
 ): Promise<{ ref: SessionRef; updatedAt: number } | null> {
   const root = sessionsRoot ?? path.join(codexDir(), 'sessions');
-  const filePath = await findRolloutBySessionId(root, sessionId);
-  if (!filePath) return null;
+  const walkErrors: string[] = [];
+  const filePath = await findRolloutBySessionId(root, sessionId, walkErrors);
+  if (!filePath) {
+    // 有目录读不出来时不能下「没有这个会话」的结论：抛出原因，由 resolveById 记进 diagnostics，
+    // 用户才会去查权限 / 路径，而不是怀疑 id 写错或 Codex 没装
+    if (walkErrors.length) {
+      throw new Error(
+        `在 ${root} 下没找到会话 ${sessionId}，但有 ${walkErrors.length} 个位置读不出来，无法确认它是否存在：${walkErrors[0]}`,
+      );
+    }
+    return null;
+  }
   // 文件是按名字精确命中的，读不出 cwd 不等于「会话不存在」：抛给 resolveById 记进 diagnostics，
   // 否则用户会去核对 id 或以为 Codex 没装，而不是检查这个文件的权限 / 内容
   const { cwd, error } = await rolloutCwdDetail(filePath);
