@@ -68,6 +68,16 @@ export function describePathReadFailureReason(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+/**
+ * Node 文件系统错误的 `code`（`EACCES` / `EISDIR` / `EIO`…）。
+ *
+ * 用来区分「文件读不出来」与「文件读出来了但内容解析不了」：前者要说权限 / 路径，
+ * 后者才该说内容。只认 `E` + 大写的形状，别把适配器自己造的错误码（如 `parse_failed`）误判成 fs 错误。
+ */
+export function isFileSystemErrorCode(code: unknown): code is string {
+  return typeof code === 'string' && /^E[A-Z]+$/.test(code);
+}
+
 export type SessionFilePresence =
   | { state: 'present'; isFile: boolean }
   | { state: 'missing' }

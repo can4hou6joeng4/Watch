@@ -1,6 +1,11 @@
 import { stat } from 'node:fs/promises';
 import type { Store } from './store.js';
 import type { ProviderAdapter } from '../providers/adapter.js';
+import {
+  describePathReadFailureReason,
+  describeSessionReadFailureReason,
+  isFileSystemErrorCode,
+} from './read-text.js';
 
 /**
  * 重建 cwd 下各 provider 的 FTS 索引。
@@ -24,7 +29,7 @@ export async function reindexCwd(
     } catch (error) {
       // 列目录失败时无法确认会话状态，保留既有索引；但要披露，否则搜索结果会静默缺一家
       warnings?.push(
-        `${adapter.id} 会话列表读取失败，本次未更新其索引：${error instanceof Error ? error.message : String(error)}`,
+        `${adapter.id} 会话列表读取失败，本次未更新其索引：${describePathReadFailureReason(error)}`,
       );
       continue;
     }
@@ -52,7 +57,7 @@ export async function reindexCwd(
         // 其余（ENOTDIR / EACCES / EIO…）不能当成没事跳过 —— 这一轮就没更新它，必须披露
         if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
           unreadable += 1;
-          firstUnreadable ||= `${s.ref.filePath}（${error instanceof Error ? error.message : String(error)}）`;
+          firstUnreadable ||= `${s.ref.filePath}（${describePathReadFailureReason(error)}）`;
         }
         continue;
       }
@@ -82,7 +87,13 @@ export async function reindexCwd(
       } catch (error) {
         /* 单文件失败不阻断；不记录游标，下轮重试 */
         failed += 1;
-        firstError ||= error instanceof Error ? error.message : String(error);
+        // parse 顺带把文件读进来：EACCES / EIO 是「读不出来」，不是「内容格式不对」，
+        // 反过来讲会让人去查文件内容而不是权限；适配器自己抛的内容错误本来已是中文，原样保留
+        firstError ||= isFileSystemErrorCode((error as NodeJS.ErrnoException).code)
+          ? describeSessionReadFailureReason(error)
+          : error instanceof Error
+            ? error.message
+            : String(error);
       }
     }
     if (failed > 0) {
@@ -116,7 +127,7 @@ export async function reindexCwd(
         // 当成「没有聊过」：搜索结果会静默变少，权限恢复后还得重新全量解析
         if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
           keepFailed += 1;
-          firstKeepError ||= `${indexed.filePath}（${error instanceof Error ? error.message : String(error)}）`;
+          firstKeepError ||= `${indexed.filePath}（${describePathReadFailureReason(error)}）`;
           continue;
         }
         gone = true;

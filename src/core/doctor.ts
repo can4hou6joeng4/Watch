@@ -10,7 +10,7 @@ import type { SessionRef } from './types.js';
 import { readWatchVersion } from './watch-version.js';
 import { cwdProblem } from './cwd.js';
 import { countUnparsableJsonLines } from './jsonl.js';
-import { describeSessionReadFailureReason } from './read-text.js';
+import { describeSessionReadFailureReason, isFileSystemErrorCode } from './read-text.js';
 
 export type BrokenTip = {
   chainId: string;
@@ -104,16 +104,6 @@ type PathPresence =
   | { state: 'present' }
   | { state: 'missing'; code: string }
   | { state: 'unknown'; reason: string };
-
-/**
- * Node 文件系统错误的 `code`（`EACCES` / `EISDIR` / `EIO`…）。
- *
- * 用来区分「文件读不出来」与「文件读出来了但内容解析不了」：前者要说权限 / 路径，
- * 后者才该说内容。只认 `E` + 大写的形状，别把适配器自己造的错误码（如 `parse_failed`）误判成 fs 错误。
- */
-function isFileSystemErrorCode(code: unknown): code is string {
-  return typeof code === 'string' && /^E[A-Z]+$/.test(code);
-}
 
 /**
  * 只有 ENOENT / ENOTDIR 才算「文件不在」。EACCES / EIO 等读不出来时不能说成已删除，
