@@ -538,7 +538,7 @@ export async function handoff(
       if (tipPresence.state === 'missing') {
         throw new Error(
           `未发现原生会话；而链尾记录的 ${chainTipRef.provider} 会话 ${chainTipRef.sessionId} 文件已不存在（${chainTipRef.filePath}）：` +
-            `可先 watch adopt ${chainTipRef.provider} --session <id> 重新绑定，或在原生 CLI 里新开一个会话`,
+            `可先 watch adopt ${chainTipRef.provider} --session ${chainTipRef.sessionId} 重新绑定，或在原生 CLI 里新开一个会话`,
         );
       }
       if (tipPresence.state === 'unknown') {

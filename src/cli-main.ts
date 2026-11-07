@@ -642,7 +642,9 @@ async function cmdSessions(cwd: string, json: boolean, chain?: string): Promise<
             }
             if (missingFiles.length) {
               warnings.push(
-                `链 ${chainRow.name} 绑定的 ${a.id} 会话 ${missingFiles.join('、')} 文件已不存在，本次未列出；下次切换会失败，可先 watch adopt ${a.id} --session <id> 重新绑定`,
+                `链 ${chainRow.name} 绑定的 ${a.id} 会话 ${missingFiles.join('、')} 文件已不存在，本次未列出；下次切换会失败，可先 watch adopt ${a.id} --session ${missingFiles[0]}` +
+                  (missingFiles.length > 1 ? `（另有 ${missingFiles.length - 1} 个同样缺失，见上）` : '') +
+                  ' 重新绑定',
               );
             }
             if (unreadableFiles.length) {
@@ -1069,7 +1071,7 @@ async function cmdChain(cwd: string, json: boolean, action?: string, a?: string,
         });
         if (missing && c.status === 'active') {
           warnings.push(
-            `链「${c.name}」的链尾会话文件已不存在（${last.toRef.provider}:${last.toRef.sessionId}）：下次切换会失败，可先 watch adopt ${last.toRef.provider} --session <id> 重新绑定`,
+            `链「${c.name}」的链尾会话文件已不存在（${last.toRef.provider}:${last.toRef.sessionId}）：下次切换会失败，可先 watch adopt ${last.toRef.provider} --session ${last.toRef.sessionId} 重新绑定`,
           );
         } else if (tipError && c.status === 'active') {
           // 读不出来 ≠ 文件没了：不标 missing，也不能当成「一切正常」而不出声
