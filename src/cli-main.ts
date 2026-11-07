@@ -433,6 +433,14 @@ async function cmdOpen(
     if (fromId && toId) {
       fail(json, '--from 与 --to 不能同用：--from 是并入 <id> 这个目标会话，--to 是把 <id> 转入 <provider>；请一次只选一个方向');
     }
+    // --provider 是「按 id 反查时只查这一家」，而 --to / --check 的来源由 id 全局反查决定。
+    // 同用时它不生效，静默忽略会让用户以为已经限定了来源 provider。
+    if (providerId && (toId || check)) {
+      fail(
+        json,
+        '--provider 只用于按会话 id 反查（open <id> --provider <provider>）；与 --to / --check 同用不会生效：--to 已指明目标 provider，来源由会话 id 全局反查确定，请去掉 --provider',
+      );
+    }
     if (check) {
       if (!toId) fail(json, '--check 需要同时指定 --to <provider>');
       if (fromId) fail(json, '--from 不能与 --check 同用：预检只针对 --to <provider>');
