@@ -26,3 +26,32 @@ export async function cwdProblem(cwd: string): Promise<string | null> {
     return `--cwd 目录无法访问：${cwd}（${reason}）；${tail}`;
   }
 }
+
+/**
+ * 会话记录里的工作目录还能不能进。
+ *
+ * `open` 返回的 `cd … && <resume>` 与原生 resume 都在这个目录里执行；目录被删 / 被移动后，
+ * 会话内容本身读得出来、转入也照样写成功，但命令会在第一步 `cd` 就失败。以前这种情况
+ * 只有一句成功的 resume 命令，用户会以为是 CLI 或会话坏了。原因按 errno 分开说：
+ * 权限问题不是「被删除」，别把人引去重建目录。
+ */
+export async function sessionCwdProblem(cwd: string): Promise<string | null> {
+  try {
+    const probe = await stat(cwd);
+    if (!probe.isDirectory()) {
+      return `会话记录的工作目录不是目录（被同名文件占住了）：${cwd}；下面的 cd 命令会失败——先让这个路径重新成为目录`;
+    }
+    return null;
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    const tail = '下面的 cd 命令会在这里失败——先恢复这个目录，或手动 cd 到新位置再执行 resume 命令';
+    if (code === 'ENOENT' || code === 'ENOTDIR') {
+      return `会话记录的工作目录已不存在：${cwd}（项目可能被移动或删除）；${tail}；会话内容本身仍可读取 / 转入`;
+    }
+    if (code === 'EACCES' || code === 'EPERM') {
+      return `会话记录的工作目录无权访问：${cwd}（权限问题，不是被删除）；${tail}`;
+    }
+    const reason = code ?? (error instanceof Error ? error.message : String(error));
+    return `无法确认会话记录的工作目录能否进入：${cwd}（${reason}）；${tail}`;
+  }
+}

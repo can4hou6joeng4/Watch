@@ -10,6 +10,7 @@ import { PreflightBlockedError } from './providers/adapter.js';
 import { getAdapter, listAdapters, unknownProviderMessage } from './providers/registry.js';
 import { countUnparsableJsonLines } from './core/jsonl.js';
 import { describeSessionReadFailure } from './core/read-text.js';
+import { sessionCwdProblem } from './core/cwd.js';
 
 /** `watch open` 的返回协议：桌面 GUI 通过 CLI `--json` 消费 */
 export type SessionSummary = {
@@ -224,6 +225,9 @@ export async function openSession(
   const warnings: string[] = [];
   let merged = 0;
   let sourceUsage: TokenUsage | null = null;
+  // 记录的目录可能已被移动 / 删除：会话内容照常可读、转入也能写成，但返回的 cd 会在第一步失败
+  const cwdIssue = await sessionCwdProblem(target.found.ref.cwd);
+  if (cwdIssue) warnings.push(cwdIssue);
 
   // 来源与目标是同一个会话：diffTurns 必然为空，旧实现会报「已全部包含在自身中，无需并入」，
   // 看着像成功、实际什么都没做。这是参数错误，直接说清楚。
@@ -443,6 +447,9 @@ async function planOpenInProvider(
     return { ok: false, error: `未找到会话: ${sourceId}${detail}` };
   }
   const cwd = source.found.ref.cwd;
+  // 预检与写入都用这个目录：它不在了要提前说，别等用户照着一句必失败的 cd 去执行
+  const cwdIssue = await sessionCwdProblem(cwd);
+  if (cwdIssue) diagnostics?.push(cwdIssue);
   const sourceRef = source.found.ref;
   const sourceProvider = source.adapter.id;
   const base = { ok: true as const, adapter: target, sourceRef, sourceProvider, cwd };
