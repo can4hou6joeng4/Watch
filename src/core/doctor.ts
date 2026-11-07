@@ -4,7 +4,7 @@ import { listAdapters, listProviders } from '../providers/registry.js';
 import type { ProviderInfo } from './types.js';
 import type { Chain } from './store.js';
 import type { ImportJobs } from './import-jobs.js';
-import { defaultDbPath } from './store.js';
+import { defaultDbPath, describeStoreErrorReason } from './store.js';
 import { diffTurns } from './handoff.js';
 import type { SessionRef } from './types.js';
 import { readWatchVersion } from './watch-version.js';
@@ -199,8 +199,9 @@ export async function doctorReport(cwd: string, deps: DoctorDeps): Promise<Docto
         try {
           tip = listEvents(chain.id).at(-1)?.toRef;
         } catch (error) {
-          const message = error instanceof Error ? error.message : String(error);
-          warnings.push(`链「${chain.name}」的切换记录读取失败：${message}`);
+          // SQLite 的原文（`database is locked` / `no such table`）既不说是哪一类故障也不给下一步，
+          // 与 handoff.ts / open.ts 的同类警告保持一致，统一翻成中文
+          warnings.push(`链「${chain.name}」的切换记录读取失败：${describeStoreErrorReason(error)}`);
           continue;
         }
         if (!tip) continue;
@@ -314,9 +315,9 @@ export async function doctorReport(cwd: string, deps: DoctorDeps): Promise<Docto
       }
       store = { available: true, chains: chains.length, activeChains: activeChains.length, brokenTips, driftedPairs };
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      store = { available: false, error: message };
-      warnings.push(`本地库读取失败：${message}`);
+      const reason = describeStoreErrorReason(error);
+      store = { available: false, error: reason };
+      warnings.push(`本地库读取失败：${reason}`);
     }
   }
 
