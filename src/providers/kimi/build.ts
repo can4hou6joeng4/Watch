@@ -8,6 +8,7 @@ import { promisify } from 'node:util';
 import { createHash, randomUUID } from 'node:crypto';
 import { writeFileAtomic } from '../../core/atomic.js';
 import { inspectCwd, type CwdInspection } from '../../core/cwd.js';
+import { describePathReadFailureReason } from '../../core/read-text.js';
 import { verifyWrittenTurns } from '../../core/verify.js';
 import { parseKimiSession } from './parse.js';
 import type { ImportTurnsOpts } from '../adapter.js';
@@ -55,7 +56,7 @@ export async function listKimiSessionsByCwd(
     // 否则「索引损坏 / 没权限」会被讲成「这个目录没聊过」
     if (code === 'ENOENT' || code === 'ENOTDIR') return [];
     throw new Error(
-      `无法读取 Kimi 会话索引 ${indexPath}：${error instanceof Error ? error.message : String(error)}`,
+      `无法读取 Kimi 会话索引 ${indexPath}：${describePathReadFailureReason(error)}`,
     );
   }
   for (const line of raw.split('\n')) {
@@ -82,7 +83,7 @@ export async function listKimiSessionsByCwd(
       // wire 已删（索引陈旧）就跳过；其余读不出来不能静默丢——列表会少掉一条却毫无提示
       if (code === 'ENOENT' || code === 'ENOTDIR') continue;
       throw new Error(
-        `无法读取 Kimi 会话文件状态 ${wirePath}：${error instanceof Error ? error.message : String(error)}`,
+        `无法读取 Kimi 会话文件状态 ${wirePath}：${describePathReadFailureReason(error)}`,
       );
     }
   }

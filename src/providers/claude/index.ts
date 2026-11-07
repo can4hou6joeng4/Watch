@@ -5,7 +5,7 @@ import path from 'node:path';
 import { promisify } from 'node:util';
 import { digestFile } from '../../core/atomic.js';
 import type { FileDigest } from '../../core/atomic.js';
-import { isMissingPathError } from '../../core/read-text.js';
+import { describePathReadFailureReason, isMissingPathError } from '../../core/read-text.js';
 import type { ProviderAdapter } from '../adapter.js';
 import type { ProcessEvent, SessionRef, UnifiedTurn } from '../../core/types.js';
 import { streamCommand } from '../../core/streamCommand.js';
@@ -37,7 +37,7 @@ export async function findLatestClaudeSession(
     // 否则「权限 / 路径出错」会被讲成「这个目录没有会话」
     if (code === 'ENOENT' || code === 'ENOTDIR') return null;
     throw new Error(
-      `无法列出 Claude 会话目录 ${projectDir}：${error instanceof Error ? error.message : String(error)}`,
+      `无法列出 Claude 会话目录 ${projectDir}：${describePathReadFailureReason(error)}`,
     );
   }
   let best: { filePath: string; sessionId: string; updatedAt: number } | null = null;
@@ -56,7 +56,7 @@ export async function findLatestClaudeSession(
       // 与 listClaudeSessions 同一规则：只有文件确实不在才跳过，读不出来要抛出
       if (code === 'ENOENT' || code === 'ENOTDIR') continue;
       throw new Error(
-        `无法读取 Claude 会话文件状态 ${filePath}：${error instanceof Error ? error.message : String(error)}`,
+        `无法读取 Claude 会话文件状态 ${filePath}：${describePathReadFailureReason(error)}`,
       );
     }
   }
@@ -76,7 +76,7 @@ export async function claudeSessionCwdDetail(
   try {
     raw = await readFile(filePath, 'utf8');
   } catch (error) {
-    return { cwd: null, error: error instanceof Error ? error.message : String(error) };
+    return { cwd: null, error: describePathReadFailureReason(error) };
   }
   const cwd = cwdFromClaudeRaw(raw);
   return cwd ? { cwd } : { cwd: null, error: '前 60 行里没有 cwd 字段' };
@@ -122,7 +122,7 @@ export async function findClaudeSessionById(
     // 其余（权限 / I/O）读不出来照常抛，原因交给 resolveById 的 diagnostics
     if (isMissingPathError(error)) return null;
     throw new Error(
-      `无法列出 Claude 会话目录 ${root}：${error instanceof Error ? error.message : String(error)}`,
+      `无法列出 Claude 会话目录 ${root}：${describePathReadFailureReason(error)}`,
     );
   }
   const unreadable: string[] = [];
@@ -137,7 +137,7 @@ export async function findClaudeSessionById(
       const code = (error as NodeJS.ErrnoException).code;
       // ENOENT / ENOTDIR：这个 projectDir 里没有该会话，正常跳过；其余是读不出来，要记下来
       if (code !== 'ENOENT' && code !== 'ENOTDIR') {
-        unreadable.push(`${filePath}（${error instanceof Error ? error.message : String(error)}）`);
+        unreadable.push(`${filePath}（${describePathReadFailureReason(error)}）`);
       }
       continue;
     }
@@ -183,7 +183,7 @@ export async function listClaudeSessions(
     // 目录不存在 = 这个 cwd 没聊过；读不出来要抛出，让 sessions / recent / doctor 披露
     if (code === 'ENOENT' || code === 'ENOTDIR') return [];
     throw new Error(
-      `无法读取 Claude 会话目录 ${projectDir}：${error instanceof Error ? error.message : String(error)}`,
+      `无法读取 Claude 会话目录 ${projectDir}：${describePathReadFailureReason(error)}`,
     );
   }
   const items: { ref: SessionRef; updatedAt: number }[] = [];
@@ -203,7 +203,7 @@ export async function listClaudeSessions(
       // 整个目录都 stat 不出来时会被读成「这个 cwd 没聊过」
       if (code === 'ENOENT' || code === 'ENOTDIR') continue;
       throw new Error(
-        `无法读取 Claude 会话文件状态 ${filePath}：${error instanceof Error ? error.message : String(error)}`,
+        `无法读取 Claude 会话文件状态 ${filePath}：${describePathReadFailureReason(error)}`,
       );
     }
   }

@@ -8,6 +8,7 @@ import * as readline from 'node:readline';
 import { promisify } from 'node:util';
 import { digestFile } from '../../core/atomic.js';
 import type { FileDigest } from '../../core/atomic.js';
+import { describePathReadFailureReason } from '../../core/read-text.js';
 import type { ProviderAdapter, PreflightContext } from '../adapter.js';
 import { PreflightBlockedError } from '../adapter.js';
 import { acquireThreadWriterLock, probeThreadWriterHolders, threadWriterLockPath, type WriterLockGuard } from './writer-lock.js';
@@ -44,7 +45,7 @@ async function collectRecentRolloutFiles(
     const code = (error as NodeJS.ErrnoException).code;
     // 根目录不存在 = 这台机器没用过 codex，空结果就是事实；读不出来则必须记下来
     if (code !== 'ENOENT' && code !== 'ENOTDIR') {
-      errors?.push(`${sessionsRoot}（${error instanceof Error ? error.message : String(error)}）`);
+      errors?.push(`${sessionsRoot}（${describePathReadFailureReason(error)}）`);
     }
     return [];
   }
@@ -58,7 +59,7 @@ async function collectRecentRolloutFiles(
     } catch (error) {
       const code = (error as NodeJS.ErrnoException).code;
       if (code !== 'ENOENT' && code !== 'ENOTDIR') {
-        errors?.push(`${path.join(sessionsRoot, y)}（${error instanceof Error ? error.message : String(error)}）`);
+        errors?.push(`${path.join(sessionsRoot, y)}（${describePathReadFailureReason(error)}）`);
       }
       continue;
     }
@@ -72,7 +73,7 @@ async function collectRecentRolloutFiles(
       } catch (error) {
         const code = (error as NodeJS.ErrnoException).code;
         if (code !== 'ENOENT' && code !== 'ENOTDIR') {
-          errors?.push(`${path.join(sessionsRoot, y, m)}（${error instanceof Error ? error.message : String(error)}）`);
+          errors?.push(`${path.join(sessionsRoot, y, m)}（${describePathReadFailureReason(error)}）`);
         }
         continue;
       }
@@ -84,7 +85,7 @@ async function collectRecentRolloutFiles(
         } catch (error) {
           const code = (error as NodeJS.ErrnoException).code;
           if (code !== 'ENOENT' && code !== 'ENOTDIR') {
-            errors?.push(`${dayDir}（${error instanceof Error ? error.message : String(error)}）`);
+            errors?.push(`${dayDir}（${describePathReadFailureReason(error)}）`);
           }
           continue;
         }
@@ -96,7 +97,7 @@ async function collectRecentRolloutFiles(
           } catch (error) {
             const code = (error as NodeJS.ErrnoException).code;
             if (code !== 'ENOENT' && code !== 'ENOTDIR') {
-              errors?.push(`${filePath}（${error instanceof Error ? error.message : String(error)}）`);
+              errors?.push(`${filePath}（${describePathReadFailureReason(error)}）`);
             }
             continue;
           }
@@ -163,7 +164,7 @@ async function rolloutCwdDetail(
   } catch (error) {
     return {
       cwd: null,
-      error: error instanceof Error ? error.message : String(error),
+      error: describePathReadFailureReason(error),
       code: (error as NodeJS.ErrnoException).code ?? 'EIO',
     };
   }

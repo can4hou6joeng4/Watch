@@ -6,7 +6,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { homedir } from 'node:os';
 import path from 'node:path';
 import { writeFileAtomic } from '../../core/atomic.js';
-import { readTextOrEmpty } from '../../core/read-text.js';
+import { describePathReadFailureReason, readTextOrEmpty } from '../../core/read-text.js';
 import { verifyWrittenTurns } from '../../core/verify.js';
 import { mergeConsecutiveAssistant } from '../../core/rich.js';
 import { parseGrokSession } from './parse.js';
@@ -263,7 +263,7 @@ export async function listGrokSessions(
     // 否则「权限 / 路径出错」会被讲成「这个目录没聊过」
     if (code === 'ENOENT' || code === 'ENOTDIR') return [];
     throw new Error(
-      `无法读取 Grok 会话目录 ${dir}：${error instanceof Error ? error.message : String(error)}`,
+      `无法读取 Grok 会话目录 ${dir}：${describePathReadFailureReason(error)}`,
     );
   }
 
@@ -317,7 +317,7 @@ export async function findGrokSessionById(
     // 其余（权限 / 路径被占）是「读不出来」，不能返回 null 冒充不存在
     if (code === 'ENOENT' || code === 'ENOTDIR') return null;
     throw new Error(
-      `无法列出 Grok 会话目录 ${root}：${error instanceof Error ? error.message : String(error)}`,
+      `无法列出 Grok 会话目录 ${root}：${describePathReadFailureReason(error)}`,
     );
   }
   const unreadable: string[] = [];
@@ -359,7 +359,7 @@ export async function findGrokSessionById(
       const code = (error as NodeJS.ErrnoException).code;
       // 这个目录里没有该会话是常态；读不出来（EACCES 等）要记下来，不能当成「没有」
       if (code !== 'ENOENT' && code !== 'ENOTDIR') {
-        unreadable.push(`${chatPath}（${error instanceof Error ? error.message : String(error)}）`);
+        unreadable.push(`${chatPath}（${describePathReadFailureReason(error)}）`);
       }
       continue;
     }

@@ -5,7 +5,7 @@ import { promisify } from 'node:util';
 import path from 'node:path';
 import { digestFile } from '../../core/atomic.js';
 import type { FileDigest } from '../../core/atomic.js';
-import { isMissingPathError } from '../../core/read-text.js';
+import { describePathReadFailureReason, isMissingPathError } from '../../core/read-text.js';
 import type { ProviderAdapter } from '../adapter.js';
 import type { ProcessEvent, SessionRef, TokenUsage, UnifiedTurn } from '../../core/types.js';
 import { parseKimiSession } from './parse.js';
@@ -154,7 +154,7 @@ export async function findKimiSessionById(
     // 其余（权限 / I/O）读不出来照常抛，原因交给 resolveById 的 diagnostics
     if (isMissingPathError(error)) return null;
     throw new Error(
-      `无法读取 Kimi 会话索引 ${idxFile}：${error instanceof Error ? error.message : String(error)}`,
+      `无法读取 Kimi 会话索引 ${idxFile}：${describePathReadFailureReason(error)}`,
     );
   }
   const unreadable: string[] = [];
@@ -189,7 +189,7 @@ export async function findKimiSessionById(
       unreadable.push(
         code === 'ENOENT' || code === 'ENOTDIR'
           ? `${wirePath} 不存在（索引里有这条会话，可能已被删除）`
-          : `${wirePath}（${error instanceof Error ? error.message : String(error)}）`,
+          : `${wirePath}（${describePathReadFailureReason(error)}）`,
       );
       continue;
     }

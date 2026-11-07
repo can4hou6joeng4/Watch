@@ -5,7 +5,7 @@ import path from 'node:path';
 import { promisify } from 'node:util';
 import type { ProviderAdapter } from '../adapter.js';
 import { digestFile, type FileDigest } from '../../core/atomic.js';
-import { isMissingPathError } from '../../core/read-text.js';
+import { describePathReadFailureReason, isMissingPathError } from '../../core/read-text.js';
 import type { SessionRef } from '../../core/types.js';
 import { parsePiSession } from './parse.js';
 import { encodePiProjectDir, importTurnsToPi, piSessionsRoot } from './build.js';
@@ -37,7 +37,7 @@ export async function listPiSessions(
     // 否则权限或路径出错会被讲成「这个目录没聊过」
     if (code === 'ENOENT' || code === 'ENOTDIR') return [];
     throw new Error(
-      `无法读取 Pi 会话目录 ${dir}：${error instanceof Error ? error.message : String(error)}`,
+      `无法读取 Pi 会话目录 ${dir}：${describePathReadFailureReason(error)}`,
     );
   }
   const items: { ref: SessionRef; updatedAt: number }[] = [];
@@ -57,7 +57,7 @@ export async function listPiSessions(
       // 列目录到取状态之间被删掉算正常；其余读不出来不能静默跳过——列表因此不完整
       if (code === 'ENOENT' || code === 'ENOTDIR') continue;
       throw new Error(
-        `无法读取 Pi 会话文件状态 ${filePath}：${error instanceof Error ? error.message : String(error)}`,
+        `无法读取 Pi 会话文件状态 ${filePath}：${describePathReadFailureReason(error)}`,
       );
     }
   }
@@ -78,7 +78,7 @@ async function piSessionCwdDetail(filePath: string): Promise<{ cwd: string | nul
   try {
     raw = await readFile(filePath, 'utf8');
   } catch (error) {
-    return { cwd: null, error: error instanceof Error ? error.message : String(error) };
+    return { cwd: null, error: describePathReadFailureReason(error) };
   }
   for (const line of raw.split('\n')) {
     if (!line.trim()) continue;
@@ -108,7 +108,7 @@ export async function findPiSessionById(
     // 其余（权限 / I/O）读不出来照常抛，原因交给 resolveById 的 diagnostics
     if (isMissingPathError(error)) return null;
     throw new Error(
-      `无法列出 Pi 会话目录 ${root}：${error instanceof Error ? error.message : String(error)}`,
+      `无法列出 Pi 会话目录 ${root}：${describePathReadFailureReason(error)}`,
     );
   }
   const unreadable: string[] = [];
@@ -120,7 +120,7 @@ export async function findPiSessionById(
     } catch (error) {
       const code = (error as NodeJS.ErrnoException).code;
       if (code !== 'ENOENT' && code !== 'ENOTDIR') {
-        unreadable.push(`${path.join(root, dir)}（${error instanceof Error ? error.message : String(error)}）`);
+        unreadable.push(`${path.join(root, dir)}（${describePathReadFailureReason(error)}）`);
       }
       continue;
     }
@@ -133,7 +133,7 @@ export async function findPiSessionById(
     } catch (error) {
       const code = (error as NodeJS.ErrnoException).code;
       if (code !== 'ENOENT' && code !== 'ENOTDIR') {
-        unreadable.push(`${filePath}（${error instanceof Error ? error.message : String(error)}）`);
+        unreadable.push(`${filePath}（${describePathReadFailureReason(error)}）`);
       }
       continue;
     }

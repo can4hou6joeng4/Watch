@@ -5,7 +5,7 @@ import { randomUUID } from 'node:crypto';
 import { appendFileAtomic, writeFileAtomic } from '../../core/atomic.js';
 import { verifyWrittenTurns } from '../../core/verify.js';
 import { ENCRYPTED_THINKING, codexToolInput, toCodexToolName, turnHasContent } from '../../core/rich.js';
-import { isMissingPathError } from '../../core/read-text.js';
+import { describePathReadFailureReason, isMissingPathError } from '../../core/read-text.js';
 import { parseCodexSession } from './parse.js';
 import type { ProcessEvent, SessionRef, TokenUsage, UnifiedTurn } from '../../core/types.js';
 import type { ImportTurnsOpts } from '../adapter.js';
@@ -70,7 +70,7 @@ async function newestJsonlPaths(sessionsDir: string, max: number, errors?: strin
       entries = await readdir(dir);
     } catch (error) {
       if (!isMissingPathError(error)) {
-        errors?.push(`${dir}（${error instanceof Error ? error.message : String(error)}）`);
+        errors?.push(`${dir}（${describePathReadFailureReason(error)}）`);
       }
       return;
     }
@@ -84,7 +84,7 @@ async function newestJsonlPaths(sessionsDir: string, max: number, errors?: strin
         }
       } catch (error) {
         if (!isMissingPathError(error)) {
-          errors?.push(`${p}（${error instanceof Error ? error.message : String(error)}）`);
+          errors?.push(`${p}（${describePathReadFailureReason(error)}）`);
         }
         continue;
       }

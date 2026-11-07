@@ -51,6 +51,23 @@ export function describeSessionReadFailureReason(error: unknown): string {
   return `会话文件读不出来（${reason}）`;
 }
 
+/**
+ * 「路径 / 目录读不出来」的简要中文原因，用来拼在「无法读取 X 目录 <路径>：<原因>」这类消息里。
+ *
+ * 与 `describeSessionReadFailureReason()` 的区别：这里不假定对象是会话文件（可能是目录、
+ * 数据库、索引），措辞按路径来说，避免把「读不出目录」讲成「会话文件读不出来」。
+ * 适配器以前直接把 `error.message` 拼进用户面文案，`sessions` / `recent` / `doctor` 的
+ * warnings 里就会出现 `EACCES: permission denied, scandir '…'` 这类英文原文。
+ */
+export function describePathReadFailureReason(error: unknown): string {
+  const code = (error as NodeJS.ErrnoException).code;
+  if (code === 'ENOENT' || code === 'ENOTDIR') return '路径不存在（可能刚被移动或删除）';
+  if (code === 'EACCES' || code === 'EPERM') return '无权读取（权限问题，不是路径写错）';
+  if (code === 'EISDIR') return '该路径是目录，不是文件';
+  if (code) return `读取失败（${code}）`;
+  return error instanceof Error ? error.message : String(error);
+}
+
 export type SessionFilePresence =
   | { state: 'present'; isFile: boolean }
   | { state: 'missing' }
