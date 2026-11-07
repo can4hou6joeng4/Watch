@@ -222,8 +222,27 @@ export function dedupeCallEvents(turns: UnifiedTurn[]): UnifiedTurn[] {
   });
 }
 
-export function ensureAssistant(turns: UnifiedTurn[], timestamp: string, provider: string): UnifiedTurn {
-  const last = turns.at(-1);
+/**
+ * 有工具调用、却没有对应结果的 callId（按出现顺序去重）。
+ *
+ * 中断（Ctrl-C、用量耗尽）、工具还在跑、或 resume 重放了半截调用都会留下这种回合：
+ * 内容照常可读，`diffTurns` 只比解析结果、round-trip 只比「写进去的内容」，两处都看不出
+ * 那一轮是做了一半的。交接前必须主动披露，否则接手的一侧会以为任务停在这里就完了。
+ */
+export function danglingToolCalls(turns: UnifiedTurn[]): string[] {
+  const called = new Set<string>();
+  const finished = new Set<string>();
+  for (const t of turns) {
+    for (const e of t.events ?? []) {
+      if (!e.callId) continue;
+      if (e.kind === 'tool_call') called.add(e.callId);
+      else if (e.kind === 'tool_result') finished.add(e.callId);
+    }
+  }
+  return [...called].filter((id) => !finished.has(id));
+}
+
+export function ensureAssistant(turns: UnifiedTurn[], timestamp: string, provider: string): UnifiedTurn {  const last = turns.at(-1);
   if (last?.role === 'assistant') return last;
   const created: UnifiedTurn = { role: 'assistant', text: '', timestamp, provider, events: [] };
   turns.push(created);

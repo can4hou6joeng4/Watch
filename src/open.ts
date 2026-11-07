@@ -1,7 +1,7 @@
 import { stat } from 'node:fs/promises';
 import { describeWriteFailureReason, type FileDigest } from './core/atomic.js';
 import { assertTargetUnchanged, blockedHint, diffTurns, HandoffBlockedError } from './core/handoff.js';
-import { dedupeCallEvents } from './core/rich.js';
+import { danglingToolCalls, dedupeCallEvents } from './core/rich.js';
 import { Store, defaultDbPath, describeStoreErrorReason, describeStoreOpenFailure } from './core/store.js';
 import { IS_WIN, stripDevicePrefix } from './core/platform.js';
 import type { SessionRef, TokenUsage, UnifiedTurn } from './core/types.js';
@@ -318,6 +318,11 @@ export async function openSession(
         );
       }
       const dstTurns = await target.adapter.parse(target.found.ref);
+      warnDanglingToolCalls(
+        srcTurns,
+        `来源会话 ${source.found.ref.sessionId}（${source.adapter.displayName}）`,
+        (msg) => warnings.push(msg),
+      );
       const badDstLines = await countUnparsableJsonLines(target.found.ref.filePath);
       if (badDstLines > 0) {
         warnings.push(
@@ -365,6 +370,12 @@ export async function openSession(
     }
     try {
       const turns = await target.adapter.parse(target.found.ref);
+      // 即将 resume 的这个会话本身就停在做了一半的工具调用上：resume 后客户端多半也停在那里
+      warnDanglingToolCalls(
+        turns,
+        `会话 ${target.found.ref.sessionId}（${target.adapter.displayName}）`,
+        (msg) => warnings.push(msg),
+      );
       const userTurns = turns.filter((t) => t.role === 'user' && t.text.trim());
       const assistantTurns = turns.filter(
         (t) => t.role === 'assistant' && (t.text.trim() || (t.events?.length ?? 0) > 0),
@@ -467,6 +478,19 @@ type PlannedOpen =
   | { ok: false; error: string };
 
 /**
+ * 会话里有工具调用没有结果（中断 / 仍在运行 / resume 重放过半截调用）：内容照常可读，
+ * 但接手的一侧会停在做了一半的那一轮，`diffTurns` 与 round-trip 都查不出来——只能主动披露。
+ */
+function warnDanglingToolCalls(turns: UnifiedTurn[], label: string, push: (msg: string) => void): void {
+  const dangling = danglingToolCalls(turns);
+  if (dangling.length === 0) return;
+  const shown = dangling.slice(0, 3).join(', ');
+  push(
+    `${label}有 ${dangling.length} 次工具调用没有结果（callId: ${shown}${dangling.length > 3 ? ' 等' : ''}），可能在中断或仍在运行：交接后那一轮不完整，先在原生 CLI 里确认再继续`,
+  );
+}
+
+/**
  * 目标会话里的坏行会被 parse 跳过，于是 `diffTurns(来源, 目标)` 把「已有但解析不出」的内容
  * 当成缺失、再追加一遍；round-trip 也查不出来（比对的是解析结果）。只能在这里主动披露。
  */
@@ -535,6 +559,12 @@ async function planOpenInProvider(
     );
   }
   const outgoing = dedupeCallEvents(turns);
+  // 来源停在做了一半的工具调用上：转入后目标会话在那一轮同样不完整，预检与写入都要说
+  warnDanglingToolCalls(
+    turns,
+    `来源会话 ${sourceId}（${source.adapter.displayName}）`,
+    (msg) => diagnostics?.push(msg),
+  );
   if (outgoing.length === 0) return { ok: false, error: `来源会话 ${sourceId} 没有可转入的内容` };
 
   // 决策 1：来源在链上 → 回链上另一侧配对会话并并入增量；
