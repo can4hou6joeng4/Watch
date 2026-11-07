@@ -261,7 +261,7 @@ async function cmdStatus(cwd: string, json: boolean, chain?: string): Promise<vo
   }
   const { tips, chainTip, history, chain: current, warnings } = result;
   for (const warning of warnings) console.error(`警告: ${warning}`);
-  if (current) console.log(`链: ${current.name}  (${current.id})`);
+  if (current) console.log(`链: ${current.name}${current.status === 'archived' ? ' [归档]' : ''}  (${current.id})`);
   // 同一目录可能有多条链：只显示当前这条会让文本用户以为没有别的（--json 的 chains 一直是全量）
   const otherChains = result.chains.filter((c) => c.id !== current?.id);
   if (otherChains.length) {

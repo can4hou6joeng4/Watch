@@ -388,6 +388,11 @@ export async function chainStatus(
       chains = store.listChains(cwd);
       chain = store.findActiveChain(cwd, chainId);
       if (chainId && !chain) throw new Error(store.missingChainMessage(cwd, chainId));
+      // 归档链照样能按名字 / id 查（findActiveChain 不看 status），但 status 文本模式只印链名：
+      // 不说清就会被当成「现在还在用这条」，与 sessions --chain / usage 的同一句话对齐
+      if (chain?.status === 'archived') {
+        warnings.push(`链 ${chain.name} 已归档（不再是本目录的当前链），下面显示的是它的历史记录`);
+      }
       history = chain ? store.listSwitchEvents(chain.id) : [];
     } catch (error) {
       if (error instanceof Error && /找不到链/.test(error.message)) throw error;
