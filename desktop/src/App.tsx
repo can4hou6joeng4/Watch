@@ -3,7 +3,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { readText, writeText } from '@tauri-apps/plugin-clipboard-manager';
 import { ArrowDownLeft, ArrowRight, ArrowUpRight, Check, ChevronDown, ClipboardPaste, Copy, FileText, Folder, History, Info, LoaderCircle, Monitor, Moon, RefreshCw, Search, Settings2, ShieldCheck, Sun, SunMoon, Terminal, Workflow, X } from 'lucide-react';
 import { assertSameCodexImportPlan, beginCodexOpen, completeCodexOpen, failCodexOpen, importedCodexThreadId, parseCodexImportResult, viewForCodexImportResult, type CodexImportResult, type CodexImportView } from './codex-import.js';
-import { AGENTS, buildCommand, handoffRoute, historyView, parsePrecheckBlocked, parseThemePreference, providerDetectFailures, recentView, resolveTheme, sourceWarnings, THEME_OPTIONS, type ProviderDetectFailure, type PrecheckResponse, type ThemePreference } from './handoff-ui.js';
+import { AGENTS, buildCommand, handoffRoute, historyView, parsePrecheckBlocked, parseThemePreference, providerDetectFailures, recentView, resolveTheme, sourceWarnings, THEME_OPTIONS, usableTerminals, type ProviderDetectFailure, type PrecheckResponse, type ThemePreference } from './handoff-ui.js';
 import './App.css';
 
 type TerminalId = 'terminal' | 'kaku' | 'iterm2' | 'ghostty';
@@ -54,6 +54,8 @@ export default function App() {
   // 单家 detect() 抛错时 CLI 会给 available:false + error：混进「CLI 未检测到」会被当成没装
   const [providerFailures, setProviderFailures] = useState<ProviderDetectFailure[]>([]);
   const [available, setAvailable] = useState<TerminalId[]>(['terminal']);
+  // 列不出本机终端时（桥报错 / 返回不合契约）以前 catch 成空函数：下拉框悄悄只剩系统终端，保存过的 kaku/iterm2 也不恢复
+  const [terminalsError, setTerminalsError] = useState('');
   const [mode, setMode] = useState<LaunchMode>(initialMode);
   const [target, setTarget] = useState('codex');
   const [yolo, setYolo] = useState(false);
@@ -109,15 +111,16 @@ export default function App() {
     void invoke<{ providers?: Provider[] }>('list_available_providers').then((data) => { if (cancelled) return; if (Array.isArray(data.providers)) { setProviders(data.providers); setProviderFailures(providerDetectFailures(data.providers)); setProvidersError(''); } else { setProviderFailures([]); setProvidersError('providers 没有返回列表'); } }).catch((error) => { if (!cancelled) { setProviderFailures([]); setProvidersError(message(error)); } });
     void invoke<string[]>('list_terminals').then((list) => {
       if (cancelled) return;
-      const ids = list.filter((entry): entry is TerminalId => entry !== 'copy' && entry in terminalLabels);
-      const usable = ids.length ? ids : ['terminal' as TerminalId]; setAvailable(usable);
+      const usable = usableTerminals(list, Object.keys(terminalLabels)) as TerminalId[];
+      setAvailable(usable);
+      setTerminalsError(Array.isArray(list) ? '' : '列不出本机终端（list_terminals 没有返回列表）');
       setMode((saved) => {
         if (saved === 'copy') return saved;
         let persisted = false;
         try { persisted = localStorage.getItem('watch-launch-mode') !== null; } catch { /* Use discovery defaults. */ }
         return persisted && usable.includes(saved) ? saved : (['kaku', 'iterm2', 'ghostty'] as TerminalId[]).find((entry) => usable.includes(entry)) ?? 'terminal';
       });
-    }).catch(() => {});
+    }).catch((error) => { if (!cancelled) setTerminalsError(message(error)); });
     return () => { cancelled = true; };
   }, []);
   useEffect(() => {
@@ -284,7 +287,7 @@ export default function App() {
       </>}
       {page === 'history' && <section><div className="section-heading"><h2>{basename(source?.cwd)}</h2><span>链式接力记录</span></div>{historyError && <p className="state-message error">{historyError}</p>}{historyWarnings.map((warning, index) => <p className="warning-message" key={`hw${index}`}><Info size={15} />{warning}</p>)}{historyError ? <div className="large-empty"><History size={30} /><h2>接力记录读取失败</h2><p>上面的原因来自 watch status；处理后再回到此页，不是「没有记录」。</p></div> : !history.length ? <div className="large-empty"><History size={30} /><h2>暂无接力记录</h2><p>{source ? '此列表来自工作目录的链式接力历史，不是所有导入操作的执行日志。' : '选择来源会话后查看对应工作目录的记录。'}</p><button className="secondary-button" onClick={() => setPage('handoff')}>返回会话接力<ArrowRight size={15} /></button></div> : history.map((entry, index) => <div className="record-row" key={entry.id || index}><History size={17} /><span>{labels[entry.fromProvider || ''] || entry.fromProvider || '来源'}</span><ArrowRight size={14} /><strong>{labels[entry.toProvider] || entry.toProvider}</strong><time>{relativeTime(entry.createdAt)}</time>{entry.toRef?.sessionId && <button className="text-button" disabled={busy !== null} onClick={() => { setSessionId(entry.toRef!.sessionId!); setDemo(false); setPage('handoff'); }}>查看目标<ArrowUpRight size={14} /></button>}</div>)}</section>}
       {page === 'compatibility' && <section><div className="section-heading"><h2>支持路径</h2><span>仓库证据 / 2026-09-10</span></div><div className="compat-row"><Monitor size={19} /><div><h3>Claude Code → Codex Desktop</h3><p>官方导入、项目先建、预览 / 确认 / 独立打开。macOS arm64 合成样本限定通过；工具记录可能转为文本，模型继续不在通过范围内。</p></div><span className="badge green">限定验收</span></div><div className="compat-row"><Terminal size={19} /><div><h3>Claude / Codex / OpenCode / Kimi / Pi</h3><p>保留已有 CLI 适配器与恢复入口，不代表所有方向、版本及平台均通过原生验收。OpenCode 使用基础 CLI 路径。</p></div><span className="badge amber">逐方向验收</span></div><div className="compat-row"><ShieldCheck size={19} /><div><h3>官方增强与其他客户端</h3><p>OpenCode 官方 Web/TUI 增强、Claude Desktop Code 与 Antigravity 不作为新的默认接力入口。</p></div><span className="badge">未接入</span></div><p className="warning-message"><Info size={16} />安装检测只说明 CLI 命令可找到，不代表版本或会话兼容性通过。</p></section>}
-      {page === 'settings' && <section><div className="setting-row"><div><h2>默认交付方式</h2><p>保存到本地；终端启动失败时尝试复制恢复命令。</p></div>{modeSelect('默认交付方式')}</div><div className="setting-row"><div><h2>YOLO 免确认参数</h2><p>仅本次运行生效，可能放宽目标 Agent 权限；官方桌面导入不会传入此参数。</p></div><label className="toggle-label"><input aria-label="YOLO 免确认参数" type="checkbox" checked={yolo} disabled={busy !== null} onChange={(event) => setYolo(event.target.checked)} /><span>{yolo ? '已开启' : '已关闭'}</span></label></div><div className="setting-row"><div><h2>合成演示</h2><p>仅展示交互状态，不转换真实会话、不启动外部客户端。</p></div><button className="secondary-button" disabled={busy !== null} onClick={startDemo}>载入演示<ArrowRight size={15} /></button></div></section>}
+      {page === 'settings' && <section><div className="setting-row"><div><h2>默认交付方式</h2><p>保存到本地；终端启动失败时尝试复制恢复命令。</p></div>{modeSelect('默认交付方式')}</div><div className="setting-row"><div><h2>本机终端</h2><p>启动转交时会用到的终端列表由桌面壳检测；检测失败时只能选系统终端或仅复制命令。</p>{terminalsError ? <p className="warning-message" role="status"><Info size={15} />无法列出本机终端：{terminalsError}；当前只能用系统终端或仅复制命令——这不是「没装终端」</p> : <p className="muted">已检测到：{available.map((entry) => terminalLabels[entry]).join('、')}</p>}</div></div><div className="setting-row"><div><h2>YOLO 免确认参数</h2><p>仅本次运行生效，可能放宽目标 Agent 权限；官方桌面导入不会传入此参数。</p></div><label className="toggle-label"><input aria-label="YOLO 免确认参数" type="checkbox" checked={yolo} disabled={busy !== null} onChange={(event) => setYolo(event.target.checked)} /><span>{yolo ? '已开启' : '已关闭'}</span></label></div><div className="setting-row"><div><h2>合成演示</h2><p>仅展示交互状态，不转换真实会话、不启动外部客户端。</p></div><button className="secondary-button" disabled={busy !== null} onClick={startDemo}>载入演示<ArrowRight size={15} /></button></div></section>}
       </main><footer className="app-footer"><span>Watch · 值更</span><span>Relieve the watch. The voyage never stalls.</span></footer>
     </div>
     {notice && <div className={`toast ${notice.type}`} role={notice.type === 'error' ? 'alert' : 'status'}>{notice.type === 'ok' ? <Check size={17} /> : <Info size={17} />}<span>{notice.text}</span><button className="icon-button" title="关闭通知" aria-label="关闭通知" onClick={() => setNotice(null)}><X size={15} /></button></div>}

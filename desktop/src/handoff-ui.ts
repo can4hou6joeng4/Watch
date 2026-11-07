@@ -105,6 +105,17 @@ export function historyView(
   return { entries, warnings, error };
 }
 
+/**
+ * `list_terminals` 的返回值过滤：只留桌面端认识的终端 id。
+ * `copy` 是前端加的选项（仅复制命令），不是可拉起的终端；一个都不剩时退回系统终端，
+ * 否则下拉框会是空的、连「系统终端」都选不到。
+ */
+export function usableTerminals(list: unknown, known: readonly string[]): string[] {
+  if (!Array.isArray(list)) return ['terminal'];
+  const ids = list.filter((entry): entry is string => typeof entry === 'string' && entry !== 'copy' && known.includes(entry));
+  return ids.length ? ids : ['terminal'];
+}
+
 export type ProviderDetectFailure = { id: string; label: string; error: string };
 
 /**
