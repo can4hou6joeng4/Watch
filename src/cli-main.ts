@@ -525,7 +525,7 @@ async function cmdSessions(cwd: string, json: boolean, chain?: string): Promise<
       }
     } catch (error) {
       // 链查询失败时退化为全量列表，但要说清楚，否则 --chain 的输出会被误读
-      warnings.push(`链查询失败，已列出该目录全部会话：${error instanceof Error ? error.message : String(error)}`);
+      warnings.push(`链查询失败，已列出该目录全部会话：${describeStoreErrorReason(error)}`);
     }
   }
   try {
@@ -949,7 +949,7 @@ async function cmdChain(cwd: string, json: boolean, action?: string, a?: string,
         try {
           last = store.listSwitchEvents(c.id).at(-1);
         } catch (error) {
-          warnings.push(`链「${c.name}」的切换记录读不出来：${error instanceof Error ? error.message : String(error)}`);
+          warnings.push(`链「${c.name}」的切换记录读不出来：${describeStoreErrorReason(error)}`);
           continue;
         }
         if (!last?.toRef) continue;
