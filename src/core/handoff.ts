@@ -84,7 +84,7 @@ export async function adoptIntoChain(
   if (store) {
     try {
       const id = store.findActiveChain(cwd, chainId)?.id ?? null;
-      if (chainId && !id) throw new Error(`找不到链: ${chainId}`);
+      if (chainId && !id) throw new Error(store.missingChainMessage(cwd, chainId));
       history = id ? store.listSwitchEvents(id) : [];
     } catch (error) {
       if (error instanceof Error && /找不到链|已归档/.test(error.message)) throw error;
@@ -135,7 +135,7 @@ export async function createChainSession(
   let history: SwitchRecord[] = [];
   try {
     const id = store.findActiveChain(cwd, chainId)?.id ?? null;
-    if (chainId && !id) throw new Error(`找不到链: ${chainId}`);
+    if (chainId && !id) throw new Error(store.missingChainMessage(cwd, chainId));
     history = id ? store.listSwitchEvents(id) : [];
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
@@ -197,7 +197,7 @@ export async function chainUsage(
   }
   const warnings: string[] = [];
   const chain = store.findActiveChain(cwd, chainId);
-  if (chainId && !chain) throw new Error(`找不到链: ${chainId}`);
+  if (chainId && !chain) throw new Error(store.missingChainMessage(cwd, chainId));
   const history = chain ? store.listSwitchEvents(chain.id) : [];
   const byProvider: { provider: string; sessionId: string; usage: TokenUsage | null; error?: string }[] = [];
   let total = { ...empty };
@@ -307,7 +307,7 @@ export async function chainStatus(
     try {
       chains = store.listChains(cwd);
       chain = store.findActiveChain(cwd, chainId);
-      if (chainId && !chain) throw new Error(`找不到链: ${chainId}`);
+      if (chainId && !chain) throw new Error(store.missingChainMessage(cwd, chainId));
       history = chain ? store.listSwitchEvents(chain.id) : [];
     } catch (error) {
       if (error instanceof Error && /找不到链/.test(error.message)) throw error;
@@ -366,6 +366,12 @@ export async function handoff(
   }
   const findings: Finding[] = [];
 
+  // 先确认 --chain 指得到，再扫会话：目录里恰好没有原生会话时，
+  // 后面的「未发现原生会话」会把 --chain 写错说成「这个目录没东西」。
+  if (store && opts?.chainId && !store.findActiveChain(cwd, opts.chainId)) {
+    throw new Error(store.missingChainMessage(cwd, opts.chainId));
+  }
+
   const tips = await collectTips(cwd, adapters, warnings);
   const mtimeTip = pickChainTip(tips);
   if (!mtimeTip) throw new Error('未发现原生会话，请先在 Claude Code 或 Codex TUI 里开聊');
@@ -374,7 +380,7 @@ export async function handoff(
   if (store) {
     try {
       const id = store.findActiveChain(cwd, opts?.chainId)?.id ?? null;
-      if (opts?.chainId && !id) throw new Error(`找不到链: ${opts.chainId}`);
+      if (opts?.chainId && !id) throw new Error(store.missingChainMessage(cwd, opts.chainId));
       history = id ? store.listSwitchEvents(id) : [];
     } catch (error) {
       if (error instanceof Error && /找不到链|已归档/.test(error.message)) throw error;

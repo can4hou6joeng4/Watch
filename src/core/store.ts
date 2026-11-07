@@ -625,6 +625,32 @@ export class Store {
     return row ? rowToChain(row) : null;
   }
 
+  /**
+   * `--chain <名或 id>` 在当前目录找不到时的补充说明。
+   *
+   * 链按 cwd 精确匹配：在 A 目录建的链，拿到 B 目录下用只会得到「找不到链」，
+   * 用户会去核对名字有没有打错，其实该查的是 `--cwd`。
+   * 这里跨目录找同名 / 同 id 的链，命中就说明它在哪个目录。
+   */
+  missingChainMessage(cwd: string, chainId: string): string {
+    const base = `找不到链: ${chainId}`;
+    const normalized = this.normCwd(cwd);
+    const byId = this.db.prepare('SELECT id, cwd, name, status FROM chains WHERE id=?').get(chainId) as
+      | { id: string; cwd: string; name: string; status: string }
+      | undefined;
+    const hit =
+      byId ??
+      (this.db.prepare('SELECT id, cwd, name, status FROM chains WHERE name=?').all(chainId) as {
+        id: string;
+        cwd: string;
+        name: string;
+        status: string;
+      }[])[0];
+    if (!hit || hit.cwd === normalized) return base;
+    const status = hit.status === 'archived' ? '（已归档）' : '';
+    return `${base}——链「${hit.name}」${status}属于另一个目录: ${hit.cwd}；请用 --cwd ${hit.cwd}`;
+  }
+
   listChains(cwd: string): Chain[] {
     cwd = this.normCwd(cwd);
     const rows = this.db
@@ -695,7 +721,7 @@ export class Store {
       this.touchChain(found.id);
       return found.id;
     }
-    if (chainId) throw new Error(`找不到链: ${chainId}`);
+    if (chainId) throw new Error(this.missingChainMessage(cwd, chainId));
     return this.createChain(cwd, '默认').id;
   }
 

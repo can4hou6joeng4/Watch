@@ -465,7 +465,8 @@ async function cmdSessions(cwd: string, json: boolean, chain?: string): Promise<
           warnings.push(`链 ${chainRow.name} 还没有绑定会话（可用 watch switch / adopt 先绑定）`);
         }
       } else if (chain) {
-        warnings.push(`未找到链 ${chain}（cwd=${cwd}），已列出该目录全部会话`);
+        // 跨目录的链在这里同样是「找不到」，但指名它在哪个目录，用户才知道该改 --cwd
+        warnings.push(`${store.missingChainMessage(cwd, chain)}；已列出该目录全部会话`);
       }
     } catch (error) {
       // 链查询失败时退化为全量列表，但要说清楚，否则 --chain 的输出会被误读
@@ -757,7 +758,7 @@ async function cmdNew(cwd: string, providerId: string, json: boolean, chain?: st
     let historyLen = 0;
     if (store) {
       const id = store.findActiveChain(cwd, chain)?.id ?? null;
-      if (chain && !id) fail(json, `找不到链: ${chain}`);
+      if (chain && !id) fail(json, store.missingChainMessage(cwd, chain));
       historyLen = id ? store.listSwitchEvents(id).length : 0;
     }
     // 空链：优先用 nezha 式 createEmptySession 预创建可 resume 的空会话，
@@ -857,7 +858,7 @@ async function cmdChain(cwd: string, json: boolean, action?: string, a?: string,
     if (action === 'rename') {
       if (!a || !b) usage();
       const found = store.findActiveChain(cwd, a);
-      if (!found) throw new Error(`找不到链: ${a}`);
+      if (!found) throw new Error(store.missingChainMessage(cwd, a));
       const chain = store.renameChain(found.id, b);
       if (json) console.log(JSON.stringify({ ok: true, chain }));
       else console.log(`已重命名: ${chain.name}  (${chain.id})`);
@@ -866,7 +867,7 @@ async function cmdChain(cwd: string, json: boolean, action?: string, a?: string,
     if (action === 'archive') {
       if (!a) usage();
       const found = store.findActiveChain(cwd, a);
-      if (!found) throw new Error(`找不到链: ${a}`);
+      if (!found) throw new Error(store.missingChainMessage(cwd, a));
       store.archiveChain(found.id);
       if (json) console.log(JSON.stringify({ ok: true, id: found.id }));
       else console.log(`已归档: ${found.name}`);
@@ -875,7 +876,7 @@ async function cmdChain(cwd: string, json: boolean, action?: string, a?: string,
     if (action === 'use') {
       if (!a) usage();
       const found = store.findActiveChain(cwd, a);
-      if (!found) throw new Error(`找不到链: ${a}`);
+      if (!found) throw new Error(store.missingChainMessage(cwd, a));
       if (found.status === 'archived') throw new Error(`链已归档: ${found.name}`);
       store.touchChain(found.id);
       if (json) console.log(JSON.stringify({ ok: true, chain: { ...found, lastUsedAt: Date.now() } }));
