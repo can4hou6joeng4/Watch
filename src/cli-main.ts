@@ -248,7 +248,7 @@ async function cmdStatus(cwd: string, json: boolean, chain?: string): Promise<vo
   const store = openStore();
   let result;
   try {
-    result = await chainStatus(cwd, listAdapters(), store, chain);
+    result = await chainStatus(cwd, listAdapters(), store, chain, lastStoreError ?? undefined);
   } catch (error) {
     fail(json, error instanceof Error ? error.message : String(error));
   }
@@ -1282,7 +1282,7 @@ async function main(): Promise<void> {
 async function cmdUsage(cwd: string, json: boolean, chain?: string): Promise<void> {
   const store = openStore();
   try {
-    const result = await chainUsage(cwd, listAdapters(), store, chain);
+    const result = await chainUsage(cwd, listAdapters(), store, chain, lastStoreError ?? undefined);
     const cwdIssue = await cwdProblem(cwd);
     if (cwdIssue) result.warnings.push(cwdIssue);
     if (json) {

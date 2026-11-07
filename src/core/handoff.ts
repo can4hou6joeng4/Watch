@@ -210,11 +210,27 @@ export function pairedRef(history: SwitchRecord[], provider: string): SessionRef
   return found;
 }
 
+/**
+ * 无库时的统一警告。
+ *
+ * 调用方（`cli-main.ts` 的 `openStore()`）已经拿到了打开失败的真实原因——权限、库损坏、
+ * 被另一个 watch 占用、schema 比本程序新，每一种都自带路径与下一步，且与 Node 版本无关。
+ * 旧文案一律补一句「可检查 WATCH_DB 路径与 Node 版本」，会把人引去查 Node，与
+ * `storeUnavailableError()` 早就改过的规则矛盾（见 `cli-main.ts` 那条注释）。
+ * 只有真的拿不到原因（直接传 `null` store 的调用方）才退回那句通用提示。
+ */
+function storeUnavailableWarning(subject: string, storeError?: string): string {
+  if (storeError) return `本地库不可用，${subject}：${storeError}`;
+  return `本地库不可用，${subject}（可检查 WATCH_DB 路径与 Node 版本）`;
+}
+
 export async function chainUsage(
   cwd: string,
   adapters: ProviderAdapter[],
   store?: Store | null,
   chainId?: string,
+  /** 库打开失败的真实原因；带上它就不再让用户去查 Node 版本 */
+  storeError?: string,
 ): Promise<{
   chain: Chain | null;
   total: TokenUsage;
@@ -238,7 +254,7 @@ export async function chainUsage(
       totalMissingUsage: 0,
       byProvider: [],
       unsupported: [],
-      warnings: ['本地库不可用，无法确定当前链与各家用量（可检查 WATCH_DB 路径与 Node 版本）'],
+      warnings: [storeUnavailableWarning('无法确定当前链与各家用量', storeError)],
     };
   }
   const warnings: string[] = [];
@@ -370,6 +386,8 @@ export async function chainStatus(
   adapters: ProviderAdapter[],
   store?: Store | null,
   chainId?: string,
+  /** 库打开失败的真实原因；带上它就不再让用户去查 Node 版本 */
+  storeError?: string,
 ): Promise<{
   tips: ProviderTip[];
   chainTip: ProviderTip | null;
@@ -400,7 +418,7 @@ export async function chainStatus(
       warnings.push(`链历史读取失败，按无链处理：${describeStoreErrorReason(error)}`);
     }
   } else {
-    warnings.push('本地库不可用，链信息与链尾无法显示（只列出原生会话；可检查 WATCH_DB 路径与 Node 版本）');
+    warnings.push(storeUnavailableWarning('链信息与链尾无法显示（只列出原生会话）', storeError));
   }
   // 链尾只以当前链的 switch_events 最后一条为准；不再 fallback 到目录全局最新会话
   let chainTip: ProviderTip | null = null;
