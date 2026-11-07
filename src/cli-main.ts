@@ -14,7 +14,7 @@ import { ImportJobs } from './core/import-jobs.js';
 import { officialImportJournalRoot } from './providers/codex/official-import.js';
 import { doctorReport } from './core/doctor.js';
 import { cwdProblem } from './core/cwd.js';
-import { sessionFilePresence } from './core/read-text.js';
+import { describeSessionReadFailureReason, sessionFilePresence } from './core/read-text.js';
 
 /**
  * 参数还没解析完就要报用法错误（缺值 / 越界 / 未知 flag）：此时 `--json` 已经能从 argv 看出来。
@@ -670,8 +670,9 @@ async function cmdRecent(cwd: string, json: boolean, limit: number = 8, cwdGiven
           // 但读不出来（EACCES 等）不是「没了」，要披露，否则这条会话会静默消失在「近期」里
           const code = (error as NodeJS.ErrnoException).code;
           if (code !== 'ENOENT' && code !== 'ENOTDIR') {
+            // 原因要翻成中文：`EACCES: permission denied, stat '…'` 这类原文看不出该修权限还是路径
             warnings.push(
-              `${loc.provider} 会话 ${loc.sessionId} 的映射记录无法确认文件状态（${loc.filePath}）：${error instanceof Error ? error.message : String(error)}；已跳过映射命中`,
+              `${loc.provider} 会话 ${loc.sessionId} 的映射记录无法确认文件状态（${loc.filePath}）：${describeSessionReadFailureReason(error)}；已跳过映射命中，先确认该路径是否可读再重试`,
             );
           }
         }
