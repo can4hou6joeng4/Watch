@@ -77,6 +77,34 @@ export function sourceWarnings(data: { warnings?: unknown } | null | undefined):
   return out;
 }
 
+export type HistoryView = {
+  entries: unknown[];
+  warnings: string[];
+  /** `status` 失败（本地库打不开等）时的原因；成功但没有记录时为 null */
+  error: string | null;
+};
+
+/**
+ * 「接力记录」页的数据（`get_handoff_history` = `watch status --json`）。
+ *
+ * 以前前端只取 `history` 数组：`ok:false`（本地库打不开、库损坏）和 `warnings`
+ * （链尾会话文件已不存在、读不出来）都被丢掉，页面照样显示「暂无接力记录」——
+ * 把「没读成」讲成「没有记录」。这里把三种情况分开：记录 / 降级原因 / 失败原因。
+ */
+export function historyView(
+  data: { ok?: unknown; error?: unknown; history?: unknown; warnings?: unknown } | null | undefined,
+): HistoryView {
+  const entries = Array.isArray(data?.history) ? (data!.history as unknown[]) : [];
+  const warnings = sourceWarnings(data);
+  let error: string | null = null;
+  if (data && data.ok === false) {
+    error = typeof data.error === 'string' && data.error.trim()
+      ? data.error.trim()
+      : '读取接力记录失败（status 没有返回原因）；请用 watch status --json 查看';
+  }
+  return { entries, warnings, error };
+}
+
 export function shellQuote(value: string) { return `'${value.replace(/'/g, `'\\''`)}'`; }export function powershellQuote(value: string) { return `'${value.replace(/'/g, `''`)}'`; }
 export function buildCommand(agent: Agent, id: string, cwd: string | undefined, yolo: boolean, windows = false) {
   // Native IDs are arguments, not shell fragments. Keep ordinary IDs readable.
