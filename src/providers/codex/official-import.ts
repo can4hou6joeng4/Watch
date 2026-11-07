@@ -103,7 +103,10 @@ export class OfficialCodexImport {
   constructor(private deps: Dependencies) { this.projects = new CodexProjectBinding(deps); }
 
   async prepare(sourceId: string, cwd: string, options: { desktopProject?: boolean } = {}) {
-    if (!UUID.test(sourceId) || !path.isAbsolute(cwd)) throw new Error('需要 Claude 会话 UUID 与绝对路径 --cwd');
+    // 两件事分开说：--cwd 是否绝对路径这条在 runImportCodex 里已先拦过，到这里多半是来源 id 写错，
+    // 合成一句「需要 Claude 会话 UUID 与绝对路径 --cwd」会把人引去核对一个本来没问题的路径。
+    if (!UUID.test(sourceId)) throw new Error(`来源会话 id 需要 Claude 会话 UUID（8-4-4-4-12 位十六进制），收到: ${sourceId}；可用 watch sessions --cwd <目录> 核对`);
+    if (!path.isAbsolute(cwd)) throw new Error(`--cwd 需要绝对路径，收到: ${cwd}`);
     const version = await this.deps.version();
     if (version !== SUPPORTED_VERSION) throw new Error(`实验性导入路径目前只支持 ${SUPPORTED_VERSION}`);
     const source = await this.deps.findSource(sourceId, cwd);
