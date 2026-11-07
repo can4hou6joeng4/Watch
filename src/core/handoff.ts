@@ -68,6 +68,19 @@ export async function assertTargetUnchanged(
         `目标会话文件状态无法确认：${presence.reason}；为避免覆盖外部内容，已中止本次${action}（未写入任何内容），请先确认它是否还在再重试`,
       );
     }
+    // 走到这里说明 stat 看到路径还在，指纹却是 null：指纹为 null 只可能来自「读不出来」，
+    // 不是「内容变了」。以前这条落到 target_changed（「正在被外部写入，请稍后重试」），
+    // 用户会对着一个 chmod 000 的文件（或同名目录占位）无限重试——那是修权限 / 恢复路径的事
+    if (!presence.isFile) {
+      throw new HandoffBlockedError(
+        'target_unreadable',
+        `目标会话路径现在不是普通文件（被同名目录或设备文件占住了）：${ref.filePath}；已中止本次${action}（未写入任何内容），先恢复该路径再重试`,
+      );
+    }
+    throw new HandoffBlockedError(
+      'target_unreadable',
+      `目标会话文件读不出来（可能是权限或 I/O 问题）：${ref.filePath}；已中止本次${action}（未写入任何内容），先确认它可读再重试`,
+    );
   }
   throw new HandoffBlockedError('target_changed', `目标会话正在被外部写入，已中止本次${action}，请稍后重试`);
 }
