@@ -1288,7 +1288,20 @@ async function cmdUsage(cwd: string, json: boolean, chain?: string): Promise<voi
         console.log(`链上有绑定（${result.unsupported.join('、')}），但这些适配器不提供用量数据`);
         return;
       }
-      console.log(result.warnings.length ? '（无可统计的用量；原因见上方警告）' : '无链或该链无绑定会话');
+      if (result.chain) {
+        // 链就在上面打印着（chain new 之后还没切过）：这时说「无链」自相矛盾，
+        // 用户会去查链是不是没建成功，其实只是还没有绑定会话
+        console.log(
+          `这条链还没有绑定任何会话，没有可统计的用量；先用 watch switch <provider> 或 watch adopt <provider> --session <id> 绑定`,
+        );
+        return;
+      }
+      // 没有当前链有两种来源：还没建链，或现有链都已归档——别把后者说成「没有链」
+      console.log(
+        result.warnings.length
+          ? '（无可统计的用量；原因见上方警告）'
+          : '没有可用的当前链（还没建链，或现有链都已归档），无用量可统计；可先用 watch chain list 查看',
+      );
       return;
     }
     // 合计只是「已知用量之和」：读取失败与「原生没有 usage 字段」都不在其中，两种都要说出来
