@@ -1,5 +1,5 @@
 import { stat } from 'node:fs/promises';
-import type { FileDigest } from './core/atomic.js';
+import { describeWriteFailureReason, type FileDigest } from './core/atomic.js';
 import { assertTargetUnchanged, blockedHint, diffTurns, HandoffBlockedError } from './core/handoff.js';
 import { dedupeCallEvents } from './core/rich.js';
 import { Store, defaultDbPath, describeStoreErrorReason, describeStoreOpenFailure } from './core/store.js';
@@ -346,7 +346,8 @@ export async function openSession(
     } catch (error) {
       const blocked = blockedFrom(error);
       const raw = error instanceof Error ? error.message : String(error);
-      return blocked ? { ok: false, error: raw, blocked } : { ok: false, error: `并入新内容失败: ${raw}` };
+      // 写入被阻断走结构化 blocked（文案已是中文）；其余多半是写盘失败，原文只有英文 errno
+      return blocked ? { ok: false, error: raw, blocked } : { ok: false, error: `并入新内容失败: ${describeWriteFailureReason(error) ?? raw}` };
     }
   }
   let usage: TokenUsage | null = null;
@@ -783,7 +784,7 @@ export async function openInProvider(
   } catch (error) {
     const blocked = blockedFrom(error);
     const raw = error instanceof Error ? error.message : String(error);
-    return blocked ? { ok: false, error: raw, blocked } : { ok: false, error: `转入新会话失败: ${raw}` };
+    return blocked ? { ok: false, error: raw, blocked } : { ok: false, error: `转入新会话失败: ${describeWriteFailureReason(error) ?? raw}` };
   }
 }
 

@@ -1,8 +1,49 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { copyFile, mkdir, open, readFile, rename, rm, stat } from 'node:fs/promises';
 import path from 'node:path';
+import { isFileSystemErrorCode } from './read-text.js';
 
 export type FileDigest = { sha256: string; sizeBytes: number };
+
+/**
+ * 写盘失败的说明：`writeFileAtomic` / `appendFileAtomic` 与各家 `importTurns` 抛出的
+ * 就是 Node 原文（`EACCES: permission denied, mkdir '…'`），直接拼进 `{ ok:false, error }`
+ * 只剩一句英文 errno——用户看不出是权限、磁盘满了还是哪个路径被占住，而这恰恰是唯一
+ * 需要照着做的一类错误。
+ *
+ * 只翻译文件系统错误（`code` 是已知 fs errno）；round-trip 校验失败、写入被阻断这类业务
+ * 错误返回 null，由调用方原样带出——否则「内容校验没过」会被讲成「没有权限」。
+ * `path` 来自 errno 自带的 `error.path`（可能是 tmp 文件），一起带出才好定位。
+ */
+export function describeWriteFailureReason(error: unknown): string | null {
+  const code = (error as NodeJS.ErrnoException).code;
+  if (!isFileSystemErrorCode(code)) return null;
+  const rawPath = (error as NodeJS.ErrnoException).path;
+  const where = rawPath ? `：${rawPath}` : '';
+  switch (code) {
+    case 'EACCES':
+    case 'EPERM':
+      return `无权写入${where}（权限问题，不是路径写错；确认该目录可写、且不属于其它用户）`;
+    case 'EROFS':
+      return `目标位于只读文件系统${where}；换一个可写的 HOME / 数据目录后重试`;
+    case 'ENOSPC':
+    case 'EDQUOT':
+      return `磁盘空间不足或超出配额${where}；清理空间后重试（本次未写入任何内容）`;
+    case 'EMFILE':
+    case 'ENFILE':
+      return `打开的文件过多${where}；关掉其它程序或稍后重试（本次未写入任何内容）`;
+    case 'EISDIR':
+      return `目标是目录而不是文件${where}；先把它挪走再重试（本次未写入任何内容）`;
+    case 'ENOTDIR':
+      return `路径上的某一级不是目录${where}（被同名文件占住了？）；恢复该路径后重试`;
+    case 'ENOENT':
+      return `目标路径的上级目录不存在${where}（可能在写入过程中被移动或删除）；确认目录还在再重试`;
+    case 'EBUSY':
+      return `目标文件正被占用${where}；退出可能正在写它的程序后重试（本次未写入任何内容）`;
+    default:
+      return `写入失败（${code}）${where}；本次未写入任何内容，可据上面的路径排查`;
+  }
+}
 
 /** 文件内容指纹；文件不存在返回 null（TOCTOU 检测用） */
 export async function digestFile(filePath: string): Promise<FileDigest | null> {

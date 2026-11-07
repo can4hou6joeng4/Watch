@@ -3,7 +3,7 @@ import type { SessionRef, TokenUsage, UnifiedTurn } from './types.js';
 import { describeStoreErrorReason } from './store.js';
 import type { Chain, Store, SwitchRecord } from './store.js';
 import { dedupeCallEvents, mergeTurns, shouldReplacePairedSession, unwrapUserQuery } from './rich.js';
-import type { FileDigest } from './atomic.js';
+import { describeWriteFailureReason, type FileDigest } from './atomic.js';
 import { addFinding, type Finding } from './findings.js';
 import { countUnparsableJsonLines } from './jsonl.js';
 import { sessionFilePresence } from './read-text.js';
@@ -623,7 +623,14 @@ export async function handoff(
     try {
       // 取锁后再比对指纹：把与原生 writer 的竞态窗口收窄到「快照 → 取锁」之间
       await assertDestUnchanged();
-      return await target.importTurns(turnsToWrite, cwd, into, opts);
+      try {
+        return await target.importTurns(turnsToWrite, cwd, into, opts);
+      } catch (error) {
+        // 写盘失败只有 Node 原文（`EACCES: permission denied, mkdir '…'`），cmdSwitch 会把它
+        // 原样放进 `{ ok:false, error }`；换成中文原因，非文件系统错误（round-trip 校验）原样抛
+        const reason = describeWriteFailureReason(error);
+        throw reason ? new Error(reason) : error;
+      }
     } finally {
       await guard?.release();
     }
