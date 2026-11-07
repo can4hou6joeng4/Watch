@@ -475,6 +475,17 @@ async function cmdSessions(cwd: string, json: boolean, chain?: string): Promise<
           const linked = chainRow ? (ids ? sessions.filter((s) => ids.has(s.ref.sessionId)) : []) : sessions;
           // 撞到适配器上限时列表只是「最近 N 个」：不标出来会被当成全集
           const capped = a.listSessionsCap !== undefined && sessions.length >= a.listSessionsCap;
+          // 链上绑定的会话可能比列表上限更老：过滤后整个 provider 组都会消失，
+          // 不说就像「这条链没绑定它」——尤其 `--chain` 时整组被 filter 掉，更容易误读
+          if (chainRow && ids && capped) {
+            const listed = new Set(sessions.map((s) => s.ref.sessionId));
+            const hidden = [...ids].filter((id) => !listed.has(id));
+            if (hidden.length) {
+              warnings.push(
+                `链 ${chainRow.name} 绑定的 ${a.id} 会话 ${hidden.join('、')} 不在最近 ${sessions.length} 个里（已达列表上限），本次未列出；可用 watch doctor 或原生 CLI 确认该会话是否还在`,
+              );
+            }
+          }
           return {
             provider: a.id,
             sessions: linked,
