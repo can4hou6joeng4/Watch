@@ -6,7 +6,7 @@ import { describeFindings } from './core/findings.js';
 import { adoptIntoChain, blockedHint, chainStatus, chainUsage, collectTips, createChainSession, handoff, HandoffBlockedError } from './core/handoff.js';
 import { reindexCwd } from './core/search.js';
 import type { SessionRef } from './core/types.js';
-import { getAdapter, listAdapters, listProviders, unknownProviderMessage } from './providers/registry.js';
+import { getAdapter, listAdapters, listProviders, noSessionHint, unknownProviderMessage } from './providers/registry.js';
 import { checkOpenInProvider, openInProvider, openSession } from './open.js';
 import { PreflightBlockedError } from './providers/adapter.js';
 import { runImportCodex } from './import-codex.js';
@@ -271,7 +271,7 @@ async function cmdStatus(cwd: string, json: boolean, chain?: string): Promise<vo
     console.log(`另有 ${otherChains.length} 条链（${parts.join('、')}）；用 --chain <名或 id> 查看`);
   }
   if (!tips.length) {
-    console.log('未发现会话（请先在 Claude Code 或 Codex TUI 开聊）');
+    console.log(`未发现会话（${noSessionHint()}）`);
   } else {
     console.log(`cwd: ${cwd}`);
     console.log('');

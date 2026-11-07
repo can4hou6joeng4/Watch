@@ -35,6 +35,17 @@ export function unknownProviderMessage(id: string, adapters: ProviderAdapter[] =
   return `未知 provider: ${id}${known ? `；可用: ${known}` : ''}`;
 }
 
+/**
+ * 「这个目录里没有原生会话」的统一提示。`status` 与 `handoff()`（`switch` / `new`）各说一句，
+ * 以前两处都写死「请先在 Claude Code 或 Codex TUI 里开聊」——只用 pi / kimi / opencode / grok
+ * 的人看到这句会以为这家没被支持。按调用方实际使用的适配器表列出可用清单，与
+ * `unknownProviderMessage()` 同一套写法。
+ */
+export function noSessionHint(adapters: ProviderAdapter[] = listAdapters()): string {
+  const known = adapters.map((a) => a.id).join(' / ');
+  return `请先在任一受支持的 Agent 里开聊${known ? `；可用: ${known}` : ''}`;
+}
+
 /** `overrides` 只给测试注入假适配器用；默认读注册表 */
 export async function listProviders(overrides?: ProviderAdapter[]): Promise<ProviderInfo[]> {
   return Promise.all(

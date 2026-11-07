@@ -7,7 +7,7 @@ import { describeWriteFailureReason, type FileDigest } from './atomic.js';
 import { addFinding, type Finding } from './findings.js';
 import { countUnparsableJsonLines } from './jsonl.js';
 import { describePathReadFailureReason, describeReadFailureOrSelf, sessionFilePresence } from './read-text.js';
-import { unknownProviderMessage } from '../providers/registry.js';
+import { noSessionHint, unknownProviderMessage } from '../providers/registry.js';
 
 /** 写回被阻断（如 TOCTOU 检测到目标被外部修改）：一票否决，不产生部分写 */
 export class HandoffBlockedError extends Error {
@@ -512,7 +512,7 @@ export async function handoff(
         );
       }
       // 路径被同名目录 / 设备文件占住：两个分支都不进就会落到下面通用的
-      // 「请先在 Claude Code 或 Codex TUI 里开聊」，把「路径不可用」讲成「目录里没东西」
+      // 「请先在…里开聊」，把「路径不可用」讲成「目录里没东西」
       if (tipPresence.state === 'present' && !tipPresence.isFile) {
         throw new Error(
           `未发现原生会话；而链尾记录的 ${chainTipRef.provider} 会话 ${chainTipRef.sessionId} 的路径现在不是普通文件（被同名目录或设备文件占住了）：${chainTipRef.filePath}` +
@@ -520,7 +520,7 @@ export async function handoff(
         );
       }
     }
-    throw new Error('未发现原生会话，请先在 Claude Code 或 Codex TUI 里开聊');
+    throw new Error(`未发现原生会话，${noSessionHint(adapters)}`);
   }
 
   let sourceTip: ProviderTip | null = null;
