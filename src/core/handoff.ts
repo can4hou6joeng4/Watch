@@ -337,14 +337,19 @@ export async function chainStatus(
     const last = history.at(-1)!;
     chainTip = { provider: last.toProvider, ref: last.toRef, updatedAt: last.createdAt, onChain: true };
     // 链尾指向的会话文件被删/被移走时，status 不能假装一切正常：下次 switch 会在这里失败
+    let tipProblem: string | null = null;
     try {
       const info = await stat(last.toRef.filePath);
-      if (!info.isFile()) throw new Error('not a regular file');
+      // 路径被同名目录占住时 isFile() 为 false：直接拼进警告就成了英文「not a regular file」
+      if (!info.isFile()) tipProblem = '该路径现在不是普通文件';
     } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      // ENOENT 的原文会把同一个路径再说一遍（路径已经在前面了），其余错误才值得带原文
+      tipProblem = code === 'ENOENT' ? '文件不存在' : error instanceof Error ? error.message : String(error);
+    }
+    if (tipProblem) {
       warnings.push(
-        `链尾会话文件已不存在：${last.toRef.filePath}（${last.toProvider} ${last.toRef.sessionId}）；下次切换会失败，可先 adopt 该 provider 的新会话：${
-          error instanceof Error ? error.message : String(error)
-        }`,
+        `链尾会话文件已不存在：${last.toRef.filePath}（${last.toProvider} ${last.toRef.sessionId}，${tipProblem}）；下次切换会失败，可先 adopt 该 provider 的新会话`,
       );
     }
   }
