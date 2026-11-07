@@ -402,8 +402,10 @@ export async function chainStatus(
         `链尾会话文件已不存在：${last.toRef.filePath}（${last.toProvider} ${last.toRef.sessionId}，文件不存在）；下次切换会失败，可先 adopt 该 provider 的新会话`,
       );
     } else if (tipPresence.state === 'present' && !tipPresence.isFile) {
+      // 路径还在、只是不是普通文件：说成「文件已不存在」自相矛盾，还会把人引去 adopt；
+      // 与 chain list / doctor 的「该路径现在不是普通文件」保持同一说法
       warnings.push(
-        `链尾会话文件已不存在：${last.toRef.filePath}（${last.toProvider} ${last.toRef.sessionId}，该路径现在不是普通文件）；下次切换会失败，可先 adopt 该 provider 的新会话`,
+        `链尾会话文件的路径现在不是普通文件（被同名目录或设备文件占住了）：${last.toRef.filePath}（${last.toProvider} ${last.toRef.sessionId}）；下次切换会失败，先恢复该路径，再决定是否需要 adopt 该 provider 的新会话`,
       );
     } else if (tipPresence.state === 'unknown') {
       warnings.push(
@@ -491,6 +493,14 @@ export async function handoff(
         throw new Error(
           `未发现原生会话；链尾记录的 ${chainTipRef.provider} 会话 ${chainTipRef.sessionId} 状态无法确认：${chainTipRef.filePath}；${tipPresence.reason}` +
             `——可能是权限或路径问题，先确认它是否还在，再决定是否 watch adopt 重新绑定`,
+        );
+      }
+      // 路径被同名目录 / 设备文件占住：两个分支都不进就会落到下面通用的
+      // 「请先在 Claude Code 或 Codex TUI 里开聊」，把「路径不可用」讲成「目录里没东西」
+      if (tipPresence.state === 'present' && !tipPresence.isFile) {
+        throw new Error(
+          `未发现原生会话；而链尾记录的 ${chainTipRef.provider} 会话 ${chainTipRef.sessionId} 的路径现在不是普通文件（被同名目录或设备文件占住了）：${chainTipRef.filePath}` +
+            `——先恢复该路径，再决定是否 watch adopt 重新绑定，或在原生 CLI 里新开一个会话`,
         );
       }
     }
