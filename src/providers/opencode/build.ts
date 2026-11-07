@@ -4,6 +4,7 @@ import path from 'node:path';
 import type { ImportTurnsOpts } from '../adapter.js';
 import type { ProcessEvent, SessionRef, TokenUsage, UnifiedTurn } from '../../core/types.js';
 import {
+  assertUsableOpencodeDb,
   opencodeDbPath,
   opencodeDbSqliteError,
   probeOpencodeDbFile,
@@ -196,6 +197,8 @@ export async function createEmptyOpencodeSession(cwd: string): Promise<SessionRe
   // 库不存在就让它新建；路径被同名目录占住要在这里说清，否则 SQLite 只回一句英文
   // `unable to open database file`，看不出要修的是那个路径
   await probeOpencodeDbFile(dbPath);
+  // 路径上已有别人的文件 / 库时不能接管：`ensureMinimalSchema` 会就地建表把原内容覆盖
+  assertUsableOpencodeDb(dbPath);
   const t = nowMs();
   const sessionId = sortableId('ses', t, 1, true);
   let db: DatabaseSync;
@@ -332,6 +335,8 @@ export async function importTurnsToOpencode(
   const dbPath = opencodeDbPath();
   // 写入前先确认库路径可用：被同名目录 / 设备文件占住时这里就要说清，不把 SQLite 原文抛给用户
   await probeOpencodeDbFile(dbPath);
+  // 已有别人的文件 / 库时同样不能接管（`into` 路径也一样：指向别人的库就会往里写四张表）
+  assertUsableOpencodeDb(dbPath);
   const ref = into ?? (await createEmptyOpencodeSession(cwd));
   let db: DatabaseSync;
   try {

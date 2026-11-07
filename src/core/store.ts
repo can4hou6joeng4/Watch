@@ -1,9 +1,10 @@
 import { DatabaseSync } from 'node:sqlite';
-import { chmodSync, closeSync, existsSync, mkdirSync, openSync, readSync, statSync, unlinkSync } from 'node:fs';
+import { chmodSync, mkdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { homedir } from 'node:os';
 import { randomUUID } from 'node:crypto';
 import { normalizePath } from './platform.js';
+import { probeSqliteTables, readSqliteFileHead } from './sqlite-file.js';
 import type { ProcessEvent, SessionRef, UnifiedTurn } from './types.js';
 
 const SCHEMA_VERSION = 6;
@@ -148,84 +149,39 @@ export function describeStoreOpenFailure(dbPath: string, error: unknown): string
  */
 function assertUsableStoreFile(dbPath: string): void {
   if (dbPath === ':memory:') return;
-  let stat;
-  try {
-    stat = statSync(dbPath);
-  } catch (error) {
-    const code = (error as NodeJS.ErrnoException).code;
-    // 还没有库：交给 DatabaseSync 正常新建；其余（权限 / 路径占位）也交给它，那里已有中文说明
-    if (code === 'ENOENT' || code === 'ENOTDIR' || code === 'EACCES' || code === 'EPERM') return;
-    throw error;
-  }
-  // 目录 / 设备文件：DatabaseSync 的 unable to open database file 已有专门说明，不在这里抢
-  if (!stat.isFile() || stat.size === 0) return;
+  const head = readSqliteFileHead(dbPath);
+  // 没有库 / 目录 / 设备文件都交给 DatabaseSync，那里已有中文说明
+  if (head.kind !== 'file' || head.size === 0) return;
 
-  const head = Buffer.alloc(100);
-  const fd = openSync(dbPath, 'r');
-  let read = 0;
-  try {
-    read = readSync(fd, head, 0, 100, 0);
-  } finally {
-    closeSync(fd);
-  }
-  const SQLITE_MAGIC = 'SQLite format 3\0';
-  if (read < 100 || head.toString('latin1', 0, 16) !== SQLITE_MAGIC) {
+  if (!head.hasMagic) {
     throw Object.assign(
       new Error(
-        `本地库路径上已有一个不是有效的 SQLite 数据库的文件：${dbPath}（${stat.size} 字节）。为避免把它覆盖成 Watch 的库，本次未写入任何内容；请先备份并挪走这个文件，或改用另一个 WATCH_DB`,
+        `本地库路径上已有一个不是有效的 SQLite 数据库的文件：${dbPath}（${head.size} 字节）。为避免把它覆盖成 Watch 的库，本次未写入任何内容；请先备份并挪走这个文件，或改用另一个 WATCH_DB`,
       ),
       { code: 'EWATCHNOTSQLITE' },
     );
   }
-  // user_version 在文件头第 60 字节、页数在第 28 字节，都是大端。
-  // 版本为 0 有两种可能，光看头分不清：别的程序的库，或 Watch 自己第一次建库时被杀在半路。
-  // 只有这一档才去只读打开看表名；WAL 模式的库会顺带生成空的 -shm / -wal，
-  // 所以只删掉「探之前不存在、由这次探测生成」的那两个，不在别人的目录里留垃圾。
-  const userVersion = head.readUInt32BE(60);
-  const pageCount = head.readUInt32BE(28);
-  if (userVersion === 0 && pageCount > 0) {
-    const companions = [`${dbPath}-shm`, `${dbPath}-wal`];
-    const preexisting = new Set(companions.filter((p) => existsSync(p)));
-    let tables: string[] = [];
-    let probeError: unknown = null;
-    try {
-      const probe = new DatabaseSync(dbPath, { readOnly: true });
-      try {
-        tables = (
-          probe.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'").all() as {
-            name: string;
-          }[]
-        ).map((r) => r.name);
-      } finally {
-        probe.close();
-      }
-    } catch (error) {
-      probeError = error;
-    } finally {
-      for (const p of companions) {
-        if (preexisting.has(p)) continue;
-        try {
-          unlinkSync(p);
-        } catch {
-          // 没生成就没什么可删；删不掉也不该盖住本次要报的错
-        }
-      }
-    }
-    // 半途建库的 Watch 库至少已经落下部分表；一张 Watch 的表都没有才判成别人的库
-    const known = tables.filter((t) => (REQUIRED_TABLES as readonly string[]).includes(t));
-    if (probeError || known.length === 0) {
-      const detail = probeError
-        ? `表结构读不出来：${describeStoreErrorReason(probeError)}`
+  // user_version 为 0 有两种可能，光看头分不清：别的程序的库，或 Watch 自己第一次建库时被杀在半路。
+  // 只有这一档才去只读打开看表名。
+  if (head.userVersion !== 0 || head.pageCount === 0) return;
+
+  const probe = probeSqliteTables(dbPath);
+  const tables = 'tables' in probe ? probe.tables : [];
+  // 半途建库的 Watch 库至少已经落下部分表；一张 Watch 的表都没有才判成别人的库
+  const known = tables.filter((t) => (REQUIRED_TABLES as readonly string[]).includes(t));
+  if ('error' in probe || known.length === 0) {
+    const detail =
+      'error' in probe
+        ? `表结构读不出来：${describeStoreErrorReason(probe.error)}`
         : `表: ${tables.slice(0, 5).join(' / ') || '（没有任何表）'}`;
-      throw Object.assign(
-        new Error(
-          `本地库路径上已有一个不是 Watch 的 SQLite 数据库：${dbPath}（user_version=0，${detail}）。` +
-            `为避免把 Watch 的表写进别人的库、改掉它的 user_version，本次未写入任何内容；` +
-            `请改用另一个 WATCH_DB（默认 ~/.watch/watch.db）；如果这其实是 Watch 的库损坏了，先备份，再删掉 watch.db / watch.db-wal / watch.db-shm 让它重建`,
-        ),
-        { code: 'EWATCHFOREIGN' },
-      );
-    }
+    throw Object.assign(
+      new Error(
+        `本地库路径上已有一个不是 Watch 的 SQLite 数据库：${dbPath}（user_version=0，${detail}）。` +
+          `为避免把 Watch 的表写进别人的库、改掉它的 user_version，本次未写入任何内容；` +
+          `请改用另一个 WATCH_DB（默认 ~/.watch/watch.db）；如果这其实是 Watch 的库损坏了，先备份，再删掉 watch.db / watch.db-wal / watch.db-shm 让它重建`,
+      ),
+      { code: 'EWATCHFOREIGN' },
+    );
   }
 }
 

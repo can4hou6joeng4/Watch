@@ -2,6 +2,7 @@ import { homedir } from 'node:os';
 import { stat } from 'node:fs/promises';
 import path from 'node:path';
 import { isMissingPathError } from '../../core/read-text.js';
+import { probeSqliteTables, readSqliteFileHead } from '../../core/sqlite-file.js';
 
 export function opencodeDbPath(): string {
   if (process.env.WATCH_OPENCODE_DB) return process.env.WATCH_OPENCODE_DB;
@@ -49,6 +50,48 @@ export function opencodeDbSqliteError(dbPath: string, action: '打开' | '查询
   return new Error(
     `无法${action} OpenCode 数据库 ${dbPath}：${describeSqliteFailure(raw)}——可先关闭占用它的 opencode 进程重试；` +
       '仍不行就备份该文件，让 opencode 重建后再试',
+  );
+}
+
+/** 一张都没有就可能不是 opencode 的库；只要命中任意必备表就按 opencode 的库处理 */
+const OPENCODE_KNOWN_TABLES = ['project', 'session', 'message', 'part'];
+
+/**
+ * 往 `opencode.db` 写之前，先确认这个文件是 opencode 的库。
+ *
+ * SQLite 有两种静默接管，与 `watch.db` 那套守卫同源（见 `core/sqlite-file.ts`）：
+ * - 1～99 字节的任意文件被当成空库，`CREATE TABLE` 直接把原内容覆盖掉；
+ * - 别人的 SQLite 库（只有 bookmarks 之类）会被 `ensureMinimalSchema` 就地建出四张表，
+ *   对方的库结构就此被改（实测 `bookmarks` 行还在，但多了 project / session / message / part）。
+ * 两种以前都是「转入成功」静默完成。这里只读文件头，不打开 SQLite、不产生 -wal / -shm。
+ */
+export function assertUsableOpencodeDb(dbPath: string): void {
+  const head = readSqliteFileHead(dbPath);
+  // 没有库 / 目录 / 设备文件：交给 DatabaseSync 与既有中文说明
+  if (head.kind !== 'file' || head.size === 0) return;
+
+  if (!head.hasMagic) {
+    throw new Error(
+      `OpenCode 数据库路径上已有一个不是有效的 SQLite 数据库的文件：${dbPath}（${head.size} 字节）。为避免把它覆盖成 opencode 的库，本次未写入任何内容；请先备份并挪走这个文件，或改用另一个 WATCH_OPENCODE_DB`,
+    );
+  }
+  // 刚初始化、还没有任何表的库接管不破坏数据（opencode 首次运行前也可能长这样）
+  if (head.pageCount === 0) return;
+
+  const probe = probeSqliteTables(dbPath);
+  if ('error' in probe) {
+    throw new Error(
+      `无法确认 OpenCode 数据库是不是 opencode 的库（表结构读不出来）：${dbPath}；` +
+        `本次未写入任何内容——可先关闭占用它的 opencode 进程再重试，仍不行就确认该文件是否可读`,
+    );
+  }
+  if (probe.tables.length === 0) return;
+  if (probe.tables.some((t) => OPENCODE_KNOWN_TABLES.includes(t))) return;
+
+  throw new Error(
+    `OpenCode 数据库路径上已有一个不是 opencode 的 SQLite 数据库：${dbPath}（表: ${probe.tables.slice(0, 5).join(' / ')}）。` +
+      `为避免把 opencode 的表写进别人的库，本次未写入任何内容；请改用另一个 WATCH_OPENCODE_DB；` +
+      `如果这其实是 opencode 的库损坏了，先备份，再挪走它让 opencode 重建`,
   );
 }
 
