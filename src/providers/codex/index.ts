@@ -598,10 +598,12 @@ export const codexAdapter: ProviderAdapter = {
     if (!ref) return;
     const lockPath = threadWriterLockPath(ref.sessionId);
     // stat 失败不等于「没有锁」：只有 ENOENT 才是「没有 writer 登记，无共享文件可冲突」。
-    // 路径被同名文件占住（ENOTDIR）/ 没有权限（EACCES）时读不出来 = 无法判定，按有锁处理
+    // 路径被同名文件占住（ENOTDIR）/ 没有权限（EACCES）时读不出来 = 无法判定，按有锁处理；
+    // stat 成功但不是普通文件（锁路径本身被同名目录占住）同样是「读不出锁状态」，
+    // 以前算成 absent 会直接放行写入
     let lockState: 'absent' | 'present' | 'unreadable' = 'absent';
     try {
-      lockState = (await stat(lockPath)).isFile() ? 'present' : 'absent';
+      lockState = (await stat(lockPath)).isFile() ? 'present' : 'unreadable';
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') lockState = 'unreadable';
     }
