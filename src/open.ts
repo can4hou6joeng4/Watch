@@ -77,16 +77,17 @@ function blockedFrom(error: unknown): OpenSessionResult['blocked'] | undefined {
   return undefined;
 }
 
-/** 映射快返的「文件还在吗」：只有 ENOENT（`throwIfNoEntry: false` 返回 undefined）才是「不在了」。
+/** 映射快返的「文件还在吗」：只有 ENOENT / ENOTDIR 才是「不在了」。
  * `EACCES` 等读不出来的情况照常抛出，由 resolveById 记进 diagnostics —— 把权限问题当成文件被删，
- * 会让人以为是会话丢了，而不是去看目录权限。 */
-async function fileExists(p: string): Promise<boolean> {
+ * 会让人以为是会话丢了，而不是去看目录权限。
+ * 路径在但不是普通文件（被同名目录 / 设备文件占住）单独一档：它不能当命中，也不能当「被删」 */
+async function probeMappedFile(p: string): Promise<'present' | 'gone' | 'not-file'> {
   try {
-    return (await stat(p)).isFile();
+    return (await stat(p)).isFile() ? 'present' : 'not-file';
   } catch (error) {
     const code = (error as NodeJS.ErrnoException).code;
     // 只有「路径上确实没有东西」算不存在；EACCES 等读不出来照常抛，由调用方记进 diagnostics
-    if (code === 'ENOENT' || code === 'ENOTDIR') return false;
+    if (code === 'ENOENT' || code === 'ENOTDIR') return 'gone';
     throw error;
   }
 }
@@ -123,7 +124,8 @@ export async function resolveById(
         const loc = store.getSessionLocation(a.id, sessionId);
         // Windows canonicalize 会给路径加 `\\?\` 前缀，探测其去前缀形式
         const filePath = loc && IS_WIN ? stripDevicePrefix(loc.filePath) : loc?.filePath;
-        if (loc && filePath && (await fileExists(filePath))) {
+        const state = loc && filePath ? await probeMappedFile(filePath) : 'gone';
+        if (loc && filePath && state === 'present') {
           try {
             store.rememberSessionLocation(a.id, loc, Date.now());
           } catch {
@@ -136,6 +138,13 @@ export async function resolveById(
               updatedAt: loc.lastSeenAt,
             },
           };
+        }
+        if (loc && filePath && state === 'not-file') {
+          // 与 `recent` / `sessions --chain` / `search` 索引清理同一档说法：路径被同名目录或
+          // 设备文件占住既不是「会话没了」也不是可用文件，全扫也找不到时要能说清原因
+          diagnostics?.push(
+            `${a.id} 会话 ${sessionId} 的映射记录指向的路径现在不是普通文件（被同名目录或设备文件占住了）：${loc.filePath}；已改为全盘扫描`,
+          );
         }
       } catch (error) {
         // 映射读失败不能等同「没有这个会话」：记进 diagnostics，全扫也没找到时能说清原因
