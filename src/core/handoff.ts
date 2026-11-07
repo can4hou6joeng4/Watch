@@ -278,10 +278,17 @@ export async function chainUsage(
     // 再 stat 一次分开，否则 `usage` 的合计会把「链尾文件已经没了」讲成「这些会话没有用量数据」
     if (usage === null) {
       const presence = await sessionFilePresence(ref.filePath);
-      if (presence.state !== 'present') {
+      // 路径被同名目录 / 设备文件占住（present 但 isFile 为假）既不是「没有 usage 数据」，
+      // 也不是可读文件：以前落进 totalMissingUsage，把「读不出内容」讲成「这家原生没有 usage」
+      if (presence.state !== 'present' || !presence.isFile) {
         // 只有 ENOENT / ENOTDIR 才能说「不存在」：EACCES 等读不出来时照实说，
         // 否则权限问题会被讲成会话丢了，用户会去重新绑定而不是修权限
-        const msg = presence.state === 'missing' ? `会话文件已不存在：${ref.filePath}` : presence.reason;
+        const msg =
+          presence.state === 'missing'
+            ? `会话文件已不存在：${ref.filePath}`
+            : presence.state === 'present'
+              ? `该路径现在不是普通文件（被同名目录或设备文件占住了）：${ref.filePath}`
+              : presence.reason;
         warnings.push(`${adapter.id} 用量读取失败：${msg}`);
         byProvider.push({ provider: adapter.id, sessionId: ref.sessionId, usage: null, error: msg });
         totalExcluded += 1;
