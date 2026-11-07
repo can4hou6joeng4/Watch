@@ -68,6 +68,16 @@ function fail(json: boolean, message: string, extra?: Record<string, unknown>): 
   process.exit(1);
 }
 
+/**
+ * 失败输出，并把 `--cwd` 的问题拼在前面。
+ *
+ * 链名与目录都是精确匹配：目录写错时链同样查不到，只说「找不到链: x」会让人去核对名字。
+ * `fail()` 立刻 exit，写在它后面的 `cwdIssue` 永远跑不到，所以失败路径必须走这里。
+ */
+function failWithCwd(json: boolean, cwdIssue: string | null, message: string): never {
+  fail(json, cwdIssue ? `${cwdIssue}；${message}` : message);
+}
+
 /** 写入被拒（目标被占用 / TOCTOU）：统一输出 `blocked:*` 结构；未写入任何内容，可重试 */
 function failBlocked(error: HandoffBlockedError | PreflightBlockedError, json: boolean): never {
   const block = error instanceof PreflightBlockedError ? error.block : undefined;
@@ -246,14 +256,15 @@ function parseArgs(argv: string[]): {
 
 async function cmdStatus(cwd: string, json: boolean, chain?: string): Promise<void> {
   const store = openStore();
+  // 路径写错时各 provider 会安静返回空列表，先把原因放进同一条 warnings 通道
+  const cwdIssue = await cwdProblem(cwd);
   let result;
   try {
     result = await chainStatus(cwd, listAdapters(), store, chain, lastStoreError ?? undefined);
   } catch (error) {
-    fail(json, error instanceof Error ? error.message : String(error));
+    // 链名 / 目录都是精确匹配：目录写错时链同样查不到，失败时也要带出路径原因
+    failWithCwd(json, cwdIssue, error instanceof Error ? error.message : String(error));
   }
-  // 路径写错时各 provider 会安静返回空列表，先把原因放进同一条 warnings 通道
-  const cwdIssue = await cwdProblem(cwd);
   if (cwdIssue) result.warnings.push(cwdIssue);
   if (json) {
     console.log(JSON.stringify({ ok: true, ...result }));
@@ -917,7 +928,7 @@ async function cmdNew(cwd: string, providerId: string, json: boolean, chain?: st
     let historyLen = 0;
     if (store) {
       const id = store.findActiveChain(cwd, chain)?.id ?? null;
-      if (chain && !id) fail(json, store.missingChainMessage(cwd, chain));
+      if (chain && !id) failWithCwd(json, cwdIssue, store.missingChainMessage(cwd, chain));
       historyLen = id ? store.listSwitchEvents(id).length : 0;
     }
     // 空链：优先用 nezha 式 createEmptySession 预创建可 resume 的空会话，
@@ -1281,9 +1292,10 @@ async function main(): Promise<void> {
 
 async function cmdUsage(cwd: string, json: boolean, chain?: string): Promise<void> {
   const store = openStore();
+  // 链名与目录都是精确匹配：目录写错时 `--chain` 同样查不到，失败时也要带出路径原因
+  const cwdIssue = await cwdProblem(cwd);
   try {
     const result = await chainUsage(cwd, listAdapters(), store, chain, lastStoreError ?? undefined);
-    const cwdIssue = await cwdProblem(cwd);
     if (cwdIssue) result.warnings.push(cwdIssue);
     if (json) {
       console.log(JSON.stringify({ ok: true, ...result }));
@@ -1344,12 +1356,7 @@ async function cmdUsage(cwd: string, json: boolean, chain?: string): Promise<voi
     }
   } catch (error) {
     const msg = error instanceof Error ? error.message : String(error);
-    if (json) {
-      console.log(JSON.stringify({ ok: false, error: msg }));
-    } else {
-      console.error(msg);
-    }
-    process.exit(1);
+    failWithCwd(json, cwdIssue, msg);
   }
 }
 
