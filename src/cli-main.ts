@@ -14,6 +14,7 @@ import { ImportJobs } from './core/import-jobs.js';
 import { officialImportJournalRoot } from './providers/codex/official-import.js';
 import { doctorReport } from './core/doctor.js';
 import { cwdProblem } from './core/cwd.js';
+import { sessionFilePresence } from './core/read-text.js';
 
 /**
  * 参数还没解析完就要报用法错误（缺值 / 越界 / 未知 flag）：此时 `--json` 已经能从 argv 看出来。
@@ -932,17 +933,17 @@ async function cmdChain(cwd: string, json: boolean, action?: string, a?: string,
           continue;
         }
         if (!last?.toRef) continue;
-        // 只有 ENOENT 才算「文件已不存在」。权限 / 路径错误（EACCES、ENOTDIR…）下说成
-        // 「已不存在」会把人引去重新 adopt，而真正的问题是读不出来
-        let missing = false;
-        let tipError: string | null = null;
-        try {
-          if (!(await stat(last.toRef.filePath)).isFile()) tipError = '该路径现在不是普通文件';
-        } catch (error) {
-          const code = (error as NodeJS.ErrnoException).code;
-          if (code === 'ENOENT') missing = true;
-          else tipError = error instanceof Error ? error.message : String(error);
-        }
+        // 与 status / doctor 共用同一判定：只有 ENOENT / ENOTDIR 才算「文件已不存在」。
+        // 这里以前只认 ENOENT，ENOTDIR（路径中间那一层被同名文件占住）会被讲成「状态无法确认」，
+        // 同一条链在 status 里却写着「已不存在」；原因还会把英文 errno 原文塞进 --json 与 stderr
+        const presence = await sessionFilePresence(last.toRef.filePath);
+        const missing = presence.state === 'missing';
+        const tipError =
+          presence.state === 'unknown'
+            ? presence.reason
+            : presence.state === 'present' && !presence.isFile
+              ? '该路径现在不是普通文件'
+              : null;
         tips.set(c.id, {
           provider: last.toRef.provider,
           sessionId: last.toRef.sessionId,
