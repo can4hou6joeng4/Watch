@@ -50,8 +50,13 @@ export async function findLatestClaudeSession(
       if (!best || updatedAt > best.updatedAt) {
         best = { filePath, sessionId: entry.replace(/\.jsonl$/i, ''), updatedAt };
       }
-    } catch {
-      continue;
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      // 与 listClaudeSessions 同一规则：只有文件确实不在才跳过，读不出来要抛出
+      if (code === 'ENOENT' || code === 'ENOTDIR') continue;
+      throw new Error(
+        `无法读取 Claude 会话文件状态 ${filePath}：${error instanceof Error ? error.message : String(error)}`,
+      );
     }
   }
   if (!best) return null;
@@ -178,8 +183,14 @@ export async function listClaudeSessions(
         ref: { provider: 'claude', sessionId: entry.replace(/\.jsonl$/i, ''), filePath, cwd },
         updatedAt: st.mtimeMs,
       });
-    } catch {
-      continue;
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      // 列目录到取状态之间被删掉算正常；其余读不出来（EACCES 等）不能静默跳过——
+      // 整个目录都 stat 不出来时会被读成「这个 cwd 没聊过」
+      if (code === 'ENOENT' || code === 'ENOTDIR') continue;
+      throw new Error(
+        `无法读取 Claude 会话文件状态 ${filePath}：${error instanceof Error ? error.message : String(error)}`,
+      );
     }
   }
   items.sort((a, b) => b.updatedAt - a.updatedAt);
