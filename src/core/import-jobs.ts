@@ -215,12 +215,29 @@ export class ImportJobs {
   }
 
   async attempted(id: string): Promise<boolean> {
+    const file = path.join(this.dir(id), 'started.json');
     try {
-      await lstat(path.join(this.dir(id), 'started.json'));
+      await lstat(file);
       return true;
     } catch (error) {
+      // 只有 ENOENT 是「还没 claim 过」；ENOTDIR（id 那层被同名文件占住）等读不出来要翻成中文，
+      // 否则 status / doctor 只会拿到一句裸 errno，看不出该删哪个文件
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false;
-      throw error;
+      throw new Error(describeReadError(error, file));
+    }
+  }
+
+  /**
+   * 列执行日志根目录下的条目。只有 ENOENT（还没导入过）是空的；
+   * ENOTDIR / EACCES 等读不出来要翻成中文再抛——doctor / status 会把这句话直接显示给用户，
+   * 以前抛的是裸 `ENOTDIR: not a directory, scandir '…'`，看不出是哪个路径被什么占住了。
+   */
+  private async listJournalIds(): Promise<string[]> {
+    try {
+      return await readdir(this.root);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return [];
+      throw new Error(describeReadError(error, this.root));
     }
   }
 
@@ -240,10 +257,7 @@ export class ImportJobs {
     items: { id: string; route: string; status: ImportJournalStatus }[];
     skipped: { id: string; reason: string }[];
   }> {
-    const ids = await readdir(this.root).catch((error: NodeJS.ErrnoException) => {
-      if (error.code === 'ENOENT') return [] as string[];
-      throw error;
-    });
+    const ids = await this.listJournalIds();
     const items: { id: string; route: string; status: ImportJournalStatus }[] = [];
     const skipped: { id: string; reason: string }[] = [];
     for (const id of ids) {
@@ -297,10 +311,7 @@ export class ImportJobs {
     hits: { id: string; outcome: ImportOutcome; sameContent: boolean }[];
     skipped: { id: string; reason: string }[];
   }> {
-    const ids = await readdir(this.root).catch((error: NodeJS.ErrnoException) => {
-      if (error.code === 'ENOENT') return [] as string[];
-      throw error;
-    });
+    const ids = await this.listJournalIds();
     const hits: { id: string; outcome: ImportOutcome; sameContent: boolean }[] = [];
     const skipped: { id: string; reason: string }[] = [];
     for (const id of ids) {
