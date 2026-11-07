@@ -11,7 +11,18 @@ export async function cwdProblem(cwd: string): Promise<string | null> {
       return `--cwd 指向的不是目录：${cwd}；会话与链都按路径精确匹配，结果不代表任何真实项目`;
     }
     return null;
-  } catch {
-    return `--cwd 目录不存在或无法访问：${cwd}；各 provider 按原生记录的路径字符串精确比较，路径不对会全部显示 0`;
+  } catch (error) {
+    // 只有 ENOENT / ENOTDIR 才能说「不存在」：EACCES 等读不出来时把原因写清楚，
+    // 否则权限问题会被讲成路径写错，用户会去改 --cwd 而不是修权限
+    const code = (error as NodeJS.ErrnoException).code;
+    const tail = '各 provider 按原生记录的路径字符串精确比较，路径不对会全部显示 0';
+    if (code === 'ENOENT' || code === 'ENOTDIR') {
+      return `--cwd 目录不存在：${cwd}；${tail}`;
+    }
+    if (code === 'EACCES' || code === 'EPERM') {
+      return `--cwd 目录无权访问：${cwd}（权限问题，不是路径写错）；${tail}`;
+    }
+    const reason = code ?? (error instanceof Error ? error.message : String(error));
+    return `--cwd 目录无法访问：${cwd}（${reason}）；${tail}`;
   }
 }

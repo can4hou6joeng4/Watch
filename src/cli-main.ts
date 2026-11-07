@@ -761,20 +761,24 @@ async function cmdDoctor(cwd: string, json: boolean): Promise<void> {
       }
     }
     if (report.store.available) {
-      const broken = report.store.brokenTips.length;
+      const broken = report.store.brokenTips.filter((b) => b.missing).length;
+      const unreadable = report.store.brokenTips.length - broken;
       const drifted = report.store.driftedPairs.length;
       console.log(
-        `本地库: 可用，本目录 ${report.store.chains} 条链（${report.store.activeChains} 条活跃${broken ? `，${broken} 条链尾缺失` : ''}${drifted ? `，${drifted} 条链尾内容落后于来源` : ''}）`,
+        `本地库: 可用，本目录 ${report.store.chains} 条链（${report.store.activeChains} 条活跃${broken ? `，${broken} 条链尾缺失` : ''}${unreadable ? `，${unreadable} 条链尾状态无法确认` : ''}${drifted ? `，${drifted} 条链尾内容落后于来源` : ''}）`,
       );
       for (const d of report.store.driftedPairs) {
         console.log(
           `  链「${d.chainName}」: ${d.from.provider}:${d.from.sessionId} → ${d.to.provider}:${d.to.sessionId}，缺 ${d.missingTurns}/${d.sourceTurns} 条`,
         );
       }
-      // 摘要行只报个数；缺的是哪条链尾必须直接给 provider:sessionId，否则照「可先 adopt」也无法定位
+      // 摘要行只报个数；缺的是哪条链尾必须直接给 provider:sessionId，否则照「可先 adopt」也无法定位。
+      // 读不出来 ≠ 已删除：EACCES 等状态下让人 adopt 等于白换一次绑定
       for (const b of report.store.brokenTips) {
         console.log(
-          `  链「${b.chainName}」: ${b.provider}:${b.sessionId} 链尾文件已不存在（${b.filePath}），可先 adopt 该 provider 的新会话`,
+          b.missing
+            ? `  链「${b.chainName}」: ${b.provider}:${b.sessionId} 链尾文件已不存在（${b.filePath}），可先 adopt 该 provider 的新会话`
+            : `  链「${b.chainName}」: ${b.provider}:${b.sessionId} 链尾文件状态无法确认（${b.filePath}，${b.error}）；先确认文件是否还在，再决定是否需要 adopt`,
         );
       }
     } else {

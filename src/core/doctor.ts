@@ -18,6 +18,8 @@ export type BrokenTip = {
   sessionId: string;
   filePath: string;
   error: string;
+  /** true = 文件确认不在（ENOENT / ENOTDIR）；false = 读不出来，无法确认是否还在 */
+  missing: boolean;
 };
 
 /** 报告来源：贴到 issue 里要能定位「哪一版、什么环境、看的是哪个库」 */
@@ -97,12 +99,23 @@ export type DoctorDeps = {
   environment?: DoctorEnvironment;
 };
 
-async function exists(filePath: string): Promise<boolean> {
+type PathPresence =
+  | { state: 'present' }
+  | { state: 'missing'; code: string }
+  | { state: 'unknown'; reason: string };
+
+/**
+ * 只有 ENOENT / ENOTDIR 才算「文件不在」。EACCES / EIO 等读不出来时不能说成已删除，
+ * 否则权限问题会被讲成「下次切换会失败，先 adopt」，把人引去白换一次绑定。
+ */
+async function pathPresence(filePath: string): Promise<PathPresence> {
   try {
     await stat(filePath);
-    return true;
-  } catch {
-    return false;
+    return { state: 'present' };
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === 'ENOENT' || code === 'ENOTDIR') return { state: 'missing', code };
+    return { state: 'unknown', reason: error instanceof Error ? error.message : String(error) };
   }
 }
 
@@ -183,21 +196,28 @@ export async function doctorReport(cwd: string, deps: DoctorDeps): Promise<Docto
           continue;
         }
         if (!tip) continue;
-        try {
-          await stat(tip.filePath);
-        } catch (error) {
-          const message = error instanceof Error ? error.message : String(error);
+        const tipPresence = await pathPresence(tip.filePath);
+        if (tipPresence.state !== 'present') {
+          const missing = tipPresence.state === 'missing';
+          const error = missing ? tipPresence.code : tipPresence.reason;
           brokenTips.push({
             chainId: chain.id,
             chainName: chain.name,
             provider: tip.provider,
             sessionId: tip.sessionId,
             filePath: tip.filePath,
-            error: message,
+            error,
+            missing,
           });
-          warnings.push(
-            `链「${chain.name}」的链尾会话文件已不存在：${tip.filePath}（${tip.provider}）；下次切换会失败，可先 adopt 该 provider 的新会话`,
-          );
+          if (missing) {
+            warnings.push(
+              `链「${chain.name}」的链尾会话文件已不存在：${tip.filePath}（${tip.provider}）；下次切换会失败，可先 adopt 该 provider 的新会话`,
+            );
+          } else {
+            warnings.push(
+              `链「${chain.name}」的链尾会话文件状态无法确认：${tip.filePath}（${tip.provider}）；读不出来（${error}），可能只是权限或路径问题，先确认再决定是否 adopt`,
+            );
+          }
         }
       }
       // 内容对账：链尾文件还在，不代表它也还在内容上承接来源（手动改过、客户端截断、resume 重写都会让两者漂移）
@@ -217,10 +237,25 @@ export async function doctorReport(cwd: string, deps: DoctorDeps): Promise<Docto
         const fromAdapter = adapterById.get(from.provider);
         const toAdapter = adapterById.get(to.provider);
         if (!fromAdapter?.parse || !toAdapter?.parse) continue;
-        // 文件缺失已有 brokenTips / 专门警告，别再让 parse 抛 ENOENT 重复报一次
-        if (!(await exists(to.filePath))) continue;
-        if (!(await exists(from.filePath))) {
+        // 文件确认不在已有 brokenTips / 专门警告，别再让 parse 抛 ENOENT 重复报一次；
+        // 但「读不出来」要单独说，`continue` 静默跳过会被当成「对账通过」
+        const toPresence = await pathPresence(to.filePath);
+        if (toPresence.state === 'missing') continue;
+        if (toPresence.state === 'unknown') {
+          warnings.push(
+            `链「${chain.name}」的链尾会话文件状态无法确认：${to.filePath}（${to.provider}）；读不出来（${toPresence.reason}），本次未做内容对账`,
+          );
+          continue;
+        }
+        const fromPresence = await pathPresence(from.filePath);
+        if (fromPresence.state === 'missing') {
           warnings.push(`链「${chain.name}」的来源会话文件已不存在：${from.filePath}（${from.provider}）；链尾仍在，但无法再做内容对账`);
+          continue;
+        }
+        if (fromPresence.state === 'unknown') {
+          warnings.push(
+            `链「${chain.name}」的来源会话文件状态无法确认：${from.filePath}（${from.provider}）；读不出来（${fromPresence.reason}），本次未做内容对账`,
+          );
           continue;
         }
         // parse 对坏行一律跳过：两边都坏时 diffTurns 可能「看起来对齐」，实际上内容已经丢了，
