@@ -1251,7 +1251,9 @@ async function main(): Promise<void> {
     return;
   }
   if (cmd === 'search') {
-    const q = [target, ...rest].filter(Boolean).join(' ');
+    // 必须先 trim：全是空格的查询词 `filter(Boolean)` 会放行，store 那边再 trim 成空串直接返回零命中，
+    // 文本模式于是打「无结果」、--json 带 ok:true——看着像「搜过了没有」，其实一次都没查
+    const q = [target, ...rest].filter(Boolean).join(' ').trim();
     if (!q) usage('search 需要查询词；例：watch search 迁移');
     await cmdSearch(cwd, json, q);
     return;
