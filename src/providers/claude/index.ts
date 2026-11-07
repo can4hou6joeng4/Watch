@@ -55,14 +55,26 @@ export async function findLatestClaudeSession(
   };
 }
 
-/** 读 jsonl 前若干行里 user 消息携带的 cwd（目录名编码不可逆，cwd 只能从文件内容拿） */
-export async function claudeSessionCwd(filePath: string): Promise<string | null> {
+/** 读 jsonl 前若干行里 user 消息携带的 cwd（目录名编码不可逆，cwd 只能从文件内容拿）。
+ * `error` 区分「文件读不出来」与「内容里就没有 cwd」——反查时前者不能说成「会话不存在」 */
+export async function claudeSessionCwdDetail(
+  filePath: string,
+): Promise<{ cwd: string | null; error?: string }> {
   let raw: string;
   try {
     raw = await readFile(filePath, 'utf8');
-  } catch {
-    return null;
+  } catch (error) {
+    return { cwd: null, error: error instanceof Error ? error.message : String(error) };
   }
+  const cwd = cwdFromClaudeRaw(raw);
+  return cwd ? { cwd } : { cwd: null, error: '前 60 行里没有 cwd 字段' };
+}
+
+export async function claudeSessionCwd(filePath: string): Promise<string | null> {
+  return (await claudeSessionCwdDetail(filePath)).cwd;
+}
+
+function cwdFromClaudeRaw(raw: string): string | null {
   for (const line of raw.split('\n').slice(0, 60)) {
     if (!line.trim()) continue;
     let rec: Record<string, unknown>;
@@ -93,20 +105,40 @@ export async function findClaudeSessionById(
   let dirs: string[];
   try {
     dirs = await readdir(root);
-  } catch {
-    return null;
+  } catch (error) {
+    // 扫不了根目录时不能返回 null（= 没有这个会话）：原因要交给 resolveById 的 diagnostics
+    throw new Error(
+      `无法列出 Claude 会话目录 ${root}：${error instanceof Error ? error.message : String(error)}`,
+    );
   }
+  const unreadable: string[] = [];
+  const foundButUnreadable: string[] = [];
   for (const dir of dirs) {
     const filePath = path.join(root, dir, `${sessionId}.jsonl`);
+    let st;
     try {
-      const st = await stat(filePath);
-      if (!st.isFile()) continue;
-      const cwd = await claudeSessionCwd(filePath);
-      if (!cwd) continue;
-      return { ref: { provider: 'claude', sessionId, filePath, cwd }, updatedAt: st.mtimeMs };
-    } catch {
+      st = await stat(filePath);
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      // ENOENT / ENOTDIR：这个 projectDir 里没有该会话，正常跳过；其余是读不出来，要记下来
+      if (code !== 'ENOENT' && code !== 'ENOTDIR') {
+        unreadable.push(`${filePath}（${error instanceof Error ? error.message : String(error)}）`);
+      }
       continue;
     }
+    if (!st.isFile()) continue;
+    const { cwd, error } = await claudeSessionCwdDetail(filePath);
+    if (cwd) return { ref: { provider: 'claude', sessionId, filePath, cwd }, updatedAt: st.mtimeMs };
+    // 文件确实在，只是读不出 cwd：继续找同名副本，但结论不能是「会话不存在」
+    foundButUnreadable.push(`${filePath}（${error ?? '原因未知'}）`);
+  }
+  if (foundButUnreadable.length) {
+    throw new Error(`找到会话文件 ${foundButUnreadable[0]}，但读不出它的工作目录，无法确认会话 ${sessionId}`);
+  }
+  if (unreadable.length) {
+    throw new Error(
+      `在 ${root} 下没找到会话 ${sessionId}，但有 ${unreadable.length} 个位置读不出来，无法确认它是否存在：${unreadable[0]}`,
+    );
   }
   return null;
 }
