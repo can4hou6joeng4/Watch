@@ -649,7 +649,14 @@ async function cmdRecent(cwd: string, json: boolean, limit: number = 8, cwdGiven
         const key = `${loc.provider}:${loc.sessionId}`;
         try {
           const st = await stat(loc.filePath);
-          if (!st.isFile()) continue;
+          if (!st.isFile()) {
+            // 路径还在，但被同名目录 / 设备文件占住：既不是「已删除」（原生扫描也列不出来），
+            // 也不是能用的会话。静默跳过会让它从「近期」里凭空消失
+            warnings.push(
+              `${loc.provider} 会话 ${loc.sessionId} 的映射记录指向的路径现在不是普通文件（被同名目录或设备文件占住了）：${loc.filePath}；已跳过映射命中，先恢复该路径再重试`,
+            );
+            continue;
+          }
           merged.set(key, {
             provider: loc.provider,
             sessionId: loc.sessionId,
