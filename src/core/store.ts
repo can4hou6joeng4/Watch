@@ -3,6 +3,7 @@ import { chmodSync, mkdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { homedir } from 'node:os';
 import { randomUUID } from 'node:crypto';
+import { escapeControlChars } from './display.js';
 import { normalizePath } from './platform.js';
 import { probeSqliteTables, readSqliteFileHead } from './sqlite-file.js';
 import type { ProcessEvent, SessionRef, UnifiedTurn } from './types.js';
@@ -786,7 +787,7 @@ export class Store {
       }[])[0];
     if (hit && hit.cwd !== normalized) {
       const status = hit.status === 'archived' ? '（已归档）' : '';
-      return `${base}——链「${hit.name}」${status}属于另一个目录: ${hit.cwd}；请用 --cwd ${hit.cwd}`;
+      return `${base}——链「${escapeControlChars(hit.name)}」${status}属于另一个目录: ${hit.cwd}；请用 --cwd ${hit.cwd}`;
     }
     // 本目录里一条链都没有：没有可列的清单，也不该暗示「你有别的链可选」，
     // 但「没有链」本身是另一种错——不是名字打错，而是还没有可用的链，要给建第一条的办法。
@@ -798,7 +799,8 @@ export class Store {
       );
     }
     // listChains 按状态与最近使用时间排，文案里再按名字排一次，同一份状态每次说法一致
-    const names = local.map((c) => c.name).sort((a, b) => a.localeCompare(b));
+    // 名字要进终端：库里可能存着写入守卫上线前的坏名字，显示时转义（见 display.ts）
+    const names = local.map((c) => escapeControlChars(c.name)).sort((a, b) => a.localeCompare(b));
     let message = `${base}；本目录的链: ${names.join(' / ')}`;
     // 链名精确匹配、大小写敏感：`Alpha` 不会落到 `alpha`，不点出来用户只会反复重打同一个词
     const cased = names.find((n) => n !== chainId && n.toLowerCase() === chainId.toLowerCase());
@@ -839,7 +841,7 @@ export class Store {
       // 链尾只是补充说明，读不出来不影响「这是链不是会话」这条结论
     }
     const where = cwd && this.normCwd(cwd) !== row.cwd ? `（它属于目录 ${row.cwd}，不是你这次的 --cwd）` : '';
-    return `这个 id 是链「${row.name}」（${status}）的 id，不是会话 id${where}${tip}；要打开会话请用 watch status --cwd <目录> 或 watch chain list 里链尾的实际会话 id`;
+    return `这个 id 是链「${escapeControlChars(row.name)}」（${status}）的 id，不是会话 id${where}${tip}；要打开会话请用 watch status --cwd <目录> 或 watch chain list 里链尾的实际会话 id`;
   }
 
   listChains(cwd: string): Chain[] {
@@ -920,8 +922,8 @@ export class Store {
         ? `本目录只统计活跃链（另有 ${archived.n} 条已归档的链，但归档不参与默认选择）`
         : '本目录还没有别的链';
       throw new Error(
-        `不能归档「${chain.name}」：它是本目录唯一的活跃链，归档后 status / switch 就没有默认可用的链了；` +
-          `${scope}。可先 watch chain new <新名字> 建一条，或 watch chain use ${chain.name} 确认它在用`,
+        `不能归档「${escapeControlChars(chain.name)}」：它是本目录唯一的活跃链，归档后 status / switch 就没有默认可用的链了；` +
+          `${scope}。可先 watch chain new <新名字> 建一条，或 watch chain use ${escapeControlChars(chain.name)} 确认它在用`,
       );
     }
     this.db.prepare("UPDATE chains SET status='archived' WHERE id=?").run(id);
@@ -961,7 +963,8 @@ export class Store {
     if (!chainId) return null;
     const found = this.findActiveChain(cwd, chainId);
     if (!found) throw new Error(this.missingChainMessage(cwd, chainId));
-    return found.status === 'archived' ? found.name : null;
+    // 返回的名字会拼进用户面错误（`链已归档: …`），转义后交给调用方
+    return found.status === 'archived' ? escapeControlChars(found.name) : null;
   }
 
   /** 纯 CLI 场景：选定或创建链，挂 switch_events */
@@ -969,7 +972,8 @@ export class Store {
     const found = this.findActiveChain(cwd, chainId);
     if (found) {
       if (found.status === 'archived') {
-        throw new Error(`链已归档: ${found.name}；可 watch chain use ${found.name} 恢复成当前链`);
+        const shown = escapeControlChars(found.name);
+        throw new Error(`链已归档: ${shown}；可 watch chain use ${shown} 恢复成当前链`);
       }
       this.touchChain(found.id);
       return found.id;
@@ -1189,10 +1193,10 @@ function uniqueChainName(error: unknown, name: string, findHolder?: () => Chain 
   if (holder.status === 'archived') {
     return new Error(
       `${base}——这条链已归档（不再参与 status / switch 的默认选择），但归档只表示「不是当前链」，` +
-        `名字仍被占用；可用 watch chain use ${holder.name} 把它恢复成当前链，或换一个名字`,
+        `名字仍被占用；可用 watch chain use ${escapeControlChars(holder.name)} 把它恢复成当前链，或换一个名字`,
     );
   }
   return new Error(
-    `${base}——这条链正在使用中；可用 watch chain rename ${holder.name} <新名字> 先给它改名，或换一个名字`,
+    `${base}——这条链正在使用中；可用 watch chain rename ${escapeControlChars(holder.name)} <新名字> 先给它改名，或换一个名字`,
   );
 }

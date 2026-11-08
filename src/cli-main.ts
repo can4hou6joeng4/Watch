@@ -14,6 +14,7 @@ import { ImportJobs } from './core/import-jobs.js';
 import { officialImportJournalRoot } from './providers/codex/official-import.js';
 import { doctorReport } from './core/doctor.js';
 import { cwdProblem, describeCwdProblem, describeNewSessionCwd, inspectCwd } from './core/cwd.js';
+import { escapeControlChars, hasControlChars } from './core/display.js';
 import { describeSessionReadFailureReason, sessionFilePresence } from './core/read-text.js';
 import { describeWriteFailureReason } from './core/atomic.js';
 import { describeSpawnFailure } from './core/platform.js';
@@ -272,7 +273,8 @@ async function cmdStatus(cwd: string, json: boolean, chain?: string): Promise<vo
   }
   const { tips, chainTip, chainTipUnusable, history, chain: current, warnings } = result;
   for (const warning of warnings) console.error(`警告: ${warning}`);
-  if (current) console.log(`链: ${current.name}${current.status === 'archived' ? ' [归档]' : ''}  (${current.id})`);
+  // 链名是用户输入、库里可能留着写入守卫上线前的坏名字：进终端前转义，别把 ESC / 换行打出去
+  if (current) console.log(`链: ${escapeControlChars(current.name)}${current.status === 'archived' ? ' [归档]' : ''}  (${current.id})`);
   // 同一目录可能有多条链：只显示当前这条会让文本用户以为没有别的（--json 的 chains 一直是全量）
   const otherChains = result.chains.filter((c) => c.id !== current?.id);
   if (otherChains.length) {
@@ -636,7 +638,7 @@ async function cmdSessions(cwd: string, json: boolean, chain?: string): Promise<
         // findActiveChain 按名 / id 查时不看 status：归档链照样能过滤，
         // 但它已不是本目录的当前链，不说明会被当成「现在还在用这条」
         if (chainRow.status === 'archived') {
-          warnings.push(`链 ${chainRow.name} 已归档（不再是本目录的当前链），下面按它的绑定过滤`);
+          warnings.push(`链 ${escapeControlChars(chainRow.name)} 已归档（不再是本目录的当前链），下面按它的绑定过滤`);
         } else {
           // 活跃但非当前链：列出来的会话看着就像「现在这条链的使用情况」
           const notCurrent = notCurrentChainWarning(chainRow, store.findActiveChain(cwd));
@@ -644,7 +646,7 @@ async function cmdSessions(cwd: string, json: boolean, chain?: string): Promise<
         }
         // 链存在但一条绑定都没有：过滤后必然是空列表，不说原因会被当成「目录里没有会话」
         if (bound.size === 0) {
-          warnings.push(`链 ${chainRow.name} 还没有绑定会话：${emptyChainBindHint()}`);
+          warnings.push(`链 ${escapeControlChars(chainRow.name)} 还没有绑定会话：${emptyChainBindHint()}`);
         }
       } else if (chain) {
         // 跨目录的链在这里同样是「找不到」，但指名它在哪个目录，用户才知道该改 --cwd
@@ -698,23 +700,23 @@ async function cmdSessions(cwd: string, json: boolean, chain?: string): Promise<
             }
             if (missingFiles.length) {
               warnings.push(
-                `链 ${chainRow.name} 绑定的 ${a.id} 会话 ${missingFiles.join('、')} 文件已不存在，本次未列出；下次切换会失败，${rebindHint(a.id)}` +
+                `链 ${escapeControlChars(chainRow.name)} 绑定的 ${a.id} 会话 ${missingFiles.join('、')} 文件已不存在，本次未列出；下次切换会失败，${rebindHint(a.id)}` +
                   (missingFiles.length > 1 ? `（另有 ${missingFiles.length - 1} 个同样缺失，见上）` : ''),
               );
             }
             if (unreadableFiles.length) {
               warnings.push(
-                `链 ${chainRow.name} 绑定的 ${a.id} 会话 ${unreadableFiles.map((u) => u.id).join('、')} 文件状态无法确认，本次未列出；首个原因：${unreadableFiles[0]!.reason}；先确认文件是否还在，再决定是否需要重新 adopt`,
+                `链 ${escapeControlChars(chainRow.name)} 绑定的 ${a.id} 会话 ${unreadableFiles.map((u) => u.id).join('、')} 文件状态无法确认，本次未列出；首个原因：${unreadableFiles[0]!.reason}；先确认文件是否还在，再决定是否需要重新 adopt`,
               );
             }
             if (occupiedFiles.length) {
               warnings.push(
-                `链 ${chainRow.name} 绑定的 ${a.id} 会话 ${occupiedFiles.join('、')} 的路径现在不是普通文件（被同名目录或设备文件占住了），本次未列出；先恢复该路径，再决定是否需要重新 adopt`,
+                `链 ${escapeControlChars(chainRow.name)} 绑定的 ${a.id} 会话 ${occupiedFiles.join('、')} 的路径现在不是普通文件（被同名目录或设备文件占住了），本次未列出；先恢复该路径，再决定是否需要重新 adopt`,
               );
             }
             if (tooOld.length) {
               warnings.push(
-                `链 ${chainRow.name} 绑定的 ${a.id} 会话 ${tooOld.join('、')} 不在最近 ${sessions.length} 个里${capped ? '（已达列表上限）' : '（可能属于另一个目录）'}，本次未列出；可用 watch doctor 或原生 CLI 确认该会话`,
+                `链 ${escapeControlChars(chainRow.name)} 绑定的 ${a.id} 会话 ${tooOld.join('、')} 不在最近 ${sessions.length} 个里${capped ? '（已达列表上限）' : '（可能属于另一个目录）'}，本次未列出；可用 watch doctor 或原生 CLI 确认该会话`,
               );
             }
           }
@@ -946,7 +948,7 @@ async function cmdDoctor(cwd: string, json: boolean): Promise<void> {
       );
       for (const d of report.store.driftedPairs) {
         console.log(
-          `  链「${d.chainName}」: ${d.from.provider}:${d.from.sessionId} → ${d.to.provider}:${d.to.sessionId}，缺 ${d.missingTurns}/${d.sourceTurns} 条`,
+          `  链「${escapeControlChars(d.chainName)}」: ${d.from.provider}:${d.from.sessionId} → ${d.to.provider}:${d.to.sessionId}，缺 ${d.missingTurns}/${d.sourceTurns} 条`,
         );
       }
       // 摘要行只报个数；缺的是哪条链尾必须直接给 provider:sessionId，否则照「可先 watch switch」也无法定位。
@@ -954,8 +956,8 @@ async function cmdDoctor(cwd: string, json: boolean): Promise<void> {
       for (const b of report.store.brokenTips) {
         console.log(
           b.missing
-            ? `  链「${b.chainName}」: ${b.provider}:${b.sessionId} 链尾文件已不存在（${b.filePath}），${rebindHint(b.provider)}`
-            : `  链「${b.chainName}」: ${b.provider}:${b.sessionId} 链尾文件状态无法确认（${b.filePath}，${b.error}）；先确认文件是否还在，再决定是否需要 adopt`,
+            ? `  链「${escapeControlChars(b.chainName)}」: ${b.provider}:${b.sessionId} 链尾文件已不存在（${b.filePath}），${rebindHint(b.provider)}`
+            : `  链「${escapeControlChars(b.chainName)}」: ${b.provider}:${b.sessionId} 链尾文件状态无法确认（${b.filePath}，${b.error}）；先确认文件是否还在，再决定是否需要 adopt`,
         );
       }
     } else {
@@ -1148,6 +1150,18 @@ async function cmdChain(cwd: string, json: boolean, action?: string, a?: string,
     if (!action || action === 'list') {
       const chains = store.listChains(cwd);
       const warnings = cwdIssue ? [cwdIssue] : [];
+      // 写入守卫（`assertChainNameUsable()`）只拦得住新名字：库里可能留着它上线前建出的
+      // 坏名字。文本输出一律转义（`escapeControlChars`），但用户看到 `\u001B` 时得知道
+      // 那不是自己打的名字，也知道怎么改掉——不说就等于把名字悄悄改成了另一串字符。
+      const legacyBadNames = chains.filter((c) => hasControlChars(c.name));
+      if (legacyBadNames.length) {
+        warnings.push(
+          `有 ${legacyBadNames.length} 条链的名字里含控制字符（换行 / 制表符 / ESC 等），文本输出里已转义成 \\n、\\u001B 这类可见形式；` +
+            `它们是写入校验上线前留下的，不会自动改：` +
+            `${legacyBadNames.slice(0, 3).map((c) => `${c.id}`).join('、')}${legacyBadNames.length > 3 ? ' 等' : ''}；` +
+            `可用 watch chain rename <链 id> <新名字> 改掉`,
+        );
+      }
       // 链尾 = 最后一条 switch_event 的 toRef。只给名字 + id 时看不出这条链停在哪一家，
       // 也看不出链尾文件是否还在（在的话下次 switch 才接得上，不在就是 doctor 的 brokenTips）
       const tips = new Map<
@@ -1159,7 +1173,7 @@ async function cmdChain(cwd: string, json: boolean, action?: string, a?: string,
         try {
           last = store.listSwitchEvents(c.id).at(-1);
         } catch (error) {
-          warnings.push(`链「${c.name}」的切换记录读不出来：${describeStoreErrorReason(error)}`);
+          warnings.push(`链「${escapeControlChars(c.name)}」的切换记录读不出来：${describeStoreErrorReason(error)}`);
           continue;
         }
         if (!last?.toRef) continue;
@@ -1183,12 +1197,12 @@ async function cmdChain(cwd: string, json: boolean, action?: string, a?: string,
         });
         if (missing && c.status === 'active') {
           warnings.push(
-            `链「${c.name}」的链尾会话文件已不存在（${last.toRef.provider}:${last.toRef.sessionId}）：下次切换会失败，${rebindHint(last.toRef.provider)}`,
+            `链「${escapeControlChars(c.name)}」的链尾会话文件已不存在（${last.toRef.provider}:${last.toRef.sessionId}）：下次切换会失败，${rebindHint(last.toRef.provider)}`,
           );
         } else if (tipError && c.status === 'active') {
           // 读不出来 ≠ 文件没了：不标 missing，也不能当成「一切正常」而不出声
           warnings.push(
-            `链「${c.name}」的链尾会话文件无法确认是否还在（${last.toRef.provider}:${last.toRef.sessionId}）：${tipError}`,
+            `链「${escapeControlChars(c.name)}」的链尾会话文件无法确认是否还在（${last.toRef.provider}:${last.toRef.sessionId}）：${tipError}`,
           );
         }
       }
@@ -1224,7 +1238,7 @@ async function cmdChain(cwd: string, json: boolean, action?: string, a?: string,
         const tipText = tip
           ? `  → ${tip.provider}:${tip.sessionId}${tip.missing ? '（链尾文件已不存在）' : tip.error ? '（链尾文件状态无法确认）' : ''}`
           : '';
-        console.log(`  ${c.name}${mark}${here}  ${c.id}  lastUsed=${fmtTime(c.lastUsedAt)}${tipText}`);
+        console.log(`  ${escapeControlChars(c.name)}${mark}${here}  ${c.id}  lastUsed=${fmtTime(c.lastUsedAt)}${tipText}`);
       }
       return;
     }
@@ -1256,7 +1270,7 @@ async function cmdChain(cwd: string, json: boolean, action?: string, a?: string,
         );
       } else {
         if (cwdIssue) console.error(`警告: ${cwdIssue}`);
-        console.log(`已创建链: ${chain.name}  (${chain.id})`);
+        console.log(`已创建链: ${escapeControlChars(chain.name)}  (${chain.id})`);
         // 与 `chain rename` / `chain archive` 的提示同一位置：跟在结果下一行，不是降级警告
         if (switchNote) console.log(`  ${switchNote}`);
       }
@@ -1270,12 +1284,14 @@ async function cmdChain(cwd: string, json: boolean, action?: string, a?: string,
       // 改成同一个名字时 UPDATE 写的是同一个值，什么都没变，但以前照样报「已重命名」，
       // 输出与真的改过名一模一样（脚本无法区分）。打这条命令的动机常常是「先把它改成我想要的名字」，
       // 名字本来就对时，明说「没有改动」才让人敢确认结论
+      // 比较用的是库里的原值，只有显示才转义：坏名字本来也抄不进参数
       if (found.name === b.trim()) {
+        const shown = escapeControlChars(found.name);
         const note =
-          `链「${found.name}」本来就叫这个名字，本次没有做任何改动` +
-          (wasArchived ? `；它是归档状态，可用 watch chain use ${found.name} 恢复成当前链` : '');
+          `链「${shown}」本来就叫这个名字，本次没有做任何改动` +
+          (wasArchived ? `；它是归档状态，可用 watch chain use ${shown} 恢复成当前链` : '');
         if (json) console.log(JSON.stringify({ ok: true, unchanged: true, chain: found, warnings: [note] }));
-        else console.log(`未改动: ${found.name}  (${found.id})——${note}`);
+        else console.log(`未改动: ${shown}  (${found.id})——${note}`);
         return;
       }
       const chain = store.renameChain(found.id, b);
@@ -1283,11 +1299,11 @@ async function cmdChain(cwd: string, json: boolean, action?: string, a?: string,
       // 只报「已重命名」会让人以为改名之后就切过去了（改名的动机常常就是这个），
       // 接下来发现 `switch` 仍然忽略它，只会以为改名没生效。
       const renameHint = wasArchived
-        ? `这条链是归档状态，改名不会让它变成当前链；可用 watch chain use ${chain.name} 恢复`
+        ? `这条链是归档状态，改名不会让它变成当前链；可用 watch chain use ${escapeControlChars(chain.name)} 恢复`
         : null;
       if (json) console.log(JSON.stringify({ ok: true, chain, ...(renameHint ? { warnings: [renameHint] } : {}) }));
       else {
-        console.log(`已重命名: ${chain.name}  (${chain.id})`);
+        console.log(`已重命名: ${escapeControlChars(chain.name)}  (${chain.id})`);
         if (renameHint) console.log(`  ${renameHint}`);
       }
       return;
@@ -1299,9 +1315,10 @@ async function cmdChain(cwd: string, json: boolean, action?: string, a?: string,
       // 已是归档状态时 `archiveChain()` 直接 return，什么都没做。
       // 照旧打「已归档」会让用户以为刚刚归档成功，看不出本次是空操作。
       if (found.status === 'archived') {
-        const note = `链「${found.name}」本来就是归档状态，本次没有做任何改动；可用 watch chain use ${found.name} 把它恢复成当前链`;
+        const shown = escapeControlChars(found.name);
+        const note = `链「${shown}」本来就是归档状态，本次没有做任何改动；可用 watch chain use ${shown} 把它恢复成当前链`;
         if (json) console.log(JSON.stringify({ ok: true, unchanged: true, id: found.id, warnings: [note] }));
-        else console.log(`已归档: ${found.name}（${note}）`);
+        else console.log(`已归档: ${shown}（${note}）`);
         return;
       }
       // 归档**当前链**时，当前链会静默换成另一条活跃链：之后所有不带 `--chain` 的
@@ -1316,8 +1333,8 @@ async function cmdChain(cwd: string, json: boolean, action?: string, a?: string,
       const nextCurrent = archivingCurrent ? store.findActiveChain(cwd) : null;
       const currentNote = archivingCurrent
         ? nextCurrent
-          ? `当前链已从「${found.name}」换成「${nextCurrent.name}」；之后不带 --chain 的 status / switch / new / adopt 都作用在「${nextCurrent.name}」上（要按名字指定这条链用 watch chain use ${nextCurrent.name}）`
-          : `「${found.name}」原本是本目录的当前链，归档后已经没有其它活跃链了；status / switch / new / adopt 需要先用 watch chain new <新名字> 建一条，或 watch chain use ${found.name} 恢复`
+          ? `当前链已从「${escapeControlChars(found.name)}」换成「${escapeControlChars(nextCurrent.name)}」；之后不带 --chain 的 status / switch / new / adopt 都作用在「${escapeControlChars(nextCurrent.name)}」上（要按名字指定这条链用 watch chain use ${escapeControlChars(nextCurrent.name)}）`
+          : `「${escapeControlChars(found.name)}」原本是本目录的当前链，归档后已经没有其它活跃链了；status / switch / new / adopt 需要先用 watch chain new <新名字> 建一条，或 watch chain use ${escapeControlChars(found.name)} 恢复`
         : null;
       if (json) {
         console.log(
@@ -1329,7 +1346,7 @@ async function cmdChain(cwd: string, json: boolean, action?: string, a?: string,
           }),
         );
       } else {
-        console.log(`已归档: ${found.name}（可用 watch chain use ${found.name} 恢复）`);
+        console.log(`已归档: ${escapeControlChars(found.name)}（可用 watch chain use ${escapeControlChars(found.name)} 恢复）`);
         // 与 `chain rename` 对归档链的提示同一位置：跟在结果下一行，不是降级警告
         if (currentNote) console.log(`  ${currentNote}`);
       }
@@ -1345,12 +1362,12 @@ async function cmdChain(cwd: string, json: boolean, action?: string, a?: string,
         store.restoreChain(found.id);
         const restored = store.findActiveChain(cwd, found.id) ?? { ...found, status: 'active' };
         if (json) console.log(JSON.stringify({ ok: true, restored: true, chain: restored }));
-        else console.log(`已恢复并设为当前链: ${restored.name}  (${restored.id})`);
+        else console.log(`已恢复并设为当前链: ${escapeControlChars(restored.name)}  (${restored.id})`);
         return;
       }
       store.touchChain(found.id);
       if (json) console.log(JSON.stringify({ ok: true, chain: { ...found, lastUsedAt: Date.now() } }));
-      else console.log(`当前链: ${found.name}  (${found.id})`);
+      else console.log(`当前链: ${escapeControlChars(found.name)}  (${found.id})`);
       return;
     }
     // 拼错的子命令（`chain lsit`）以前一律落到通用用法错误「参数不完整或不合法」，
@@ -1521,7 +1538,7 @@ async function cmdUsage(cwd: string, json: boolean, chain?: string): Promise<voi
       return;
     }
     if (result.chain) {
-      console.log(`链: ${result.chain.name}  (${result.chain.id})`);
+      console.log(`链: ${escapeControlChars(result.chain.name)}  (${result.chain.id})`);
     } else if (chain) {
       // 本地库不可用时 chainUsage 返回 chain:null——这时连「这条链是否存在」都没查成。
       // 单独印一行「链: keep」与 --json 的 chain:null 矛盾，用户会当成「链在、只是没有用量」

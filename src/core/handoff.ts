@@ -5,6 +5,7 @@ import type { Chain, Store, SwitchRecord } from './store.js';
 import { dedupeCallEvents, describeDanglingToolCalls, describeUnansweredTail, mergeTurns, shouldReplacePairedSession, unwrapUserQuery } from './rich.js';
 import { describeWriteFailureReason, type FileDigest } from './atomic.js';
 import { addFinding, type Finding } from './findings.js';
+import { escapeControlChars } from './display.js';
 import { countUnparsableJsonLines } from './jsonl.js';
 import { describePathReadFailureReason, describeReadFailureOrSelf, sessionFilePresence } from './read-text.js';
 import { noSessionHint, unknownProviderMessage } from '../providers/registry.js';
@@ -71,12 +72,14 @@ export function notCurrentChainWarning(chain: Chain, current: Chain | null): str
   if (chain.status !== 'active') return null; // 归档链有自己那句，不重复
   if (current && current.id === chain.id) return null;
   const currentLabel = current
-    ? `当前链是 ${current.name}`
+    ? `当前链是 ${escapeControlChars(current.name)}`
     : '本目录当前没有活跃链（现有链都已归档或还没建链）';
+  // 链名是用户输入、历史库里可能有控制字符，拼进终端文案前统一转义（见 display.ts）
+  const shown = escapeControlChars(chain.name);
   return (
-    `链 ${chain.name} 不是本目录的当前链（${currentLabel}）；` +
-    `不带 --chain 的 status / switch / new / adopt 都作用在当前链上，本次输出的只有 ${chain.name}——` +
-    `要切到它：watch chain use ${chain.name}`
+    `链 ${shown} 不是本目录的当前链（${currentLabel}）；` +
+    `不带 --chain 的 status / switch / new / adopt 都作用在当前链上，本次输出的只有 ${shown}——` +
+    `要切到它：watch chain use ${shown}`
   );
 }
 
@@ -144,10 +147,12 @@ export function currentChainShiftNote(
   next: Pick<Chain, 'id' | 'name'> | null,
 ): string | null {
   if (!previous || !next || previous.id === next.id) return null;
+  const from = escapeControlChars(previous.name);
+  const to = escapeControlChars(next.name);
   return (
-    `当前链已从「${previous.name}」换成「${next.name}」；` +
-    `之后不带 --chain 的 status / switch / new / adopt 都作用在「${next.name}」上` +
-    `（要回到原来那条用 watch chain use ${previous.name}）`
+    `当前链已从「${from}」换成「${to}」；` +
+    `之后不带 --chain 的 status / switch / new / adopt 都作用在「${to}」上` +
+    `（要回到原来那条用 watch chain use ${from}）`
   );
 }
 
@@ -501,7 +506,7 @@ export async function chainUsage(
   // 归档链照样给用量（历史记录有用），但要说清它已不是当前链：
   // `--json` 里虽有 status，文本模式只印名字，容易被当成「现在还在用这条」
   if (chain?.status === 'archived') {
-    warnings.push(`链 ${chain.name} 已归档（不再是本目录的当前链），下面的用量是历史记录`);
+    warnings.push(`链 ${escapeControlChars(chain.name)} 已归档（不再是本目录的当前链），下面的用量是历史记录`);
   } else if (chain && chainId) {
     // 活跃但非当前链：与「已归档」同一类误导，而且更隐蔽（状态栏里一点异常都没有）
     const notCurrent = notCurrentChainWarning(chain, store.findActiveChain(cwd));
@@ -672,7 +677,7 @@ export async function chainStatus(
       // 归档链照样能按名字 / id 查（findActiveChain 不看 status），但 status 文本模式只印链名：
       // 不说清就会被当成「现在还在用这条」，与 sessions --chain / usage 的同一句话对齐
       if (chain?.status === 'archived') {
-        warnings.push(`链 ${chain.name} 已归档（不再是本目录的当前链），下面显示的是它的历史记录`);
+        warnings.push(`链 ${escapeControlChars(chain.name)} 已归档（不再是本目录的当前链），下面显示的是它的历史记录`);
       } else if (chain && chainId) {
         // 活跃但非当前链：不及时说明，用户会把这份 status 当成「不带 --chain 也会作用在这条链上」
         const notCurrent = notCurrentChainWarning(chain, store.findActiveChain(cwd));
@@ -758,9 +763,8 @@ export async function handoff(
   // getOrCreateChainSession 报「链已归档」。这里提前拦住，否则空归档链会先撞下面的
   // 「未发现原生会话」，把「链已归档」讲成「目录里没东西」。
   if (chainRow?.status === 'archived') {
-    throw new Error(
-      `链已归档: ${chainRow.name}；可 watch chain use ${chainRow.name} 恢复，或省略 --chain 用当前链`,
-    );
+    const shown = escapeControlChars(chainRow.name);
+    throw new Error(`链已归档: ${shown}；可 watch chain use ${shown} 恢复，或省略 --chain 用当前链`);
   }
 
   // 链记录先读：下面「未发现原生会话」要先看一眼链尾是不是指向了一个已被删掉的文件，

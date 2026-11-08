@@ -9,6 +9,7 @@ import { diffTurns, rebindHint } from './handoff.js';
 import type { SessionRef } from './types.js';
 import { readWatchVersion } from './watch-version.js';
 import { cwdProblem } from './cwd.js';
+import { escapeControlChars } from './display.js';
 import { countUnparsableJsonLines } from './jsonl.js';
 import { describeSessionReadFailureReason, isFileSystemErrorCode } from './read-text.js';
 
@@ -201,7 +202,7 @@ export async function doctorReport(cwd: string, deps: DoctorDeps): Promise<Docto
         } catch (error) {
           // SQLite 的原文（`database is locked` / `no such table`）既不说是哪一类故障也不给下一步，
           // 与 handoff.ts / open.ts 的同类警告保持一致，统一翻成中文
-          warnings.push(`链「${chain.name}」的切换记录读取失败：${describeStoreErrorReason(error)}`);
+          warnings.push(`链「${escapeControlChars(chain.name)}」的切换记录读取失败：${describeStoreErrorReason(error)}`);
           continue;
         }
         if (!tip) continue;
@@ -220,11 +221,11 @@ export async function doctorReport(cwd: string, deps: DoctorDeps): Promise<Docto
           });
           if (missing) {
             warnings.push(
-              `链「${chain.name}」的链尾会话文件已不存在：${tip.filePath}（${tip.provider}）；下次切换会失败，${rebindHint(tip.provider)}`,
+              `链「${escapeControlChars(chain.name)}」的链尾会话文件已不存在：${tip.filePath}（${tip.provider}）；下次切换会失败，${rebindHint(tip.provider)}`,
             );
           } else {
             warnings.push(
-              `链「${chain.name}」的链尾会话文件状态无法确认：${tip.filePath}（${tip.provider}）；${error}；先确认它是否还在、是否是普通文件，再决定是否 adopt`,
+              `链「${escapeControlChars(chain.name)}」的链尾会话文件状态无法确认：${tip.filePath}（${tip.provider}）；${error}；先确认它是否还在、是否是普通文件，再决定是否 adopt`,
             );
           }
         }
@@ -252,18 +253,18 @@ export async function doctorReport(cwd: string, deps: DoctorDeps): Promise<Docto
         if (toPresence.state === 'missing') continue;
         if (toPresence.state === 'unknown') {
           warnings.push(
-            `链「${chain.name}」的链尾会话文件状态无法确认：${to.filePath}（${to.provider}）；读不出来（${toPresence.reason}），本次未做内容对账`,
+            `链「${escapeControlChars(chain.name)}」的链尾会话文件状态无法确认：${to.filePath}（${to.provider}）；读不出来（${toPresence.reason}），本次未做内容对账`,
           );
           continue;
         }
         const fromPresence = await pathPresence(from.filePath);
         if (fromPresence.state === 'missing') {
-          warnings.push(`链「${chain.name}」的来源会话文件已不存在：${from.filePath}（${from.provider}）；链尾仍在，但无法再做内容对账`);
+          warnings.push(`链「${escapeControlChars(chain.name)}」的来源会话文件已不存在：${from.filePath}（${from.provider}）；链尾仍在，但无法再做内容对账`);
           continue;
         }
         if (fromPresence.state === 'unknown') {
           warnings.push(
-            `链「${chain.name}」的来源会话文件状态无法确认：${from.filePath}（${from.provider}）；读不出来（${fromPresence.reason}），本次未做内容对账`,
+            `链「${escapeControlChars(chain.name)}」的来源会话文件状态无法确认：${from.filePath}（${from.provider}）；读不出来（${fromPresence.reason}），本次未做内容对账`,
           );
           continue;
         }
@@ -275,12 +276,12 @@ export async function doctorReport(cwd: string, deps: DoctorDeps): Promise<Docto
         ]);
         if (fromBad > 0) {
           warnings.push(
-            `链「${chain.name}」的来源会话 ${from.sessionId}（${from.provider}）有 ${fromBad} 行无法解析（截断或损坏）：切换时这些内容会被跳过`,
+            `链「${escapeControlChars(chain.name)}」的来源会话 ${from.sessionId}（${from.provider}）有 ${fromBad} 行无法解析（截断或损坏）：切换时这些内容会被跳过`,
           );
         }
         if (toBad > 0) {
           warnings.push(
-            `链「${chain.name}」的链尾会话 ${to.sessionId}（${to.provider}）有 ${toBad} 行无法解析（截断或损坏）：内容对账与增量判定可能不准`,
+            `链「${escapeControlChars(chain.name)}」的链尾会话 ${to.sessionId}（${to.provider}）有 ${toBad} 行无法解析（截断或损坏）：内容对账与增量判定可能不准`,
           );
         }
         try {
@@ -296,7 +297,7 @@ export async function doctorReport(cwd: string, deps: DoctorDeps): Promise<Docto
               sourceTurns: fromTurns.length,
             });
             warnings.push(
-              `链「${chain.name}」的链尾比来源少 ${missingTurns} 条记录（来源 ${fromTurns.length} 条）：若切换后又在来源侧继续聊过属正常，下次切换会补齐；否则可能是目标会话被改动或截断，可用 switch / adopt 重新对齐`,
+              `链「${escapeControlChars(chain.name)}」的链尾比来源少 ${missingTurns} 条记录（来源 ${fromTurns.length} 条）：若切换后又在来源侧继续聊过属正常，下次切换会补齐；否则可能是目标会话被改动或截断，可用 switch / adopt 重新对齐`,
             );
           }
         } catch (error) {
@@ -305,11 +306,11 @@ export async function doctorReport(cwd: string, deps: DoctorDeps): Promise<Docto
           // 用户既看不出该修权限还是该查内容，也不知道这一项其实没做成。
           if (isFileSystemErrorCode((error as NodeJS.ErrnoException).code)) {
             warnings.push(
-              `链「${chain.name}」的内容对账未进行：${describeSessionReadFailureReason(error)}；先确认来源 / 链尾会话文件是否可读，再重跑 watch doctor`,
+              `链「${escapeControlChars(chain.name)}」的内容对账未进行：${describeSessionReadFailureReason(error)}；先确认来源 / 链尾会话文件是否可读，再重跑 watch doctor`,
             );
           } else {
             const message = error instanceof Error ? error.message : String(error);
-            warnings.push(`链「${chain.name}」的内容对账失败：${message}`);
+            warnings.push(`链「${escapeControlChars(chain.name)}」的内容对账失败：${message}`);
           }
         }
       }
