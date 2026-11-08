@@ -788,9 +788,15 @@ export class Store {
       const status = hit.status === 'archived' ? '（已归档）' : '';
       return `${base}——链「${hit.name}」${status}属于另一个目录: ${hit.cwd}；请用 --cwd ${hit.cwd}`;
     }
-    // 本目录里一条链都没有：没有可列的清单，也不该暗示「你有别的链可选」
+    // 本目录里一条链都没有：没有可列的清单，也不该暗示「你有别的链可选」，
+    // 但「没有链」本身是另一种错——不是名字打错，而是还没有可用的链，要给建第一条的办法。
     const local = this.listChains(cwd);
-    if (local.length === 0) return base;
+    if (local.length === 0) {
+      return (
+        `${base}——本目录还没有任何链（--chain 只能指向已存在的链，不会顺手新建）；` +
+        `可先用 watch chain new <名字> 建一条，或直接 watch new <provider> 让它在默认链上开一次`
+      );
+    }
     // listChains 按状态与最近使用时间排，文案里再按名字排一次，同一份状态每次说法一致
     const names = local.map((c) => c.name).sort((a, b) => a.localeCompare(b));
     let message = `${base}；本目录的链: ${names.join(' / ')}`;
