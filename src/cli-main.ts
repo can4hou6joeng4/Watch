@@ -1761,6 +1761,13 @@ async function cmdSearch(cwd: string, json: boolean, query: string): Promise<voi
     await reindexCwd(cwd, listAdapters(), store, warnings, unavailable);
     // 三种上限各自独立：全局 40 条、单会话 3 条、session id 前缀 10 条；只说「truncated」会混淆是哪一种
     const { hits, truncated, perSessionCapped, idPrefixCapped } = store.searchMessagesWithMeta(query, cwd);
+    // 零命中与 status / sessions / recent 同一口径：`--cwd` 可能只是同一个目录的另一种写法，
+    // 只留一句「本目录没有匹配」会把「会话在另一个写法下面」讲成「这里没聊过」。
+    // 走 `warnings`（不是 notes）：同一件事实在四条命令上必须落在同一个通道。
+    if (!hits.length && !cwdIssue) {
+      const alias = await cwdAliasHint(cwd);
+      if (alias) warnings.push(alias);
+    }
     pushEscapedContentWarning(
       warnings,
       // 判定要在「折叠空白之后」的文本上做：多行消息的换行本来就会被折成空格，

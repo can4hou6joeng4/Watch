@@ -7,6 +7,7 @@ import { describeWriteFailureReason, type FileDigest } from './atomic.js';
 import { addFinding, type Finding } from './findings.js';
 import { escapeControlChars } from './display.js';
 import { countUnparsableJsonLines } from './jsonl.js';
+import { cwdAliasHint } from './cwd.js';
 import { describePathReadFailureReason, describeReadFailureOrSelf, sessionFilePresence } from './read-text.js';
 import { noSessionHint, unknownProviderMessage } from '../providers/registry.js';
 
@@ -111,16 +112,23 @@ export function notCurrentChainWarning(chain: Chain, current: Chain | null): str
  * `availableHere` 是别家在本目录真实列出来的 provider（列不出来的一律不计），只用来给一条
  * 能立刻照抄的命令；一家都没有时不给空清单。
  */
-export function adoptNoSessionMessage(providerId: string, availableHere: string[] = []): string {
+export function adoptNoSessionMessage(
+  providerId: string,
+  availableHere: string[] = [],
+  aliasHint: string | null = null,
+): string {
   const elseWhere =
     availableHere.length > 0
       ? `本目录现在可接入的有: ${availableHere.join(' / ')}——可直接 watch adopt ${availableHere[0]} --session <会话 id> 接入；`
       : '';
-  return (
-    `${providerId} 在这个目录还没有会话（只会接入 cwd 与 --cwd 一致的会话）；${elseWhere}` +
-    `要接入 ${providerId}，先在该家的原生 CLI 里开一次会话，再用 watch adopt ${providerId} --session <会话 id> 接入` +
-    `（会话 id 可用 watch sessions 或原生 CLI 确认）；若它其实在别的目录，用 --cwd <那个目录> 重跑`
-  );
+  // 已知 `--cwd` 只是同一个目录的另一种写法时，「若它其实在别的目录」这句是错的方向：
+  // 会话不在别处，就在同一个目录的另一个写法下面。换成 realpath 那句，其余照旧。
+  const next = aliasHint
+    ? `${aliasHint}；换成该路径后仍然没有，再先在该家的原生 CLI 里开一次会话，` +
+      `用 watch adopt ${providerId} --session <会话 id> 接入（会话 id 可用 watch sessions 确认）`
+    : `要接入 ${providerId}，先在该家的原生 CLI 里开一次会话，再用 watch adopt ${providerId} --session <会话 id> 接入` +
+      `（会话 id 可用 watch sessions 或原生 CLI 确认）；若它其实在别的目录，用 --cwd <那个目录> 重跑`;
+  return `${providerId} 在这个目录还没有会话（只会接入 cwd 与 --cwd 一致的会话）；${elseWhere}${next}`;
 }
 
 /** 别家在本目录确实有会话的 provider；列不出来的一律跳过（这条只是补充说明，不能盖掉主错误） */
@@ -266,7 +274,14 @@ export async function adoptIntoChain(
   const found = targetRef
     ? { ref: targetRef }
     : await adapter.findLatestSession(cwd);
-  if (!found) throw new Error(adoptNoSessionMessage(providerId, await providersWithSessionsHere(cwd, adapters, providerId)));
+  if (!found) {
+    // 「这家在这个目录没有会话」同样可能只是 `--cwd` 的写法不同：会话文件在，
+    // 只是按另一条路径字符串记录着。这时让人「先开一次会话」会白开一个。
+    const alias = await cwdAliasHint(cwd);
+    throw new Error(
+      adoptNoSessionMessage(providerId, await providersWithSessionsHere(cwd, adapters, providerId), alias),
+    );
+  }
 
   let history: SwitchRecord[] = [];
   if (!store) {
@@ -842,7 +857,16 @@ export async function handoff(
         );
       }
     }
-    throw new Error(`未发现原生会话，${noSessionHint(adapters)}`);
+    // 按字符串比较确实没有会话时，`--cwd` 仍可能只是同一个目录的另一种写法（软链 / 前缀 / 大小写）：
+    // 只留「请先开聊」会把人引去开新会话，而原来的会话一直躺在另一个写法下面。
+    // 与 status / sessions / recent 同一口径，零结果时才补这句（健康目录不多一遍 realpath）。
+    const alias = await cwdAliasHint(cwd);
+    const hint = noSessionHint(adapters);
+    // 已知还有另一种写法时不能先说「请先开聊」再纠正：那句话是错的下一步，
+    // 摆在最前面就会有人照着做。把它降级成「若确实是新目录」的补充分支。
+    throw new Error(
+      alias ? `未发现原生会话；${alias}；若确实是新目录，${hint}` : `未发现原生会话，${hint}`,
+    );
   }
 
   let sourceTip: ProviderTip | null = null;
