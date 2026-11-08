@@ -15,7 +15,7 @@ import { officialImportJournalRoot } from './providers/codex/official-import.js'
 import { doctorReport } from './core/doctor.js';
 import { cwdProblem, describeCwdProblem, describeNewSessionCwd, inspectCwd } from './core/cwd.js';
 import { escapeControlChars, hasControlChars } from './core/display.js';
-import { describeSessionReadFailureReason, sessionFilePresence } from './core/read-text.js';
+import { describePathReadFailureReason, describeSessionReadFailureReason, sessionFilePresence } from './core/read-text.js';
 import { describeWriteFailureReason } from './core/atomic.js';
 import { describeSpawnFailure } from './core/platform.js';
 
@@ -473,8 +473,10 @@ async function cmdAdopt(
             const found = await adapter.findById(sessionId);
             if (found && found.ref.cwd !== cwd) elsewhere = found.ref.cwd;
           } catch (error) {
-            // 反查失败不能静默退成「在当前目录找不到会话」：权限、库损坏会被读成 id 写错或会话不存在
-            lookupError = error instanceof Error ? error.message : String(error);
+            // 反查失败不能静默退成「在当前目录找不到会话」：权限、库损坏会被读成 id 写错或会话不存在。
+            // 适配器自己写好的中文原因原样保留（`describePathReadFailureReason` 只翻漏网的 fs errno），
+            // 否则这里会漏出 `EACCES: permission denied, scandir '…'`——与 resolveById 同一口径
+            lookupError = describePathReadFailureReason(error);
           }
         }
         if (elsewhere) {
@@ -485,13 +487,20 @@ async function cmdAdopt(
         // id 属于另一家 provider 时，「在当前目录找不到」会被读成 id 写错：adopt <provider>
         // 只在这家自己的存储里找，provider 写错（或从 sessions 输出里拿错一行）都会走到这里。
         // 只在原 provider 没找到时才跨家反查，正常路径不多付一次扫描。
+        //
+        // 别家读不出来既不算命中、也不能当成「这家没有」：静默 `continue` 时，最终那句
+        // 「在当前目录找不到会话」会被读成「哪一家都没有这个 id」，用户就去核对那串其实
+        // 没错的 uuid 了——而真正要修的是那家的目录权限 / 索引。`open --provider` 早就会补
+        // 「另有 N 家没能查（…），无法确认它是否属于那些 provider」（findOwnerElsewhere），
+        // 这里以前只有一句结论。收集起来，未命中时一并披露。
+        const unreadableOthers: string[] = [];
         for (const other of listAdapters()) {
           if (other.id === providerId || !other.findById) continue;
           let found: Awaited<ReturnType<NonNullable<typeof other.findById>>>;
           try {
             found = await other.findById(sessionId);
-          } catch {
-            // 别家存储读不出来不能作为结论：本条只是「是不是 provider 写错了」的补充说明
+          } catch (error) {
+            unreadableOthers.push(`${other.id} 反查失败：${describePathReadFailureReason(error)}`);
             continue;
           }
           if (found) {
@@ -508,6 +517,10 @@ async function cmdAdopt(
         const lookupNote = lookupError
           ? `；按 id 全局反查也失败：${lookupError}——无法确认它是否属于另一个目录，请先确认该会话存储是否可读`
           : '';
+        // 别家没查成时同样不能说成「谁都不认识这个 id」：那会把权限 / 索引问题讲成 id 写错
+        const othersNote = unreadableOthers.length
+          ? `；另有 ${unreadableOthers.length} 家没能查（${unreadableOthers.join('；')}），无法确认它是否属于那些 provider`
+          : '';
         // 链 id 也是 UUID，chain list 里就印在同一行：说清它是链并给出链尾绑定，避免反复核对 id
         const chainUse = store?.describeChainIdMisuse(sessionId, cwd) ?? null;
         // `adopt` 是四条按 id 反查的路径里唯一没接共用下一步的那条，也是唯一「多说了一个 id、
@@ -520,7 +533,8 @@ async function cmdAdopt(
               ? `在当前目录最近 ${all.length} 个会话里找不到: ${sessionId}（${adapter.id} 列表上限 ${cap}，更早的会话不在其中）`
               : `在当前目录找不到会话: ${sessionId}`) +
             `；${LOOKUP_NEXT_STEP}。本次未写入任何内容` +
-            lookupNote,
+            lookupNote +
+            othersNote,
         );
       }
       targetRef = hit.ref;
