@@ -126,6 +126,39 @@ function fmtTime(ms: number): string {
   return new Date(ms).toISOString();
 }
 
+/**
+ * 会话内容（预览 / 搜索片段）进终端前的一道。
+ *
+ * 预览与片段来自原生会话文件，而会话里什么都可能有：用户粘过一段彩色终端输出、agent 读过
+ * 一个带 ANSI 的文件、工具输出里有 `/tmp` 下某个程序的进度条。2026-11-08 实测（修复前）把
+ * 一条首条消息含 `\u001b[31mPWNED\u001b[0m` 与 `\u001b]0;hacked\u0007` 的 Claude 会话放进去，
+ * `watch recent` 的文本输出原样带出 ESC 与 OSC——也就是**会话内容能改写终端**（改颜色、
+ * 改窗口标题、清屏），同 `src/core/display.ts` 里链名那一类问题，只是来源更广。
+ *
+ * 只改显示、不改数据：`--json` 里的 `preview` / `snippet` 仍是原文（`JSON.stringify` 自己
+ * 会转义），会话文件一个字节都不动；这里把「显示时转义过」显式说出来，否则用户会以为
+ * 原文里就有 `\u001B` 这几个字符。
+ */
+function pushEscapedContentWarning(
+  warnings: string[],
+  items: { provider: string; sessionId: string }[],
+  kind: string,
+): void {
+  const seen = new Set<string>();
+  const hits: string[] = [];
+  for (const item of items) {
+    const key = `${item.provider}:${item.sessionId}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    hits.push(key);
+  }
+  if (!hits.length) return;
+  warnings.push(
+    `有 ${hits.length} 条会话的${kind}含控制字符（ESC / 换行 / 制表符等，多来自粘进对话的终端输出），文本输出里已转义成 \\n、\\u001B 这类可见形式；` +
+      `会话文件本身没有被改动（--json 里仍是原文）：${hits.slice(0, 3).join('、')}${hits.length > 3 ? ' 等' : ''}`,
+  );
+}
+
 function parseArgs(argv: string[]): {
   cmd?: string;
   target?: string;
@@ -728,6 +761,16 @@ async function cmdSessions(cwd: string, json: boolean, chain?: string): Promise<
         }),
     );
     const result = groups.filter((g) => g.sessions.length > 0);
+    pushEscapedContentWarning(
+      warnings,
+      result.flatMap((g) =>
+        g.sessions
+          .filter((s) => Boolean(s.preview))
+          .filter((s) => hasControlChars(s.preview as string))
+          .map((s) => ({ provider: g.provider, sessionId: s.ref.sessionId })),
+      ),
+      '预览',
+    );
     if (json) {
       console.log(JSON.stringify({
         ok: true,
@@ -748,7 +791,7 @@ async function cmdSessions(cwd: string, json: boolean, chain?: string): Promise<
       console.log(`${g.provider}${g.capped ? '（已达列表上限，更早的会话未列出）' : ''}:`);
       for (const s of g.sessions) {
         console.log(`  ${s.ref.sessionId}  mtime=${fmtTime(s.updatedAt)}`);
-        if (s.preview) console.log(`    ${s.preview}`);
+        if (s.preview) console.log(`    ${escapeControlChars(s.preview)}`);
       }
     }
     if (unavailable.length) console.error(`未读取: ${unavailable.join('、')}（原生存储读取失败）`);
@@ -854,6 +897,11 @@ async function cmdRecent(cwd: string, json: boolean, limit: number = 8, cwdGiven
   const final = results.slice(0, limit);
   // 列表被 --limit（默认 8）截断时要说出来，否则用户会把「最近 8 条」当成全部
   const truncated = results.length > final.length;
+  pushEscapedContentWarning(
+    warnings,
+    final.filter((s) => Boolean(s.preview)).filter((s) => hasControlChars(s.preview as string)),
+    '预览',
+  );
 
   if (json) {
     console.log(JSON.stringify({
@@ -877,7 +925,7 @@ async function cmdRecent(cwd: string, json: boolean, limit: number = 8, cwdGiven
   for (const s of final) {
     // 「最近」的价值就在时间与摘要：JSON 一直带 updatedAt / preview，文本模式不能只留 id
     console.log(`  [${s.provider}] ${s.sessionId} (${s.cwd})  mtime=${fmtTime(s.updatedAt)}`);
-    if (s.preview) console.log(`    ${s.preview}`);
+    if (s.preview) console.log(`    ${escapeControlChars(s.preview)}`);
   }
 }
 
@@ -1593,6 +1641,13 @@ async function cmdSearch(cwd: string, json: boolean, query: string): Promise<voi
     await reindexCwd(cwd, listAdapters(), store, warnings);
     // 三种上限各自独立：全局 40 条、单会话 3 条、session id 前缀 10 条；只说「truncated」会混淆是哪一种
     const { hits, truncated, perSessionCapped, idPrefixCapped } = store.searchMessagesWithMeta(query, cwd);
+    pushEscapedContentWarning(
+      warnings,
+      // 判定要在「折叠空白之后」的文本上做：多行消息的换行本来就会被折成空格，
+      // 按原文判会让几乎每条命中都冒出一条假警告。
+      hits.filter((h) => hasControlChars(h.snippet.replace(/\s+/g, ' '))),
+      '搜索片段',
+    );
     if (json) {
       console.log(JSON.stringify({
         ok: true,
@@ -1613,7 +1668,7 @@ async function cmdSearch(cwd: string, json: boolean, query: string): Promise<voi
     }
     for (const h of hits) {
       console.log(`${h.provider}  ${h.sessionId}`);
-      console.log(`  ${h.snippet.replace(/\s+/g, ' ')}`);
+      console.log(`  ${escapeControlChars(h.snippet.replace(/\s+/g, ' '))}`);
     }
     if (truncated) {
       console.error(
