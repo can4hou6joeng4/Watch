@@ -336,7 +336,15 @@ export async function openSession(
     const source = await resolveById(from, undefined, mapping, adapters, lookup);
     if (!source) {
       const detail = lookup.length ? `（${lookup.join('；')}）` : '';
-      return { ok: false, error: `未找到来源会话: ${from}${detail}` };
+      // 来源侧与目标侧是同一件事：链 id 与会话 id 都是 UUID、`chain list` 还把它们印在同一行，
+      // 只回「未找到来源会话」会让人反复核对那串抄得没错的 id。目标侧早就认链 id，这里补齐。
+      const chainUse = mapping ? mapping.describeChainIdMisuse(from) : null;
+      return {
+        ok: false,
+        error: chainUse
+          ? `未找到来源会话: ${from}；${chainUse}${detail}`
+          : `未找到来源会话: ${from}。请确认 id 正确，且该会话属于已安装登录的 CLI；可用 watch sessions 或 watch recent 核对会话 id，若它在别的目录请用 watch recent --cwd <目录> 查看${detail}`,
+      };
     }
     try {
       // 来源 usage 聚合携带：source 支持 sessionUsage 时读出，跨侧对账展示（写回各 build 仍为零占位）
