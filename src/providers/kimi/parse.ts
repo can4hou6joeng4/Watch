@@ -82,8 +82,12 @@ function num(value: unknown): number {
   return typeof value === 'number' && Number.isFinite(value) ? value : 0;
 }
 
-/** kimi usage 形状（usage.record 与 step.end.usage 共用）：input 含缓存读/建 */
-function usageFromRecord(usage: Record<string, unknown> | null): TokenUsage | undefined {
+/**
+ * kimi usage 形状（usage.record 与 step.end.usage 共用）：input 含缓存读/建。
+ * 导出给 `kimiSessionUsage()` 复用——用量统计与 parse 必须认同一套形状，否则 Watch
+ * 自己写出的 `step.end.usage` 会在 `watch usage` 里整段消失。
+ */
+export function usageFromRecord(usage: Record<string, unknown> | null): TokenUsage | undefined {
   if (!usage) return undefined;
   const input = num(usage.inputOther) + num(usage.inputCacheRead) + num(usage.inputCacheCreation);
   const output = num(usage.output);

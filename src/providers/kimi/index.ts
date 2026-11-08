@@ -9,7 +9,7 @@ import { describePathReadFailureReason, isMissingPathError } from '../../core/re
 import { SessionLookupFailureError } from '../adapter.js';
 import type { ProviderAdapter } from '../adapter.js';
 import type { ProcessEvent, SessionRef, TokenUsage, UnifiedTurn } from '../../core/types.js';
-import { parseKimiSession } from './parse.js';
+import { parseKimiSession, usageFromRecord } from './parse.js';
 import {
   encodeKimiWorkspaceDir,
   importTurnsToKimi,
@@ -228,8 +228,15 @@ function toNum(v: unknown): number {
 }
 
 /**
- * Kimi 会话用量（信息层）：累加 wire.jsonl 里全部 `usage.record` → inputTokens/outputTokens。
- * input 含 inputOther + inputCacheRead + inputCacheCreation；无记录时返回 null（对齐无 usage 语义）。
+ * Kimi 会话用量（信息层）：累加 wire.jsonl 里的用量 → inputTokens/outputTokens。
+ * input 含 inputOther + inputCacheRead + inputCacheCreation；无用量记录时返回 null（对齐无 usage 语义）。
+ *
+ * 两种形状都要认：原生把用量记成顶层 `usage.record`，而 Watch 的写出侧
+ * （`buildKimiWireLines()`）写在 `context.append_loop_event` → `event.type === 'step.end'`
+ * → `event.usage`。以前只认前者，于是 Watch 自己转出的会话一律被报成「无 usage 数据」。
+ * 判定规则与 `parse.ts` 一致：**同一轮**里已有 `usage.record` 就以它为准（两种形状同时存在
+ * 时不能叠加，否则翻倍）；没有 `usage.record` 时取该轮最后一条 `step.end.usage`
+ * （写出侧把同一条 turn 的用量同时挂在多个 step 上，逐条累加会重复计入）。
  */
 export async function kimiSessionUsage(ref: SessionRef): Promise<TokenUsage | null> {
   let raw: string;
@@ -242,6 +249,18 @@ export async function kimiSessionUsage(ref: SessionRef): Promise<TokenUsage | nu
   let input = 0;
   let output = 0;
   let saw = false;
+  // 当前这一轮（assistant）的状态：是否已有 usage.record、以及最后一条 step.end 的用量
+  let turnHasRecord = false;
+  let pendingStepUsage: TokenUsage | null = null;
+  const flushTurn = (): void => {
+    if (!turnHasRecord && pendingStepUsage) {
+      input += pendingStepUsage.inputTokens;
+      output += pendingStepUsage.outputTokens;
+      saw = true;
+    }
+    turnHasRecord = false;
+    pendingStepUsage = null;
+  };
   for (const line of raw.split('\n')) {
     if (!line.trim()) continue;
     let r: Record<string, unknown>;
@@ -250,14 +269,29 @@ export async function kimiSessionUsage(ref: SessionRef): Promise<TokenUsage | nu
     } catch {
       continue;
     }
-    if (r.type !== 'usage.record') continue;
-    const u = r.usage;
-    if (typeof u !== 'object' || u === null) continue;
-    const usage = u as Record<string, unknown>;
-    input += toNum(usage.inputOther) + toNum(usage.inputCacheRead) + toNum(usage.inputCacheCreation);
-    output += toNum(usage.output);
-    saw = true;
+    if (r.type === 'usage.record') {
+      const u = r.usage;
+      if (typeof u !== 'object' || u === null) continue;
+      const usage = u as Record<string, unknown>;
+      input += toNum(usage.inputOther) + toNum(usage.inputCacheRead) + toNum(usage.inputCacheCreation);
+      output += toNum(usage.output);
+      saw = true;
+      turnHasRecord = true;
+      continue;
+    }
+    if (r.type === 'context.append_loop_event') {
+      const event = r.event;
+      if (typeof event !== 'object' || event === null) continue;
+      const e = event as Record<string, unknown>;
+      if (e.type !== 'step.end') continue;
+      const u = e.usage;
+      const usage = usageFromRecord(typeof u === 'object' && u !== null ? (u as Record<string, unknown>) : null);
+      if (usage) pendingStepUsage = usage;
+      continue;
+    }
+    if (r.type === 'turn.ended' || r.type === 'turn.prompt' || r.type === 'turn.steer') flushTurn();
   }
+  flushTurn();
   return saw ? { inputTokens: input, outputTokens: output } : null;
 }
 
