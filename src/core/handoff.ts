@@ -659,6 +659,13 @@ export type HandoffResult = {
    * 只有 recorded 才谈得上「链尾已在 X」，其余两档要说明没有可交接的来源、本次未写入链记录。
    */
   chainTipState?: 'recorded' | 'empty' | 'unknown';
+  /**
+   * alreadyAtTarget 时这条 resume 指向的会话文件现在读不出来（`chmod 000` 之类）。
+   *
+   * 文本模式据此把「直接打开即可」换成「直接打开会失败」——`warnings` 已经逐条说明原因，
+   * 但结论句本身也得改，否则用户复制的那条命令一执行就失败却找不到矛盾在哪。
+   */
+  resumeUnreadable?: boolean;
   /** 全部 catch-继续路径的降级披露（recordSwitch/parse/rewrite 失败等） */
   warnings: string[];
   /** 内容处置披露（追加/去重/重写计数） */
@@ -979,6 +986,18 @@ export async function handoff(
       // provider 会话时打开到非链尾会话（用户看到的就会是“没有历史”）。
       const boundTarget = pairedRef(history, targetId);
       const resumeRef = boundTarget ?? mtimeTip.ref;
+      // 这条分支以前只回「直接打开即可」+ resume，而它和 status 一样只读元数据：
+      // `stat` 对 chmod 000 的文件照常成功，于是同一份文件 new 明确拒绝、status 警告、
+      // chain list 标 unreadable、doctor 报失败，只有 switch 替它宣称可用——用户复制的那条
+      // resume 一执行就失败。这里探一次真正要 resume 的那条会话（只 open，不读内容）。
+      const resumeReadProblem = await probeSessionReadable(resumeRef.filePath);
+      if (resumeReadProblem) {
+        warnings.push(
+          `链尾会话 ${resumeRef.sessionId}（${targetId}）的文件现在读不出来：${resumeReadProblem}；` +
+            `下面那条 resume 命令一执行就会失败——先修好这个文件（权限或内容）再重试` +
+            `，或 watch adopt ${targetId} --session <另一个会话 id> 换绑，或用 watch chain new <新名字> 另起一条链`,
+        );
+      }
       return {
         newRef: resumeRef,
         resumeCommand: target.resumeCommand(resumeRef),
@@ -986,6 +1005,7 @@ export async function handoff(
         turnCount: 0,
         alreadyAtTarget: true,
         chainTipState,
+        ...(resumeReadProblem ? { resumeUnreadable: true } : {}),
         warnings,
         findings,
       };

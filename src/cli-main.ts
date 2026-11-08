@@ -460,12 +460,24 @@ async function cmdSwitch(cwd: string, targetId: string, json: boolean, chain?: s
       if (result.chainTipState === 'empty') {
         console.log('当前链还没有绑定任何会话（没有可交接的来源，本次未写入链记录）。');
         console.log(
-          `已找到 ${targetId} 的最新会话，可直接打开；要让链记录指向它，可用 watch adopt ${targetId} --session ${result.newRef.sessionId}`,
+          result.resumeUnreadable
+            ? `已找到 ${targetId} 的最新会话，但它的文件现在读不出来（原因见上方警告）；要让链记录指向它，可用 watch adopt ${targetId} --session ${result.newRef.sessionId}`
+            : `已找到 ${targetId} 的最新会话，可直接打开；要让链记录指向它，可用 watch adopt ${targetId} --session ${result.newRef.sessionId}`,
         );
       } else if (result.chainTipState === 'recorded') {
-        console.log(`链尾已在 ${targetId}，直接打开即可。`);
+        // 链尾确实停在这家，但文件读不出来时「直接打开即可」是错的下一步：
+        // 用户照抄的 resume 一执行就失败，而原因写在 stderr 的警告里，正文得先对得上
+        console.log(
+          result.resumeUnreadable
+            ? `链尾已在 ${targetId}，但这条会话的文件现在读不出来，直接打开会失败（原因见上方警告）。`
+            : `链尾已在 ${targetId}，直接打开即可。`,
+        );
       } else {
-        console.log(`无法确认链尾（本次未写入链记录），已找到 ${targetId} 的最新会话，可直接打开。`);
+        console.log(
+          result.resumeUnreadable
+            ? `无法确认链尾（本次未写入链记录），已找到 ${targetId} 的最新会话，但它的文件现在读不出来（原因见上方警告）。`
+            : `无法确认链尾（本次未写入链记录），已找到 ${targetId} 的最新会话，可直接打开。`,
+        );
       }
       console.log(`resume: ${result.resumeCommand}`);
       return;
