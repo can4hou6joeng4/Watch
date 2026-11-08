@@ -76,6 +76,25 @@ export type SearchHit = {
   snippet: string;
 };
 
+export type SearchElsewhere = { cwd: string; hits: number };
+
+/**
+ * 本目录零命中、索引里别的目录有匹配时的下一步（`search` 共用）。
+ *
+ * 与 `chainsElsewhereHint()` 同一位置、同一思路：文案跟结构绑在一起，调用点只负责打印。
+ */
+export function searchElsewhereHint(rows: SearchElsewhere[], cwd: string, query: string): string {
+  const shown = rows
+    .slice(0, 3)
+    .map((r) => `${r.cwd}（${r.hits} 条）`)
+    .join('、');
+  const more = rows.length > 3 ? ` 等 ${rows.length} 个目录` : '';
+  return (
+    `本地搜索索引里其它目录有匹配：${shown}${more}；` +
+    `搜索按目录限定（--cwd ${cwd} 只查这一条），要看那个目录里的命中，用 watch search ${query} --cwd <那个目录>`
+  );
+}
+
 /** 搜索结果 + 三种硬上限是否真的截掉了命中（逐项独立，不能互相冒充） */
 export type SearchResult = {
   hits: SearchHit[];
@@ -557,6 +576,48 @@ export class Store {
     const byId = this.searchSessionIdPrefix(q, normalized);
     const capped = capPerSession([...byId.hits, ...this.searchIndexText(q, normalized)]);
     return { hits: capped.hits, truncated: capped.truncated, perSessionCapped: capped.perSessionCapped, idPrefixCapped: byId.capped };
+  }
+
+  /**
+   * 本目录没命中时，索引里**别的目录**有没有匹配（按目录聚合，命中多的在前）。
+   *
+   * 搜索按 cwd 限定，于是「这个目录没聊过」与「这条会话属于另一个目录」在输出里一模一样：
+   * 2026-11-08 实测会话在 `a/`、在 `b/` 里搜，只回一句「无结果」——结论式文案，用户会以为
+   * 真没有，而同一句 `watch search … --cwd a` 立刻能搜到。`chainsElsewhere()` 是同一个思路
+   * 在链上的版本。
+   *
+   * 只用来补一句说明：查不出来时调用方应当照常给结果，不能因为这条补充查询失败而遮住命中。
+   */
+  searchElsewhere(query: string, cwd: string): SearchElsewhere[] {
+    const q = query.trim();
+    if (!q) return [];
+    const normalized = this.normCwd(cwd);
+    const counts = new Map<string, number>();
+    const bump = (rows: { cwd: string }[]) => {
+      for (const row of rows) counts.set(row.cwd, (counts.get(row.cwd) ?? 0) + 1);
+    };
+    // 与 searchMessagesWithMeta 同一套判定：id 前缀 + 正文（短词退 LIKE），否则「本目录能搜到、
+    // 别处搜不到」会变成假结论
+    if (/^[0-9a-f][0-9a-f-]{3,63}$/i.test(q)) {
+      bump(
+        this.db
+          .prepare('SELECT cwd FROM search_index WHERE cwd<>? AND session_id LIKE ? LIMIT 50')
+          .all(normalized, `${q.toLowerCase()}%`) as { cwd: string }[],
+      );
+    }
+    const textRows = ([...q].length < 3
+      ? this.db
+          .prepare(
+            `SELECT cwd FROM messages_fts WHERE cwd<>? AND text LIKE ? ESCAPE '\\' LIMIT ${SCAN_LIMIT}`,
+          )
+          .all(normalized, `%${q.replace(/[\\%_]/g, (c) => `\\${c}`)}%`)
+      : this.db
+          .prepare(`SELECT cwd FROM messages_fts WHERE cwd<>? AND messages_fts MATCH ? LIMIT ${SCAN_LIMIT}`)
+          .all(normalized, `"${q.replace(/"/g, ' ')}"`)) as { cwd: string }[];
+    bump(textRows);
+    return [...counts.entries()]
+      .map(([dir, hits]) => ({ cwd: dir, hits }))
+      .sort((a, b) => b.hits - a.hits);
   }
 
   /** 查询形如 session id 时，按 `search_index` 里的 id 前缀命中（uuid 片段即可；`reindexCwd` 总会写游标） */

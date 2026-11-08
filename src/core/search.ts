@@ -13,12 +13,16 @@ import {
  * 索引里记录的原生文件已不存在时清掉该会话，但 `listSessions` 可能有 50 条上限，
  * 不能拿「本轮列表」当删除依据——只认文件是否还在。
  * 列目录 / 解析失败只跳过并写进可选的 `warnings`，不静默吞掉。
+ *
+ * `unavailable`（可选）收集这轮**压根没读成**的 provider：调用方拿它把「没有匹配」与
+ * 「这一家没查成」分开——只有 warnings 字符串时，正文那句「无结果」照样会被当成结论。
  */
 export async function reindexCwd(
   cwd: string,
   adapters: ProviderAdapter[],
   store: Store,
   warnings?: string[],
+  unavailable?: string[],
 ): Promise<number> {
   let n = 0;
   for (const adapter of adapters) {
@@ -28,6 +32,7 @@ export async function reindexCwd(
       list = await adapter.listSessions(cwd);
     } catch (error) {
       // 列目录失败时无法确认会话状态，保留既有索引；但要披露，否则搜索结果会静默缺一家
+      unavailable?.push(adapter.id);
       warnings?.push(
         `${adapter.id} 会话列表读取失败，本次未更新其索引：${describePathReadFailureReason(error)}`,
       );

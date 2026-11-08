@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 import { stat } from 'node:fs/promises';
 import path from 'node:path';
-import { chainsElsewhereHint, SEARCH_MAX_HITS, Store, defaultDbPath, describeStoreErrorReason, describeStoreOpenFailure } from './core/store.js';
-import type { ChainsElsewhere } from './core/store.js';
+import { chainsElsewhereHint, SEARCH_MAX_HITS, searchElsewhereHint, Store, defaultDbPath, describeStoreErrorReason, describeStoreOpenFailure } from './core/store.js';
+import type { ChainsElsewhere, SearchElsewhere } from './core/store.js';
 import { describeFindings } from './core/findings.js';
 import { adoptIntoChain, blockedHint, chainStatus, chainUsage, collectTips, createChainSession, currentChainShiftNote, emptyChainBindHint, handoff, HandoffBlockedError, notCurrentChainWarning, rebindHint, storeUnavailableWarning } from './core/handoff.js';
 import { reindexCwd } from './core/search.js';
@@ -1737,9 +1737,10 @@ async function cmdSearch(cwd: string, json: boolean, query: string): Promise<voi
   if (!store) fail(json, storeUnavailableError());
   try {
     const warnings: string[] = [];
+    const unavailable: string[] = [];
     const cwdIssue = await cwdProblem(cwd);
     if (cwdIssue) warnings.push(cwdIssue);
-    await reindexCwd(cwd, listAdapters(), store, warnings);
+    await reindexCwd(cwd, listAdapters(), store, warnings, unavailable);
     // 三种上限各自独立：全局 40 条、单会话 3 条、session id 前缀 10 条；只说「truncated」会混淆是哪一种
     const { hits, truncated, perSessionCapped, idPrefixCapped } = store.searchMessagesWithMeta(query, cwd);
     pushEscapedContentWarning(
@@ -1749,6 +1750,25 @@ async function cmdSearch(cwd: string, json: boolean, query: string): Promise<voi
       hits.filter((h) => hasControlChars(h.snippet.replace(/\s+/g, ' '))),
       '搜索片段',
     );
+    // 零命中不是结论：搜索按 cwd 限定，别处有匹配时必须指路，否则「这个目录没聊过」
+    // 与「会话属于另一个目录」在输出里一模一样（README 的用法里 search 从不带 --cwd 时才是全局）
+    const notes: string[] = [];
+    if (!hits.length) {
+      let elsewhere: SearchElsewhere[] = [];
+      if (!cwdIssue) {
+        try {
+          elsewhere = store.searchElsewhere(query, cwd);
+        } catch {
+          // 补充说明而已：查询失败时正文照常给，真正的库故障已由 openStore / 搜索本身报出
+        }
+      }
+      if (elsewhere.length) notes.push(searchElsewhereHint(elsewhere, cwd, query));
+      if (unavailable.length) {
+        notes.push(
+          `本次没有命中，但 ${unavailable.join(' / ')} 的会话列表没能读取（原因见上方警告），搜索没有覆盖到它们——不代表这些 Agent 里没有匹配；先修好这些存储（权限、路径或库状态）再重试`,
+        );
+      }
+    }
     if (json) {
       console.log(JSON.stringify({
         ok: true,
@@ -1758,13 +1778,18 @@ async function cmdSearch(cwd: string, json: boolean, query: string): Promise<voi
         ...(truncated ? { truncated: true } : {}),
         ...(perSessionCapped ? { perSessionCapped: true } : {}),
         ...(idPrefixCapped ? { idPrefixCapped: true } : {}),
+        ...(unavailable.length ? { unavailable } : {}),
+        ...(notes.length ? { notes } : {}),
         ...(warnings.length ? { warnings } : {}),
       }));
       return;
     }
     for (const warning of warnings) console.error(`警告: ${warning}`);
     if (!hits.length) {
-      console.log('无结果');
+      // 正文先说清范围（搜索只覆盖这一个目录），再说有没有别处线索——
+      // 单打一句「无结果」会被当成「这台机器上没有」
+      console.log(`无结果：本目录没有匹配（搜索按目录限定，只查了 ${cwd}）`);
+      for (const note of notes) console.log(note);
       return;
     }
     for (const h of hits) {
