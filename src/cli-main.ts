@@ -1105,8 +1105,8 @@ async function cmdDoctor(cwd: string, json: boolean): Promise<void> {
           st.count === null
             ? `✗ 读取失败: ${st.error}`
             : st.capped
-              ? `≥ ${st.count} 个会话（已达列表上限，实际可能更多）`
-              : `${st.count} 个会话`;
+              ? `≥ ${st.count} 个会话（已达列表上限，实际可能更多${st.unreadable ? `，其中 ${st.unreadable} 条读不出来` : ''}）`
+              : `${st.count} 个会话${st.unreadable ? `（${st.unreadable} 条读不出来）` : ''}`;
         console.log(`  ${st.provider.padEnd(10)} ${countText}`);
       }
     }

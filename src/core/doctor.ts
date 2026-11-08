@@ -58,6 +58,13 @@ export type StorageProbe = {
   error?: string;
   /** 计数已达适配器 `listSessionsCap`：实际会话数只会更多，不能当精确总数用 */
   capped?: boolean;
+  /**
+   * 文件列得出来、但预览读不出来（`chmod 000` 之类）的会话数。
+   *
+   * `count` 只说明「目录里有几条」，`stat` 对读不出来的文件照常成功，所以不加这一档时
+   * doctor 会对一条 open / switch 必然失败的会话报告“N 个会话”，看起来一切正常。
+   */
+  unreadable?: number;
 };
 
 export type DoctorReport = {
@@ -192,12 +199,29 @@ export async function doctorReport(cwd: string, deps: DoctorDeps): Promise<Docto
 
   // 原生会话列表只读；与 detect（只看 PATH）互补：装了但存储读不出，比「没装」更需要解释
   const storage: StorageProbe[] = [];
+  // 列得出、但预览读不出来的会话。链尾由下面的 brokenTips 单独说（更具体、带下一步），
+  // 这里收集是为了覆盖「不是链尾、却同样打不开」的那一类
+  const unreadableSessions: { provider: string; sessionId: string; filePath: string; reason: string }[] = [];
   for (const adapter of adapters) {
     if (!adapter.listSessions) continue;
     try {
       const listed = await adapter.listSessions(cwd);
       const capped = adapter.listSessionsCap !== undefined && listed.length >= adapter.listSessionsCap;
-      storage.push({ provider: adapter.id, count: listed.length, ...(capped ? { capped: true } : {}) });
+      const unreadable = listed.filter((item) => item.previewError);
+      for (const item of unreadable) {
+        unreadableSessions.push({
+          provider: adapter.id,
+          sessionId: item.ref.sessionId,
+          filePath: item.ref.filePath,
+          reason: item.previewError as string,
+        });
+      }
+      storage.push({
+        provider: adapter.id,
+        count: listed.length,
+        ...(capped ? { capped: true } : {}),
+        ...(unreadable.length ? { unreadable: unreadable.length } : {}),
+      });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       storage.push({ provider: adapter.id, count: null, error: message });
@@ -384,6 +408,24 @@ export async function doctorReport(cwd: string, deps: DoctorDeps): Promise<Docto
       store = { available: false, error: reason };
       warnings.push(`本地库读取失败：${reason}`);
     }
+  }
+
+  // 非链尾的「文件在、读不出来」会话：`storage` 的计数看不出这一档，`sessions` / `recent`
+  // 早已会警告，doctor 作为排障入口不能说「claude 2 个会话」就完事——那两条 open / switch
+  // 一读内容就失败。链尾已经在 brokenTips 里逐条说过（带链名与下一步），这里只报剩下的，
+  // 同一份报告不把同一条文件讲两遍
+  const tipFiles = new Set(store.available ? store.brokenTips.map((tip) => tip.filePath) : []);
+  const unreadableBeyondTips = unreadableSessions.filter((item) => !tipFiles.has(item.filePath));
+  if (unreadableBeyondTips.length > 0) {
+    const sample = unreadableBeyondTips
+      .slice(0, 3)
+      .map((item) => `${item.provider}:${item.sessionId}（${item.reason}）`)
+      .join('、');
+    warnings.push(
+      `有 ${unreadableBeyondTips.length} 条会话文件读不出来（列得出来，但 open / switch 读内容时会失败）：${sample}${
+        unreadableBeyondTips.length > 3 ? ` 等 ${unreadableBeyondTips.length} 条` : ''
+      }；先确认这些文件可读（权限、路径）再重试`,
+    );
   }
 
   let imports: DoctorReport['imports'];
