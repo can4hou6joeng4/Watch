@@ -146,7 +146,15 @@ export async function adoptIntoChain(
   store?: Store | null,
   targetRef?: SessionRef,
   chainId?: string,
-): Promise<{ adoptedRef: SessionRef; replacedRef: SessionRef | null; warnings: string[] }> {
+): Promise<{
+  adoptedRef: SessionRef;
+  replacedRef: SessionRef | null;
+  warnings: string[];
+  /** 该会话在本次之前就已经绑在链上：目标状态已成立，没有写入任何链记录 */
+  unchanged?: boolean;
+  /** `unchanged` 时的结果说明（走 stdout；与 `warnings` 的降级原因分开） */
+  note?: string;
+}> {
   const warnings: string[] = [];
   const adapter = adapters.find((a) => a.id === providerId);
   if (!adapter?.findLatestSession) throw new Error(unknownProviderMessage(providerId, adapters));
@@ -180,7 +188,22 @@ export async function adoptIntoChain(
     }
   }
   if (history.some((h) => h.toProvider === providerId && h.toRef?.sessionId === found.ref.sessionId)) {
-    throw new Error('该会话已在链上，无需接入');
+    // 目标状态本来就成立（这家已经绑着这个会话）——这是空操作，不是失败。以前一律抛
+    // 「该会话已在链上，无需接入」让 cmdAdopt 以 exit 1 结束：脚本会把空操作当接入失败，
+    // 而 `chain rename <同名>` / `chain archive <已归档>` 早就是 `unchanged:true` 的成功返回。
+    //
+    // 更常见的问题是这句话在**链尾停在另一家**时误导人：此时 adopt 的动机几乎都是
+    // 「让这一家重新成为当前一侧」，而真正能做这件事的是 `watch switch <provider>`
+    // （会复用这条已绑定的会话，不新建）。只回「无需接入」，用户再试几遍还是同一句。
+    const tail = history.at(-1);
+    const tipElsewhere = tail && tail.toProvider !== providerId;
+    const note = tipElsewhere
+      ? `会话 ${found.ref.sessionId} 已经在链上（${providerId} 这一侧绑定的就是它），本次没有写入任何链记录；` +
+        `当前链尾停在 ${tail.toProvider}（${tail.toRef.sessionId}），要让 ${providerId} 重新成为当前一侧请用 watch switch ${providerId}（会复用这条会话，不新建）`
+      : `会话 ${found.ref.sessionId} 已经在链上，本次没有写入任何链记录（没有需要改动的地方）`;
+    // 这是结果说明而不是降级原因（链记录没有写失败，是本来就不需要写），所以走 note：
+    // 文本模式打到 stdout，与 `warnings`（stderr，真正的降级）分开
+    return { adoptedRef: found.ref, replacedRef: null, warnings, unchanged: true, note };
   }
 
   let replaced: SessionRef | null = pairedRef(history, providerId);

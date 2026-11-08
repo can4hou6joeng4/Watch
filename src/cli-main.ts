@@ -448,13 +448,21 @@ async function cmdAdopt(
     const adoptedAdapter = listAdapters().find((a) => a.id === result.adoptedRef.provider);
     const resumeCommand = adoptedAdapter ? adoptedAdapter.resumeCommand(result.adoptedRef) : undefined;
     if (json) {
+      // `warnings` 只放降级原因，`note` 放结果说明（同 open 的 warnings / notes 分法）
       console.log(JSON.stringify({ ok: true, ...result, ...(resumeCommand ? { resumeCommand } : {}) }));
       return;
     }
     // 与 switch 一致：警告先打（未写入链记录这类说明不能排在成功之后被漏看），且走 stderr
     for (const warning of result.warnings) console.error(`警告: ${warning}`);
-    console.log(`已接入链: ${result.adoptedRef.sessionId}`);
-    if (result.replacedRef) console.log(`替换了:  ${result.replacedRef.sessionId}`);
+    // 空操作（这条会话本来就绑在这家）时不能打「已接入链」：链上什么都没有变，
+    // 而它可能正是用户想修的那件事（链尾还停在另一家）
+    if (result.unchanged) {
+      console.log(`未改动: ${result.adoptedRef.sessionId}`);
+      if (result.note) console.log(`  ${result.note}`);
+    } else {
+      console.log(`已接入链: ${result.adoptedRef.sessionId}`);
+      if (result.replacedRef) console.log(`替换了:  ${result.replacedRef.sessionId}`);
+    }
     if (resumeCommand) {
       console.log('');
       console.log(`resume: ${resumeCommand}`);
