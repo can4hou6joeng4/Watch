@@ -3,7 +3,7 @@ import { describeWriteFailureReason, type FileDigest } from './core/atomic.js';
 import { assertTargetUnchanged, blockedHint, diffTurns, HandoffBlockedError } from './core/handoff.js';
 import { describeDanglingToolCalls, describeUnansweredTail, dedupeCallEvents } from './core/rich.js';
 import { Store, defaultDbPath, describeStoreErrorReason, describeStoreOpenFailure } from './core/store.js';
-import { IS_WIN, stripDevicePrefix } from './core/platform.js';
+import { IS_WIN, normalizePath, stripDevicePrefix } from './core/platform.js';
 import type { SessionRef, TokenUsage, UnifiedTurn } from './core/types.js';
 import type { ProviderAdapter } from './providers/adapter.js';
 import { cliDetectFailedBlock, cliMissingBlock, PreflightBlockedError, SessionLookupFailureError } from './providers/adapter.js';
@@ -493,6 +493,9 @@ export async function openSession(
         notes.push(`${from} 的内容已全部包含在 ${targetId} 中，无需并入`);
       } else {
         const dedup = dedupeCallEvents(outgoing);
+        // 工作目录要在写入之前取：`importTurns` 之后 `target.found` 会换成它返回的 ref
+        const sourceCwd = source.found.ref.cwd;
+        const targetCwd = target.found.ref.cwd;
         await target.adapter.preflight?.({ ref: target.found.ref, cwd: target.found.ref.cwd });
         const guard = await target.adapter.acquireWriteLock?.({ ref: target.found.ref });
         try {
@@ -500,6 +503,15 @@ export async function openSession(
           const newRef = await target.adapter.importTurns(dedup, target.found.ref.cwd, target.found.ref);
           merged = dedup.length;
           notes.push(`已把 ${from} 的 ${merged} 轮新内容并入 ${target.adapter.displayName} 会话 ${newRef.sessionId}`);
+          // 两个会话记录的工作目录不同：内容来自另一个项目，却写进了这一侧的会话。
+          // 项目目录被移动 / 改名时这是对的（旧记录里的 cwd 已失效），但更常见的成因是 id 抄错。
+          // 以前这里零披露——`--json` 连 warnings 都没有，用户不会发现自己刚把别处的项目并了进来。
+          if (normalizePath(sourceCwd) !== normalizePath(targetCwd)) {
+            warnings.push(
+              `来源会话 ${from}（${source.adapter.displayName}）记录的工作目录是 ${sourceCwd}，与目标会话 ${targetId} 的 ${targetCwd} 不同：这 ${merged} 轮内容现在在目标那一侧，resume 后会在 ${targetCwd} 里继续` +
+                `；若只是抄错了会话 id，先核对来源会话是否本来就该并进来——要把某个会话带到它自己那个目录继续，用 watch open <会话 id> --to <provider>（目标会在来源目录里新建）`,
+            );
+          }
           target.found = { ref: newRef, updatedAt: 0 };
         } finally {
           await guard?.release();
