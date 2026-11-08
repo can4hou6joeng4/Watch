@@ -976,6 +976,9 @@ async function cmdDoctor(cwd: string, json: boolean): Promise<void> {
 async function cmdNew(cwd: string, providerId: string, json: boolean, chain?: string): Promise<void> {
   const store = openStore();
   const warnings: string[] = [];
+  // 与 switch / adopt 同一处根因：两条分支都经 getOrCreateChainSession() → touchChain()
+  // 抬高 `--chain` 指定那条链的 last_used_at，而「当前链」就是按它算的。先记下来，写完如实说明
+  const previousChain = store?.findActiveChain(cwd) ?? null;
   // 目录不存在也能把会话建出来，但绑定指向一个不存在的项目，resume 时必然进不去
   const cwdIssue = await cwdProblem(cwd);
   if (cwdIssue) warnings.push(cwdIssue);
@@ -1038,26 +1041,52 @@ async function cmdNew(cwd: string, providerId: string, json: boolean, chain?: st
         }
       }
       const resumeCommand = adapter.resumeCommand(ref);
+      // 空链分支同样会 touchChain（getOrCreateChainSession 在建会话之后就跑过）
+      const currentChain = store?.findActiveChain(cwd) ?? null;
+      const shiftNote = currentChainShiftNote(previousChain, currentChain);
       for (const warning of warnings) console.error(`警告: ${warning}`);
       if (json) {
-        console.log(JSON.stringify({ ok: true, newRef: ref, resumeCommand, turnCount, fromProvider: providerId, ...(warnings.length ? { warnings } : {}) }));
+        console.log(
+          JSON.stringify({
+            ok: true,
+            newRef: ref,
+            resumeCommand,
+            turnCount,
+            fromProvider: providerId,
+            ...(shiftNote ? { previousChain, currentChain } : {}),
+            ...(warnings.length || shiftNote ? { warnings: shiftNote ? [...warnings, shiftNote] : warnings } : {}),
+          }),
+        );
         return;
       }
       console.log(`新会话: ${ref.sessionId}`);
       console.log(`resume: ${resumeCommand}`);
+      // 结果说明走 stdout（同 switch / adopt / chain new 的位置），不是降级警告
+      if (shiftNote) console.log(`\n${shiftNote}`);
       return;
     }
 
     const result = await createChainSession(providerId, cwd, listAdapters(), getAdapter, store, chain);
     // 链已存在时的表单同样要带出 cwd / 读库 / 交接降级说明，不能只在空链分支打印
     const allWarnings = [...warnings, ...result.warnings];
+    // createChainSession() 内部同样经 getOrCreateChainSession() 写 last_used_at
+    const currentChain = store?.findActiveChain(cwd) ?? null;
+    const shiftNote = currentChainShiftNote(previousChain, currentChain);
     if (json) {
-      console.log(JSON.stringify({ ok: true, ...result, ...(allWarnings.length ? { warnings: allWarnings } : {}) }));
+      console.log(
+        JSON.stringify({
+          ok: true,
+          ...result,
+          ...(shiftNote ? { previousChain, currentChain } : {}),
+          ...(allWarnings.length || shiftNote ? { warnings: shiftNote ? [...allWarnings, shiftNote] : allWarnings } : {}),
+        }),
+      );
       return;
     }
     for (const warning of allWarnings) console.error(`警告: ${warning}`);
     console.log(`新会话: ${result.newRef.sessionId}（${result.turnCount} 轮）`);
     console.log(`resume: ${result.resumeCommand}`);
+    if (shiftNote) console.log(`\n${shiftNote}`);
   } catch (error) {
     const msg = error instanceof Error ? error.message : String(error);
     // 与 switch / adopt 一致：目录本身有问题时先说路径，否则「还没有切换链」会被当成「目录里没东西」
