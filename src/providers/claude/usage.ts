@@ -15,9 +15,17 @@ export async function claudeSessionUsage(ref: SessionRef): Promise<TokenUsage | 
   let hit = false;
   // 同一条 assistant 回复按 content block 拆成多行写进 jsonl（thinking / text / tool_use 各一行），
   // **每一行都带同一份完整 usage**，逐行累加会把一条消息算 2～4 次。实测 39005 条里同一
-  // `message.id` 的 usage 逐字相同（0 条不同），所以按首份去重是无损的。
+  // `message.id` 的 usage 逐字相同（0 条不同）。
+  // 但「逐字相同」不是契约：流式写盘、进程被杀在半路、外部工具改写过文件时，靠前的行可能只带
+  // **部分** usage，最后那一行才是最终值。以前按「第一份」去重，这种会话会被**少算**，而且少算
+  // 得毫无异样——`watch usage` 与 `open` 摘要照常给一个数字。
+  // 现在按 `message.id` 取**用量合计最大的那一份**（顺序无关，`pick()` 已滤掉 0/0 占位，
+  // 所以占位不会盖掉真实值）。上游依据：ccusage（ccusage/ccusage，19.4k stars）的 `daily.rs`
+  // 对同一 `message_id` 的重复记录调用 `should_replace_deduped_daily_entry()`，判据正是
+  // `candidate_total > existing_total`——保留最大的那一份，而不是先读到的那一份。
+  // 多行完全相同时取最大与取第一份结果一致，对现有数据零行为变化。
   // 没有 `message.id` 的记录（如顶层的 `result.usage`）照旧各自累加——那本来就是不同的计数。
-  const seenMessageIds = new Set<string>();
+  const bestByMessageId = new Map<string, TokenUsage>();
   for (const line of raw.split('\n')) {
     if (!line.trim()) continue;
     let rec: Record<string, unknown>;
@@ -31,9 +39,17 @@ export async function claudeSessionUsage(ref: SessionRef): Promise<TokenUsage | 
     if (!u) continue;
     const messageId = typeof message?.id === 'string' && message.id ? message.id : null;
     if (messageId) {
-      if (seenMessageIds.has(messageId)) continue;
-      seenMessageIds.add(messageId);
+      const prev = bestByMessageId.get(messageId);
+      if (!prev || u.inputTokens + u.outputTokens > prev.inputTokens + prev.outputTokens) {
+        bestByMessageId.set(messageId, u);
+      }
+      continue;
     }
+    hit = true;
+    input += u.inputTokens;
+    output += u.outputTokens;
+  }
+  for (const u of bestByMessageId.values()) {
     hit = true;
     input += u.inputTokens;
     output += u.outputTokens;
