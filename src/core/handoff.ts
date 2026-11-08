@@ -1,7 +1,7 @@
 import type { ImportTurnsOpts, ProviderAdapter } from '../providers/adapter.js';
 import type { SessionRef, TokenUsage, UnifiedTurn } from './types.js';
-import { describeStoreErrorReason, emptyChainBindHint } from './store.js';
-import type { Chain, Store, SwitchRecord } from './store.js';
+import { chainsElsewhereHint, describeStoreErrorReason, emptyChainBindHint } from './store.js';
+import type { Chain, ChainsElsewhere, Store, SwitchRecord } from './store.js';
 import { dedupeCallEvents, describeDanglingToolCalls, describeUnansweredTail, mergeTurns, shouldReplacePairedSession, unwrapUserQuery } from './rich.js';
 import { describeWriteFailureReason, type FileDigest } from './atomic.js';
 import { addFinding, type Finding } from './findings.js';
@@ -457,6 +457,18 @@ export function storeUnavailableWarning(subject: string, storeError?: string): s
   return `本地库不可用，${subject}（可检查 WATCH_DB 路径与 Node 版本）`;
 }
 
+/**
+ * 本目录没有链时，本地库里其它目录的链（`usage` 的说明用）。
+ * 这条查询只是**补充说明**：库读不出来就当没有，用量报告本身不该因为它一起失败。
+ */
+function chainsElsewhereOf(store: Store, cwd: string): ChainsElsewhere[] {
+  try {
+    return store.chainsElsewhere(cwd);
+  } catch {
+    return [];
+  }
+}
+
 export async function chainUsage(
   cwd: string,
   adapters: ProviderAdapter[],
@@ -580,8 +592,15 @@ export async function chainUsage(
       // 有切换记录却没有一条统计得出来（绑定的 provider 已不在适配器列表里）
       notes.push('链上有切换记录，但没有可统计的会话（绑定的 provider 可能未注册）；未统计任何用量');
     } else {
-      // 没有当前链有两种来源：还没建链，或现有链都已归档——别把后者说成「没有链」
-      notes.push('没有可用的当前链（还没建链，或现有链都已归档），无用量可统计；可先用 watch chain list 查看');
+      // 没有当前链有两种来源：还没建链，或现有链都已归档——别把后者说成「没有链」。
+      // 还有第三种更容易被误读的：本目录没有链，链躺在别的目录里（链按 cwd 精确分组），
+      // 此时「还没建链」会被读成链丢了 / 从来没建成功，必须指出它在哪
+      const elsewhere = chainsElsewhereOf(store, cwd);
+      notes.push(
+        elsewhere.length
+          ? `本目录没有可用的当前链，无用量可统计；${chainsElsewhereHint(elsewhere)}`
+          : '没有可用的当前链（还没建链，或现有链都已归档），无用量可统计；可先用 watch chain list 查看',
+      );
     }
   }
   return { chain, total, totalExcluded, totalMissingUsage, byProvider, unsupported, warnings, notes };
