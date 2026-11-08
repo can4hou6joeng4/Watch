@@ -797,10 +797,15 @@ async function planOpenInProvider(
   let reuseMissing = Infinity;
   let reuseAt = -1;
   let parseFailed = 0;
+  // 撞上 listSessionsCap 时枚举到的只是「最近 N 个」：更早的会话根本没参与复用匹配，
+  // 复用失败不等于「确实没有可复用的」，而后果是多出一份重复会话
+  let scanCappedAt = 0;
   const unreadableCandidates: string[] = [];
   if (typeof target.listSessions === 'function') {
     try {
       const sessions = await target.listSessions(cwd);
+      const cap = target.listSessionsCap;
+      if (cap !== undefined && sessions.length >= cap) scanCappedAt = cap;
       for (const s of sessions) {
         let destTurns: UnifiedTurn[];
         try {
@@ -873,6 +878,15 @@ async function planOpenInProvider(
             : `已把 ${source.adapter.displayName} 的新增 ${delta.length} 轮并入既有 ${target.displayName} 会话 ${reuse.sessionId}`,
       },
     };
+  }
+  // 只在本轮真的会新建时披露：已经复用成功说明上限不影响结论，多喊一句就是假警。
+  // 文案要说清「不是没有」，以及后果（多一份会话）——否则「新建」看起来像正常决策。
+  if (scanCappedAt > 0) {
+    diagnostics?.push(
+      `${target.displayName} 在 ${cwd} 的会话已达列表上限 ${scanCappedAt} 个，本次只在最近 ${scanCappedAt} 个里找可复用的既有会话` +
+        `（更早的会话没参与匹配，无法确认其中是否已有能承接这些内容的会话）；本次将新建一份，项目里可能因此多出一份重复会话——` +
+        `若记得那条会话，可用 watch open <它的会话 id> 直接打开，或先在原生 CLI 里确认后再决定是否删掉这一份`,
+    );
   }
   return {
     ...base,
