@@ -280,8 +280,30 @@ export async function listGrokSessions(
       updatedAt = updatedAtRaw;
     }
     if (!updatedAt) {
-      // 旧版 Grok 会话目录没有 summary.json，用 chat_history.jsonl mtime 兜底，否则排序全 0 不稳定
-      updatedAt = (await stat(path.join(dir, id, 'chat_history.jsonl')).catch(() => undefined))?.mtimeMs ?? 0;
+      // 旧版 Grok 会话目录没有 summary.json，用 chat_history.jsonl mtime 兜底，否则排序全 0 不稳定。
+      // 但「读不出来」不能再写成 mtime=0：那会把一条会话变成「1970 年修改过」的事实——`sessions`
+      // 印 `mtime=1970-01-01`、`recent` 把它排到最后（多半直接挤出前 N 条）、`findLatestGrokSession`
+      // 也不会把它当最新来源，全程 `warnings: []`。只有文件真的不在（残留的会话目录）才算「没有会话」，
+      // 其余按 errno 抛中文原因，交给 sessions / recent / doctor 记进 unavailable + warnings——
+      // 与同文件 readdir 分支、kimi / codex 列表的口径一致。
+      const chatPath = path.join(dir, id, 'chat_history.jsonl');
+      try {
+        const st = await stat(chatPath);
+        if (!st.isFile()) {
+          throw Object.assign(new Error('不是普通文件'), { code: 'NOT_REGULAR_FILE' });
+        }
+        updatedAt = st.mtimeMs;
+      } catch (error) {
+        const code = (error as NodeJS.ErrnoException).code;
+        // 残留的会话目录（没有 chat_history.jsonl）不是会话，跳过即可
+        if (code === 'ENOENT' || code === 'ENOTDIR') continue;
+        if (code === 'NOT_REGULAR_FILE') {
+          throw new Error(
+            `会话 ${id} 的路径现在不是普通文件（被同名目录或设备文件占住了）：${chatPath}；无法把它当作会话读取，请先恢复该路径再重试`,
+          );
+        }
+        throw new Error(`无法读取 Grok 会话文件状态 ${chatPath}：${describePathReadFailureReason(error)}`);
+      }
     }
     const preview =
       typeof summary?.generated_title === 'string'
