@@ -1344,7 +1344,15 @@ async function cmdChain(cwd: string, json: boolean, action?: string, a?: string,
       // 也看不出链尾文件是否还在（在的话下次 switch 才接得上，不在就是 doctor 的 brokenTips）
       const tips = new Map<
         string,
-        { provider: string; sessionId: string; filePath: string; missing: boolean; error?: string }
+        {
+          provider: string;
+          sessionId: string;
+          filePath: string;
+          missing: boolean;
+          error?: string;
+          /** 文件在、但读不出来（`chmod 000` 之类）：`missing` 为假也不代表可用 */
+          unreadable?: boolean;
+        }
       >();
       for (const c of chains) {
         let last: ReturnType<typeof store.listSwitchEvents>[number] | undefined;
@@ -1360,8 +1368,13 @@ async function cmdChain(cwd: string, json: boolean, action?: string, a?: string,
         // 同一条链在 status 里却写着「已不存在」；原因还会把英文 errno 原文塞进 --json 与 stderr
         const presence = await sessionFilePresence(last.toRef.filePath);
         const missing = presence.state === 'missing';
-        const tipError =
-          presence.state === 'unknown'
+        // 同理，`stat` 成功也不代表读得出来：`chmod 000` 的链尾在 chain list 里看着一切正常，
+        // 而 resume 与下一次 switch 一读内容就失败（status 走同一个探测，口径一致）
+        const readProblem =
+          presence.state === 'present' && presence.isFile ? await probeSessionReadable(last.toRef.filePath) : null;
+        const tipError = readProblem
+          ? readProblem
+          : presence.state === 'unknown'
             ? presence.reason
             : presence.state === 'present' && !presence.isFile
               ? '该路径现在不是普通文件'
@@ -1372,10 +1385,17 @@ async function cmdChain(cwd: string, json: boolean, action?: string, a?: string,
           filePath: last.toRef.filePath,
           missing,
           ...(tipError ? { error: tipError } : {}),
+          ...(readProblem ? { unreadable: true } : {}),
         });
         if (missing && c.status === 'active') {
           warnings.push(
             `链「${escapeControlChars(c.name)}」的链尾会话文件已不存在（${last.toRef.provider}:${last.toRef.sessionId}）：下次切换会失败，${rebindHint(last.toRef.provider)}`,
+          );
+        } else if (readProblem && c.status === 'active') {
+          // 读不出来 ≠ 文件没了：不标 missing，也不能当成「一切正常」而不出声
+          warnings.push(
+            `链「${escapeControlChars(c.name)}」的链尾会话文件读不出来（${last.toRef.provider}:${last.toRef.sessionId}）：${readProblem}；` +
+              `resume 与下次切换会失败——先修好这个文件（权限或内容），或 watch adopt ${last.toRef.provider} --session <另一个会话 id> 换绑`,
           );
         } else if (tipError && c.status === 'active') {
           // 读不出来 ≠ 文件没了：不标 missing，也不能当成「一切正常」而不出声
@@ -1416,7 +1436,15 @@ async function cmdChain(cwd: string, json: boolean, action?: string, a?: string,
         const here = current && c.id === current.id ? ' ← 当前' : '';
         const tip = tips.get(c.id);
         const tipText = tip
-          ? `  → ${tip.provider}:${tip.sessionId}${tip.missing ? '（链尾文件已不存在）' : tip.error ? '（链尾文件状态无法确认）' : ''}`
+          ? `  → ${tip.provider}:${tip.sessionId}${
+              tip.missing
+                ? '（链尾文件已不存在）'
+                : tip.unreadable
+                  ? '（链尾文件读不出来）'
+                  : tip.error
+                    ? '（链尾文件状态无法确认）'
+                    : ''
+            }`
           : '';
         console.log(`  ${escapeControlChars(c.name)}${mark}${here}  ${c.id}  lastUsed=${fmtTime(c.lastUsedAt)}${tipText}`);
       }

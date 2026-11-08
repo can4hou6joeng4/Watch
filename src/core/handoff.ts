@@ -8,7 +8,7 @@ import { addFinding, type Finding } from './findings.js';
 import { escapeControlChars } from './display.js';
 import { countUnparsableJsonLines } from './jsonl.js';
 import { cwdAliasHint } from './cwd.js';
-import { describePathReadFailureReason, describeReadFailureOrSelf, sessionFilePresence } from './read-text.js';
+import { describePathReadFailureReason, describeReadFailureOrSelf, probeSessionReadable, sessionFilePresence } from './read-text.js';
 import { noSessionHint, unknownProviderMessage } from '../providers/registry.js';
 
 /** 写回被阻断（如 TOCTOU 检测到目标被外部修改）：一票否决，不产生部分写 */
@@ -430,6 +430,17 @@ export async function createChainSession(
           `本次无法交接也无法 resume——可先恢复该文件，或用 watch chain new <新名字> 另起一条链`,
       );
     }
+    // `stat` 成功不等于读得出来：`chmod 000` 的文件 `stat` 照常返回，上面三档全过，
+    // 于是这里告诉用户「直接 resume 即可」，而 resume 一打开就失败。同一状态下
+    // `sessions` 会说「open / switch 读这条会话时同样会失败」、`open` 会说「找到了，但读不出来」。
+    const readProblem = await probeSessionReadable(tail.toRef.filePath);
+    if (readProblem) {
+      throw new Error(
+        `链尾已是 ${providerId}，但链尾会话 ${tail.toRef.sessionId} 的文件现在读不出来：${readProblem}；` +
+          `resume 会失败，本次没有新建会话——先修好这个文件（权限或内容）；` +
+          `若这个会话不再需要，用 watch chain new <新名字> 另起一条链后再 watch new ${providerId}`,
+      );
+    }
     throw new Error(`链尾已是 ${providerId}，直接 resume 即可；要开新对话请先切到另一侧`);
   }
   const paired = pairedRef(history, providerId);
@@ -763,6 +774,19 @@ export async function chainStatus(
       warnings.push(
         `链尾会话文件状态无法确认：${last.toProvider} ${last.toRef.sessionId}；${tipPresence.reason}；可能是权限或路径问题，先确认它是否还在，再决定是否需要 adopt`,
       );
+    } else if (tipPresence.isFile) {
+      // `stat` 成功不等于读得出来：`chmod 000` 的链尾文件 stat 照常返回，于是
+      // `chainTipUnusable` 报 false、warnings 为空，而 resume / 下一次 switch 一读内容就失败。
+      // 同一状态下 `sessions` / `open` 都会披露，status 作为总览入口不能替它宣称「可用」。
+      const readProblem = await probeSessionReadable(last.toRef.filePath);
+      if (readProblem) {
+        chainTipUnusable = true;
+        warnings.push(
+          `链尾会话文件读不出来：${last.toProvider} ${last.toRef.sessionId}；${readProblem}；` +
+            `resume 与下一次 switch 都会失败——先修好这个文件（权限或内容），` +
+            `或 watch adopt ${last.toProvider} --session <另一个会话 id> 换绑，或用 watch chain new <新名字> 另起一条链`,
+        );
+      }
     }
   }
   // tips 仍列出同目录全部会话，但用 onChain 标记是否属于当前链；链尾不再 fallback 到游离会话
