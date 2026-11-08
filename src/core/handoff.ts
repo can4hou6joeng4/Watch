@@ -203,7 +203,17 @@ export async function adoptIntoChain(
       warnings.push(`链历史读取失败，按无链处理：${describeStoreErrorReason(error)}`);
     }
   }
-  if (history.some((h) => h.toProvider === providerId && h.toRef?.sessionId === found.ref.sessionId)) {
+  // 「这家已经绑着这个会话」只看 `toRef` 是不够的：`switch codex` 之后 claude 的绑定留在
+  // `fromRef` 上（链上每个 provider 只有一个会话），旧判据会把这种情况当成一次真的换绑，
+  // `recordSwitch` 于是写下 `claude → claude`（`fromRef` 与 `toRef` 是同一个会话）的自指记录
+  // 并成为链尾（2026-11-08 实测：`new claude` → `chain new A` → `switch codex --chain A`
+  // → `adopt claude --chain A` 得到 `replacedRef` 与 `adoptedRef` 完全相同的 JSON，
+  // 文本模式印「替换了: <和上一行一样的 id>」）。判据是「这家**当前**绑的就是它」，
+  // 用 `pairedRef()`：它按整条历史取最后一次出现，正好等于链上这一家的当前绑定。
+  // 不能改成「历史上出现过就算」——`adopt <provider> --session <更早的会话>` 正是
+  // `new` 的报错里给出的换绑办法，那条更早的会话通常以 `fromRef` 出现过。
+  const bound = pairedRef(history, providerId)?.sessionId === found.ref.sessionId;
+  if (bound) {
     // 目标状态本来就成立（这家已经绑着这个会话）——这是空操作，不是失败。以前一律抛
     // 「该会话已在链上，无需接入」让 cmdAdopt 以 exit 1 结束：脚本会把空操作当接入失败，
     // 而 `chain rename <同名>` / `chain archive <已归档>` 早就是 `unchanged:true` 的成功返回。
