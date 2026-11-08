@@ -70,15 +70,28 @@ export async function parseClaudeSession(ref: SessionRef): Promise<UnifiedTurn[]
   return stripEmptyEvents(turns);
 }
 
-/** 从 claude message 读真实 usage；缺字段或全 0 返回 undefined（避免把 0 占位当真实值） */
+/**
+ * 从 claude message 读真实 usage；缺字段或全 0 返回 undefined（避免把 0 占位当真实值）。
+ *
+ * 输入量口径必须与 `claudeSessionUsage()`（`usage.ts` 的 `pick()`）一致：`input_tokens` 只是
+ * **未命中缓存**的增量，真实输入是「未命中 + 写入缓存 + 命中缓存」三块之和（ccusage 口径）。
+ * 两边各算一套时，`open --to <provider>` 的 note 会写「来源 Claude Code 用量 in=370 out=30
+ * （已在对账中携带）」，而写进目标会话的是 300/30——**搬运层丢掉了缓存那两块**，note 却让人
+ * 以为带过去了。纯缓存命中的会话（明文两块都是 0、`cache_read` 非零）更是被 0/0 判据直接丢掉，
+ * 转入别家后变成「这条会话没有用量」。与 codex 侧同源：信息层与搬运层读的不是同一份口径。
+ */
 function readUsage(message: unknown): TokenUsage | undefined {
   if (typeof message !== 'object' || message === null) return undefined;
   const usage = (message as Record<string, unknown>).usage;
   if (typeof usage !== 'object' || usage === null) return undefined;
   const u = usage as Record<string, unknown>;
-  const inputTokens = typeof u.input_tokens === 'number' ? u.input_tokens : undefined;
-  const outputTokens = typeof u.output_tokens === 'number' ? u.output_tokens : undefined;
-  if (inputTokens === undefined || outputTokens === undefined) return undefined;
+  const cacheCreate = typeof u.cache_creation_input_tokens === 'number' ? u.cache_creation_input_tokens : 0;
+  const cacheRead = typeof u.cache_read_input_tokens === 'number' ? u.cache_read_input_tokens : 0;
+  const hasBase = typeof u.input_tokens === 'number' || typeof u.output_tokens === 'number';
+  if (!hasBase && cacheCreate === 0 && cacheRead === 0) return undefined;
+  const inputTokens = (typeof u.input_tokens === 'number' ? u.input_tokens : 0) + cacheCreate + cacheRead;
+  const outputTokens = typeof u.output_tokens === 'number' ? u.output_tokens : 0;
+  // 按**合计**判 0：只有缓存命中的记录 input/output 都是 0，但缓存两块非零，不能被误丢。
   if (inputTokens === 0 && outputTokens === 0) return undefined;
   return { inputTokens, outputTokens };
 }
