@@ -123,9 +123,24 @@ export async function runImportCodex(args: string[]): Promise<void> {
         `${action} 需要 --experimental（写操作必须显式确认）；例：watch import-codex ${action} ${id} --experimental`,
       );
     }
-    if (action !== 'prepare' && values.cwd) throw new Error('已确认的计划已经绑定工作目录，不要再覆盖');
-    if (action !== 'prepare' && values['desktop-project']) throw new Error('--desktop-project 只接受用于 prepare');
-    if (action !== 'project-prepare' && values.project) throw new Error('--project 只接受用于 project-prepare');
+    // 参数用错子命令时说「参数用错」，不能说计划状态：`status` 是只读的，连计划都还没找到，
+    // 旧文案「已确认的计划已经绑定工作目录，不要再覆盖」把用户的注意力引去查导入日志 / 目标锁。
+    // 每条都指名「哪个子命令不接受哪个参数」并给出可照抄的下一步。
+    if (action !== 'prepare' && values.cwd) {
+      throw new Error(
+        `import-codex ${action} 不接受 --cwd（只有 prepare 用它绑定工作目录，其他子命令的计划在 prepare 时就已确定目录）；去掉 --cwd 重跑：watch import-codex ${action} ${id}`,
+      );
+    }
+    if (action !== 'prepare' && values['desktop-project']) {
+      throw new Error(
+        `import-codex ${action} 不接受 --desktop-project（只有 prepare 接受）；去掉它重跑：watch import-codex ${action} ${id}`,
+      );
+    }
+    if (action !== 'project-prepare' && values.project) {
+      throw new Error(
+        `import-codex ${action} 不接受 --project（只有 project-prepare 接受）；要按项目导入请改用 watch import-codex project-prepare ${id} --project <UUID> --experimental，否则去掉 --project 重跑`,
+      );
+    }
     const service = createOfficialCodexImport();
     const result = action === 'prepare'
       ? await service.prepare(id, values.cwd!, { desktopProject: values['desktop-project'] })
