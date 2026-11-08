@@ -5,7 +5,7 @@ import type { ProviderInfo } from './types.js';
 import type { Chain } from './store.js';
 import type { ImportJobs } from './import-jobs.js';
 import { defaultDbPath, describeStoreErrorReason } from './store.js';
-import { diffTurns } from './handoff.js';
+import { diffTurns, rebindHint } from './handoff.js';
 import type { SessionRef } from './types.js';
 import { readWatchVersion } from './watch-version.js';
 import { cwdProblem } from './cwd.js';
@@ -220,7 +220,7 @@ export async function doctorReport(cwd: string, deps: DoctorDeps): Promise<Docto
           });
           if (missing) {
             warnings.push(
-              `链「${chain.name}」的链尾会话文件已不存在：${tip.filePath}（${tip.provider}）；下次切换会失败，可先 adopt 该 provider 的新会话`,
+              `链「${chain.name}」的链尾会话文件已不存在：${tip.filePath}（${tip.provider}）；下次切换会失败，${rebindHint(tip.provider)}`,
             );
           } else {
             warnings.push(

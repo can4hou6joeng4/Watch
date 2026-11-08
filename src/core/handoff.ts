@@ -40,6 +40,22 @@ export function blockedHint(code: string): string {
 }
 
 /**
+ * 链上绑定的会话文件已经不可用（被删 / 路径被占 / 读不出来）时的下一步。
+ *
+ * 这里**不能**建议 `adopt --session <那个 id>`：`adopt` 按原生存储反查会话，
+ * 文件没了就反查不到，照抄只会得到「在当前目录找不到会话: <同一个 id>」——
+ * 把人送回同一个死胡同（2026-11-08 实测三处提示全部如此，包括刚把真实 id 填进去的那版）。
+ * 真能修复绑定的是 `watch switch <provider>`：找不到可沿用的目标会话时会新建一个承接内容
+ * 并让链尾跟过去。`adopt` 仍然有用，但只能配**另一个还存在的**会话 id，所以显式标成占位符。
+ */
+export function rebindHint(provider: string, providerLabel = provider): string {
+  return (
+    `可先 watch switch ${provider} 重新绑定（找不到可沿用的 ${providerLabel} 会话时会新建一个承接内容）；` +
+    `若要用 adopt 指定别的会话，需要那个会话的文件还在：watch adopt ${provider} --session <会话 id>`
+  );
+}
+
+/**
  * 写前 TOCTOU 校验：目标会话指纹与快照不一致（被外部写入）则拒绝。
  * `action` 只影响错误文案（“已中止本次<action>”）。open / switch 两条写入路径共用。
  */
@@ -474,14 +490,14 @@ export async function chainStatus(
     if (tipPresence.state === 'missing') {
       chainTipUnusable = true;
       warnings.push(
-        `链尾会话文件已不存在：${last.toRef.filePath}（${last.toProvider} ${last.toRef.sessionId}，文件不存在）；下次切换会失败，可先 adopt 该 provider 的新会话`,
+        `链尾会话文件已不存在：${last.toRef.filePath}（${last.toProvider} ${last.toRef.sessionId}，文件不存在）；下次切换会失败，${rebindHint(last.toProvider)}`,
       );
     } else if (tipPresence.state === 'present' && !tipPresence.isFile) {
       // 路径还在、只是不是普通文件：说成「文件已不存在」自相矛盾，还会把人引去 adopt；
       // 与 chain list / doctor 的「该路径现在不是普通文件」保持同一说法
       chainTipUnusable = true;
       warnings.push(
-        `链尾会话文件的路径现在不是普通文件（被同名目录或设备文件占住了）：${last.toRef.filePath}（${last.toProvider} ${last.toRef.sessionId}）；下次切换会失败，先恢复该路径，再决定是否需要 adopt 该 provider 的新会话`,
+        `链尾会话文件的路径现在不是普通文件（被同名目录或设备文件占住了）：${last.toRef.filePath}（${last.toProvider} ${last.toRef.sessionId}）；下次切换会失败，先恢复该路径，再决定是否需要 ${rebindHint(last.toProvider)}`,
       );
     } else if (tipPresence.state === 'unknown') {
       chainTipUnusable = true;
@@ -565,13 +581,13 @@ export async function handoff(
       if (tipPresence.state === 'missing') {
         throw new Error(
           `未发现原生会话；而链尾记录的 ${chainTipRef.provider} 会话 ${chainTipRef.sessionId} 文件已不存在（${chainTipRef.filePath}）：` +
-            `可先 watch adopt ${chainTipRef.provider} --session ${chainTipRef.sessionId} 重新绑定，或在原生 CLI 里新开一个会话`,
+            `${rebindHint(chainTipRef.provider)}，或在原生 CLI 里新开一个会话`,
         );
       }
       if (tipPresence.state === 'unknown') {
         throw new Error(
           `未发现原生会话；链尾记录的 ${chainTipRef.provider} 会话 ${chainTipRef.sessionId} 状态无法确认：${chainTipRef.filePath}；${tipPresence.reason}` +
-            `——可能是权限或路径问题，先确认它是否还在，再决定是否 watch adopt 重新绑定`,
+            `——可能是权限或路径问题，先确认它是否还在，再决定是否 watch switch ${chainTipRef.provider} 重新绑定`,
         );
       }
       // 路径被同名目录 / 设备文件占住：两个分支都不进就会落到下面通用的
@@ -579,7 +595,7 @@ export async function handoff(
       if (tipPresence.state === 'present' && !tipPresence.isFile) {
         throw new Error(
           `未发现原生会话；而链尾记录的 ${chainTipRef.provider} 会话 ${chainTipRef.sessionId} 的路径现在不是普通文件（被同名目录或设备文件占住了）：${chainTipRef.filePath}` +
-            `——先恢复该路径，再决定是否 watch adopt 重新绑定，或在原生 CLI 里新开一个会话`,
+            `——先恢复该路径，再决定是否 watch switch ${chainTipRef.provider} 重新绑定，或在原生 CLI 里新开一个会话`,
         );
       }
     }
@@ -696,10 +712,10 @@ export async function handoff(
     const code = (error as NodeJS.ErrnoException).code;
     const gone = code === 'ENOENT' || code === 'ENOTDIR';
     const reason = gone
-      ? `文件 ${sourceTip.ref.filePath} 已不存在，而链记录仍指向它：可用 watch adopt 重新绑定，或用 watch sessions 查看该目录还有哪些可接力的会话`
+      ? `文件 ${sourceTip.ref.filePath} 已不存在，而链记录仍指向它：${rebindHint(sourceTip.provider)}，或用 watch sessions 查看该目录还有哪些可接力的会话`
       : code === 'EACCES' || code === 'EPERM'
         ? `文件 ${sourceTip.ref.filePath} 无权读取（权限问题，不是被删除）：先修权限或换一个有权限的路径，再重试`
-        : `文件 ${sourceTip.ref.filePath} 读不出来：如果只是格式坏掉可先确认文件内容；确认文件确实没了再 watch adopt 重新绑定`;
+        : `文件 ${sourceTip.ref.filePath} 读不出来：如果只是格式坏掉可先确认文件内容；确认文件确实没了再 watch switch ${sourceTip.provider} 重新绑定`;
     const knownFsError = gone || code === 'EACCES' || code === 'EPERM';
     const detail = knownFsError ? '' : `${describeReadFailureOrSelf(error)}；`;
     throw new Error(

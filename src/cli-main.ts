@@ -3,7 +3,7 @@ import { stat } from 'node:fs/promises';
 import path from 'node:path';
 import { SEARCH_MAX_HITS, Store, defaultDbPath, describeStoreErrorReason, describeStoreOpenFailure } from './core/store.js';
 import { describeFindings } from './core/findings.js';
-import { adoptIntoChain, blockedHint, chainStatus, chainUsage, collectTips, createChainSession, handoff, HandoffBlockedError } from './core/handoff.js';
+import { adoptIntoChain, blockedHint, chainStatus, chainUsage, collectTips, createChainSession, handoff, HandoffBlockedError, rebindHint } from './core/handoff.js';
 import { reindexCwd } from './core/search.js';
 import type { SessionRef } from './core/types.js';
 import { getAdapter, listAdapters, listProviders, noSessionHint, unknownProviderMessage } from './providers/registry.js';
@@ -288,7 +288,7 @@ async function cmdStatus(cwd: string, json: boolean, chain?: string): Promise<vo
     // 具体原因已由警告给出（三档措辞不同），这里只指认链尾并给下一步
     console.log(
       `未发现可列出的原生会话；链尾记录的是 ${chainTip.provider} 会话 ${chainTip.ref.sessionId}，` +
-        `其文件当前不可用（原因见上方警告）——可先恢复该文件，或 watch adopt ${chainTip.provider} --session ${chainTip.ref.sessionId} 重新绑定`,
+        `其文件当前不可用（原因见上方警告）——可先恢复该文件，或 ${rebindHint(chainTip.provider)}`,
     );
   } else if (!tips.length) {
     console.log(`未发现会话（${noSessionHint()}）`);
@@ -621,7 +621,7 @@ async function cmdSessions(cwd: string, json: boolean, chain?: string): Promise<
           // 撞到适配器上限时列表只是「最近 N 个」：不标出来会被当成全集
           const capped = a.listSessionsCap !== undefined && sessions.length >= a.listSessionsCap;
           // 链上绑定了、但这次没被列出来：整组被 filter 掉后看起来就像「这条链没绑定它」。
-          // 两种原因必须分开说——文件已经没了（下次切换必然失败，可先 adopt），还是只是排在上限之外。
+          // 两种原因必须分开说——文件已经没了（下次切换必然失败，可先 switch 重建），还是只是排在上限之外。
           if (chainRow && ids) {
             const listed = new Set(sessions.map((s) => s.ref.sessionId));
             const missingFiles: string[] = [];
@@ -642,9 +642,8 @@ async function cmdSessions(cwd: string, json: boolean, chain?: string): Promise<
             }
             if (missingFiles.length) {
               warnings.push(
-                `链 ${chainRow.name} 绑定的 ${a.id} 会话 ${missingFiles.join('、')} 文件已不存在，本次未列出；下次切换会失败，可先 watch adopt ${a.id} --session ${missingFiles[0]}` +
-                  (missingFiles.length > 1 ? `（另有 ${missingFiles.length - 1} 个同样缺失，见上）` : '') +
-                  ' 重新绑定',
+                `链 ${chainRow.name} 绑定的 ${a.id} 会话 ${missingFiles.join('、')} 文件已不存在，本次未列出；下次切换会失败，${rebindHint(a.id)}` +
+                  (missingFiles.length > 1 ? `（另有 ${missingFiles.length - 1} 个同样缺失，见上）` : ''),
               );
             }
             if (unreadableFiles.length) {
@@ -894,12 +893,12 @@ async function cmdDoctor(cwd: string, json: boolean): Promise<void> {
           `  链「${d.chainName}」: ${d.from.provider}:${d.from.sessionId} → ${d.to.provider}:${d.to.sessionId}，缺 ${d.missingTurns}/${d.sourceTurns} 条`,
         );
       }
-      // 摘要行只报个数；缺的是哪条链尾必须直接给 provider:sessionId，否则照「可先 adopt」也无法定位。
+      // 摘要行只报个数；缺的是哪条链尾必须直接给 provider:sessionId，否则照「可先 watch switch」也无法定位。
       // 读不出来 ≠ 已删除：EACCES 等状态下让人 adopt 等于白换一次绑定
       for (const b of report.store.brokenTips) {
         console.log(
           b.missing
-            ? `  链「${b.chainName}」: ${b.provider}:${b.sessionId} 链尾文件已不存在（${b.filePath}），可先 adopt 该 provider 的新会话`
+            ? `  链「${b.chainName}」: ${b.provider}:${b.sessionId} 链尾文件已不存在（${b.filePath}），${rebindHint(b.provider)}`
             : `  链「${b.chainName}」: ${b.provider}:${b.sessionId} 链尾文件状态无法确认（${b.filePath}，${b.error}）；先确认文件是否还在，再决定是否需要 adopt`,
         );
       }
@@ -1071,7 +1070,7 @@ async function cmdChain(cwd: string, json: boolean, action?: string, a?: string,
         });
         if (missing && c.status === 'active') {
           warnings.push(
-            `链「${c.name}」的链尾会话文件已不存在（${last.toRef.provider}:${last.toRef.sessionId}）：下次切换会失败，可先 watch adopt ${last.toRef.provider} --session ${last.toRef.sessionId} 重新绑定`,
+            `链「${c.name}」的链尾会话文件已不存在（${last.toRef.provider}:${last.toRef.sessionId}）：下次切换会失败，${rebindHint(last.toRef.provider)}`,
           );
         } else if (tipError && c.status === 'active') {
           // 读不出来 ≠ 文件没了：不标 missing，也不能当成「一切正常」而不出声
