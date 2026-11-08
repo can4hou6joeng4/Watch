@@ -2,7 +2,7 @@ import type { ImportTurnsOpts, ProviderAdapter } from '../providers/adapter.js';
 import type { SessionRef, TokenUsage, UnifiedTurn } from './types.js';
 import { describeStoreErrorReason } from './store.js';
 import type { Chain, Store, SwitchRecord } from './store.js';
-import { dedupeCallEvents, describeDanglingToolCalls, mergeTurns, shouldReplacePairedSession, unwrapUserQuery } from './rich.js';
+import { dedupeCallEvents, describeDanglingToolCalls, describeUnansweredTail, mergeTurns, shouldReplacePairedSession, unwrapUserQuery } from './rich.js';
 import { describeWriteFailureReason, type FileDigest } from './atomic.js';
 import { addFinding, type Finding } from './findings.js';
 import { countUnparsableJsonLines } from './jsonl.js';
@@ -918,11 +918,13 @@ export async function handoff(
   // 同上，工具调用没有结果（Ctrl-C、用量耗尽、resume 重放过半截）在两处检查里都看不出来：
   // `diffTurns` 只比解析结果，round-trip 只比「写进去的内容」。`switch` 是 CLI 主路径，
   // 不披露就会把「那一轮做了一半」当成完整交接。
-  const dangling = describeDanglingToolCalls(
-    turns,
-    `来源会话 ${sourceTip.ref.sessionId}（${source.displayName}）`,
-  );
+  const sourceLabel = `来源会话 ${sourceTip.ref.sessionId}（${source.displayName}）`;
+  const dangling = describeDanglingToolCalls(turns, sourceLabel);
   if (dangling) warnings.push(dangling);
+  // 「用户说完、模型没回」是同一种中断的另一形状：`diffTurns` 会把这句悬空的问题当成新内容
+  // 照常并入目标，round-trip 两边都含它所以校验通过——不主动披露就会把半轮当完整交接。
+  const unanswered = describeUnansweredTail(turns, sourceLabel);
+  if (unanswered) warnings.push(unanswered);
   // 目标级保护：传入即将写入的会话，Codex 据此检查 per-thread writer 锁（而非只看 Desktop 是否运行）
   await target.preflight?.({ ref: into, cwd });
   // 协作写锁：供应商支持时在写入期间独占原生锁，收窄与原生 writer 的竞态窗口

@@ -254,6 +254,34 @@ export function describeDanglingToolCalls(turns: UnifiedTurn[], label: string): 
   return `${label}有 ${dangling.length} 次工具调用没有结果（callId: ${shown}${dangling.length > 3 ? ' 等' : ''}），可能在中断或仍在运行：交接后那一轮不完整，先在原生 CLI 里确认再继续`;
 }
 
+/**
+ * 会话最后停在用户这一侧：用户说了话，没有对应的助手回复就断了。
+ *
+ * 这是「工具调用没有结果」之外的另一种中断形状（Ctrl-C、用量耗尽、进程被杀、文件被截断）：
+ * `parse` 会如实解析出那条 user 记录，`diffTurns` 把它当新内容照常并入目标，round-trip
+ * 两边都含这一轮所以校验通过——`danglingToolCalls` 只按 callId 看，三处防护都看不出
+ * 「这一轮其实没有发生」。接手的一侧会看到一句悬空的问题，而输出看起来像一次完整交接。
+ *
+ * **保守判定，宁少报不误报**：只看最后一条 turn 的 role，且要求它有实际文本。
+ * 仅含 `tool_result` 的 user 记录在 parse 阶段已并进 assistant.events，不会落成 user turn；
+ * 空文本也说明不了什么（各家可能写占位记录），不据此下结论。
+ */
+export function unansweredUserTail(turns: UnifiedTurn[]): UnifiedTurn | null {
+  const last = turns.at(-1);
+  if (!last || last.role !== 'user') return null;
+  if (!last.text.trim()) return null;
+  return last;
+}
+
+/** 与 `describeDanglingToolCalls` 同一套披露口径，未闭合时返回 null。 */
+export function describeUnansweredTail(turns: UnifiedTurn[], label: string): string | null {
+  const tail = unansweredUserTail(turns);
+  if (!tail) return null;
+  const full = tail.text.trim().replace(/\s+/g, ' ');
+  const preview = full.length > 40 ? `${full.slice(0, 40)}…` : full;
+  return `${label}最后停在用户消息上（「${preview}」），没有对应的助手回复：这一轮可能被中断或还在生成，交接后接手的一侧会看到一句悬空的问题，先在原生 CLI 里确认再继续`;
+}
+
 export function ensureAssistant(turns: UnifiedTurn[], timestamp: string, provider: string): UnifiedTurn {  const last = turns.at(-1);
   if (last?.role === 'assistant') return last;
   const created: UnifiedTurn = { role: 'assistant', text: '', timestamp, provider, events: [] };

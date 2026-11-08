@@ -1,7 +1,7 @@
 import { stat } from 'node:fs/promises';
 import { describeWriteFailureReason, type FileDigest } from './core/atomic.js';
 import { assertTargetUnchanged, blockedHint, diffTurns, HandoffBlockedError } from './core/handoff.js';
-import { describeDanglingToolCalls, dedupeCallEvents } from './core/rich.js';
+import { describeDanglingToolCalls, describeUnansweredTail, dedupeCallEvents } from './core/rich.js';
 import { Store, defaultDbPath, describeStoreErrorReason, describeStoreOpenFailure } from './core/store.js';
 import { IS_WIN, stripDevicePrefix } from './core/platform.js';
 import type { SessionRef, TokenUsage, UnifiedTurn } from './core/types.js';
@@ -389,7 +389,7 @@ export async function openSession(
           error: `目标会话 ${target.found.ref.sessionId}（${target.adapter.displayName}）读取失败：${describeReadFailureOrSelf(error)}；本次未写入任何内容`,
         };
       }
-      warnDanglingToolCalls(
+      warnUnfinishedTurns(
         srcTurns,
         `来源会话 ${source.found.ref.sessionId}（${source.adapter.displayName}）`,
         (msg) => warnings.push(msg),
@@ -442,7 +442,7 @@ export async function openSession(
     try {
       const turns = await target.adapter.parse(target.found.ref);
       // 即将 resume 的这个会话本身就停在做了一半的工具调用上：resume 后客户端多半也停在那里
-      warnDanglingToolCalls(
+      warnUnfinishedTurns(
         turns,
         `会话 ${target.found.ref.sessionId}（${target.adapter.displayName}）`,
         (msg) => warnings.push(msg),
@@ -549,12 +549,15 @@ type PlannedOpen =
   | { ok: false; error: string };
 
 /**
- * 会话里有工具调用没有结果（中断 / 仍在运行 / resume 重放过半截调用）：内容照常可读，
- * 但接手的一侧会停在做了一半的那一轮，`diffTurns` 与 round-trip 都查不出来——只能主动披露。
+ * 会话没收尾的两种形状，`diffTurns` 与 round-trip 都查不出来——只能主动披露：
+ *   1. 工具调用没有结果（中断 / 仍在运行 / resume 重放过半截调用）；
+ *   2. 最后停在用户消息上、没有对应的助手回复（用户说完就被打断 / 文件被截断）。
+ * 两处文案都在 `rich.ts`，`switch` 用的是同一对函数，措辞不会在 CLI 与桌面端跑偏。
  */
-function warnDanglingToolCalls(turns: UnifiedTurn[], label: string, push: (msg: string) => void): void {
-  const message = describeDanglingToolCalls(turns, label);
-  if (message) push(message);
+function warnUnfinishedTurns(turns: UnifiedTurn[], label: string, push: (msg: string) => void): void {
+  for (const message of [describeDanglingToolCalls(turns, label), describeUnansweredTail(turns, label)]) {
+    if (message) push(message);
+  }
 }
 
 /**
@@ -629,7 +632,7 @@ async function planOpenInProvider(
   }
   const outgoing = dedupeCallEvents(turns);
   // 来源停在做了一半的工具调用上：转入后目标会话在那一轮同样不完整，预检与写入都要说
-  warnDanglingToolCalls(
+  warnUnfinishedTurns(
     turns,
     `来源会话 ${sourceId}（${source.adapter.displayName}）`,
     (msg) => diagnostics?.push(msg),
