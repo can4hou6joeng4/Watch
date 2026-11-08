@@ -212,6 +212,31 @@ export async function resolveById(
 }
 
 /**
+ * `--provider` 指定的那一家没有这个 id 时，别家可能有：跨家再反查一次，别把
+ * 「provider 写错」讲成「id 写错」。`cmdAdopt` 早就是这么做的（会话属于别家会指名），
+ * `open` 一直没有，两条路径对同一种参数错误给出两种说法。
+ *
+ * 只跳过被点名的 provider；别家读不出来既不算命中、也不能当成「这家没有」——
+ * 记进 unreadable，没命中时一并披露，不凭空断言「谁都不认识这个 id」。
+ */
+async function findOwnerElsewhere(
+  sessionId: string,
+  provider: string,
+  adapters: ProviderAdapter[],
+): Promise<{ owner: string | null; unreadable: string[] }> {
+  const unreadable: string[] = [];
+  for (const a of adapters) {
+    if (a.id === provider || !a.findById) continue;
+    try {
+      if (await a.findById(sessionId)) return { owner: a.id, unreadable };
+    } catch (error) {
+      unreadable.push(`${a.id}（${describePathReadFailureReason(error)}）`);
+    }
+  }
+  return { owner: null, unreadable };
+}
+
+/**
  * 读会话文件失败的用户面原因：fs 错误（EACCES / EIO…）说成「读不出来」，
  * 其余保留适配器自己给的说明（内容格式问题本来就是中文）。
  *
@@ -275,9 +300,23 @@ export async function openSession(
     // 链 id 与会话 id 都是 UUID，chain list 里还印在同一行：直接说「未找到会话」会让人
     // 去核对那串 id 有没有抄错，而链永远不会被反查命中
     const chainUse = mapping && !provider ? mapping.describeChainIdMisuse(targetId) : null;
+    // `--provider` 写错时（id 其实属于别家）单说「未找到会话」会让人去核对那串 id，
+    // 而它是对的：跨家反查一次，命中就指名真实 provider 并给出可照抄的下一步。
+    const elsewhere = provider ? await findOwnerElsewhere(targetId, provider, adapters) : { owner: null, unreadable: [] };
+    if (elsewhere.owner) {
+      return {
+        ok: false,
+        error:
+          `会话 ${targetId} 属于 ${elsewhere.owner}，不是 ${provider}；` +
+          `请用 watch open ${targetId} --provider ${elsewhere.owner}，或去掉 --provider 按 id 全局反查${detail}`,
+      };
+    }
+    const unchecked = elsewhere.unreadable.length
+      ? `另有 ${elsewhere.unreadable.length} 家没能查（${elsewhere.unreadable.join('、')}），无法确认它是否属于那些 provider`
+      : '';
     return {
       ok: false,
-      error: `${chainUse ? `${chainUse}；` : ''}未找到会话: ${targetId}${provider ? `（provider=${provider}）` : ''}。请确认 id 正确且对应 CLI 已安装登录。${detail}`,
+      error: `${chainUse ? `${chainUse}；` : ''}未找到会话: ${targetId}${provider ? `（provider=${provider}）` : ''}。请确认 id 正确且对应 CLI 已安装登录。${unchecked}${detail}`,
     };
   }
   const notes: string[] = [];
