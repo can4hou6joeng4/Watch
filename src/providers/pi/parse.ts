@@ -1,6 +1,6 @@
 import { readFile } from 'node:fs/promises';
 import { ensureAssistant, normalizeUserText, pushEvent, stripEmptyEvents, summarize } from '../../core/rich.js';
-import type { ProcessEvent, SessionRef, UnifiedTurn } from '../../core/types.js';
+import type { ProcessEvent, SessionRef, TokenUsage, UnifiedTurn } from '../../core/types.js';
 
 export async function parsePiSession(ref: SessionRef): Promise<UnifiedTurn[]> {
   const raw = await readFile(ref.filePath, 'utf8');
@@ -56,6 +56,7 @@ export async function parsePiSession(ref: SessionRef): Promise<UnifiedTurn[]> {
     }
     if (role !== 'assistant') continue;
     if (!sawUser) continue;
+    const usage = readPiUsage(msg);
 
     // Pi build 会把有 tool 的 assistant final text 拆成一条独立 message 跟在 toolResult 后面，
     // 解析时合并回同一个 UnifiedTurn，避免一个回合变成两个 assistant 回合。
@@ -69,6 +70,11 @@ export async function parsePiSession(ref: SessionRef): Promise<UnifiedTurn[]> {
     ) {
       prev.text = extracted.text;
       if (timestamp) prev.timestamp = timestamp;
+      // 写出侧在带工具的轮次里把**同一份** usage 写在这两条 assistant 消息上
+      // （pi TUI footer 要求每条 assistant 都带 usage），所以这里覆盖成同一个值，
+      // 不会翻倍；原生多轮 API 调用时这条规则等价于「取最后一次调用的用量」，
+      // 与 claude 的 parse 一致，不猜中间各次的分摊。
+      if (usage) prev.usage = usage;
       continue;
     }
 
@@ -76,8 +82,35 @@ export async function parsePiSession(ref: SessionRef): Promise<UnifiedTurn[]> {
     for (const ev of extracted.events) pushEvent(last, ev);
     if (extracted.text.trim()) last.text = extracted.text;
     if (timestamp) last.timestamp = timestamp;
+    if (usage) last.usage = usage;
   }
   return stripEmptyEvents(turns);
+}
+
+/**
+ * 从 pi 的 assistant `message.usage` 读真实用量；缺字段或合计为 0 返回 undefined。
+ *
+ * 字段口径取自 pi 自己的代码（`@earendil-works/pi-coding-agent` 的 `usage-totals.js` /
+ * `pi-ai` 的 `calculateCost()`）：`input` 只是**未命中缓存**的增量，`cacheRead` / `cacheWrite`
+ * 另计，真实输入是三者之和（与 `claudeSessionUsage()`、ccusage 同一口径）；
+ * `cacheWrite1h` 是 `cacheWrite` 的**子集**（1h TTL 那一部分，`calculateCost` 用它只做计价拆分），
+ * 再加一次就会凭空多算；`reasoning` 同理已含在 `output` 里。
+ *
+ * 以前这里从不读 usage，于是 **pi → 任何别家的转入一律写 0/0**，而 `importTurnsToPi()` 一直
+ * 把 `turn.usage` 写进 `message.usage`——自己转出的会话反倒能被别家读回用量，反向却不行。
+ * 与 claude 缓存两块、codex `last_token_usage`、grok `updates.jsonl` 完全同源。
+ *
+ * 0/0 是写出侧没有源侧用量时的占位（`pushMessage()` 的兜底），不能当成「确实用了 0 token」。
+ */
+function readPiUsage(msg: Record<string, unknown>): TokenUsage | undefined {
+  const usage = msg.usage;
+  if (typeof usage !== 'object' || usage === null) return undefined;
+  const u = usage as Record<string, unknown>;
+  const num = (v: unknown): number => (typeof v === 'number' && Number.isFinite(v) ? v : 0);
+  const inputTokens = num(u.input) + num(u.cacheRead) + num(u.cacheWrite);
+  const outputTokens = num(u.output);
+  if (inputTokens === 0 && outputTokens === 0) return undefined;
+  return { inputTokens, outputTokens };
 }
 
 function extractBlocks(
