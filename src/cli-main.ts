@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 import { stat } from 'node:fs/promises';
 import path from 'node:path';
-import { SEARCH_MAX_HITS, Store, defaultDbPath, describeStoreErrorReason, describeStoreOpenFailure } from './core/store.js';
+import { chainsElsewhereHint, SEARCH_MAX_HITS, Store, defaultDbPath, describeStoreErrorReason, describeStoreOpenFailure } from './core/store.js';
+import type { ChainsElsewhere } from './core/store.js';
 import { describeFindings } from './core/findings.js';
 import { adoptIntoChain, blockedHint, chainStatus, chainUsage, collectTips, createChainSession, currentChainShiftNote, emptyChainBindHint, handoff, HandoffBlockedError, notCurrentChainWarning, rebindHint, storeUnavailableWarning } from './core/handoff.js';
 import { reindexCwd } from './core/search.js';
@@ -313,6 +314,21 @@ function parseArgs(argv: string[]): {
   };
 }
 
+/**
+ * 本目录一条链都没有时，本地库里其它目录的链。
+ *
+ * 这条查询只是**补充说明**：库读不出来就当没有（`chain list` / `status` 的正文不该因为
+ * 它一起失败），真正的库故障已经由别处的警告说清。
+ */
+function chainsElsewhereOf(store: Store | null, cwd: string): ChainsElsewhere[] {
+  if (!store) return [];
+  try {
+    return store.chainsElsewhere(cwd);
+  } catch {
+    return [];
+  }
+}
+
 async function cmdStatus(cwd: string, json: boolean, chain?: string): Promise<void> {
   const store = openStore();
   // 路径写错时各 provider 会安静返回空列表，先把原因放进同一条 warnings 通道
@@ -325,8 +341,11 @@ async function cmdStatus(cwd: string, json: boolean, chain?: string): Promise<vo
     failWithCwd(json, cwdIssue, error instanceof Error ? error.message : String(error));
   }
   if (cwdIssue) result.warnings.push(cwdIssue);
+  // 「这个目录没有链」与「一条链都没建过」原本长得一样：链按 cwd 精确分组，--cwd 指错地方
+  // 时正文只有「切换链: （空）」，用户会以为链丢了。别处的链要说出来，并给出可照抄的 --cwd
+  const elsewhere = result.chains.length ? [] : chainsElsewhereOf(store, cwd);
   if (json) {
-    console.log(JSON.stringify({ ok: true, ...result }));
+    console.log(JSON.stringify({ ok: true, ...result, ...(elsewhere.length ? { chainsElsewhere: elsewhere } : {}) }));
     return;
   }
   const { tips, chainTip, chainTipUnusable, unreadable, history, chain: current, warnings } = result;
@@ -383,6 +402,8 @@ async function cmdStatus(cwd: string, json: boolean, chain?: string): Promise<vo
   } else if (store) {
     console.log('');
     console.log('切换链: （空）');
+    // 上一行是结论：本目录没有链。别处有链时必须接着指路，否则「（空）」会被当成链没了
+    if (elsewhere.length) console.log(chainsElsewhereHint(elsewhere));
   }
 }
 
@@ -1268,6 +1289,9 @@ async function cmdChain(cwd: string, json: boolean, action?: string, a?: string,
   try {
     if (!action || action === 'list') {
       const chains = store.listChains(cwd);
+      // 链按 cwd 精确分组：「本目录没有链」不等于「一条链都没建过」。指向错目录时正文只有
+      // 一句「（无链）」，用户会以为链丢了或没建成功——别处的链要说出来
+      const elsewhere = chains.length ? [] : chainsElsewhereOf(store, cwd);
       const warnings = cwdIssue ? [cwdIssue] : [];
       // 写入守卫（`assertChainNameUsable()`）只拦得住新名字：库里可能留着它上线前建出的
       // 坏名字。文本输出一律转义（`escapeControlChars`），但用户看到 `\u001B` 时得知道
@@ -1337,6 +1361,7 @@ async function cmdChain(cwd: string, json: boolean, action?: string, a?: string,
             ...(current && current.id === c.id ? { current: true } : {}),
             ...(tips.has(c.id) ? { tip: tips.get(c.id) } : {}),
           })),
+          ...(elsewhere.length ? { chainsElsewhere: elsewhere } : {}),
           ...(warnings.length ? { warnings } : {}),
         }));
         return;
@@ -1344,6 +1369,7 @@ async function cmdChain(cwd: string, json: boolean, action?: string, a?: string,
       for (const warning of warnings) console.error(`警告: ${warning}`);
       if (!chains.length) {
         console.log('（无链）');
+        if (elsewhere.length) console.log(chainsElsewhereHint(elsewhere));
         return;
       }
       // 「当前」= 活跃链里 last_used_at 最新的一条（与 status / switch 的默认链同一判定）。

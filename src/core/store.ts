@@ -28,6 +28,35 @@ export function emptyChainBindHint(): string {
   );
 }
 
+/** 一个「链在别处」的目录 */
+export type ChainsElsewhere = { cwd: string; total: number; active: number; lastUsedAt: number };
+
+/**
+ * 本目录没有链、本地库里却有别的目录的链时的下一步（`chain list` / `status` 共用）。
+ *
+ * 链按 cwd 精确分组，可「本目录没有链」与「一条链都没建过」原本长得一模一样：
+ * 2026-11-08 实测在 `a/` 建了链、在 `b/` 里查，`watch chain list` 只回一句「（无链）」、
+ * `status` 的结尾只印「切换链: （空）」，`--json` 里也没有任何线索——两句都是**结论**，
+ * 用户会以为链丢了或没建成功，而它一直躺在库里，只是 `--cwd` 指错了目录。
+ * `missingChainMessage()` 早就为「`--chain x` 在别的目录」指过路，可**不带 `--chain`**
+ * 的这两条才是最常走的入口。
+ *
+ * 与 `emptyChainBindHint()` 同理定义在 `store.ts`：调用方只有 CLI 两处，但文案里的
+ * 目录清单要跟 `ChainsElsewhere` 的结构绑在一起。
+ */
+export function chainsElsewhereHint(rows: ChainsElsewhere[]): string {
+  const shown = rows
+    .slice(0, 3)
+    .map((r) => `${r.cwd}（${r.total} 条${r.active ? `，${r.active} 条活跃` : ''}）`)
+    .join('、');
+  const more = rows.length > 3 ? ` 等 ${rows.length} 个目录` : '';
+  return (
+    `本目录没有链，但本地库里还有属于其它目录的链（链按目录分组，--cwd 不同就一条都看不到）：${shown}${more}；` +
+    '要查看用 watch chain list --cwd <那个目录>，或在本目录用 watch chain new <名字> 建一条'
+  );
+}
+
+
 const SCHEMA_VERSION = 6;
 const REQUIRED_TABLES = ['sessions', 'turns', 'switch_events', 'turn_events', 'chains', 'messages_fts', 'search_index'] as const;
 const FTS_TEXT_LIMIT = 8192;
@@ -852,6 +881,22 @@ export class Store {
       )
       .all(cwd) as ChainRow[];
     return rows.map(rowToChain);
+  }
+
+  /**
+   * 本地库里属于**其它目录**的链（按最近使用倒序）。
+   *
+   * `listChains(cwd)` 只认这一条 cwd，于是「这个目录还没建过链」与「一条链都没有」
+   * 在调用方看来没有区别。两者要区别对待：前者该指出链在哪、怎么用 `--cwd` 过去。
+   */
+  chainsElsewhere(cwd: string): ChainsElsewhere[] {
+    const normalized = this.normCwd(cwd);
+    return this.db
+      .prepare(
+        `SELECT cwd, COUNT(*) AS total, SUM(CASE status WHEN 'active' THEN 1 ELSE 0 END) AS active, MAX(last_used_at) AS lastUsedAt
+           FROM chains WHERE cwd<>? GROUP BY cwd ORDER BY lastUsedAt DESC`,
+      )
+      .all(normalized) as ChainsElsewhere[];
   }
 
   createChain(cwd: string, name: string): Chain {
