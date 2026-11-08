@@ -629,6 +629,19 @@ function findChainPaired(
   return pair;
 }
 
+/**
+ * 规划失败时把规划阶段收集到的说明（通常是「本地映射库打不开」这类降级原因）附到错误后面。
+ *
+ * 成功路径一直带 `warnings`（`openInProvider` / `checkOpenInProvider` 都从同一个
+ * `diagnostics` 数组取），失败分支却是 `return { ok:false, error: planned.error }`，
+ * 整个数组被丢掉：同一个陌生 id、同一份坏库，`watch open <id>` 会说「（本地映射库打不开…）」，
+ * `watch open <id> --to codex` 一个字都不提——而后者正是要走映射快路径的那条。
+ * 用与 `openSession` 同一格式 `（…；…）`，空数组时原样返回，不多出空括号。
+ */
+function attachDiagnostics(error: string, diagnostics: string[]): string {
+  return diagnostics.length ? `${error}（${diagnostics.join('；')}）` : error;
+}
+
 /** 转入计划：只读解析的结果（不写入任何内容） */
 export type OpenPlan = {
   kind: 'resume' | 'chain' | 'reuse' | 'new';
@@ -932,7 +945,7 @@ export async function openInProvider(
   const diagnostics: string[] = [];
   const mapping = store ?? openMappingDb(diagnostics);
   const planned = await planOpenInProvider(sourceId, providerId, mapping, diagnostics);
-  if (!planned.ok) return { ok: false, error: planned.error };
+  if (!planned.ok) return { ok: false, error: attachDiagnostics(planned.error, diagnostics) };
   const { adapter: target, sourceRef, sourceProvider, cwd, plan } = planned;
 
   const cliBlock = await newSessionCliBlock(target, plan);
@@ -1068,7 +1081,7 @@ export async function checkOpenInProvider(
   const diagnostics: string[] = [];
   const mapping = store ?? openMappingDb(diagnostics);
   const planned = await planOpenInProvider(sourceId, providerId, mapping, diagnostics);
-  if (!planned.ok) return { ok: false, error: planned.error };
+  if (!planned.ok) return { ok: false, error: attachDiagnostics(planned.error, diagnostics) };
   const { adapter: target, cwd, plan } = planned;
   const base: OpenSessionResult = {
     ok: true,
