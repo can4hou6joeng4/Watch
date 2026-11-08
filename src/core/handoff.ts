@@ -94,6 +94,51 @@ export function notCurrentChainWarning(chain: Chain, current: Chain | null): str
  * `--chain` 的 `switch` / `new` / `adopt` 都作用在 A 上。而只读的 `status --chain A`
  * 早就会警告「链 A 不是本目录的当前链」，写命令反而把它变成当前链却不吭声。
  */
+/**
+ * `adopt <provider>`（不给 `--session`）在这家于本目录一个会话都没有时的下一步。
+ *
+ * 以前只回一句「<provider> 未发现可接入的会话」——是事实，但把用户留在原地：既没说要先在
+ * 这家开一次会话，也没指出本目录里哪一家**有**会话、可以直接 `adopt`（2026-11-08 实测：
+ * 目录里明明躺着一条 claude 会话，codex 这条命令只吐出那一句就 exit 1）。
+ *
+ * 这里可以放心给具体下一步：各家的 `findLatestSession` 只在「这家在这个 cwd 确实没有会话」
+ * 时返回 `null`，读不出来会抛「…但 N 个位置读不出来，无法确认是否存在」走另一条路，
+ * 所以不会把读失败讲成「没有会话」。
+ *
+ * `availableHere` 是别家在本目录真实列出来的 provider（列不出来的一律不计），只用来给一条
+ * 能立刻照抄的命令；一家都没有时不给空清单。
+ */
+export function adoptNoSessionMessage(providerId: string, availableHere: string[] = []): string {
+  const elseWhere =
+    availableHere.length > 0
+      ? `本目录现在可接入的有: ${availableHere.join(' / ')}——可直接 watch adopt ${availableHere[0]} --session <会话 id> 接入；`
+      : '';
+  return (
+    `${providerId} 在这个目录还没有会话（只会接入 cwd 与 --cwd 一致的会话）；${elseWhere}` +
+    `要接入 ${providerId}，先在该家的原生 CLI 里开一次会话，再用 watch adopt ${providerId} --session <会话 id> 接入` +
+    `（会话 id 可用 watch sessions 或原生 CLI 确认）；若它其实在别的目录，用 --cwd <那个目录> 重跑`
+  );
+}
+
+/** 别家在本目录确实有会话的 provider；列不出来的一律跳过（这条只是补充说明，不能盖掉主错误） */
+async function providersWithSessionsHere(
+  cwd: string,
+  adapters: ProviderAdapter[],
+  exclude: string,
+): Promise<string[]> {
+  const hits: string[] = [];
+  for (const other of adapters) {
+    if (other.id === exclude || !other.listSessions) continue;
+    try {
+      const list = await other.listSessions(cwd);
+      if (list.length > 0) hits.push(other.id);
+    } catch {
+      // 读不出来的那一家不能写成「没有会话」，这里只是不列为可接入项
+    }
+  }
+  return hits;
+}
+
 export function currentChainShiftNote(
   previous: Pick<Chain, 'id' | 'name'> | null,
   next: Pick<Chain, 'id' | 'name'> | null,
@@ -216,7 +261,7 @@ export async function adoptIntoChain(
   const found = targetRef
     ? { ref: targetRef }
     : await adapter.findLatestSession(cwd);
-  if (!found) throw new Error(`${providerId} 未发现可接入的会话`);
+  if (!found) throw new Error(adoptNoSessionMessage(providerId, await providersWithSessionsHere(cwd, adapters, providerId)));
 
   let history: SwitchRecord[] = [];
   if (!store) {
