@@ -33,6 +33,10 @@ const IMPORT_POSITIONAL_HINT: Record<string, string> = {
  * 「--cwd 缺少取值（后面跟着 …）」保持一致。
  */
 function validateImportArgs(args: string[]): void {
+  // 同一个取值选项给两次时 `parseArgs` 只保留后一个，前一个静默消失。这条路径全是**写操作**
+  // （prepare 起就绑定目标目录 / 项目），「两个 --cwd 该用哪个」必须由用户决定，见 `cli-main.ts`
+  // 的 `parseArgs` 里同一处判定与生态依据（clap / flaget）。布尔开关重复是幂等的，不在此列。
+  const seenValues = new Map<string, string>();
   for (let i = 0; i < args.length; i += 1) {
     const arg = args[i]!;
     if (arg === '--') return; // 之后都是位置参数，交给 parseArgs
@@ -42,12 +46,22 @@ function validateImportArgs(args: string[]): void {
     const inline = eq === -1 ? undefined : arg.slice(eq + 1);
     const name = flag.replace(/^-+/, '');
     if (IMPORT_VALUE_FLAGS.has(name)) {
-      if (inline !== undefined) continue;
-      const next = args[i + 1];
-      // 下一个 token 仍是 flag：说明取值漏了，别把它吞成值
-      if (next === undefined) throw new Error(`${flag} 缺少取值；可用: ${IMPORT_USAGE_HINT}`);
-      if (next.startsWith('-')) throw new Error(`${flag} 缺少取值（后面跟着 ${next}）；可用: ${IMPORT_USAGE_HINT}`);
-      i += 1;
+      const value = inline ?? args[i + 1];
+      if (inline === undefined) {
+        // 下一个 token 仍是 flag：说明取值漏了，别把它吞成值
+        if (value === undefined) throw new Error(`${flag} 缺少取值；可用: ${IMPORT_USAGE_HINT}`);
+        if (value.startsWith('-')) throw new Error(`${flag} 缺少取值（后面跟着 ${value}）；可用: ${IMPORT_USAGE_HINT}`);
+        i += 1;
+      }
+      // 同时说出两个值：只说「不能给两次」的话，用户还得回头翻命令才知道自己写了哪两处
+      const first = seenValues.get(name);
+      if (first !== undefined) {
+        throw new Error(
+          `${flag} 给了两次（第一次: ${first}，第二次: ${value}）；同一个参数只给一次——` +
+            `只认后一个、前一个会被静默丢掉，去掉多余的那个后重试；可用: ${IMPORT_USAGE_HINT}`,
+        );
+      }
+      seenValues.set(name, value!);
       continue;
     }
     if (IMPORT_BOOLEAN_FLAGS.has(name) && flag.startsWith('--')) {

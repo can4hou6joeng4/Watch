@@ -257,12 +257,34 @@ function parseArgs(argv: string[]): {
   let limit: number | undefined;
   const positional: string[] = [];
   let i = 0;
-  /** 取下一个 token 作为参数值；缺值或误吞了下一个 flag 都按用法错误处理 */
+  /**
+   * 每个取值选项第一次出现的原始取值。
+   *
+   * 以前 `takeValue()` 每次都 `args[++i]` 覆盖过去，同一个选项给两次时**只有后一个留下来**，
+   * 前一个被静默丢掉：2026-11-09 实测（修复前）`watch switch codex --cwd …/proj --cwd …/proj-b`
+   * 把内容真写进了 `proj-b` 并 exit 0，而用户的命令里写着两个目录、输出里只有后者，看不出自己
+   * 写了两遍；`--session nope --session <真实 id>` / `--chain nope --chain 主力` 同样是前者
+   * 无声消失。生态里 `clap` 对每个单值选项默认拒绝第二次（`cannot be used multiple times`），
+   * 参数库 `flaget` 的「Report a flag given more than once」也把「keep the last value and drop
+   * the first one without a trace」列成缺陷（"a deploy tool that must never guess the target
+   * environment"）。布尔开关（`--json` / `--check` / `--strict`）重复是幂等的，不在此列。
+   */
+  const seenValues = new Map<string, string>();
+  /** 取下一个 token 作为参数值；缺值、误吞下一个 flag、或同一选项给了两次都按用法错误处理 */
   const takeValue = (flag: string): string => {
     const next = args[++i];
     if (!next) usage(`${flag} 缺少取值`);
     // 下一个 token 仍是 flag：说明取值漏了，别把它吞成值
     if (next.startsWith('--')) usage(`${flag} 缺少取值（后面跟着 ${next}）`);
+    // 同时说出两个值：只说「不能给两次」的话，用户还得回头翻命令才知道自己写了哪两处
+    const first = seenValues.get(flag);
+    if (first !== undefined) {
+      usage(
+        `${flag} 给了两次（第一次: ${first}，第二次: ${next}）；同一个参数只给一次——` +
+          `只认后一个、前一个会被静默丢掉，去掉多余的那个后重试`,
+      );
+    }
+    seenValues.set(flag, next);
     return next;
   };
   for (i = 0; i < args.length; i++) {
