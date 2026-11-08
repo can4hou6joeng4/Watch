@@ -122,7 +122,7 @@ search   <query> [--cwd <path>]                              local full-text sea
 usage    [--cwd <path>] [--chain <id|name>]                  token usage per session on the chain
 recent   [--cwd <path>] [--limit <n>]                        recently resolved sessions (default 8, max 50)
 providers                                                    local install detection per agent
-doctor   [--cwd <path>]                                      read-only environment diagnostics
+doctor   [--cwd <path>] [--strict]                           read-only environment diagnostics; exits 1 on hard failures, --strict also fails on warnings
 open     <session-id> [--from <id>] [--provider <name>] [--to <provider>] [--check]
 import-codex  prepare|confirm|status|project-prepare|project-confirm|project-status
 ```

@@ -40,7 +40,7 @@ function usage(reason?: string): never {
   watch sessions [--json] [--cwd <path>] [--chain <id|name>]
   watch recent [--json] [--cwd <path>] [--limit <n>]
   watch providers [--json]
-  watch doctor [--json] [--cwd <path>]   只读环境诊断：Agent 检测、本地库、导入日志（不写盘）
+  watch doctor [--json] [--strict] [--cwd <path>]   只读环境诊断：Agent 检测、本地库、导入日志（不写盘）
   watch new <provider> [--json] [--cwd <path>] [--chain <id|name>]
   watch chain list|new <name>|rename <id|name> <new>|archive <id|name>|use <id|name> [--json] [--cwd]
   watch search <query> [--json] [--cwd <path>]
@@ -198,6 +198,7 @@ function parseArgs(argv: string[]): {
   provider?: string;
   to?: string;
   check: boolean;
+  strict: boolean;
   limit?: number;
   usedFlags: string[];
   cwdGiven: boolean;
@@ -216,6 +217,7 @@ function parseArgs(argv: string[]): {
   let provider: string | undefined;
   let to: string | undefined;
   let check = false;
+  let strict = false;
   let limit: number | undefined;
   const positional: string[] = [];
   let i = 0;
@@ -232,6 +234,11 @@ function parseArgs(argv: string[]): {
     if (a === '--json') continue;
     if (a === '--check') {
       check = true;
+      continue;
+    }
+    // 只对 doctor 有意义；其它命令由下方 FLAGS_BY_COMMAND 拒绝，不能静默滑进位置参数
+    if (a === '--strict') {
+      strict = true;
       continue;
     }
     if (a === '--cwd') {
@@ -285,6 +292,7 @@ function parseArgs(argv: string[]): {
   // 命令层校验要区分「给了但被忽略」与「没给」：takeValue 拒绝空值，所以值存在即代表显式给了
   const usedFlags = [
     ...(check ? ['check'] : []),
+    ...(strict ? ['strict'] : []),
     ...(session ? ['session'] : []),
     ...(chain ? ['chain'] : []),
     ...(from ? ['from'] : []),
@@ -307,6 +315,7 @@ function parseArgs(argv: string[]): {
     provider,
     to,
     check,
+    strict,
     limit,
     usedFlags,
     cwdGiven,
@@ -1074,7 +1083,7 @@ async function cmdProviders(json: boolean): Promise<void> {
   }
 }
 
-async function cmdDoctor(cwd: string, json: boolean): Promise<void> {
+async function cmdDoctor(cwd: string, json: boolean, strict: boolean): Promise<void> {
   try {
     const store = openStore();
     let importJobs: ImportJobs | null = null;
@@ -1089,8 +1098,16 @@ async function cmdDoctor(cwd: string, json: boolean): Promise<void> {
         : error instanceof Error ? error.message : String(error);
     }
     const report = await doctorReport(cwd, { store, storeError: lastStoreError ?? undefined, importJobs, importJobsError, importsRoot });
+    // 退出码与 `open --check` 同一口径：`ok` 只表示「诊断这个动作跑通了」，
+    // 检查结论在 `summary` 里。以前 doctor 无论发现什么都 exit 0，CI / 脚本拿它当
+    // 健康检查时会被骗过——本地库打不开、链尾全坏，退出码仍是 0。
+    // 只有硬失败让默认退出码非零；`--strict` 才把警告也升成非零（与 mcp-doctor /
+    // medic 这类诊断 CLI 的约定一致）。
+    const failed = report.summary.status === 'fail';
+    const strictFailed = strict && report.warnings.length > 0;
     if (json) {
       console.log(JSON.stringify({ ok: true, ...report }));
+      if (failed || strictFailed) process.exitCode = 1;
       return;
     }
     const env = report.environment;
@@ -1164,6 +1181,18 @@ async function cmdDoctor(cwd: string, json: boolean): Promise<void> {
       console.error('警告:');
       for (const w of report.warnings) console.error(`  - ${w}`);
     }
+    // 结论行必须在 stdout 最后：`watch doctor | tail -1` 与只看退出码的脚本要拿到同一句话
+    const s = report.summary;
+    if (failed) {
+      console.log(`结论: ${s.failures.length} 项失败（退出码 1）：${s.failures.join('、')}；先按上面的失败项修复再重试`);
+    } else if (strictFailed) {
+      console.log(`结论: 通过，有 ${s.warnings} 条警告（--strict 下退出码 1）`);
+    } else if (s.warnings > 0) {
+      console.log(`结论: 通过，有 ${s.warnings} 条警告；加 --strict 可让警告也返回非零退出码`);
+    } else {
+      console.log('结论: 通过');
+    }
+    if (failed || strictFailed) process.exitCode = 1;
   } catch (error) {
     fail(json, error instanceof Error ? error.message : String(error));
   }
@@ -1610,7 +1639,7 @@ const FLAGS_BY_COMMAND: Record<string, string[]> = {
   sessions: ['chain'],
   recent: ['limit'],
   providers: [],
-  doctor: [],
+  doctor: ['strict'],
   new: ['chain'],
   chain: [],
   search: [],
@@ -1675,7 +1704,7 @@ async function main(): Promise<void> {
     await runImportCodex(process.argv.slice(3));
     return;
   }
-  const { cmd, target, extra, rest, json, cwd, session, chain, from, provider, to, check, limit, usedFlags, cwdGiven, positional } = parseArgs(process.argv);
+  const { cmd, target, extra, rest, json, cwd, session, chain, from, provider, to, check, strict, limit, usedFlags, cwdGiven, positional } = parseArgs(process.argv);
   if (cmd) {
     rejectUnusedFlags(cmd, usedFlags, json);
     rejectExtraPositionals(cmd, positional, json);
@@ -1707,7 +1736,7 @@ async function main(): Promise<void> {
     return;
   }
   if (cmd === 'doctor') {
-    await cmdDoctor(cwd, json);
+    await cmdDoctor(cwd, json, strict);
     return;
   }
   if (cmd === 'new') {

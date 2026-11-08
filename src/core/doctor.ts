@@ -103,6 +103,22 @@ export type DoctorReport = {
       }
     | { available: false; error: string };
   warnings: string[];
+  /**
+   * 结论性汇总：doctor 是排障入口，脚本 / CI 需要一个不靠解析中文文本的判断。
+   *
+   * 只有 `fail` 让默认退出码非零——「警告」是已经披露的降级（内容漂移、单条会话读不出来、
+   * uncertain 计划…），把它们也变成红灯会让一次平常的排障在 CI 里失败；`--strict` 才升级。
+   * `failures` 逐条列出硬问题（Watch 现在确实做不成某件事），不是只给个数。
+   */
+  summary: DoctorSummary;
+};
+
+export type DoctorSummary = {
+  status: 'ok' | 'warn' | 'fail';
+  /** 硬问题：本地库不可用 / 某家会话列表读不出来 / 链尾不可用 / CLI 装了但起不来 */
+  failures: string[];
+  /** 与 `warnings` 长度一致，方便只读 summary 的调用方判断有没有降级 */
+  warnings: number;
 };
 
 /** 诊断用的最小 Store 面：列出当前 cwd 的链、读某条链的切换记录；测试可注入假实现 */
@@ -177,6 +193,9 @@ function resolveEnvironment(importsRoot: string | null): DoctorEnvironment {
  */
 export async function doctorReport(cwd: string, deps: DoctorDeps): Promise<DoctorReport> {
   const warnings: string[] = [];
+  // 硬问题与 warnings 分开记：这不是同一种东西。警告是「已经降级但说清楚了」，
+  // 失败是「Watch 现在做不成某件事」——只有后者该让 exit code 非零
+  const failures: string[] = [];
   const environment = deps.environment ?? resolveEnvironment(deps.importsRoot ?? null);
 
   // 路径本身错了，下面每项都会安静地返回 0，看起来像「一切正常」——先把它说清楚
@@ -226,6 +245,7 @@ export async function doctorReport(cwd: string, deps: DoctorDeps): Promise<Docto
       const message = error instanceof Error ? error.message : String(error);
       storage.push({ provider: adapter.id, count: null, error: message });
       warnings.push(`${adapter.displayName} 会话列表读取失败：${message}`);
+      failures.push(`${adapter.displayName} 会话列表读不出来`);
     }
   }
 
@@ -238,6 +258,7 @@ export async function doctorReport(cwd: string, deps: DoctorDeps): Promise<Docto
   let store: DoctorReport['store'];
   if (!deps.store) {
     store = { available: false, error: deps.storeError ?? '本地库未打开' };
+    failures.push('本地库不可用');
     // 只写「未打开」看不出是权限、库损坏还是被占用；doctor 是排障入口，原因必须带出来
     if (deps.storeError) warnings.push(`本地库不可用，无法列出链与做内容对账：${deps.storeError}`);
   } else {
@@ -255,6 +276,7 @@ export async function doctorReport(cwd: string, deps: DoctorDeps): Promise<Docto
           // SQLite 的原文（`database is locked` / `no such table`）既不说是哪一类故障也不给下一步，
           // 与 handoff.ts / open.ts 的同类警告保持一致，统一翻成中文
           warnings.push(`链「${escapeControlChars(chain.name)}」的切换记录读取失败：${describeStoreErrorReason(error)}`);
+          failures.push(`链「${escapeControlChars(chain.name)}」的切换记录读不出来`);
           continue;
         }
         if (!tip) continue;
@@ -273,6 +295,9 @@ export async function doctorReport(cwd: string, deps: DoctorDeps): Promise<Docto
             missing,
             ...(unreadable ? { unreadable: true } : {}),
           });
+          failures.push(
+            `链「${escapeControlChars(chain.name)}」的链尾不可用（${missing ? '文件已不存在' : unreadable ? '读不出来' : '文件状态无法确认'}）`,
+          );
           if (missing) {
             warnings.push(
               `链「${escapeControlChars(chain.name)}」的链尾会话文件已不存在：${tip.filePath}（${tip.provider}）；下次切换会失败，${rebindHint(tip.provider)}`,
@@ -407,6 +432,7 @@ export async function doctorReport(cwd: string, deps: DoctorDeps): Promise<Docto
       const reason = describeStoreErrorReason(error);
       store = { available: false, error: reason };
       warnings.push(`本地库读取失败：${reason}`);
+      failures.push('本地库读取失败');
     }
   }
 
@@ -466,8 +492,16 @@ export async function doctorReport(cwd: string, deps: DoctorDeps): Promise<Docto
   }
 
   for (const p of providers) {
-    if (p.error) warnings.push(`${p.displayName} 检测失败：${p.error}`);
+    if (p.error) {
+      warnings.push(`${p.displayName} 检测失败：${p.error}`);
+      failures.push(`${p.displayName} 检测失败（装了但起不来）`);
+    }
   }
 
-  return { cwd, environment, providers, storage, store, imports, warnings };
+  const summary: DoctorSummary = {
+    status: failures.length ? 'fail' : warnings.length ? 'warn' : 'ok',
+    failures,
+    warnings: warnings.length,
+  };
+  return { cwd, environment, providers, storage, store, imports, warnings, summary };
 }
