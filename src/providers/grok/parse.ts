@@ -1,7 +1,8 @@
 import { readFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { ensureAssistant, normalizeUserText, pushEvent, stripEmptyEvents, summarize } from '../../core/rich.js';
-import type { ProcessEvent, SessionRef, UnifiedTurn } from '../../core/types.js';
+import type { ProcessEvent, SessionRef, TokenUsage, UnifiedTurn } from '../../core/types.js';
+import { grokUpdateTurnUsages } from './usage.js';
 
 type ChatLine =
   | { type: 'system'; content: string }
@@ -177,7 +178,37 @@ export async function parseGrokSession(ref: SessionRef): Promise<UnifiedTurn[]> 
     }
   }
 
-  return stripEmptyEvents(turns);
+  return attachTurnUsages(ref.filePath, stripEmptyEvents(turns));
+}
+
+/**
+ * 把同目录 `updates.jsonl` 里每轮的 `turn_completed.usage` 挂回对应的 assistant 轮。
+ *
+ * 用量不在 `chat_history.jsonl`（本函数读的那份），而在 `updates.jsonl`——原生 `/resume`
+ * 与 session restore 的权威日志，写出侧 `buildGrokUpdateLines()` 也把 `turn.usage` 写在那里。
+ * 以前这里从不填 `turn.usage`，于是 **grok → 任何别家的转入一律写 0/0**，而同一次 `open`
+ * 的 note 还写着「来源 Grok 用量 in=… out=…（已在对账中携带）」——信息层读了、搬运层没读。
+ * 与 codex `token_count` / claude 缓存两块完全同源。
+ *
+ * **数量对不上就不挂**：`turn_completed` 与 assistant 轮一一对应（写出侧每轮恰好一条），
+ * 数量不等说明有一侧被截断或重放，按顺序硬套会把第 N 轮的用量挂到别人头上——宁可不填，
+ * 也不能编一个看似合理却错位的数（同 pi 不猜多 assistant 轮的既有取舍）。
+ *
+ * 读不出来同样不挂且不抛：用量是辅助数据，`updates.jsonl` 坏了不该让可读的内容交接失败；
+ * 信息层 `grokSessionUsage()` 会在 `usage` / `open` 的 `warnings` 里单独报这个读取失败。
+ */
+async function attachTurnUsages(chatPath: string, turns: UnifiedTurn[]): Promise<UnifiedTurn[]> {
+  let usages: TokenUsage[] | null;
+  try {
+    usages = await grokUpdateTurnUsages(join(dirname(chatPath), 'updates.jsonl'));
+  } catch {
+    return turns;
+  }
+  if (!usages || usages.length === 0) return turns;
+  const assistants = turns.filter((t) => t.role === 'assistant');
+  if (assistants.length !== usages.length) return turns;
+  for (let i = 0; i < assistants.length; i++) assistants[i].usage = usages[i];
+  return turns;
 }
 
 async function readGrokCreatedAt(filePath: string): Promise<string | null> {

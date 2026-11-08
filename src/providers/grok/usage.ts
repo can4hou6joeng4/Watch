@@ -26,7 +26,29 @@ import { describeSessionReadFailure, isMissingPathError } from '../../core/read-
  * 表示「没有用量记录」；其余读不出来照常抛错，由 `chainUsage` 记成「读取失败」而不是「无数据」。
  */
 export async function grokSessionUsage(ref: SessionRef): Promise<TokenUsage | null> {
-  const updatesPath = join(dirname(ref.filePath), 'updates.jsonl');
+  const usages = await grokUpdateTurnUsages(join(dirname(ref.filePath), 'updates.jsonl'));
+  if (!usages || usages.length === 0) return null;
+  let input = 0;
+  let output = 0;
+  for (const u of usages) {
+    input += u.inputTokens;
+    output += u.outputTokens;
+  }
+  return { inputTokens: input, outputTokens: output };
+}
+
+/**
+ * `updates.jsonl` 里每条 ACP `turn_completed` 的用量，**按出现顺序**返回。
+ *
+ * 信息层（`grokSessionUsage` 求和）与搬运层（`parseGrokSession` 逐轮挂到 assistant 上）
+ * 必须读同一份、同一个口径：两边各写一套时，`open --to <provider>` 的 note 会写
+ * 「来源 Grok 用量 in=700 out=70（已在对账中携带）」，而写进目标会话的是 0/0——
+ * 搬运层根本没读这个文件。这与 claude 缓存两块、codex `last_token_usage` 完全同源。
+ *
+ * 文件不存在是正常事实（只有 chat_history 的快照 / 更老的原生会话）返回 null；
+ * 其余读不出来照常抛错，由 `chainUsage` 记成「读取失败」而不是「无数据」。
+ */
+export async function grokUpdateTurnUsages(updatesPath: string): Promise<TokenUsage[] | null> {
   let raw: string;
   try {
     raw = await readFile(updatesPath, 'utf8');
@@ -34,9 +56,7 @@ export async function grokSessionUsage(ref: SessionRef): Promise<TokenUsage | nu
     if (isMissingPathError(error)) return null;
     throw new Error(describeSessionReadFailure(updatesPath, error));
   }
-  let input = 0;
-  let output = 0;
-  let hit = false;
+  const usages: TokenUsage[] = [];
   for (const line of raw.split('\n')) {
     if (!line.trim()) continue;
     let rec: Record<string, unknown>;
@@ -51,11 +71,9 @@ export async function grokSessionUsage(ref: SessionRef): Promise<TokenUsage | nu
     if (update.sessionUpdate !== 'turn_completed') continue;
     const u = pick(update.usage);
     if (!u) continue;
-    hit = true;
-    input += u.inputTokens;
-    output += u.outputTokens;
+    usages.push(u);
   }
-  return hit ? { inputTokens: input, outputTokens: output } : null;
+  return usages;
 }
 
 function pick(usage: unknown): TokenUsage | null {
