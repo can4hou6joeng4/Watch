@@ -13,7 +13,7 @@ import { runImportCodex } from './import-codex.js';
 import { ImportJobs } from './core/import-jobs.js';
 import { officialImportJournalRoot } from './providers/codex/official-import.js';
 import { doctorReport } from './core/doctor.js';
-import { cwdProblem } from './core/cwd.js';
+import { cwdProblem, describeCwdProblem, describeNewSessionCwd, inspectCwd } from './core/cwd.js';
 import { describeSessionReadFailureReason, sessionFilePresence } from './core/read-text.js';
 import { describeWriteFailureReason } from './core/atomic.js';
 import { describeSpawnFailure } from './core/platform.js';
@@ -984,15 +984,35 @@ async function cmdDoctor(cwd: string, json: boolean): Promise<void> {
   }
 }
 
+/**
+ * `new` 在不可用目录上仍然成功时的警告。
+ *
+ * 以前这里直接复用查询类的 `cwdProblem()`：「各 provider …路径不对会全部显示 0」——那是
+ * 「列不出会话」的后果，而 `new` 已经把会话写进原生存储、还写了一条链绑定，真正的问题是
+ * 打印出来的 resume 命令进不去那个目录。不说会话文件路径的话，用户连「这次多出来的文件
+ * 是哪一个」都不知道，更没法清理或挪走。
+ */
+function newSessionCwdWarning(reason: string, filePath: string): string {
+  return (
+    `${reason}；会话文件：${filePath}，它绑定的项目目录进不去——打印的 resume 命令会在这里失败。` +
+    `先创建 / 修复该目录再 resume，或改用 --cwd 指向正确的项目目录后重跑`
+  );
+}
+
 async function cmdNew(cwd: string, providerId: string, json: boolean, chain?: string): Promise<void> {
   const store = openStore();
   const warnings: string[] = [];
   // 与 switch / adopt 同一处根因：两条分支都经 getOrCreateChainSession() → touchChain()
   // 抬高 `--chain` 指定那条链的 last_used_at，而「当前链」就是按它算的。先记下来，写完如实说明
   const previousChain = store?.findActiveChain(cwd) ?? null;
-  // 目录不存在也能把会话建出来，但绑定指向一个不存在的项目，resume 时必然进不去
-  const cwdIssue = await cwdProblem(cwd);
-  if (cwdIssue) warnings.push(cwdIssue);
+  // 目录不可用时 `new` 与查询类命令的后果完全不同：查询只是「列不出会话、显示 0」，
+  // 而 `new` 会真的把会话写进原生存储（claude / pi / grok 落在自家目录，kimi 还要在 cwd 里跑一次 CLI），
+  // 再往链上写一条绑定；随后打印的 resume 命令会在进入目录这一步失败。
+  // 所以两种口径分开生成：失败路径（链查不到 / 抛出异常）仍用查询类的 `cwdIssue` 拼在前面，
+  // 成功路径用写入口径，并在会话真的建出来之后补上它的文件路径。
+  const cwdProbe = await inspectCwd(cwd);
+  const cwdIssue = describeCwdProblem(cwdProbe, cwd);
+  const cwdWriteIssue = describeNewSessionCwd(cwdProbe, cwd);
   if (!store) {
     // 会话本身能建出来，但没有 switch_events：后续 switch 不认这条绑定，必须说明
     warnings.push('本地库不可用，本次新会话未写入链记录（后续切换不会认同这条绑定）');
@@ -1051,6 +1071,9 @@ async function cmdNew(cwd: string, providerId: string, json: boolean, chain?: st
           warnings.push(`链记录失败，后续切换不会认这条绑定：${describeStoreErrorReason(error)}`);
         }
       }
+      // 会话已经建出来、链绑定也写好了，但目录进不去：与查询类命令不同，这里必须说清
+      // 「已经写进去的是什么」以及「resume 会失败」，否则 ok:true + resume 会被读成马上能用
+      if (cwdWriteIssue) warnings.push(newSessionCwdWarning(cwdWriteIssue, ref.filePath));
       const resumeCommand = adapter.resumeCommand(ref);
       // 空链分支同样会 touchChain（getOrCreateChainSession 在建会话之后就跑过）
       const currentChain = store?.findActiveChain(cwd) ?? null;
@@ -1080,6 +1103,8 @@ async function cmdNew(cwd: string, providerId: string, json: boolean, chain?: st
     const result = await createChainSession(providerId, cwd, listAdapters(), getAdapter, store, chain);
     // 链已存在时的表单同样要带出 cwd / 读库 / 交接降级说明，不能只在空链分支打印
     const allWarnings = [...warnings, ...result.warnings];
+    // 已有链分支可能复用配对会话，也可能新建；无论哪种，只要目录进不去，resume 都会在这一步失败
+    if (cwdWriteIssue) allWarnings.push(newSessionCwdWarning(cwdWriteIssue, result.newRef.filePath));
     // createChainSession() 内部同样经 getOrCreateChainSession() 写 last_used_at
     const currentChain = store?.findActiveChain(cwd) ?? null;
     const shiftNote = currentChainShiftNote(previousChain, currentChain);
