@@ -246,6 +246,7 @@ export async function adoptIntoChain(
   store?: Store | null,
   targetRef?: SessionRef,
   chainId?: string,
+  storeError?: string,
 ): Promise<{
   adoptedRef: SessionRef;
   replacedRef: SessionRef | null;
@@ -285,8 +286,10 @@ export async function adoptIntoChain(
 
   let history: SwitchRecord[] = [];
   if (!store) {
-    // 库打不开时接入仍然完成，但没有链记录：下次 switch 不会认这条绑定，必须说明
-    warnings.push('本地库不可用，本次接入未写入链记录（后续切换不会认同这条绑定）');
+    // 库打不开时接入仍然完成，但没有链记录：下次 switch 不会认这条绑定，必须说明。
+    // 原因同样要带出（`storeError` 来自 `cli-main.ts` 的 `lastStoreError`）：只说「库不可用」
+    // 时用户不知道该修权限、修路径还是换 WATCH_DB，而原因里本来就带着路径与下一步。
+    warnings.push(storeUnavailableWarning('本次接入未写入链记录（后续切换不会认同这条绑定）', storeError));
   }
   if (store) {
     try {
@@ -844,14 +847,16 @@ export async function handoff(
   adapters: ProviderAdapter[],
   resolve: AdapterResolve,
   store?: Store | null,
-  opts?: { forceNew?: boolean; chainId?: string },
+  opts?: { forceNew?: boolean; chainId?: string; storeError?: string },
 ): Promise<HandoffResult> {
   const target = resolve(targetId);
   if (!target) throw new Error(unknownProviderMessage(targetId, adapters));
   const warnings: string[] = [];
   if (!store) {
-    // 内容仍会交接，但没有 switch_events：status / 桌面端看不到这次切换，必须说明
-    warnings.push('本地库不可用，本次切换未写入链记录（status 与桌面端不会显示这次切换）');
+    // 内容仍会交接，但没有 switch_events：status / 桌面端看不到这次切换，必须说明。
+    // 原因同样要带出（`opts.storeError` 由 `cmdSwitch` 传 `lastStoreError`）：只说「库不可用」
+    // 时用户不知道该修什么，而原因里本来就带着路径与下一步。
+    warnings.push(storeUnavailableWarning('本次切换未写入链记录（status 与桌面端不会显示这次切换）', opts?.storeError));
   }
   const findings: Finding[] = [];
 

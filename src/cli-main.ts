@@ -434,7 +434,10 @@ async function cmdSwitch(cwd: string, targetId: string, json: boolean, chain?: s
   // `--chain` 指定那条的 last_used_at，而「当前链」就是按它算的——写完当前链就换人了
   const previousChain = store?.findActiveChain(cwd) ?? null;
   try {
-    const result = await handoff(targetId, cwd, listAdapters(), getAdapter, store, { chainId: chain });
+    const result = await handoff(targetId, cwd, listAdapters(), getAdapter, store, {
+      chainId: chain,
+      storeError: lastStoreError ?? undefined,
+    });
     // 路径不对时 handoff 只会说「没有可接力的会话」，补上真正的原因
     if (cwdIssue) result.warnings.push(cwdIssue);
     // 显式写了 --chain 却把当前链换走了，是这条命令最该说的一句：用户的动机恰恰是
@@ -606,7 +609,15 @@ async function cmdAdopt(
       }
       targetRef = hit.ref;
     }
-    const result = await adoptIntoChain(providerId, cwd, listAdapters(), store, targetRef, chain);
+    const result = await adoptIntoChain(
+      providerId,
+      cwd,
+      listAdapters(),
+      store,
+      targetRef,
+      chain,
+      lastStoreError ?? undefined,
+    );
     if (cwdIssue) result.warnings.push(cwdIssue);
     // 与 switch 对齐：接入之后用户下一步就是打开这个会话，resume 命令不能只给 --json
     const adoptedAdapter = listAdapters().find((a) => a.id === result.adoptedRef.provider);
