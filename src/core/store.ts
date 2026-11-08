@@ -856,6 +856,7 @@ export class Store {
     cwd = this.normCwd(cwd);
     const trimmed = name.trim();
     if (!trimmed) throw new Error('链名不能为空');
+    assertChainNameUsable(trimmed);
     const id = randomUUID();
     const now = Date.now();
     this.db.exec('BEGIN');
@@ -879,6 +880,9 @@ export class Store {
   renameChain(id: string, name: string): Chain {
     const trimmed = name.trim();
     if (!trimmed) throw new Error('链名不能为空');
+    // 名字有问题属于参数错误，先于「这条链在不在」报出来：否则 id 也写错时，
+    // 用户先撞「找不到链」，改对 id 之后才看到链名的问题，要多改一轮
+    assertChainNameUsable(trimmed);
     const existing = this.mustChain(id);
     try {
       this.db.prepare('UPDATE chains SET name=? WHERE id=?').run(trimmed, id);
@@ -1110,6 +1114,60 @@ function rowToChain(row: ChainRow): Chain {
     lastUsedAt: row.last_used_at,
     createdAt: row.created_at,
   };
+}
+
+/**
+ * 链名会原样进终端：`chain list` 的每一行、`status` 的「链: …」、`usage`、`sessions --chain`，
+ * 以及十几条警告里的「链「…」」。它还会被当成 `--chain <名字>` 参数抄回去。
+ *
+ * 控制字符在这里不只是排版问题（2026-11-08 实测，修复前）：
+ * ```
+ * $ watch chain new $'a\nb' …            → {"ok":true,"name":"a\nb"}      exit 0
+ * $ watch chain list                     → 名字折成两行，表格错位
+ * $ watch chain new $'\e[31mRED\e[0m' …  → {"ok":true,"name":"\u001b[31mRED…"}  exit 0
+ * $ watch chain list                     → ^[[31mRED^[[0m 真的进了终端
+ * ```
+ * ESC 序列能改颜色、改标题、清屏（终端转义注入），换行 / 制表符让列表错行，抄回去的
+ * `--chain` 也对不上。显示层清洗会把名字改成另一串字符，用户更认不出来，所以在写库前就拒绝。
+ *
+ * 只拒控制字符（C0 U+0000–U+001F、DEL U+007F、C1 U+0080–U+009F）：中文、空格、标点都照常可用。
+ */
+function assertChainNameUsable(name: string): void {
+  const bad: string[] = [];
+  let position = 0;
+  for (const char of name) {
+    position += 1;
+    const code = char.codePointAt(0) ?? 0;
+    if (code <= 0x1f || code === 0x7f || (code >= 0x80 && code <= 0x9f)) {
+      bad.push(`第 ${position} 个字符是「${describeControlChar(code)}」`);
+    }
+  }
+  if (!bad.length) return;
+  const shown = bad.slice(0, 3).join('、');
+  const more = bad.length > 3 ? `等 ${bad.length} 处` : '';
+  throw new Error(
+    `链名不能包含控制字符：${shown}${more}；换行 / 制表符会让 chain list 的表格错行，` +
+      `ESC 这类转义序列还会改写终端显示（颜色 / 标题 / 清屏）。去掉这些字符后重试`,
+  );
+}
+
+function describeControlChar(code: number): string {
+  switch (code) {
+    case 0x00:
+      return 'NUL（U+0000）';
+    case 0x09:
+      return '制表符 \\t（U+0009）';
+    case 0x0a:
+      return '换行 \\n（U+000A）';
+    case 0x0d:
+      return '回车 \\r（U+000D）';
+    case 0x1b:
+      return 'ESC 终端转义（U+001B）';
+    default: {
+      const hex = code.toString(16).toUpperCase().padStart(4, '0');
+      return `控制字符 \\u${hex}（U+${hex}）`;
+    }
+  }
 }
 
 /**
