@@ -7,6 +7,7 @@ import { verifyWrittenTurns } from '../../core/verify.js';
 import { ENCRYPTED_THINKING, codexToolInput, toCodexToolName, turnHasContent } from '../../core/rich.js';
 import { describePathReadFailureReason, isMissingPathError } from '../../core/read-text.js';
 import { parseCodexSession } from './parse.js';
+import { codexSessionUsage } from './usage.js';
 import type { ProcessEvent, SessionRef, TokenUsage, UnifiedTurn } from '../../core/types.js';
 import type { ImportTurnsOpts } from '../adapter.js';
 
@@ -169,7 +170,12 @@ export function buildCodexLines(
   provider: string,
   identity: CodexIdentity,
   now: Date,
-  opts?: { includeMeta?: boolean; requireUser?: boolean },
+  opts?: {
+    includeMeta?: boolean;
+    requireUser?: boolean;
+    /** 追加写的既有会话已经累计过的用量：`total_token_usage` 要接着涨，不能从头算 */
+    initialUsage?: TokenUsage;
+  },
 ): string[] {
   const importTs = now.toISOString(); // RFC3339 millis，所有 record 统一用导入时刻
   const lines: string[] = [];
@@ -198,18 +204,46 @@ export function buildCodexLines(
     });
   }
 
+  // 原生 rollout 的 `total_token_usage` 是**整条会话的累计**，`last_token_usage` 才是这一轮
+  // （本机 524 个 rollout、493 个含 3 条以上 token_count 的文件全部单调不减，如 191 条事件的
+  // 文件 `total_tokens` 从 59445 涨到 28394619），而 `codexSessionUsage()` 正是「取最后一条的
+  // `total_token_usage`」。以前这里把同一份「本轮」用量同时写进两个字段，于是 Watch 自己转出的
+  // N 轮会话在 `watch usage` 里只剩最后一轮（2026-11-09 实测两轮 100+10 / 200+20 的会话报 200/20）。
+  const sessionTotal = {
+    inputTokens: opts?.initialUsage?.inputTokens ?? 0,
+    outputTokens: opts?.initialUsage?.outputTokens ?? 0,
+    totalTokens: (opts?.initialUsage?.inputTokens ?? 0) + (opts?.initialUsage?.outputTokens ?? 0),
+  };
+
   const closeTurn = (completedAt: number | null): void => {
     if (!turn) return;
-    const usage = {
+    // 没有真实用量时 `total_tokens` 退成「目前可见内容 / 4」的估算值，它本身就是累计的，
+    // 不能再往 sessionTotal 上叠；只保留一份下界，避免累计值倒退（原生从不倒退）。
+    const lastTotalTokens = turnUsage ? turnUsage.inputTokens + turnUsage.outputTokens : lastModelVisibleTokens;
+    if (turnUsage) {
+      sessionTotal.inputTokens += turnUsage.inputTokens;
+      sessionTotal.outputTokens += turnUsage.outputTokens;
+      sessionTotal.totalTokens += lastTotalTokens;
+    } else {
+      sessionTotal.totalTokens = Math.max(sessionTotal.totalTokens, lastTotalTokens);
+    }
+    const last = {
       input_tokens: turnUsage?.inputTokens ?? 0,
       cached_input_tokens: 0,
       output_tokens: turnUsage?.outputTokens ?? 0,
       reasoning_output_tokens: 0,
-      total_tokens: turnUsage ? turnUsage.inputTokens + turnUsage.outputTokens : lastModelVisibleTokens,
+      total_tokens: lastTotalTokens,
+    };
+    const cumulative = {
+      input_tokens: sessionTotal.inputTokens,
+      cached_input_tokens: 0,
+      output_tokens: sessionTotal.outputTokens,
+      reasoning_output_tokens: 0,
+      total_tokens: sessionTotal.totalTokens,
     };
     push('event_msg', {
       type: 'token_count',
-      info: { total_token_usage: usage, last_token_usage: usage, model_context_window: null },
+      info: { total_token_usage: cumulative, last_token_usage: last, model_context_window: null },
       rate_limits: null,
     });
     push('event_msg', {
@@ -396,9 +430,14 @@ export async function importTurnsToCodex(
     try {
       await access(into.filePath);
       if (turns.length === 0) return into;
+      // 追加到既有 rollout：它可能已经累计过一大笔用量，`total_token_usage` 必须接着涨。
+      // 从 0 起算会让 `codexSessionUsage()`（取最后一条 `total_token_usage`）只剩这次追加的部分，
+      // 既有历史全部凭空消失。读不出来就抛错（写路径 fail closed），不猜一个数。
+      const priorUsage = await codexSessionUsage(into);
       const lines = buildCodexLines(turns, into.sessionId, cwd, provider, identity, now, {
         includeMeta: false,
         requireUser: false,
+        initialUsage: priorUsage ?? undefined,
       });
       if (lines.length === 0) return into;
       await appendFileAtomic(into.filePath, lines.join('\n') + '\n', {
