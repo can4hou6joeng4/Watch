@@ -1,6 +1,6 @@
 import type { ImportTurnsOpts, ProviderAdapter } from '../providers/adapter.js';
 import type { SessionRef, TokenUsage, UnifiedTurn } from './types.js';
-import { describeStoreErrorReason } from './store.js';
+import { describeStoreErrorReason, emptyChainBindHint } from './store.js';
 import type { Chain, Store, SwitchRecord } from './store.js';
 import { dedupeCallEvents, describeDanglingToolCalls, describeUnansweredTail, mergeTurns, shouldReplacePairedSession, unwrapUserQuery } from './rich.js';
 import { describeWriteFailureReason, type FileDigest } from './atomic.js';
@@ -157,7 +157,7 @@ export function currentChainShiftNote(
  * 实现在 `store.ts`：`describeChainIdMisuse()` 也要用同一句，而 `handoff.ts` 本就依赖
  * `store.ts`，反向依赖会成环。这里原样再导出，既有调用点不用改。
  */
-export { emptyChainBindHint } from './store.js';
+export { emptyChainBindHint };
 
 /**
  * 写前 TOCTOU 校验：目标会话指纹与快照不一致（被外部写入）则拒绝。
@@ -471,6 +471,15 @@ export async function chainUsage(
   unsupported: string[];
   /** 用量读不出来的会话：null 可能是「原生没有 usage」，这里单独说明是真失败 */
   warnings: string[];
+  /**
+   * 结果说明（与 `warnings` 的降级原因分开，同 `open` 的 notes / warnings 分法）。
+   *
+   * `byProvider: []` + `total: 0` 在 `--json` 里同时表示「链上还没有绑定会话」「没有可用的
+   * 当前链」与「确实用了 0 token」，不说明就会被脚本当成后者——文本模式一直有这句解释，
+   * 但不进结构，桌面端与脚本读不到（sblattj/agentic-coding-harness 的同类教训：
+   * 未知要标成 unknown，不能静默当成 0）。空数组表示「无需说明」。
+   */
+  notes: string[];
 }> {
   const empty = { inputTokens: 0, outputTokens: 0 };
   if (!store) {
@@ -483,6 +492,7 @@ export async function chainUsage(
       byProvider: [],
       unsupported: [],
       warnings: [storeUnavailableWarning('无法确定当前链与各家用量', storeError)],
+      notes: [],
     };
   }
   const warnings: string[] = [];
@@ -554,7 +564,22 @@ export async function chainUsage(
       };
     }
   }
-  return { chain, total, totalExcluded, totalMissingUsage, byProvider, unsupported, warnings };
+  // 结果说明只回答「为什么这份报告是空的」，与 warnings 的降级原因分开放
+  const notes: string[] = [];
+  if (!byProvider.length) {
+    if (unsupported.length) {
+      notes.push(`链上有绑定（${unsupported.join('、')}），但这些适配器不提供用量数据`);
+    } else if (chain && history.length === 0) {
+      notes.push(`这条链还没有绑定任何会话，没有可统计的用量；${emptyChainBindHint()}`);
+    } else if (chain) {
+      // 有切换记录却没有一条统计得出来（绑定的 provider 已不在适配器列表里）
+      notes.push('链上有切换记录，但没有可统计的会话（绑定的 provider 可能未注册）；未统计任何用量');
+    } else {
+      // 没有当前链有两种来源：还没建链，或现有链都已归档——别把后者说成「没有链」
+      notes.push('没有可用的当前链（还没建链，或现有链都已归档），无用量可统计；可先用 watch chain list 查看');
+    }
+  }
+  return { chain, total, totalExcluded, totalMissingUsage, byProvider, unsupported, warnings, notes };
 }
 
 export type ProviderTip = {

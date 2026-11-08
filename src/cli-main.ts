@@ -1505,25 +1505,12 @@ async function cmdUsage(cwd: string, json: boolean, chain?: string): Promise<voi
     // 警告必须先打：本地库不可用时 byProvider 也是空的，先 return 会把「读不出来」说成「没有绑定会话」
     for (const warning of result.warnings) console.error(`警告: ${warning}`);
     if (!result.byProvider.length) {
-      if (result.unsupported?.length) {
-        // 链上有绑定、只是这家适配器不给用量：说成「无链」会把有链的工作当成没链
-        console.log(`链上有绑定（${result.unsupported.join('、')}），但这些适配器不提供用量数据`);
-        return;
-      }
-      if (result.chain) {
-        // 链就在上面打印着（chain new 之后还没切过）：这时说「无链」自相矛盾，
-        // 用户会去查链是不是没建成功，其实只是还没有绑定会话
-        console.log(
-          `这条链还没有绑定任何会话，没有可统计的用量；${emptyChainBindHint()}`,
-        );
-        return;
-      }
-      // 没有当前链有两种来源：还没建链，或现有链都已归档——别把后者说成「没有链」
-      console.log(
-        result.warnings.length
-          ? '（无可统计的用量；原因见上方警告）'
-          : '没有可用的当前链（还没建链，或现有链都已归档），无用量可统计；可先用 watch chain list 查看',
-      );
+      // 说明来自 chainUsage 的 notes，与 --json 同一句（以前只在文本模式里手写，
+      // 脚本拿到的是 byProvider: [] + total: 0，分不出「没绑定」和「真的用了 0」）
+      for (const note of result.notes ?? []) console.log(note);
+      if (result.notes?.length) return;
+      // 无库时没有可解释的内容，原因已经在 warnings 里逐条打过
+      console.log('（无可统计的用量；原因见上方警告）');
       return;
     }
     // 合计只是「已知用量之和」：读取失败与「原生没有 usage 字段」都不在其中，两种都要说出来
