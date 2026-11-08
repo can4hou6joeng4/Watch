@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process';
-import { resolveCli } from '../../core/platform.js';
+import { describeBrokenCommandStart, resolveCli } from '../../core/platform.js';
 import { readFileSync } from 'node:fs';
 import { readFile, stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
@@ -12,7 +12,7 @@ import { describePathReadFailureReason } from '../../core/read-text.js';
 import { verifyWrittenTurns } from '../../core/verify.js';
 import { parseKimiSession } from './parse.js';
 import type { ImportTurnsOpts } from '../adapter.js';
-import { cliMissingBlock, PreflightBlockedError } from '../adapter.js';
+import { cliDetectFailedBlock, cliMissingBlock, PreflightBlockedError } from '../adapter.js';
 import type { ProcessEvent, SessionRef, UnifiedTurn } from '../../core/types.js';
 
 const execFileAsync = promisify(execFile);
@@ -135,6 +135,10 @@ async function createRealKimiSession(cwd: string): Promise<{ sessionId: string; 
   } catch (error) {
     const err = error as NodeJS.ErrnoException & { stderr?: unknown; stdout?: unknown };
     if (err.code === 'ENOENT') {
+      // ENOENT 有两种：PATH 里没有 kimi（真的没装），与「文件在、shebang 解释器不在」
+      // （libuv 对两者报同一个 errno）。后者说成 cli_missing 会把用户引去重装一个装着的 CLI。
+      const broken = describeBrokenCommandStart('kimi');
+      if (broken) throw new PreflightBlockedError(cliDetectFailedBlock('kimi', 'Kimi', broken));
       // 与 `open --to` / `--check` 走同一份阻断：CLI 没装是**预期内的前置条件不满足**，
       // 不是内部错误。以前这里抛裸 Error，`new` / `switch` 只能回一句「找不到 kimi 命令」，
       // 既没有 blocked / code，也不说「未写入任何内容」——同一件事四条写路径两种口径

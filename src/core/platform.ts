@@ -1,8 +1,11 @@
-// 跨平台辅助：路径归一化、大小写不敏感比较。
+// 跨平台辅助：路径归一化、大小写不敏感比较、外部 CLI 的启动失败判定。
 // 模式参考 trellis-card 的 src-tauri/src/platform.rs（to_posix / path_eq_ignore_case /
-// strip_device_prefix / normalize_path）。工具函数只做字符串变换/比较，不做文件系统调用。
+// strip_device_prefix / normalize_path）。纯字符串函数不做文件系统调用；`resolveCli()` 与
+// `findExecutableOnPath()` 例外（前者调 where.exe，后者只在命令启动失败后查一次 PATH）。
 import { platform } from 'node:os';
 import { execFileSync } from 'node:child_process';
+import { statSync } from 'node:fs';
+import { delimiter, isAbsolute, join, resolve } from 'node:path';
 
 export const IS_WIN = platform() === 'win32';
 
@@ -59,21 +62,80 @@ export function describeSpawnFailure(error: unknown): string | null {
 }
 
 /**
- * `detect()` 语义下「真的没装」的唯一判据：spawn 阶段 `ENOENT`（命令不在 PATH 里）。
+ * 在 PATH 上找一个**确实存在**的可执行文件，找到返回绝对路径，否则 null。
+ *
+ * 只用于区分「命令不存在」与「命令在、但它的 shebang 解释器不存在」——libuv 的 `uv_spawn`
+ * 对这两种情况都返回 `ENOENT`，错误对象逐字节相同（`syscall: 'spawn kimi'`、`path: 'kimi'`），
+ * 光看错误分不出来。同类问题见 nodejs/node#10008、cli/cli#2213、golang/go#12301。
+ *
+ * 判定故意保守：只认普通文件（`isFile()`），目录 / 设备文件即使同名也不算「装了」；
+ * 任何 stat 失败都当「这一项没有」，继续看下一个 PATH 目录。返回 null 就是「找不到」，
+ * 调用方据此保留原来的「没装」文案——查不出来时不能反过来讲成「坏了」。
+ */
+export function findExecutableOnPath(cmd: string): string | null {
+  if (!cmd) return null;
+  const dirs = cmd.includes('/') || (IS_WIN && cmd.includes('\\'))
+    ? // 调用方给的是路径（Windows 的 resolveCli 会返回 where.exe 的绝对路径），只查这一个
+      ['']
+    : (process.env.PATH ?? process.env.Path ?? '').split(delimiter);
+  // Windows 的可执行命令带扩展名，spawn 不带 shell 时不走 PATHEXT，这里自己补一遍
+  const exts = IS_WIN
+    ? ['', ...((process.env.PATHEXT ?? '.COM;.EXE;.BAT;.CMD').split(';').filter(Boolean))]
+    : [''];
+  for (const dir of dirs) {
+    for (const ext of exts) {
+      const candidate = isAbsolute(cmd) || !dir ? cmd + ext : join(dir, cmd + ext);
+      try {
+        if (statSync(candidate).isFile()) return resolve(candidate);
+      } catch {
+        // 这一项没有（ENOENT / ENOTDIR / EACCES 都一样）：继续找
+      }
+    }
+  }
+  return null;
+}
+
+/**
+ * `detect()` 语义下「真的没装」的唯一判据：spawn 阶段 `ENOENT`，**且命令在 PATH 上找不到**。
  *
  * 六家适配器的 `detect()` 以前都是 `try { execFile(cli, ['--version']) } catch { return false }`，
  * 把「装了但起不来」（非零退出、没有执行权限、超时）一起讲成「未检测到」——用户会去重装
  * 一个其实装着、只是暂时坏了的 CLI，而 `broken` / `cli_detect_failed` 那一整套
  * （`listProviders()` 的 `error`、`watch providers` 的「检测失败」、`doctor` 的警告、
  * 桌面端 `providerDetectFailures()`）成了永远走不到的死代码。
+ *
+ * `ENOENT` 本身还不够：命令文件在、但 `#!` 解释器（`#!/usr/bin/env node`）不存在时，
+ * libuv 同样报 `ENOENT`，错误对象与「命令不在 PATH 上」一模一样。所以要再查一次 PATH——
+ * 文件在就说明这个 ENOENT 来自解释器，属于「装了但坏了」。
  */
 export function isCommandMissing(error: unknown): boolean {
   const err = error as NodeJS.ErrnoException & { syscall?: string };
-  return err?.code === 'ENOENT' && typeof err.syscall === 'string' && err.syscall.startsWith('spawn');
+  if (err?.code !== 'ENOENT' || typeof err.syscall !== 'string' || !err.syscall.startsWith('spawn')) return false;
+  const cmd = err.syscall.slice('spawn'.length).trim() || (typeof err.path === 'string' ? err.path : '');
+  // 命令文件在 PATH 上确实存在 → ENOENT 来自它的解释器 / 加载器，不是「没装」
+  if (cmd && findExecutableOnPath(cmd)) return false;
+  return true;
+}
+
+/**
+ * 命令在 PATH 上、但 `execve` 直接失败时的中文说明（`ENOENT` 来自 shebang 解释器 / 动态加载器）。
+ * 不是这种情形返回 null，调用方仍按「没装」处理。
+ */
+export function describeBrokenCommandStart(cmd: string): string | null {
+  const found = findExecutableOnPath(cmd);
+  if (!found) return null;
+  return `${cmd} 已安装（${found}），但一启动就失败：命令文件在，它的 shebang 解释器（如 #!/usr/bin/env node 指向的程序）却不存在——修好这个文件或重新安装该 CLI，不是缺安装`;
 }
 
 /** `detect()` 抛错时的中文原因：措辞要让人分清「没装」与「装了但坏了」 */
 export function describeDetectFailure(name: string, error: unknown): string {
+  const err0 = error as NodeJS.ErrnoException & { syscall?: string };
+  // 先单独认这一档：命令在、但 shebang 解释器不在（错误对象与「没装」完全相同）
+  if (err0?.code === 'ENOENT' && typeof err0.syscall === 'string' && err0.syscall.startsWith('spawn')) {
+    const cmd = err0.syscall.slice('spawn'.length).trim() || (typeof err0.path === 'string' ? err0.path : name);
+    const broken = describeBrokenCommandStart(cmd);
+    if (broken) return broken;
+  }
   const spawnReason = describeSpawnFailure(error);
   if (spawnReason) return spawnReason;
   const err = error as { code?: unknown; killed?: boolean; signal?: string | null; stderr?: string };

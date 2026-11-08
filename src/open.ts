@@ -6,7 +6,7 @@ import { Store, defaultDbPath, describeStoreErrorReason, describeStoreOpenFailur
 import { IS_WIN, stripDevicePrefix } from './core/platform.js';
 import type { SessionRef, TokenUsage, UnifiedTurn } from './core/types.js';
 import type { ProviderAdapter } from './providers/adapter.js';
-import { cliMissingBlock, PreflightBlockedError } from './providers/adapter.js';
+import { cliDetectFailedBlock, cliMissingBlock, PreflightBlockedError } from './providers/adapter.js';
 import { getAdapter, listAdapters, unknownProviderMessage } from './providers/registry.js';
 import { countUnparsableJsonLines } from './core/jsonl.js';
 import {
@@ -926,11 +926,8 @@ export async function newSessionCliBlock(
     // 检测本身失败 ≠ 没装：以前 `catch(() => false)` 会把它说成 cli_missing，
     // 用户被引去重装一个可能装着、只是 PATH / 权限 / 配置读不出来的 CLI
     const reason = error instanceof Error ? error.message : String(error);
-    return {
-      code: 'cli_detect_failed',
-      hint: `未写入任何内容；无法确认 ${target.id} CLI 是否可用（${reason}）。先修好检测问题（PATH、权限或客户端配置）再重试。`,
-      error: `${target.displayName} CLI 检测失败（不是「未安装」）：${reason}`,
-    };
+    const block = cliDetectFailedBlock(target.id, target.displayName, reason);
+    return { code: block.code, hint: block.hint ?? '', error: block.message };
   }
   if (available) return undefined;
   // 文案与 new / switch 共用一份：同一件事（CLI 没装）四条写路径不许各说各的

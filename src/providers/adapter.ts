@@ -36,6 +36,22 @@ export function cliMissingBlock(providerId: string, displayName: string): Prefli
   };
 }
 
+/**
+ * 「CLI 装了但检测不出来」的阻断（与 `cli_missing` 必须分开）。
+ *
+ * 检测失败 ≠ 没装：PATH 里没有命令是没装，而权限、`--version` 非零退出、超时、shebang
+ * 解释器不存在都是「装着、但起不来」。两种情况都报 `cli_missing`，用户会去重装一个装着的
+ * CLI。文案同样只写这一份：`open.ts` 的 `newSessionCliBlock()` 与适配器（当前是 kimi 的
+ * `createRealKimiSession`）都从这里取。
+ */
+export function cliDetectFailedBlock(providerId: string, displayName: string, reason: string): PreflightBlock {
+  return {
+    code: 'cli_detect_failed',
+    message: `${displayName} CLI 检测失败（不是「未安装」）：${reason}`,
+    hint: `未写入任何内容；无法确认 ${providerId} CLI 是否可用（${reason}）。先修好检测问题（PATH、权限或客户端配置）再重试。`,
+  };
+}
+
 /** 适配器拒绝写入（目标被占用等）。调用方应把它转成结构化输出，不要当作内部错误 */
 export class PreflightBlockedError extends Error {
   readonly block: PreflightBlock;

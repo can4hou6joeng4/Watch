@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process';
-import { describeDetectFailure, isCommandMissing, resolveCli } from '../../core/platform.js';
+import { describeBrokenCommandStart, describeDetectFailure, isCommandMissing, resolveCli } from '../../core/platform.js';
 import { readFile, stat } from 'node:fs/promises';
 import { promisify } from 'node:util';
 import path from 'node:path';
@@ -58,6 +58,9 @@ async function runKimi(args: string[], cwd: string): Promise<{ stdout: string; t
   } catch (error) {
     const err = error as NodeJS.ErrnoException & { stderr?: unknown; stdout?: unknown };
     if (err.code === 'ENOENT') {
+      // 同 build.ts：先分清「PATH 里没有 kimi」与「文件在、shebang 解释器不在」
+      const broken = describeBrokenCommandStart('kimi');
+      if (broken) throw new Error(`kimi CLI 启动失败（不是 PATH 里没有 kimi）：${broken}`);
       throw new Error('找不到 kimi code：当前进程 PATH 中没有 kimi 命令');
     }
     const pick = (v: unknown): string => (typeof v === 'string' ? v.trim() : '');
