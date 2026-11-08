@@ -808,6 +808,21 @@ export async function handoff(
     if (deduped > 0) addFinding(findings, 'handoff.dedup', 'skipped', deduped);
   }
   if (outgoing.length === 0 && !replace) {
+    // 来源会话本身是空的（`watch new` 建出来的 0 轮会话最典型），目标侧也没有可沿用的会话：
+    // 没有任何内容可交接。以前这里照样往下走，把 `toProvider` 记成目标、`toRef` 记成**来源**
+    // 那个会话，于是同一份结果里 `resumeCommand` 是 `claude --resume <codex 的 id>`（照抄必然失败），
+    // `status` 里 `chainTip.provider`（claude）与 `chainTip.ref.provider`（codex）互相矛盾，
+    // 文本模式还印「已从 codex 交接 → claude（0 轮）」。同一个操作走 `open <id> --to` 一直
+    // 老实拒绝（「没有可转入的内容」），两条路径对同一件事给出两套结论。
+    if (!into && turns.length === 0) {
+      throw new Error(
+        `来源会话 ${sourceTip.ref.sessionId}（${source.displayName}）没有任何可交接的内容（0 轮）：` +
+          `本次未写入任何内容，链尾仍在 ${source.displayName}。` +
+          `要在 ${target.displayName} 侧从零开新会话，请先另起一条链：watch chain new <新名字> 之后 watch new ${targetId}` +
+          `（同一条链上直接 new ${targetId} 仍会走这次空交接）；` +
+          `若 ${target.displayName} 侧已有会话，可用 watch adopt ${targetId} --session <会话 id> 接进来`,
+      );
+    }
     const resumeRef = into ?? mtimeTip.ref;
     // 目标 session 已包含全部最新内容，无需追加增量；但用户主动切回来时，
     // 仍应把链尾更新为目标 provider，否则桌面端状态会停留在旧 provider。
