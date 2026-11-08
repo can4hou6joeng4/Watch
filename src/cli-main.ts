@@ -3,7 +3,7 @@ import { stat } from 'node:fs/promises';
 import path from 'node:path';
 import { SEARCH_MAX_HITS, Store, defaultDbPath, describeStoreErrorReason, describeStoreOpenFailure } from './core/store.js';
 import { describeFindings } from './core/findings.js';
-import { adoptIntoChain, blockedHint, chainStatus, chainUsage, collectTips, createChainSession, handoff, HandoffBlockedError, rebindHint } from './core/handoff.js';
+import { adoptIntoChain, blockedHint, chainStatus, chainUsage, collectTips, createChainSession, emptyChainBindHint, handoff, HandoffBlockedError, rebindHint } from './core/handoff.js';
 import { reindexCwd } from './core/search.js';
 import type { SessionRef } from './core/types.js';
 import { getAdapter, listAdapters, listProviders, noSessionHint, unknownProviderMessage } from './providers/registry.js';
@@ -588,7 +588,7 @@ async function cmdSessions(cwd: string, json: boolean, chain?: string): Promise<
         }
         // 链存在但一条绑定都没有：过滤后必然是空列表，不说原因会被当成「目录里没有会话」
         if (bound.size === 0) {
-          warnings.push(`链 ${chainRow.name} 还没有绑定会话（可用 watch switch / adopt 先绑定）`);
+          warnings.push(`链 ${chainRow.name} 还没有绑定会话：${emptyChainBindHint()}`);
         }
       } else if (chain) {
         // 跨目录的链在这里同样是「找不到」，但指名它在哪个目录，用户才知道该改 --cwd
@@ -1370,7 +1370,7 @@ async function cmdUsage(cwd: string, json: boolean, chain?: string): Promise<voi
         // 链就在上面打印着（chain new 之后还没切过）：这时说「无链」自相矛盾，
         // 用户会去查链是不是没建成功，其实只是还没有绑定会话
         console.log(
-          `这条链还没有绑定任何会话，没有可统计的用量；先用 watch switch <provider> 或 watch adopt <provider> --session <id> 绑定`,
+          `这条链还没有绑定任何会话，没有可统计的用量；${emptyChainBindHint()}`,
         );
         return;
       }
