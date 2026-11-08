@@ -133,8 +133,18 @@ export function buildClaudeLines(
     return record;
   };
 
-  const assistantMessage = (content: unknown[], stopReason: string | null, usage?: TokenUsage): Record<string, unknown> => ({
-    id: newMsgId(),
+  // `message.id` 由调用方按 turn 传入：同一条 assistant 回复按 content block 拆成多行时，
+  // 这几行必须共用同一个 id。原生 Claude 就是这样写的（本机 43809 个带 usage 的 message.id
+  // 里有 32714 个出现在多行：thinking + text + tool_use 共用一个 id），而 `claudeSessionUsage()`
+  // 正是按 id 去重；以前这里每次调用都生成新 id，于是 `emitClaudeEvent()` 挂到每个 block 上的
+  // **同一份 turn usage** 被当成 N 条不同消息累加，Watch 自己转出的会话用量虚高 N 倍。
+  const assistantMessage = (
+    messageId: string,
+    content: unknown[],
+    stopReason: string | null,
+    usage?: TokenUsage,
+  ): Record<string, unknown> => ({
+    id: messageId,
     type: 'message',
     role: 'assistant',
     model: identity.model,
@@ -175,6 +185,8 @@ export function buildClaudeLines(
     }
 
     let lastCallId: string | undefined;
+    // 同一条 turn 的所有 assistant 行共用一个 message.id（见 assistantMessage 上方注释）
+    const messageId = newMsgId();
     const finalText = turn.text.trim();
     for (const ev of turn.events ?? []) {
       if (ev.kind === 'text' && (ev.detail ?? ev.summary).trim() === finalText) continue;
@@ -183,6 +195,7 @@ export function buildClaudeLines(
         assistantMessage,
         push,
         lastCallId,
+        messageId,
         setLastCallId: (id) => {
           lastCallId = id;
         },
@@ -192,7 +205,7 @@ export function buildClaudeLines(
     if (turn.text.trim()) {
       const record = baseRecord();
       record.type = 'assistant';
-      record.message = assistantMessage([{ type: 'text', text: turn.text }], 'end_turn', turn.usage);
+      record.message = assistantMessage(messageId, [{ type: 'text', text: turn.text }], 'end_turn', turn.usage);
       push(record);
     }
   }
@@ -238,9 +251,15 @@ function emitClaudeEvent(
   ev: ProcessEvent,
   ctx: {
     baseRecord: () => Record<string, unknown>;
-    assistantMessage: (content: unknown[], stopReason: string | null, usage?: TokenUsage) => Record<string, unknown>;
+    assistantMessage: (
+      messageId: string,
+      content: unknown[],
+      stopReason: string | null,
+      usage?: TokenUsage,
+    ) => Record<string, unknown>;
     push: (record: Record<string, unknown>) => void;
     lastCallId: string | undefined;
+    messageId: string;
     setLastCallId: (id: string) => void;
     usage?: TokenUsage;
   },
@@ -250,7 +269,7 @@ function emitClaudeEvent(
     if (!thinking || thinking === ENCRYPTED_THINKING) return;
     const record = ctx.baseRecord();
     record.type = 'assistant';
-    record.message = ctx.assistantMessage([{ type: 'text', text: `${CLAUDE_THINKING_PREFIX}${thinking}` }], null, ctx.usage);
+    record.message = ctx.assistantMessage(ctx.messageId, [{ type: 'text', text: `${CLAUDE_THINKING_PREFIX}${thinking}` }], null, ctx.usage);
     ctx.push(record);
     return;
   }
@@ -266,7 +285,7 @@ function emitClaudeEvent(
           : { input: ev.detail ?? ev.summary };
     const record = ctx.baseRecord();
     record.type = 'assistant';
-    record.message = ctx.assistantMessage([{ type: 'tool_use', id: callId, name, input }], 'tool_use', ctx.usage);
+    record.message = ctx.assistantMessage(ctx.messageId, [{ type: 'tool_use', id: callId, name, input }], 'tool_use', ctx.usage);
     ctx.push(record);
     return;
   }
@@ -286,7 +305,7 @@ function emitClaudeEvent(
     if (block) {
       const record = ctx.baseRecord();
       record.type = 'assistant';
-      record.message = ctx.assistantMessage([block], null, ctx.usage);
+      record.message = ctx.assistantMessage(ctx.messageId, [block], null, ctx.usage);
       ctx.push(record);
       return;
     }
@@ -294,7 +313,7 @@ function emitClaudeEvent(
     if (!text) return;
     const record = ctx.baseRecord();
     record.type = 'assistant';
-    record.message = ctx.assistantMessage([{ type: 'text', text }], null, ctx.usage);
+    record.message = ctx.assistantMessage(ctx.messageId, [{ type: 'text', text }], null, ctx.usage);
     ctx.push(record);
   }
 }
