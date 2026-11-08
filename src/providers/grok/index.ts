@@ -4,7 +4,7 @@ import { promisify } from 'node:util';
 import { digestFile } from '../../core/atomic.js';
 import type { FileDigest } from '../../core/atomic.js';
 import type { ProviderAdapter, ImportTurnsOpts } from '../adapter.js';
-import type { ProcessEvent, SessionRef, TokenUsage, UnifiedTurn } from '../../core/types.js';
+import type { ProcessEvent, SessionRef, UnifiedTurn } from '../../core/types.js';
 import {
   createEmptyGrokSession,
   findGrokSessionById,
@@ -13,6 +13,7 @@ import {
   listGrokSessions,
 } from './build.js';
 import { parseGrokSession } from './parse.js';
+import { grokSessionUsage } from './usage.js';
 
 export { findGrokSessionById };
 
@@ -69,7 +70,5 @@ export const grokAdapter: ProviderAdapter = {
     return `grok -r ${ref.sessionId}`;
   },
 
-  async sessionUsage(): Promise<TokenUsage | null> {
-    return null;
-  },
+  sessionUsage: grokSessionUsage,
 };
