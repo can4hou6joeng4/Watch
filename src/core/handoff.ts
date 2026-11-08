@@ -219,8 +219,18 @@ export async function createChainSession(
     }
     throw new Error(`链尾已是 ${providerId}，直接 resume 即可；要开新对话请先切到另一侧`);
   }
-  if (pairedRef(history, providerId)) {
-    throw new Error(`${providerId} 已在链上（每个 provider 只能有一个会话）；如需更换请用「接入」或先切走`);
+  const paired = pairedRef(history, providerId);
+  if (paired) {
+    // 「先切走」是错的：`switch` 只往 switch_events 追加记录，`pairedRef()` 扫的是整条历史，
+    // 切到另一侧再切回来绑定照样在，用户来回几轮只会再撞同一句。
+    // 真正能解开的只有两条：换绑（adopt 会替换掉旧会话）或另起一条链。
+    // 同时点出被绑着的是哪个会话——`new` 的动机常常是「上次那个好像不对」，不说 id 就只能靠猜。
+    throw new Error(
+      `${providerId} 已在链上：会话 ${paired.sessionId}（每个 provider 在一条链上只能有一个会话）；` +
+        `没有交接任何内容，也没有新建会话。` +
+        `要换绑请用「接入」：watch adopt ${providerId} --session <另一个会话 id>；` +
+        `要在新的一侧另开一段请先建链：watch chain new <新名字> 之后重跑 watch new ${providerId}`,
+    );
   }
   return handoff(providerId, cwd, adapters, resolve, store, { forceNew: true, chainId });
 }
