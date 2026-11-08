@@ -14,7 +14,7 @@ import { runImportCodex } from './import-codex.js';
 import { ImportJobs } from './core/import-jobs.js';
 import { officialImportJournalRoot } from './providers/codex/official-import.js';
 import { doctorReport } from './core/doctor.js';
-import { cwdProblem, describeCwdProblem, describeNewSessionCwd, inspectCwd } from './core/cwd.js';
+import { cwdAliasHint, cwdProblem, describeCwdProblem, describeNewSessionCwd, inspectCwd } from './core/cwd.js';
 import { escapeControlChars, hasControlChars } from './core/display.js';
 import { describePathReadFailureReason, describeSessionReadFailureReason, sessionFilePresence } from './core/read-text.js';
 import { describeWriteFailureReason } from './core/atomic.js';
@@ -341,6 +341,12 @@ async function cmdStatus(cwd: string, json: boolean, chain?: string): Promise<vo
     failWithCwd(json, cwdIssue, error instanceof Error ? error.message : String(error));
   }
   if (cwdIssue) result.warnings.push(cwdIssue);
+  // 零会话 + `--cwd` 是同一个目录的另一种写法（软链 / 大小写）：正文那句「未发现会话」是结论，
+  // 而真正的原因是这个写法与原生记录不一致。只在零结果时补，健康目录不多嘴
+  if (!result.tips.length) {
+    const alias = await cwdAliasHint(cwd);
+    if (alias) result.warnings.push(alias);
+  }
   // 「这个目录没有链」与「一条链都没建过」原本长得一样：链按 cwd 精确分组，--cwd 指错地方
   // 时正文只有「切换链: （空）」，用户会以为链丢了。别处的链要说出来，并给出可照抄的 --cwd
   const elsewhere = result.chains.length ? [] : chainsElsewhereOf(store, cwd);
@@ -828,6 +834,12 @@ async function cmdSessions(cwd: string, json: boolean, chain?: string): Promise<
         }),
     );
     const result = groups.filter((g) => g.sessions.length > 0);
+    // 零会话 + `--cwd` 只是同一个目录的另一种写法：正文的「未发现会话」会被当成「真的没聊过」，
+    // 而会话可能全记在 realpath 那种写法下（软链 / 大小写），先给可照抄的路径
+    if (!result.length) {
+      const alias = await cwdAliasHint(cwd);
+      if (alias) warnings.push(alias);
+    }
     pushEscapedContentWarning(
       warnings,
       result.flatMap((g) =>
@@ -981,6 +993,12 @@ async function cmdRecent(cwd: string, json: boolean, limit: number = 8, cwdGiven
   const results = [...merged.values()];
   results.sort((a, b) => b.updatedAt - a.updatedAt);
   const final = results.slice(0, limit);
+  // 同 status / sessions：零结果时先看 --cwd 是不是同一个目录的另一种写法，
+  // 否则「暂无最近会话记录」会被当成「这个目录真的没聊过」
+  if (!final.length) {
+    const alias = await cwdAliasHint(cwd);
+    if (alias) warnings.push(alias);
+  }
   // 列表被 --limit（默认 8）截断时要说出来，否则用户会把「最近 8 条」当成全部
   const truncated = results.length > final.length;
   pushEscapedContentWarning(

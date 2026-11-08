@@ -1,7 +1,7 @@
 // `--cwd` 指向的路径是否有问题：各 provider 的 listSessions / findLatestSession 按原生记录的
 // 路径字符串精确比较，路径错了只会安静返回 0，看起来像「这个目录没有会话」。查询类命令与
 // `watch doctor` 统一用这里的说明做披露，避免同一个坑每处各写一份文案。
-import { stat } from 'node:fs/promises';
+import { realpath, stat } from 'node:fs/promises';
 
 /**
  * 一个目录现在能不能用。分开说「不存在」与「读不出来」是因为两者下一步完全不同：
@@ -75,6 +75,38 @@ export function describeNewSessionCwd(probe: CwdInspection, cwd: string): string
 /** 路径有问题时返回一句可直接输出的说明；正常目录返回 null（不做符号链接 / realpath 归因）。 */
 export async function cwdProblem(cwd: string): Promise<string | null> {
   return describeCwdProblem(await inspectCwd(cwd), cwd);
+}
+
+/**
+ * `--cwd` 是**同一个目录的另一种写法**时的说明（路径本身没问题，`cwdProblem()` 返回 null）。
+ *
+ * 各 provider 按原生记录的路径字符串精确比较，于是同一个目录换个写法就一条会话都查不到：
+ * 软链接（`/tmp/x` 与 `/private/tmp/x`、指向同一项目的 `~/work`）与大小写不同的写法都是同一件事。
+ * `watch doctor` 早就有这条（它自己 `stat` + `realpath`，且只在「六家一共扫不到任何会话」时给出），
+ * 而 `status` / `sessions` / `recent` 在零结果时只留一句「未发现会话」——排障入口与查询入口两种口径，
+ * 用户会去重开一次会话，而不是换路径重查。
+ *
+ * 只在调用方**已经确认零结果**时才调：健康目录每次查询都多一遍 realpath 是白花，也多一句噪音。
+ * 目录不存在 / 进不去时返回 null——那是 `cwdProblem()` 的活，两句话叠在一起会互相干扰。
+ * 文案不提「符号链接」这一个原因：`/var` 与 `/private/var` 这类**前缀**是软链、名字大小写不同则是
+ * 文件系统语义，两者表现完全一样（会话一条都查不到），说错原因会把人引去 `ls -l` 一个本来正常的目录。
+ */
+export async function cwdAliasHint(cwd: string): Promise<string | null> {
+  let real: string;
+  try {
+    const probe = await stat(cwd);
+    if (!probe.isDirectory()) return null;
+    real = await realpath(cwd);
+  } catch {
+    // 不存在 / 读不出来：cwdProblem() 已经说过，这里不重复
+    return null;
+  }
+  if (real === cwd) return null;
+  return (
+    `--cwd 指向的目录还有另一种写法（realpath: ${real}），而本目录没扫到任何会话；` +
+    '各 provider 按原生记录的路径字符串精确比较，同一个目录换个写法（符号链接、/var 与 /private/var 这类前缀、大小写）就会一条都查不到' +
+    `——把 --cwd 换成 ${real} 重试同一条命令（其余参数照旧）`
+  );
 }
 
 /**
