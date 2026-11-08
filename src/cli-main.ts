@@ -16,7 +16,7 @@ import { officialImportJournalRoot } from './providers/codex/official-import.js'
 import { doctorReport } from './core/doctor.js';
 import { cwdAliasHint, cwdProblem, describeCwdProblem, describeNewSessionCwd, inspectCwd } from './core/cwd.js';
 import { escapeControlChars, hasControlChars } from './core/display.js';
-import { describePathReadFailureReason, describeSessionReadFailureReason, sessionFilePresence } from './core/read-text.js';
+import { describePathReadFailureReason, describeSessionReadFailureReason, probeSessionReadable, sessionFilePresence } from './core/read-text.js';
 import { describeWriteFailureReason } from './core/atomic.js';
 import { describeSpawnFailure } from './core/platform.js';
 
@@ -578,6 +578,19 @@ async function cmdAdopt(
     // 与 switch 对齐：接入之后用户下一步就是打开这个会话，resume 命令不能只给 --json
     const adoptedAdapter = listAdapters().find((a) => a.id === result.adoptedRef.provider);
     const resumeCommand = adoptedAdapter ? adoptedAdapter.resumeCommand(result.adoptedRef) : undefined;
+    // adopt 只写链记录、不读会话内容，所以「文件本身读不出来」在这里一点都看不出来：
+    // `sessions` / `recent` 会为同一条会话警告「open / switch 读它时同样会失败」，
+    // adopt 却回 ok:true 并给出一条一执行就失败的 resume。`stat` 对 `chmod 000` 照常成功
+    // （列目录就能接入），因此接入之后单独 open 一次确认它真的读得出来。
+    const readProblem = await probeSessionReadable(result.adoptedRef.filePath);
+    if (readProblem) {
+      result.warnings.push(
+        `接入了会话 ${result.adoptedRef.sessionId}（${adoptedAdapter?.displayName ?? result.adoptedRef.provider}），但它的会话文件现在读不出来：${readProblem}；` +
+          `链记录已写入，本次没有改动会话文件——但 ${
+            resumeCommand ? `resume 命令（${resumeCommand}）` : '打开这条会话'
+          }一执行就会失败，先修好这个文件再打开，或用 watch adopt <provider> --session <会话 id> 换成另一条会话`,
+      );
+    }
     // 同 switch：显式 --chain 却把当前链换走了，必须在结果里说（空操作时链没被 touch，
     // previousChain 与 currentChain 相同，自然不冒这句）
     const currentChain = store?.findActiveChain(cwd) ?? null;

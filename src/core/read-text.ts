@@ -1,4 +1,4 @@
-import { readFile, stat } from 'node:fs/promises';
+import { open, readFile, stat } from 'node:fs/promises';
 
 /**
  * 读文本；文件不存在按空串处理（新建分支依赖这个语义）。
@@ -113,5 +113,26 @@ export async function sessionFilePresence(filePath: string): Promise<SessionFile
     const code = (error as NodeJS.ErrnoException).code;
     if (code === 'ENOENT' || code === 'ENOTDIR') return { state: 'missing' };
     return { state: 'unknown', reason: describeSessionReadFailure(filePath, error) };
+  }
+}
+
+/**
+ * 只读探一次「这个会话文件现在读得出来吗」：只 `open` 一下，不读内容。
+ *
+ * `stat` 成功不代表读得出来（`chmod 000` 的文件 `stat` 照常返回），所以只 `stat` /
+ * 只列目录的路径（如 `adopt` 写链记录）会显得一切正常，而它打印的 resume 命令
+ * 一执行就失败。返回 `null` 表示读得出来，否则是中文原因（已带路径）。
+ */
+export async function probeSessionReadable(filePath: string): Promise<string | null> {
+  let handle: Awaited<ReturnType<typeof open>> | undefined;
+  try {
+    handle = await open(filePath, 'r');
+    return null;
+  } catch (error) {
+    // 这里只报「读不出来」：文件确实不在时也要说清，否则用户会去反复试 resume
+    if (isMissingPathError(error)) return `会话文件已不存在：${filePath}`;
+    return describeSessionReadFailure(filePath, error);
+  } finally {
+    await handle?.close().catch(() => {});
   }
 }
