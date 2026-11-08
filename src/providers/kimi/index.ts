@@ -270,6 +270,11 @@ export async function kimiSessionUsage(ref: SessionRef): Promise<TokenUsage | nu
       continue;
     }
     if (r.type === 'usage.record') {
+      // 原生还会按 step 记 usage（`usageScope: "step"`）。那些是同一轮拆出来的中间量，
+      // 计入就会翻倍：ccusage（ccusage/ccusage，19.4k stars）的 kimi 适配器只认
+      // `usageScope === "turn"` 的记录，其它一律跳过。这里同样只在「显式写了别的 scope」时跳过，
+      // 没有 `usageScope` 的记录照旧累加（历史文件与本地回归的既有形状）。
+      if (typeof r.usageScope === 'string' && r.usageScope !== 'turn') continue;
       const u = r.usage;
       if (typeof u !== 'object' || u === null) continue;
       const usage = u as Record<string, unknown>;
