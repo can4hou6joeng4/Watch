@@ -168,7 +168,7 @@ export async function adoptIntoChain(
   warnings: string[];
   /** 该会话在本次之前就已经绑在链上：目标状态已成立，没有写入任何链记录 */
   unchanged?: boolean;
-  /** `unchanged` 时的结果说明（走 stdout；与 `warnings` 的降级原因分开） */
+  /** `unchanged` 时的结果说明，或接入时说明接入的会话是自动挑的（走 stdout；与 `warnings` 的降级原因分开） */
   note?: string;
 }> {
   const warnings: string[] = [];
@@ -182,6 +182,11 @@ export async function adoptIntoChain(
       throw new Error(`链已归档: ${archived}；可 watch chain use ${archived} 恢复，或省略 --chain 用当前链`);
     }
   }
+  // 没有 --session 时按 mtime 挑「最新会话」。这条兜底路径以前会**静默改绑**：
+  // 同目录另一条链刚聊过的会话更新，`adopt claude --chain 默认` 就会把默认链的绑定
+  // 换成别条链的会话（2026-11-08 实测 `chain list` 里两条链从此指向同一个 id），
+  // 而 `replacedRef` 只写「替换了: <id>」，用户看不出那条会话根本不是自己指定的。
+  const autoPicked = !targetRef;
   const found = targetRef
     ? { ref: targetRef }
     : await adapter.findLatestSession(cwd);
@@ -223,16 +228,45 @@ export async function adoptIntoChain(
     // （会复用这条已绑定的会话，不新建）。只回「无需接入」，用户再试几遍还是同一句。
     const tail = history.at(-1);
     const tipElsewhere = tail && tail.toProvider !== providerId;
+    // 这条会话是「按 mtime 挑出来的」，不是用户指定的：note 里那句「没有需要改动的地方」
+    // 只在用户确实想接它时成立。说明它是自动挑的，并给出显式写法，用户才有机会纠正。
+    const autoPickedNote = autoPicked
+      ? `未指定 --session，本次自动挑的是按修改时间最新的会话 ${found.ref.sessionId}；要接入指定会话请用 watch adopt ${providerId} --session <会话 id>`
+      : '';
     const note = tipElsewhere
       ? `会话 ${found.ref.sessionId} 已经在链上（${providerId} 这一侧绑定的就是它），本次没有写入任何链记录；` +
         `当前链尾停在 ${tail.toProvider}（${tail.toRef.sessionId}），要让 ${providerId} 重新成为当前一侧请用 watch switch ${providerId}（会复用这条会话，不新建）`
       : `会话 ${found.ref.sessionId} 已经在链上，本次没有写入任何链记录（没有需要改动的地方）`;
     // 这是结果说明而不是降级原因（链记录没有写失败，是本来就不需要写），所以走 note：
     // 文本模式打到 stdout，与 `warnings`（stderr，真正的降级）分开
-    return { adoptedRef: found.ref, replacedRef: null, warnings, unchanged: true, note };
+    return {
+      adoptedRef: found.ref,
+      replacedRef: null,
+      warnings,
+      unchanged: true,
+      note: autoPickedNote ? `${note}；${autoPickedNote}` : note,
+    };
   }
 
   let replaced: SessionRef | null = pairedRef(history, providerId);
+  // 没指定 --session、而链上这一家已经绑着另一个会话：这是**静默改绑**，不能做。
+  // 同目录另一条链刚聊过的会话更新时，`adopt claude --chain 默认` 会把默认链的绑定换成
+  // 别条链的会话（2026-11-08 实测 `chain list` 里两条链从此指向同一个 id），而输出只说
+  // 「替换了: <id>」，用户看不出换上去的那条根本没被自己指定过。链只按 cwd 分组，
+  // 「最新」与「这条链上的」是两件事。想要换绑就显式给 --session，让选择可见。
+  if (autoPicked && replaced) {
+    const autoPickedNote =
+      `未指定 --session，本次自动挑的是按修改时间最新的会话 ${found.ref.sessionId}；` +
+      `但链上 ${providerId} 这一侧现在绑的是 ${replaced.sessionId}，本次没有改动它（自动挑的会话可能属于另一条链或另一段工作）；` +
+      `确实要换成最新那条请用 watch adopt ${providerId} --session ${found.ref.sessionId}`;
+    return {
+      adoptedRef: replaced,
+      replacedRef: null,
+      warnings,
+      unchanged: true,
+      note: autoPickedNote,
+    };
+  }
   const otherBound = (() => {
     let r: SessionRef | null = null;
     for (const h of history) {
@@ -252,7 +286,13 @@ export async function adoptIntoChain(
       warnings.push(`链记录失败: ${describeStoreErrorReason(error)}`);
     }
   }
-  return { adoptedRef: found.ref, replacedRef: replaced, warnings };
+  // 链上这一家原本没绑会话时仍然接入「最新会话」（这是 adopt 的既定语义），
+  // 但必须披露它是自动挑的：--json 里只有 id，文本模式也只有一串 uuid，
+  // 用户很容易把「挑中的那条」当成自己指定的那条。
+  const note = autoPicked
+    ? `未指定 --session，本次是按修改时间挑的最新会话 ${found.ref.sessionId}；要接入指定会话请用 watch adopt ${providerId} --session <会话 id>`
+    : undefined;
+  return { adoptedRef: found.ref, replacedRef: replaced, warnings, ...(note ? { note } : {}) };
 }
 
 /**

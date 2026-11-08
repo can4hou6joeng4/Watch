@@ -462,6 +462,8 @@ async function cmdAdopt(
     } else {
       console.log(`已接入链: ${result.adoptedRef.sessionId}`);
       if (result.replacedRef) console.log(`替换了:  ${result.replacedRef.sessionId}`);
+      // 没给 --session 时接入的是「按 mtime 挑的最新会话」，这一点不能只在 --json 里
+      if (result.note) console.log(`  ${result.note}`);
     }
     if (resumeCommand) {
       console.log('');
