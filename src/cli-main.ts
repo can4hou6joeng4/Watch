@@ -1131,12 +1131,37 @@ async function cmdChain(cwd: string, json: boolean, action?: string, a?: string,
     }
     if (action === 'new') {
       if (!a) throw new Error(`chain new 需要一个链名；可用: ${CHAIN_SUBCOMMANDS}`);
+      // 新建链写入 `last_used_at = now`，而「当前链」就是活跃链里 `last_used_at` 最新的一条：
+      // 于是 `chain new` 会**静默把当前链换走**。这恰好与这条命令最常见的用途相反——
+      // 「先建一条备用放着，以后再说」——建完当前链就变成那条备用的了，
+      // 紧接着一次不带 `--chain` 的 `switch` 就把内容交接进这条谁也没打算用的链，
+      // 原来那条链上什么都不剩（2026-11-08 实测：`chain new 主力` → `chain new 备用` →
+      // `switch codex` 之后 `chain list` 里「备用」是 `← 当前` 并带链尾，「主力」是空的）。
+      // 所以先记下原当前链，建完把这件事说出来，并给一条能回去的命令。
+      const previous = store.findActiveChain(cwd);
       const chain = store.createChain(cwd, a);
+      // 本目录第一条活跃链时没有「被换下的链」，此时不出声（每次建链都弹提示就是假警）
+      const switchedFrom = previous && previous.id !== chain.id ? previous : null;
+      const switchNote = switchedFrom
+        ? `当前链已从「${switchedFrom.name}」换成「${chain.name}」；之后不带 --chain 的 status / switch / new / adopt 都作用在「${chain.name}」上（要回到原来那条用 watch chain use ${switchedFrom.name}）`
+        : null;
       // 与 watch new 同理：路径错了照样建出链，但绑定指向不存在的项目，必须说明
-      if (json) console.log(JSON.stringify({ ok: true, chain, ...(cwdIssue ? { warnings: [cwdIssue] } : {}) }));
-      else {
+      // （cwd 问题走降级警告通道；当前链变更走结果说明通道，见 `chain archive` 的同一分法）
+      if (json) {
+        const warnings = [...(cwdIssue ? [cwdIssue] : []), ...(switchNote ? [switchNote] : [])];
+        console.log(
+          JSON.stringify({
+            ok: true,
+            chain,
+            ...(switchedFrom ? { previousChain: switchedFrom } : {}),
+            ...(warnings.length ? { warnings } : {}),
+          }),
+        );
+      } else {
         if (cwdIssue) console.error(`警告: ${cwdIssue}`);
         console.log(`已创建链: ${chain.name}  (${chain.id})`);
+        // 与 `chain rename` / `chain archive` 的提示同一位置：跟在结果下一行，不是降级警告
+        if (switchNote) console.log(`  ${switchNote}`);
       }
       return;
     }
