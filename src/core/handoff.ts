@@ -200,6 +200,23 @@ export async function createChainSession(
   if (!history.length) throw new Error('当前目录还没有切换链，请先执行一次 Switch 建链');
   const tail = history.at(-1)!;
   if (tail.toProvider === providerId) {
+    // 「直接 resume 即可」只在链尾文件真的还在时成立。文件被删 / 被同名目录占住 / 读不出来时
+    // 照旧这么说，用户会在原生 CLI 里撞一个更含糊的错误；同一条链上 `switch` 早就分三档说清了。
+    const tipPresence = await sessionFilePresence(tail.toRef.filePath);
+    const broken =
+      tipPresence.state === 'missing'
+        ? '文件已不存在'
+        : tipPresence.state === 'unknown'
+          ? `状态无法确认：${tipPresence.reason}`
+          : !tipPresence.isFile
+            ? '的路径现在不是普通文件（被同名目录或设备文件占住了）'
+            : null;
+    if (broken) {
+      throw new Error(
+        `链尾已是 ${providerId}，但链尾会话 ${tail.toRef.sessionId} ${broken}：${tail.toRef.filePath}；` +
+          `本次无法交接也无法 resume——可先恢复该文件，或用 watch chain new <新名字> 另起一条链`,
+      );
+    }
     throw new Error(`链尾已是 ${providerId}，直接 resume 即可；要开新对话请先切到另一侧`);
   }
   if (pairedRef(history, providerId)) {
