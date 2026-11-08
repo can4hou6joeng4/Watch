@@ -1182,9 +1182,35 @@ async function cmdChain(cwd: string, json: boolean, action?: string, a?: string,
         else console.log(`已归档: ${found.name}（${note}）`);
         return;
       }
+      // 归档**当前链**时，当前链会静默换成另一条活跃链：之后所有不带 `--chain` 的
+      // status / switch / new / adopt 都作用在它上面，而输出只有一句「已归档」。
+      // 归档自己正在用的那条链，恰好是最需要知道「接下来写进哪条」的时刻。
+      const currentBefore = store.findActiveChain(cwd);
+      const archivingCurrent = currentBefore?.id === found.id;
       store.archiveChain(found.id);
-      if (json) console.log(JSON.stringify({ ok: true, id: found.id }));
-      else console.log(`已归档: ${found.name}（可用 watch chain use ${found.name} 恢复）`);
+      // 归档后就地再查一次，拿到真正接手的那条（`lastUsedAt` 最新的活跃链）。
+      // `archiveChain()` 在「最后一条活跃链」时已经抛错，所以这里必然还有一条；
+      // 仍留一条兜底文案，避免将来守卫放宽时把「没有当前链」说成「换成了某条」。
+      const nextCurrent = archivingCurrent ? store.findActiveChain(cwd) : null;
+      const currentNote = archivingCurrent
+        ? nextCurrent
+          ? `当前链已从「${found.name}」换成「${nextCurrent.name}」；之后不带 --chain 的 status / switch / new / adopt 都作用在「${nextCurrent.name}」上（要按名字指定这条链用 watch chain use ${nextCurrent.name}）`
+          : `「${found.name}」原本是本目录的当前链，归档后已经没有其它活跃链了；status / switch / new / adopt 需要先用 watch chain new <新名字> 建一条，或 watch chain use ${found.name} 恢复`
+        : null;
+      if (json) {
+        console.log(
+          JSON.stringify({
+            ok: true,
+            id: found.id,
+            ...(nextCurrent ? { currentChain: nextCurrent } : {}),
+            ...(currentNote ? { warnings: [currentNote] } : {}),
+          }),
+        );
+      } else {
+        console.log(`已归档: ${found.name}（可用 watch chain use ${found.name} 恢复）`);
+        // 与 `chain rename` 对归档链的提示同一位置：跟在结果下一行，不是降级警告
+        if (currentNote) console.log(`  ${currentNote}`);
+      }
       return;
     }
     if (action === 'use') {
