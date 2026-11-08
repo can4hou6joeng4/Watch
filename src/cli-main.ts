@@ -7,7 +7,7 @@ import { adoptIntoChain, blockedHint, chainStatus, chainUsage, collectTips, crea
 import { reindexCwd } from './core/search.js';
 import type { SessionRef } from './core/types.js';
 import { getAdapter, listAdapters, listProviders, noSessionHint, unknownProviderMessage } from './providers/registry.js';
-import { checkOpenInProvider, openInProvider, openSession } from './open.js';
+import { checkOpenInProvider, LOOKUP_NEXT_STEP, openInProvider, openSession } from './open.js';
 import { PreflightBlockedError } from './providers/adapter.js';
 import { runImportCodex } from './import-codex.js';
 import { ImportJobs } from './core/import-jobs.js';
@@ -450,11 +450,16 @@ async function cmdAdopt(
           : '';
         // 链 id 也是 UUID，chain list 里就印在同一行：说清它是链并给出链尾绑定，避免反复核对 id
         const chainUse = store?.describeChainIdMisuse(sessionId, cwd) ?? null;
+        // `adopt` 是四条按 id 反查的路径里唯一没接共用下一步的那条，也是唯一「多说了一个 id、
+        // 提示反而更弱」的那条：不给 `--session` 时 `adoptIntoChain()` 走 `adoptNoSessionMessage()`
+        // 有完整指引，给了却掉进这里只剩一句事实。它同样是写路径（会写 switch_events、动链尾），
+        // 失败时还要说清没有写入——否则用户不知道链有没有被改过。
         throw new Error(
           (chainUse ? `${chainUse}；` : '') +
             (capped
-              ? `在当前目录最近 ${all.length} 个会话里找不到: ${sessionId}（${adapter.id} 列表上限 ${cap}，更早的会话不在其中，可用 watch sessions 或原生 CLI 确认真实 id）`
+              ? `在当前目录最近 ${all.length} 个会话里找不到: ${sessionId}（${adapter.id} 列表上限 ${cap}，更早的会话不在其中）`
               : `在当前目录找不到会话: ${sessionId}`) +
+            `；${LOOKUP_NEXT_STEP}。本次未写入任何内容` +
             lookupNote,
         );
       }
