@@ -11,7 +11,7 @@ import { readWatchVersion } from './watch-version.js';
 import { cwdProblem } from './cwd.js';
 import { escapeControlChars } from './display.js';
 import { countUnparsableJsonLines } from './jsonl.js';
-import { describeSessionReadFailureReason, isFileSystemErrorCode } from './read-text.js';
+import { describeSessionReadFailureReason, isFileSystemErrorCode, probeSessionReadable } from './read-text.js';
 
 export type BrokenTip = {
   chainId: string;
@@ -22,6 +22,14 @@ export type BrokenTip = {
   error: string;
   /** true = 文件确认不在（ENOENT / ENOTDIR）；false = 读不出来，无法确认是否还在 */
   missing: boolean;
+  /**
+   * true = 文件在、是普通文件，但打不开（`chmod 000` 之类）。
+   *
+   * `stat` 成功不代表读得出来，所以这一档既不能进 `missing`（文件没丢），也不能当成
+   * 健康链尾（`resume` 与下次切换一读内容就失败）。`status` / `chain list` / `new`
+   * 对同一状态都会披露，`doctor` 作为排障入口必须给出同一档结论。
+   */
+  unreadable?: boolean;
 };
 
 /** 报告来源：贴到 issue 里要能定位「哪一版、什么环境、看的是哪个库」 */
@@ -116,6 +124,7 @@ export type DoctorDeps = {
 
 type PathPresence =
   | { state: 'present' }
+  | { state: 'unreadable'; reason: string }
   | { state: 'missing'; code: string }
   | { state: 'unknown'; reason: string };
 
@@ -130,7 +139,13 @@ type PathPresence =
 async function pathPresence(filePath: string): Promise<PathPresence> {
   try {
     const info = await stat(filePath);
-    if (info.isFile()) return { state: 'present' };
+    if (info.isFile()) {
+      // `stat` 对 `chmod 000` 照常成功：文件在、是普通文件，但内容读不出来。
+      // 只按 `stat` 判 present 会让 doctor 对一条 resume 必然失败的链尾保持沉默。
+      const readProblem = await probeSessionReadable(filePath);
+      if (readProblem) return { state: 'unreadable', reason: readProblem };
+      return { state: 'present' };
+    }
     return { state: 'unknown', reason: '该路径现在不是普通文件（被同名目录或设备文件占住了）' };
   } catch (error) {
     const code = (error as NodeJS.ErrnoException).code;
@@ -221,6 +236,7 @@ export async function doctorReport(cwd: string, deps: DoctorDeps): Promise<Docto
         if (!tip) continue;
         const tipPresence = await pathPresence(tip.filePath);
         if (tipPresence.state !== 'present') {
+          const unreadable = tipPresence.state === 'unreadable';
           const missing = tipPresence.state === 'missing';
           const error = missing ? tipPresence.code : tipPresence.reason;
           brokenTips.push({
@@ -231,10 +247,18 @@ export async function doctorReport(cwd: string, deps: DoctorDeps): Promise<Docto
             filePath: tip.filePath,
             error,
             missing,
+            ...(unreadable ? { unreadable: true } : {}),
           });
           if (missing) {
             warnings.push(
               `链「${escapeControlChars(chain.name)}」的链尾会话文件已不存在：${tip.filePath}（${tip.provider}）；下次切换会失败，${rebindHint(tip.provider)}`,
+            );
+          } else if (unreadable) {
+            // 「读不出来」既不是「文件丢了」也不是「无法确认它还在」：文件明明白白在，
+            // 只是内容读不出来。说成「已不存在」会把人引去重新绑定，说成「状态无法确认」
+            // 又会让人以为可能是路径问题——两处都修不好一个权限。
+            warnings.push(
+              `链「${escapeControlChars(chain.name)}」的链尾会话文件读不出来：${tip.filePath}（${tip.provider}）；${error}；resume 与下次切换都会失败——先修好这个文件（权限或内容），或 watch switch ${tip.provider} 重新绑定，或 watch chain new <新名字> 另起一条链`,
             );
           } else {
             warnings.push(
@@ -264,6 +288,9 @@ export async function doctorReport(cwd: string, deps: DoctorDeps): Promise<Docto
         // 但「读不出来」要单独说，`continue` 静默跳过会被当成「对账通过」
         const toPresence = await pathPresence(to.filePath);
         if (toPresence.state === 'missing') continue;
+        // 链尾读不出来已经在上面 brokenTips / 链尾警告里说过一遍（含「先修好这个文件」的下一步），
+        // 这里再补一句「未做内容对账」只是同一件事讲两遍，反而把真正可执行的建议淹没
+        if (toPresence.state === 'unreadable') continue;
         if (toPresence.state === 'unknown') {
           warnings.push(
             `链「${escapeControlChars(chain.name)}」的链尾会话文件状态无法确认：${to.filePath}（${to.provider}）；读不出来（${toPresence.reason}），本次未做内容对账`,
@@ -273,6 +300,13 @@ export async function doctorReport(cwd: string, deps: DoctorDeps): Promise<Docto
         const fromPresence = await pathPresence(from.filePath);
         if (fromPresence.state === 'missing') {
           warnings.push(`链「${escapeControlChars(chain.name)}」的来源会话文件已不存在：${from.filePath}（${from.provider}）；链尾仍在，但无法再做内容对账`);
+          continue;
+        }
+        // 来源会话读不出来：链尾没问题，但这一条链的内容对账做不成，来源侧也打不开
+        if (fromPresence.state === 'unreadable') {
+          warnings.push(
+            `链「${escapeControlChars(chain.name)}」的来源会话文件读不出来：${from.filePath}（${from.provider}）；${fromPresence.reason}；本次未做内容对账——先修好这个文件（权限或内容），再重跑 watch doctor`,
+          );
           continue;
         }
         if (fromPresence.state === 'unknown') {

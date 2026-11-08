@@ -1112,10 +1112,11 @@ async function cmdDoctor(cwd: string, json: boolean): Promise<void> {
     }
     if (report.store.available) {
       const broken = report.store.brokenTips.filter((b) => b.missing).length;
-      const unreadable = report.store.brokenTips.length - broken;
+      const unreadable = report.store.brokenTips.filter((b) => b.unreadable).length;
+      const unknown = report.store.brokenTips.length - broken - unreadable;
       const drifted = report.store.driftedPairs.length;
       console.log(
-        `本地库: 可用，本目录 ${report.store.chains} 条链（${report.store.activeChains} 条活跃${broken ? `，${broken} 条链尾缺失` : ''}${unreadable ? `，${unreadable} 条链尾状态无法确认` : ''}${drifted ? `，${drifted} 条链尾内容落后于来源` : ''}）`,
+        `本地库: 可用，本目录 ${report.store.chains} 条链（${report.store.activeChains} 条活跃${broken ? `，${broken} 条链尾缺失` : ''}${unreadable ? `，${unreadable} 条链尾读不出来` : ''}${unknown ? `，${unknown} 条链尾状态无法确认` : ''}${drifted ? `，${drifted} 条链尾内容落后于来源` : ''}）`,
       );
       // 上一行是结论：本目录没有链。别处有链时必须接着指路，否则会被当成链丢了 / 没建成功
       if (!report.store.chains && report.store.chainsElsewhere.length) {
@@ -1132,7 +1133,9 @@ async function cmdDoctor(cwd: string, json: boolean): Promise<void> {
         console.log(
           b.missing
             ? `  链「${escapeControlChars(b.chainName)}」: ${b.provider}:${b.sessionId} 链尾文件已不存在（${b.filePath}），${rebindHint(b.provider)}`
-            : `  链「${escapeControlChars(b.chainName)}」: ${b.provider}:${b.sessionId} 链尾文件状态无法确认（${b.filePath}，${b.error}）；先确认文件是否还在，再决定是否需要 adopt`,
+            : b.unreadable
+              ? `  链「${escapeControlChars(b.chainName)}」: ${b.provider}:${b.sessionId} 链尾文件读不出来（${b.filePath}，${b.error}）；resume 与下次切换都会失败——先修好这个文件（权限或内容），或 watch switch ${b.provider} 重新绑定`
+              : `  链「${escapeControlChars(b.chainName)}」: ${b.provider}:${b.sessionId} 链尾文件状态无法确认（${b.filePath}，${b.error}）；先确认文件是否还在，再决定是否需要 adopt`,
         );
       }
     } else {
