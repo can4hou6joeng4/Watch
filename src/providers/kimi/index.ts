@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process';
-import { resolveCli } from '../../core/platform.js';
+import { describeDetectFailure, isCommandMissing, resolveCli } from '../../core/platform.js';
 import { readFile, stat } from 'node:fs/promises';
 import { promisify } from 'node:util';
 import path from 'node:path';
@@ -261,8 +261,9 @@ export const kimiAdapter: ProviderAdapter = {
     try {
       await execFileAsync(resolveCli('kimi'), ['--version'], { timeout: 10_000 });
       return true;
-    } catch {
-      return false;
+    } catch (error) {
+      if (isCommandMissing(error)) return false;
+      throw new Error(describeDetectFailure('kimi', error));
     }
   },
 

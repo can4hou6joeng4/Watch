@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process';
-import { resolveCli } from '../../core/platform.js';
+import { describeDetectFailure, isCommandMissing, resolveCli } from '../../core/platform.js';
 import type { ProviderAdapter } from '../adapter.js';
 import type { ProcessEvent, SessionRef, UnifiedTurn } from '../../core/types.js';
 import { parseOpencodeSession } from './parse.js';
@@ -90,17 +90,49 @@ export const opencodeAdapter: ProviderAdapter = {
   displayName: 'OpenCode',
 
   async detect(): Promise<boolean> {
-    return new Promise((resolve) => {
+    return new Promise((resolve, reject) => {
+      // spawn 的 `timeout` 选项在 `'error'`（命令不存在）之后不会清掉自己的定时器：进程会一直挂到
+      // 超时才退出——2026-11-08 实测 `watch providers` 在任何没装 opencode 的机器上都固定卡 10 秒
+      // （其余五家用 execFile，超时正确清理，同一命令 0.1 秒就返回）。这里自己做定时器，四条出口都清。
+      let timer: NodeJS.Timeout | undefined;
+      let settled = false;
+      const finish = (fn: () => void): void => {
+        if (settled) return;
+        settled = true;
+        if (timer) clearTimeout(timer);
+        fn();
+      };
       // 二进制存在但不可执行（如 bun postinstall 未跑的 shim 无 shebang）时 spawn 会同步抛 ENOEXEC
       let child: ReturnType<typeof spawn>;
       try {
-        child = spawn(resolveCli('opencode'), ['--version'], { timeout: 10_000 });
-      } catch {
-        resolve(false);
+        child = spawn(resolveCli('opencode'), ['--version'], { stdio: 'ignore' });
+      } catch (error) {
+        // 同步抛错只可能是 spawn 阶段（ENOENT / EACCES / ENOEXEC）：仍然是「没装」与「装了但起不来」之分
+        finish(() =>
+          isCommandMissing(error)
+            ? resolve(false)
+            : reject(new Error(describeDetectFailure('opencode', error))),
+        );
         return;
       }
-      child.on('error', () => resolve(false));
-      child.on('exit', (code) => resolve(code === 0));
+      timer = setTimeout(() => {
+        child.kill('SIGTERM');
+        finish(() => reject(new Error(describeDetectFailure('opencode', { killed: true, signal: 'SIGTERM' }))));
+      }, 10_000);
+      child.on('error', (error) => {
+        // 同上：命令不存在才是没装；权限 / 格式问题要报检测失败
+        finish(() =>
+          isCommandMissing(error)
+            ? resolve(false)
+            : reject(new Error(describeDetectFailure('opencode', error))),
+        );
+      });
+      child.on('exit', (code, signal) => {
+        // 非零退出 / 被信号终止：命令装上了但跑不起来，不能说成「未检测到」
+        finish(() =>
+          code === 0 ? resolve(true) : reject(new Error(describeDetectFailure('opencode', { code, signal }))),
+        );
+      });
     });
   },
 

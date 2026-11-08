@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process';
-import { resolveCli } from '../../core/platform.js';
+import { describeDetectFailure, isCommandMissing, resolveCli } from '../../core/platform.js';
 import { promisify } from 'node:util';
 import { digestFile } from '../../core/atomic.js';
 import type { FileDigest } from '../../core/atomic.js';
@@ -24,10 +24,11 @@ export const grokAdapter: ProviderAdapter = {
 
   async detect(): Promise<boolean> {
     try {
-      await execFileAsync(resolveCli('grok'), ['--version']);
+      await execFileAsync(resolveCli('grok'), ['--version'], { timeout: 10_000 });
       return true;
-    } catch {
-      return false;
+    } catch (error) {
+      if (isCommandMissing(error)) return false;
+      throw new Error(describeDetectFailure('grok', error));
     }
   },
 

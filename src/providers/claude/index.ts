@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process';
-import { resolveCli } from '../../core/platform.js';
+import { describeDetectFailure, isCommandMissing, resolveCli } from '../../core/platform.js';
 import { readdir, readFile, stat } from 'node:fs/promises';
 import path from 'node:path';
 import { promisify } from 'node:util';
@@ -303,8 +303,10 @@ export const claudeAdapter: ProviderAdapter = {
     try {
       await execFileAsync(resolveCli('claude'), ['--version'], { timeout: 10_000 });
       return true;
-    } catch {
-      return false;
+    } catch (error) {
+      // 只有「命令不存在」才是没装；装了但起不来要抛出去，让上游报「检测失败」而不是「未检测到」
+      if (isCommandMissing(error)) return false;
+      throw new Error(describeDetectFailure('claude', error));
     }
   },
 

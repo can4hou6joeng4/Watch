@@ -51,9 +51,46 @@ export function describeSpawnFailure(error: unknown): string | null {
     case 'EACCES':
     case 'EPERM':
       return `无法启动 ${cmd}：没有执行权限（检查该文件的权限，不是缺少安装）`;
+    case 'ENOEXEC':
+      return `无法启动 ${cmd}：文件存在但不是可执行格式（脚本缺少 shebang 或解释器，不是缺少安装）`;
     default:
       return `无法启动 ${cmd}（${err.code ?? '未知错误'}）`;
   }
+}
+
+/**
+ * `detect()` 语义下「真的没装」的唯一判据：spawn 阶段 `ENOENT`（命令不在 PATH 里）。
+ *
+ * 六家适配器的 `detect()` 以前都是 `try { execFile(cli, ['--version']) } catch { return false }`，
+ * 把「装了但起不来」（非零退出、没有执行权限、超时）一起讲成「未检测到」——用户会去重装
+ * 一个其实装着、只是暂时坏了的 CLI，而 `broken` / `cli_detect_failed` 那一整套
+ * （`listProviders()` 的 `error`、`watch providers` 的「检测失败」、`doctor` 的警告、
+ * 桌面端 `providerDetectFailures()`）成了永远走不到的死代码。
+ */
+export function isCommandMissing(error: unknown): boolean {
+  const err = error as NodeJS.ErrnoException & { syscall?: string };
+  return err?.code === 'ENOENT' && typeof err.syscall === 'string' && err.syscall.startsWith('spawn');
+}
+
+/** `detect()` 抛错时的中文原因：措辞要让人分清「没装」与「装了但坏了」 */
+export function describeDetectFailure(name: string, error: unknown): string {
+  const spawnReason = describeSpawnFailure(error);
+  if (spawnReason) return spawnReason;
+  const err = error as { code?: unknown; killed?: boolean; signal?: string | null; stderr?: string };
+  // execFile 的 timeout / kill：没有退出码，只有 killed + signal
+  if (err?.killed || (typeof err?.signal === 'string' && err.signal)) {
+    return `${name} --version 超时或被终止${err?.signal ? `（信号 ${err.signal}）` : ''}——CLI 已安装但没有正常响应，先确认这个命令能直接在终端里跑完，不是没装`;
+  }
+  if (typeof err?.code === 'number') {
+    const tail = String(err.stderr ?? '')
+      .split(/\r?\n/)
+      .map((l) => l.trim())
+      .filter(Boolean)
+      .pop();
+    return `${name} --version 退出码 ${err.code}${tail ? `（CLI 输出：${tail}）` : ''}——CLI 已安装但启动失败，检查配置或登录状态，不是没装`;
+  }
+  const message = error instanceof Error ? error.message : String(error);
+  return `${name} --version 执行失败：${message}`;
 }
 
 /**

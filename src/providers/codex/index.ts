@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process';
-import { resolveCli } from '../../core/platform.js';
+import { describeDetectFailure, isCommandMissing, resolveCli } from '../../core/platform.js';
 import { createReadStream } from 'node:fs';
 import { mkdtemp, open, readdir, readFile, rm, stat } from 'node:fs/promises';
 import { homedir, tmpdir } from 'node:os';
@@ -570,8 +570,9 @@ export const codexAdapter: ProviderAdapter = {
     try {
       await execFileAsync(resolveCli('codex'), ['--version'], { timeout: 10_000 });
       return true;
-    } catch {
-      return false;
+    } catch (error) {
+      if (isCommandMissing(error)) return false;
+      throw new Error(describeDetectFailure('codex', error));
     }
   },
 
