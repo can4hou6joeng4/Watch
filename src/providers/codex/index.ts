@@ -226,7 +226,7 @@ export const CODEX_LIST_LIMIT = 50;
 export async function listCodexRollouts(
   cwd: string,
   sessionsRoot?: string,
-): Promise<{ ref: SessionRef; updatedAt: number; preview?: string }[]> {
+): Promise<{ ref: SessionRef; updatedAt: number; preview?: string; previewError?: string }[]> {
   const root = sessionsRoot ?? path.join(codexDir(), 'sessions');
   const walkErrors: string[] = [];
   const unreadCwd: string[] = [];
@@ -253,7 +253,12 @@ export async function listCodexRollouts(
       `列出 Codex 会话时有不完整：有 ${incomplete} 个位置读不出来，列表可能少了几条：${walkErrors[0] ?? unreadCwd[0]}`,
     );
   }
-  return Promise.all(items.map(async (item) => ({ ...item, preview: (await codexFirstUserText(item.ref.filePath)) ?? undefined })));
+  return Promise.all(
+    items.map(async (item) => {
+      const { text, error } = await codexFirstUserText(item.ref.filePath);
+      return { ...item, preview: text ?? undefined, ...(error ? { previewError: error } : {}) };
+    }),
+  );
 }
 
 /** 按原生 session id（rollout 文件名尾部 uuid）全局反查 Codex 会话；sessionsRoot 可注入供单测 */
@@ -284,12 +289,15 @@ export async function findCodexSessionById(
   return { ref: fileRef, updatedAt: (await stat(filePath).catch(() => undefined))?.mtimeMs ?? 0 };
 }
 
-async function codexFirstUserText(filePath: string): Promise<string | null> {
+async function codexFirstUserText(filePath: string): Promise<{ text: string | null; error?: string }> {
   let content: string;
   try {
     content = await readFile(filePath, 'utf8');
-  } catch {
-    return null;
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    // 刚被删掉算正常；其余读不出来不能当成「这条会话还没有内容」（理由同 claude 适配器）
+    if (code === 'ENOENT' || code === 'ENOTDIR') return { text: null };
+    return { text: null, error: describePathReadFailureReason(error) };
   }
   for (const line of content.split('\n')) {
     const trimmed = line.trim();
@@ -311,13 +319,13 @@ async function codexFirstUserText(filePath: string): Promise<string | null> {
       }
       const clean = text.replace(/\s+/g, ' ').trim();
       if (clean && !clean.startsWith('<environment_context>') && !clean.startsWith('<user_instructions>')) {
-        return clean.slice(0, 80);
+        return { text: clean.slice(0, 80) };
       }
     } catch {
       continue;
     }
   }
-  return null;
+  return { text: null };
 }
 
 type CodexProviderCredential = { apiKey?: string; baseUrl?: string };

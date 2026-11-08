@@ -172,7 +172,7 @@ export async function findClaudeSessionById(
 export async function listClaudeSessions(
   cwd: string,
   projectsRoot?: string,
-): Promise<{ ref: SessionRef; updatedAt: number; preview?: string }[]> {
+): Promise<{ ref: SessionRef; updatedAt: number; preview?: string; previewError?: string }[]> {
   const root = projectsRoot ?? claudeProjectsDir();
   const projectDir = path.join(root, encodeClaudeProjectDir(cwd));
   let entries: string[];
@@ -209,19 +209,24 @@ export async function listClaudeSessions(
   }
   items.sort((a, b) => b.updatedAt - a.updatedAt);
   return Promise.all(
-    items.slice(0, CLAUDE_LIST_LIMIT).map(async (item) => ({
-      ...item,
-      preview: (await claudeFirstUserText(item.ref.filePath)) ?? undefined,
-    })),
+    items.slice(0, CLAUDE_LIST_LIMIT).map(async (item) => {
+      const { text, error } = await claudeFirstUserText(item.ref.filePath);
+      return { ...item, preview: text ?? undefined, ...(error ? { previewError: error } : {}) };
+    }),
   );
 }
 
-async function claudeFirstUserText(filePath: string): Promise<string | null> {
+async function claudeFirstUserText(filePath: string): Promise<{ text: string | null; error?: string }> {
   let content: string;
   try {
     content = await readFile(filePath, 'utf8');
-  } catch {
-    return null;
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    // 列目录 / stat 到读文件之间被删掉算正常（列表本来就来自一次快照）；其余读不出来不能
+    // 当成「这条会话还没有内容」——两者在 sessions / recent 里长得一模一样，而后者意味着
+    // open / switch 也读不了它。原因交给调用方披露，适配器只负责不说谎。
+    if (code === 'ENOENT' || code === 'ENOTDIR') return { text: null };
+    return { text: null, error: describePathReadFailureReason(error) };
   }
   for (const line of content.split('\n')) {
     if (!line.trim()) continue;
@@ -239,12 +244,12 @@ async function claudeFirstUserText(filePath: string): Promise<string | null> {
                 .join(' ')
             : '';
       const clean = text.replace(/\s+/g, ' ').trim();
-      if (clean) return clean.slice(0, 80);
+      if (clean) return { text: clean.slice(0, 80) };
     } catch {
       continue;
     }
   }
-  return null;
+  return { text: null };
 }
 /**
  * claude -p --output-format stream-json --verbose：逐行流式吐出过程事件（onEvent），

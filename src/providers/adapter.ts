@@ -96,8 +96,10 @@ export interface ProviderAdapter {
   /** 可选（TUI 交接用）：找 cwd 下本 provider 最新的原生会话；没有返回 null */
   findLatestSession?(cwd: string): Promise<{ ref: SessionRef; updatedAt: number } | null>;
 
-  /** 可选（桌面壳用）：列 cwd 下本 provider 的原生会话，mtime 降序 */
-  listSessions?(cwd: string): Promise<{ ref: SessionRef; updatedAt: number; preview?: string }[]>;
+  /** 可选（桌面壳用）：列 cwd 下本 provider 的原生会话，mtime 降序。
+   *  `preview` 缺省既表示「这条会话还没有可展示的内容」，也可能是「预览读不出来」——后者必须
+   *  用 `previewError` 说明原因，否则用户看到的是一模一样的空列表行，而那条会话其实打不开。 */
+  listSessions?(cwd: string): Promise<{ ref: SessionRef; updatedAt: number; preview?: string; previewError?: string }[]>;
 
   /** 可选：`listSessions` 单次最多返回条数。声明后 `watch doctor` 会把「恰好等于上限」的计数
    *  标成下限（`capped`），否则会把截断后的列表当成精确总数展示。 */

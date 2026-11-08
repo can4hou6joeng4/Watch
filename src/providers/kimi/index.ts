@@ -78,12 +78,15 @@ function refFromSessionId(sessionId: string, cwd: string): SessionRef {
 }
 
 /** 取 wire.jsonl 首条用户消息作为预览 */
-async function firstUserText(filePath: string): Promise<string | null> {
+async function firstUserText(filePath: string): Promise<{ text: string | null; error?: string }> {
   let raw: string;
   try {
     raw = await readFile(filePath, 'utf8');
-  } catch {
-    return null;
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    // 刚被删掉算正常；其余读不出来不能当成「这条会话还没有内容」（理由同 claude 适配器）
+    if (code === 'ENOENT' || code === 'ENOTDIR') return { text: null };
+    return { text: null, error: describePathReadFailureReason(error) };
   }
   for (const line of raw.split('\n')) {
     if (!line.trim()) continue;
@@ -100,11 +103,11 @@ async function firstUserText(filePath: string): Promise<string | null> {
       if (typeof block === 'object' && block !== null && (block as { type?: unknown }).type === 'text') {
         const text = typeof (block as { text?: unknown }).text === 'string' ? (block as { text: string }).text : '';
         const clean = text.replace(/\s+/g, ' ').trim();
-        if (clean) return clean.slice(0, 80);
+        if (clean) return { text: clean.slice(0, 80) };
       }
     }
   }
-  return null;
+  return { text: null };
 }
 
 export async function findLatestKimiSession(
@@ -121,19 +124,24 @@ export async function findLatestKimiSession(
 
 export async function listKimiSessions(
   cwd: string,
-): Promise<{ ref: SessionRef; updatedAt: number; preview?: string }[]> {
+): Promise<{ ref: SessionRef; updatedAt: number; preview?: string; previewError?: string }[]> {
   const all = await listKimiSessionsByCwd(cwd);
   return Promise.all(
-    all.slice(0, KIMI_LIST_LIMIT).map(async (item) => ({
-      ref: {
-        provider: 'kimi',
-        sessionId: item.sessionId,
-        filePath: path.join(item.sessionDir, 'agents', 'main', 'wire.jsonl'),
-        cwd,
-      },
-      updatedAt: item.updatedAt,
-      preview: (await firstUserText(path.join(item.sessionDir, 'agents', 'main', 'wire.jsonl'))) ?? undefined,
-    })),
+    all.slice(0, KIMI_LIST_LIMIT).map(async (item) => {
+      const wirePath = path.join(item.sessionDir, 'agents', 'main', 'wire.jsonl');
+      const { text, error } = await firstUserText(wirePath);
+      return {
+        ref: {
+          provider: 'kimi',
+          sessionId: item.sessionId,
+          filePath: wirePath,
+          cwd,
+        },
+        updatedAt: item.updatedAt,
+        preview: text ?? undefined,
+        ...(error ? { previewError: error } : {}),
+      };
+    }),
   );
 }
 

@@ -159,6 +159,31 @@ function pushEscapedContentWarning(
   );
 }
 
+/**
+ * 预览读不出来时不能说成「这条会话没有内容」。
+ *
+ * 各适配器的预览都是从会话文件**再读一遍**取首条用户消息，以前读失败一律 `catch { return null }`，
+ * 于是在 `sessions` / `recent` 里与「会话还没有用户消息」长得一模一样：2026-11-08 实测（修复前）
+ * 一条 `chmod 000` 的 Claude 会话在 `sessions --json` 里只有 `{ref, updatedAt}`，既无 preview
+ * 也无任何警告，文本模式只少一行预览——而这条文件读不出来意味着 `open` / `switch` 去读它时同样
+ * 会失败，用户却以为一切都好。适配器现在把原因放进 `previewError`，这里统一披露。
+ */
+function pushPreviewErrorWarning(
+  warnings: string[],
+  items: { provider: string; sessionId: string; previewError?: string }[],
+): void {
+  const hits = items.filter((s) => s.previewError);
+  if (!hits.length) return;
+  const detail = hits
+    .slice(0, 3)
+    .map((s) => `${s.provider}:${s.sessionId}（${s.previewError}）`)
+    .join('、');
+  warnings.push(
+    `有 ${hits.length} 条会话的预览读不出来（不是「这条会话没有内容」，是文件没读成）：${detail}${hits.length > 3 ? ' 等' : ''}；` +
+      `列表照常列出，但 open / switch 读这条会话时同样会失败——先确认该文件可读（权限、路径）再重试`,
+  );
+}
+
 function parseArgs(argv: string[]): {
   cmd?: string;
   target?: string;
@@ -771,6 +796,16 @@ async function cmdSessions(cwd: string, json: boolean, chain?: string): Promise<
       ),
       '预览',
     );
+    pushPreviewErrorWarning(
+      warnings,
+      result.flatMap((g) =>
+        g.sessions.map((s) => ({
+          provider: g.provider,
+          sessionId: s.ref.sessionId,
+          ...(s.previewError ? { previewError: s.previewError } : {}),
+        })),
+      ),
+    );
     if (json) {
       console.log(JSON.stringify({
         ok: true,
@@ -808,6 +843,8 @@ async function cmdRecent(cwd: string, json: boolean, limit: number = 8, cwdGiven
     cwd: string;
     updatedAt: number;
     preview?: string;
+    /** 预览读不出来的原因：缺省不等于「这条会话没有内容」 */
+    previewError?: string;
   };
   // 用 Map 而不是数组 + Set：同一会话可能先由映射表命中、再被原生扫描命中，
   // 原生那边的 mtime 与 preview 更准，合并时不能被「先到先得」丢掉（以前映射先入就丢 preview）。
@@ -883,6 +920,7 @@ async function cmdRecent(cwd: string, json: boolean, limit: number = 8, cwdGiven
           cwd: s.ref.cwd,
           updatedAt: s.updatedAt,
           preview: s.preview,
+          ...(s.previewError ? { previewError: s.previewError } : {}),
         });
       }
     } catch (error) {
@@ -902,6 +940,7 @@ async function cmdRecent(cwd: string, json: boolean, limit: number = 8, cwdGiven
     final.filter((s) => Boolean(s.preview)).filter((s) => hasControlChars(s.preview as string)),
     '预览',
   );
+  pushPreviewErrorWarning(warnings, final);
 
   if (json) {
     console.log(JSON.stringify({
