@@ -28,7 +28,13 @@ type OpencodeMessageData = {
   role?: string;
   time?: { created?: number; completed?: number };
   model?: { providerID?: string; modelID?: string };
-  tokens?: { input?: number; output?: number };
+  tokens?: {
+    total?: number;
+    input?: number;
+    output?: number;
+    reasoning?: number;
+    cache?: { read?: number; write?: number };
+  };
 };
 
 type OpencodePartData =
@@ -88,14 +94,45 @@ function filePartToEvent(part: OpencodePartData, time: number): ProcessEvent | n
   };
 }
 
-/** 从 message data.tokens 读真实 usage；缺字段或全 0 返回 undefined */
+/**
+ * 从 message data.tokens 读真实 usage；缺字段或合计为 0 返回 undefined。
+ *
+ * OpenCode 存的是一份**非重叠**分解，不是「input / output 两个总数」：
+ * `packages/opencode/src/session/session.ts` 的 `getUsage()`（本项目验证基线 1.18.29）在写
+ * message 时做减法——
+ *
+ *   tokens.input     = adjustedInputTokens（已减去 cache read / write）
+ *   tokens.output    = outputTokens - reasoningTokens
+ *   tokens.reasoning = reasoningTokens
+ *   tokens.cache     = { read, write }
+ *
+ * 上游 `packages/ai/src/schema/events.ts` 把同一件事写成不变式：
+ * `nonCachedInputTokens + cacheReadInputTokens + cacheWriteInputTokens = inputTokens`、
+ * `reasoningTokens ≤ outputTokens`。所以真实输入是三块求和，真实输出要把 reasoning 加回来。
+ *
+ * 以前只读 `tokens.input` / `tokens.output`，于是 **opencode → 任何别家的转入都低估用量**
+ * （丢掉 cache read/write 的输入与 reasoning 的输出），与 claude 缓存两块、codex
+ * `last_token_usage`、grok `updates.jsonl` 的 `turn_completed`、pi `message.usage` 完全同源：
+ * 信息层读到了、搬运层没读。
+ *
+ * 求和不会让 Watch 自转的会话翻倍：`buildAssistantMessageData()` 落的是
+ * `tokens: { total, input, output, reasoning: 0, cache: { write: 0, read: 0 } }`，两项都是 0。
+ *
+ * 已知边界：该减法只出现在较新的 OpenCode 里（本仓库可取到的最早 tag 已是这个语义，本项目只验证
+ * 1.18.29）；更早版本写下的会话若 `input` 本就含缓存，求和会偏高。没有按 `session.version` 分档，
+ * 因为无法从可取到的版本历史里确定切点，猜错切点会让现代会话静默少算——宁可让极老数据偏高，
+ * 也不让当前基线出错。
+ *
+ * 0/0 是写出侧没有源侧用量时的占位（源侧 `usage` 缺失时仍写全 0），不能当成「确实用了 0 token」。
+ */
 function messageUsage(data: OpencodeMessageData | null): TokenUsage | undefined {
   const t = data?.tokens;
-  const input = typeof t?.input === 'number' ? t.input : undefined;
-  const output = typeof t?.output === 'number' ? t.output : undefined;
-  if (input === undefined || output === undefined) return undefined;
-  if (input === 0 && output === 0) return undefined;
-  return { inputTokens: input, outputTokens: output };
+  if (typeof t?.input !== 'number' || typeof t?.output !== 'number') return undefined;
+  const num = (v: unknown): number => (typeof v === 'number' && Number.isFinite(v) ? v : 0);
+  const inputTokens = t.input + num(t.cache?.read) + num(t.cache?.write);
+  const outputTokens = t.output + num(t.reasoning);
+  if (inputTokens === 0 && outputTokens === 0) return undefined;
+  return { inputTokens, outputTokens };
 }
 
 function isToolPart(part: OpencodePartData): part is {
