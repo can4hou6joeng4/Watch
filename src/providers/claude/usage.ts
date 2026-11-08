@@ -56,7 +56,17 @@ function pick(usage: unknown): TokenUsage | null {
   // 它的合计已由 `cache_creation_input_tokens` 给出，**不能**再加一遍。
   const cacheCreate = num(u.cache_creation_input_tokens) ?? 0;
   const cacheRead = num(u.cache_read_input_tokens) ?? 0;
-  return { inputTokens: (input ?? 0) + cacheCreate + cacheRead, outputTokens: output ?? 0 };
+  const inputTokens = (input ?? 0) + cacheCreate + cacheRead;
+  const outputTokens = output ?? 0;
+  // **0 不等于「有数据」**：`buildClaudeLines()` 给每一行都写
+  // `usage: { input_tokens: turn.usage?.inputTokens ?? 0, ... }`——来源 turn 没有用量时
+  // 落成 0/0 占位。把它当成真实用量，`watch usage` 就会把「这条会话没有用量数据」报成
+  // 「确实用了 0 token」（`usage: {0,0}`，且 `totalMissingUsage` 不计数、合计里少了提示）。
+  // 判据与 kimi 的 `usageFromRecord()`（0/0 → undefined）以及 `phuryn/claude-usage`（2292★）
+  // 的 `scanner.py`（"Only record turns that have actual token usage"）一致。
+  // 注意按**合计**判：只有缓存命中的记录 input/output 都是 0，但 cache 两块非零，不能被误丢。
+  if (inputTokens === 0 && outputTokens === 0) return null;
+  return { inputTokens, outputTokens };
 }
 
 function num(v: unknown): number | null {

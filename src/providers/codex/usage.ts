@@ -36,7 +36,16 @@ function pick(usage: unknown): TokenUsage | null {
   const input = num(u.input_tokens);
   const output = num(u.output_tokens);
   if (input === null && output === null) return null;
-  return { inputTokens: input ?? 0, outputTokens: output ?? 0 };
+  const inputTokens = input ?? 0;
+  const outputTokens = output ?? 0;
+  // **0 不等于「有数据」**：`buildCodexLines()` 的 `closeTurn()` 在没有真实用量时仍会写一条
+  // `token_count`（`input_tokens` / `output_tokens` 都是 0，只有 `total_tokens` 是可读内容的
+  // 估算下界）。把它当成真实用量，`watch usage` 就会把「这条会话没有用量数据」报成
+  // 「确实用了 0 token」，`totalMissingUsage` 也不计数。判据与 claude / kimi 两侧一致。
+  // 逐条扫描 + 只保留最后一条非零的累计：Watch 写出的文件里，之后那些没有用量的 turn
+  // 不会让累计倒退，所以这里跳过 0/0 不会丢掉前面已经累计到的真实用量。
+  if (inputTokens === 0 && outputTokens === 0) return null;
+  return { inputTokens, outputTokens };
 }
 
 function num(v: unknown): number | null {
