@@ -583,6 +583,12 @@ async function cmdAdopt(
           : '';
         // 链 id 也是 UUID，chain list 里就印在同一行：说清它是链并给出链尾绑定，避免反复核对 id
         const chainUse = store?.describeChainIdMisuse(sessionId, cwd) ?? null;
+        // 本地库打不开时上面那步根本做不了——而「是不是链 id」恰恰是这条分支唯一需要库才能排除的
+        // 可能。静默跳过就只剩一句「找不到会话」，用户照着去核对那串没抄错的 uuid；同一状态下
+        // `status` / `chain list` 早就说了库不可用。这里同样披露，并指明这次没核对成的是什么。
+        const storeNote = store
+          ? ''
+          : `；${storeUnavailableWarning('没法核对这个 id 是不是链 id（链 id 与会话 id 都是 UUID，chain list 里印在同一行）', lastStoreError ?? undefined)}`;
         // `adopt` 是四条按 id 反查的路径里唯一没接共用下一步的那条，也是唯一「多说了一个 id、
         // 提示反而更弱」的那条：不给 `--session` 时 `adoptIntoChain()` 走 `adoptNoSessionMessage()`
         // 有完整指引，给了却掉进这里只剩一句事实。它同样是写路径（会写 switch_events、动链尾），
@@ -594,7 +600,8 @@ async function cmdAdopt(
               : `在当前目录找不到会话: ${sessionId}`) +
             `；${LOOKUP_NEXT_STEP}。本次未写入任何内容` +
             lookupNote +
-            othersNote,
+            othersNote +
+            storeNote,
         );
       }
       targetRef = hit.ref;
