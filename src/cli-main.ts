@@ -16,6 +16,7 @@ import { officialImportJournalRoot } from './providers/codex/official-import.js'
 import { doctorReport } from './core/doctor.js';
 import { cwdAliasHint, cwdProblem, describeCwdProblem, describeNewSessionCwd, inspectCwd } from './core/cwd.js';
 import { escapeControlChars, hasControlChars } from './core/display.js';
+import { trimUserKey } from './core/cli-input.js';
 import { describePathReadFailureReason, describeSessionReadFailureReason, probeSessionReadable, sessionFilePresence } from './core/read-text.js';
 import { describeWriteFailureReason } from './core/atomic.js';
 import { describeSpawnFailure } from './core/platform.js';
@@ -577,6 +578,10 @@ async function cmdAdopt(
   sessionId?: string,
   chain?: string,
 ): Promise<void> {
+  // `--session` 的首尾空白在这里去掉：下面 `all.find((s) => s.ref.sessionId === sessionId)`
+  // 是精确比较，不归一就会「id 一个字符都没抄错、只是从表格里连空格复制了」却回「找不到会话」。
+  // 会话 id 是各家 CLI 生成的 UUID，去掉首尾空白不可能指向另一条会话（见 `src/core/cli-input.ts`）
+  if (sessionId !== undefined) sessionId = trimUserKey(sessionId);
   const store = openStore();
   const cwdIssue = await cwdProblem(cwd);
   // 同 switch：adoptIntoChain() 经 getOrCreateChainSession() 抬高目标链的 last_used_at，

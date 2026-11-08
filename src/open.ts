@@ -4,6 +4,7 @@ import { assertTargetUnchanged, blockedHint, diffTurns, HandoffBlockedError } fr
 import { describeDanglingToolCalls, describeUnansweredTail, dedupeCallEvents } from './core/rich.js';
 import { Store, defaultDbPath, describeStoreErrorReason, describeStoreOpenFailure } from './core/store.js';
 import { IS_WIN, normalizePath, stripDevicePrefix } from './core/platform.js';
+import { trimUserKey } from './core/cli-input.js';
 import type { SessionRef, TokenUsage, UnifiedTurn } from './core/types.js';
 import type { ProviderAdapter } from './providers/adapter.js';
 import { cliDetectFailedBlock, cliMissingBlock, PreflightBlockedError, SessionLookupFailureError } from './providers/adapter.js';
@@ -181,6 +182,11 @@ export async function resolveById(
   diagnostics?: string[],
   lookupMisses?: LookupMiss[],
 ): Promise<{ adapter: ProviderAdapter; found: { ref: SessionRef; updatedAt: number } } | null> {
+  // 会话 id 一律是各家 CLI 生成的 UUID，不会以空白开头结尾；而命令行里的首尾空白在终端里
+  // 看不见（从 `watch sessions` / `chain list` 的表格里连空格复制、`$(…)` 带出换行都很常见）。
+  // 归一化在这里做一次，`open " <id> "` / `--from` / `--to` / `adopt --session` 四条路径全覆盖；
+  // 不 trim 就会「id 一个字没抄错，却回未找到会话」——见 `src/core/cli-input.ts`
+  sessionId = sessionId.trim();
   const candidates = providerId
     ? ([getAdapter(providerId)].filter((a): a is ProviderAdapter => Boolean(a)) ?? [])
     : adapters.filter((a) => typeof a.findById === 'function');
@@ -340,7 +346,12 @@ export async function openSession(
   store?: Store | null,
   adapters: ProviderAdapter[] = listAdapters(),
 ): Promise<OpenSessionResult> {
-  const { from, provider } = opts ?? {};
+  const { from: rawFrom, provider } = opts ?? {};
+  // 会话 id 的首尾空白在这里就去掉（见 `src/core/cli-input.ts`）：下面的 `from === targetId` 判断、
+  // 以及所有回显 `targetId` / `from` 的报错都该用归一后的值——否则「同一个会话」会被判成两个不同 id，
+  // 报错里也会印出一串带空白、看着像抄错的 uuid
+  targetId = trimUserKey(targetId);
+  const from = rawFrom === undefined ? undefined : trimUserKey(rawFrom);
   // --provider 拼错（如 Claude / codx）时 resolveById 会一家都不查就返回 null，
   // 报「未找到会话」会让人以为会话没了；先在注册表里确认这家存在。
   if (provider && !adapters.some((a) => a.id === provider)) {
@@ -698,6 +709,9 @@ async function planOpenInProvider(
   mapping: Store | null,
   diagnostics?: string[],
 ): Promise<PlannedOpen> {
+  // `resolveById` 内部也会归一，但这条路径的报错要回显 `sourceId`（「未找到来源会话: …」）、
+  // 还要拿它去查 `describeChainIdMisuse()`，都得是省掉首尾空白的那个值
+  sourceId = trimUserKey(sourceId);
   // 先校验目标 provider：拼错时再怎么说「未找到会话」都跑偏了，
   // 用户会去查会话 id，而不是回头看 --to 的拼写。
   const target = getAdapter(providerId);

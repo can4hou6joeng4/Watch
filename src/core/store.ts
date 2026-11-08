@@ -852,6 +852,10 @@ export class Store {
   findActiveChain(cwd: string, chainId?: string): Chain | null {
     cwd = this.normCwd(cwd);
     if (chainId) {
+      // 写入侧 `createChain()` / `renameChain()` 都先 trim 再入库，库里不可能有首尾带空白的链名，
+      // 所以这里 trim 是无损归一化（不会指向另一条链）；不 trim 的话 `chain list` 里印出来的名字
+      // 连空格一起抄回来就「找不到链」，而报错清单里正列着那个名字——见 `src/core/cli-input.ts`
+      chainId = chainId.trim();
       const byId = this.db.prepare('SELECT * FROM chains WHERE id=?').get(chainId) as ChainRow | undefined;
       if (byId && byId.cwd === cwd) return rowToChain(byId);
       const byName = this.db
@@ -879,6 +883,10 @@ export class Store {
    * 光列清单还不够，用户会以为自己已经打对了）。
    */
   missingChainMessage(cwd: string, chainId: string): string {
+    // 与 `findActiveChain()` 同一处归一化：能解析到的名字根本走不到这里，
+    // 走到这里时也要用 trim 后的值来措辞与比对——否则报错内容会是「找不到链:  nope 」，
+    // 用户看不出自己打的名字与清单里那个差在哪（首尾空白在终端里根本看不见）
+    chainId = chainId.trim();
     const base = `找不到链: ${chainId}`;
     const normalized = this.normCwd(cwd);
     const byId = this.db.prepare('SELECT id, cwd, name, status FROM chains WHERE id=?').get(chainId) as
