@@ -63,6 +63,36 @@ export class PreflightBlockedError extends Error {
 }
 
 /**
+ * `findById` 的「没查成」与「没有这个会话」必须分开，而「没查成」里还有两种结论。
+ *
+ * 返回 `null` = 这家确实没有这个 id；抛错 = 查不了。可抛错的消息以前只被
+ * `resolveById` 拼进「未找到会话: <id>。请确认 id 正确…」后面的括号里，于是两种完全
+ * 不同的处境都被第一句讲成「id 写错了」：
+ *
+ *   - `found-unreadable`：按 id **命中了**会话文件 / 索引条目，只是读不出来（权限、内容
+ *     缺失、路径被同名目录占住）。id 是对的，要修的是那个文件；用户照着第一句去核对
+ *     一串没写错的 uuid，只会白折腾。
+ *   - `incomplete`：目录 / 索引 / 库本身读不出来，压根没查全。这时既不能说「没有」，也
+ *     不能说「有」——只能说「无法确认」。
+ *
+ * 两种都不能以「未找到会话」开头：`resolveById` 把结构化结论交给 `open` 的三条路径
+ * （`open <id>` / `open <id> --from` / `open <id> --to`，含 `--check`）改写第一句。
+ * 新增适配器抛 `findById` 失败时照这两种选一个，不要抛裸 `Error`——裸 Error 只能落回
+ * 「未找到会话」的括号里。
+ */
+export type SessionLookupFailureKind = 'found-unreadable' | 'incomplete';
+
+/** 见 `SessionLookupFailureKind`：消息原样保留（已是中文），额外带一个机器可读的 kind */
+export class SessionLookupFailureError extends Error {
+  readonly kind: SessionLookupFailureKind;
+  constructor(kind: SessionLookupFailureKind, message: string) {
+    super(message);
+    this.name = 'SessionLookupFailureError';
+    this.kind = kind;
+  }
+}
+
+/**
  * Provider 适配器：每家 CLI 一个实现。
  * 新增 Provider = 新增 providers/<name>/ 目录 + registry 注册一行。
  */

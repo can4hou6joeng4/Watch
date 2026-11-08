@@ -6,6 +6,7 @@ import path from 'node:path';
 import { digestFile } from '../../core/atomic.js';
 import type { FileDigest } from '../../core/atomic.js';
 import { describePathReadFailureReason, isMissingPathError } from '../../core/read-text.js';
+import { SessionLookupFailureError } from '../adapter.js';
 import type { ProviderAdapter } from '../adapter.js';
 import type { ProcessEvent, SessionRef, TokenUsage, UnifiedTurn } from '../../core/types.js';
 import { parseKimiSession } from './parse.js';
@@ -164,7 +165,8 @@ export async function findKimiSessionById(
     // 索引不存在 = 这台机器没用过 Kimi（或从未建过会话），按「没有这个会话」处理；
     // 其余（权限 / I/O）读不出来照常抛，原因交给 resolveById 的 diagnostics
     if (isMissingPathError(error)) return null;
-    throw new Error(
+    throw new SessionLookupFailureError(
+      'incomplete',
       `无法读取 Kimi 会话索引 ${idxFile}：${describePathReadFailureReason(error)}`,
     );
   }
@@ -206,7 +208,10 @@ export async function findKimiSessionById(
     }
   }
   if (unreadable.length) {
-    throw new Error(`Kimi 索引里有会话 ${sessionId}，但读不出它的会话文件，无法确认它是否可用：${unreadable[0]}`);
+    throw new SessionLookupFailureError(
+      'found-unreadable',
+      `Kimi 索引里有会话 ${sessionId}，但读不出它的会话文件，无法确认它是否可用：${unreadable[0]}`,
+    );
   }
   return null;
 }

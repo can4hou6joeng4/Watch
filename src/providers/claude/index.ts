@@ -6,6 +6,7 @@ import { promisify } from 'node:util';
 import { digestFile } from '../../core/atomic.js';
 import type { FileDigest } from '../../core/atomic.js';
 import { describePathReadFailureReason, isMissingPathError } from '../../core/read-text.js';
+import { SessionLookupFailureError } from '../adapter.js';
 import type { ProviderAdapter } from '../adapter.js';
 import type { ProcessEvent, SessionRef, UnifiedTurn } from '../../core/types.js';
 import { streamCommand } from '../../core/streamCommand.js';
@@ -121,7 +122,8 @@ export async function findClaudeSessionById(
     // 根目录不存在 = 这台机器没用过 Claude Code，按「没有这个会话」处理；
     // 其余（权限 / I/O）读不出来照常抛，原因交给 resolveById 的 diagnostics
     if (isMissingPathError(error)) return null;
-    throw new Error(
+    throw new SessionLookupFailureError(
+      'incomplete',
       `无法列出 Claude 会话目录 ${root}：${describePathReadFailureReason(error)}`,
     );
   }
@@ -153,15 +155,20 @@ export async function findClaudeSessionById(
     foundButUnreadable.push(`${filePath}（${error ?? '原因未知'}）`);
   }
   if (notRegularFile.length) {
-    throw new Error(
+    throw new SessionLookupFailureError(
+      'found-unreadable',
       `会话 ${sessionId} 的路径现在不是普通文件（被同名目录或设备文件占住了）：${notRegularFile[0]}；无法把它当作会话读取，请先恢复该路径再重试`,
     );
   }
   if (foundButUnreadable.length) {
-    throw new Error(`找到会话文件 ${foundButUnreadable[0]}，但读不出它的工作目录，无法确认会话 ${sessionId}`);
+    throw new SessionLookupFailureError(
+      'found-unreadable',
+      `找到会话文件 ${foundButUnreadable[0]}，但读不出它的工作目录，无法确认会话 ${sessionId}`,
+    );
   }
   if (unreadable.length) {
-    throw new Error(
+    throw new SessionLookupFailureError(
+      'incomplete',
       `在 ${root} 下没找到会话 ${sessionId}，但有 ${unreadable.length} 个位置读不出来，无法确认它是否存在：${unreadable[0]}`,
     );
   }

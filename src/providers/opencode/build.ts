@@ -2,6 +2,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { createHash, randomBytes } from 'node:crypto';
 import path from 'node:path';
 import type { ImportTurnsOpts } from '../adapter.js';
+import { SessionLookupFailureError } from '../adapter.js';
 import type { ProcessEvent, SessionRef, TokenUsage, UnifiedTurn } from '../../core/types.js';
 import {
   assertUsableOpencodeDb,
@@ -91,7 +92,8 @@ export async function findOpencodeSessionById(
   try {
     db = new DatabaseSync(dbPath, { readOnly: true });
   } catch (error) {
-    throw opencodeDbSqliteError(dbPath, '打开', error);
+    // 库在却打不开：不是「这家没有这个会话」，而是压根没查成（权限 / 锁 / 被占 / 文件坏了）
+    throw new SessionLookupFailureError('incomplete', opencodeDbSqliteError(dbPath, '打开', error).message);
   }
   try {
     const row = db
@@ -103,7 +105,7 @@ export async function findOpencodeSessionById(
       updatedAt: row.time_updated,
     };
   } catch (error) {
-    throw opencodeDbSqliteError(dbPath, '查询', error);
+    throw new SessionLookupFailureError('incomplete', opencodeDbSqliteError(dbPath, '查询', error).message);
   } finally {
     try {
       db.close();

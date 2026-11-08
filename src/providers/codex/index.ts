@@ -10,7 +10,7 @@ import { digestFile } from '../../core/atomic.js';
 import type { FileDigest } from '../../core/atomic.js';
 import { describePathReadFailureReason } from '../../core/read-text.js';
 import type { ProviderAdapter, PreflightContext } from '../adapter.js';
-import { PreflightBlockedError } from '../adapter.js';
+import { PreflightBlockedError, SessionLookupFailureError } from '../adapter.js';
 import { acquireThreadWriterLock, probeThreadWriterHolders, threadWriterLockPath, type WriterLockGuard } from './writer-lock.js';
 export { threadWriterLockPath };
 import type { ProcessEvent, SessionRef, UnifiedTurn } from '../../core/types.js';
@@ -273,7 +273,8 @@ export async function findCodexSessionById(
     // 有目录读不出来时不能下「没有这个会话」的结论：抛出原因，由 resolveById 记进 diagnostics，
     // 用户才会去查权限 / 路径，而不是怀疑 id 写错或 Codex 没装
     if (walkErrors.length) {
-      throw new Error(
+      throw new SessionLookupFailureError(
+        'incomplete',
         `在 ${root} 下没找到会话 ${sessionId}，但有 ${walkErrors.length} 个位置读不出来，无法确认它是否存在：${walkErrors[0]}`,
       );
     }
@@ -283,7 +284,10 @@ export async function findCodexSessionById(
   // 否则用户会去核对 id 或以为 Codex 没装，而不是检查这个文件的权限 / 内容
   const { cwd, error } = await rolloutCwdDetail(filePath);
   if (!cwd) {
-    throw new Error(`找到 rollout 文件 ${filePath}，但读不出它的工作目录：${error ?? '原因未知'}`);
+    throw new SessionLookupFailureError(
+      'found-unreadable',
+      `找到 rollout 文件 ${filePath}，但读不出它的工作目录：${error ?? '原因未知'}`,
+    );
   }
   const fileRef: SessionRef = { provider: 'codex', sessionId, filePath, cwd };
   return { ref: fileRef, updatedAt: (await stat(filePath).catch(() => undefined))?.mtimeMs ?? 0 };

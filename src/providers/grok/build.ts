@@ -13,6 +13,7 @@ import { parseGrokSession } from './parse.js';
 
 const execFileAsync = promisify(execFile);
 import type { ImportTurnsOpts } from '../adapter.js';
+import { SessionLookupFailureError } from '../adapter.js';
 import type { ProcessEvent, SessionRef, UnifiedTurn } from '../../core/types.js';
 
 export function grokSessionsRoot(): string {
@@ -338,7 +339,8 @@ export async function findGrokSessionById(
     // 根目录不存在 = 从没用过 grok，是干净的「没有这个会话」；
     // 其余（权限 / 路径被占）是「读不出来」，不能返回 null 冒充不存在
     if (code === 'ENOENT' || code === 'ENOTDIR') return null;
-    throw new Error(
+    throw new SessionLookupFailureError(
+      'incomplete',
       `无法列出 Grok 会话目录 ${root}：${describePathReadFailureReason(error)}`,
     );
   }
@@ -387,12 +389,14 @@ export async function findGrokSessionById(
     }
   }
   if (notRegularFile.length) {
-    throw new Error(
+    throw new SessionLookupFailureError(
+      'found-unreadable',
       `会话 ${sessionId} 的路径现在不是普通文件（被同名目录或设备文件占住了）：${notRegularFile[0]}；无法把它当作会话读取，请先恢复该路径再重试`,
     );
   }
   if (unreadable.length) {
-    throw new Error(
+    throw new SessionLookupFailureError(
+      'incomplete',
       `在 ${root} 下没找到会话 ${sessionId}，但有 ${unreadable.length} 个位置读不出来，无法确认它是否存在：${unreadable[0]}`,
     );
   }

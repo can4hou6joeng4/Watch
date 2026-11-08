@@ -6,7 +6,8 @@ import { Store, defaultDbPath, describeStoreErrorReason, describeStoreOpenFailur
 import { IS_WIN, stripDevicePrefix } from './core/platform.js';
 import type { SessionRef, TokenUsage, UnifiedTurn } from './core/types.js';
 import type { ProviderAdapter } from './providers/adapter.js';
-import { cliDetectFailedBlock, cliMissingBlock, PreflightBlockedError } from './providers/adapter.js';
+import { cliDetectFailedBlock, cliMissingBlock, PreflightBlockedError, SessionLookupFailureError } from './providers/adapter.js';
+import type { SessionLookupFailureKind } from './providers/adapter.js';
 import { getAdapter, listAdapters, unknownProviderMessage } from './providers/registry.js';
 import { countUnparsableJsonLines } from './core/jsonl.js';
 import {
@@ -127,10 +128,50 @@ function openMappingDb(warnings?: string[]): Store | null {
   }
 }
 
+/** 反查里一家「没查成」的结构化结论：见 `SessionLookupFailureKind` */
+export type LookupMiss = { provider: string; kind: SessionLookupFailureKind; reason: string };
+
+/**
+ * 「未找到会话」这句结论只在**每家都确实没有这个 id** 时才成立。
+ *
+ * 适配器按 id 命中文件却读不出来（`found-unreadable`）、或者目录 / 索引 / 库整片读不出来
+ * 压根没查全（`incomplete`）时，它抛出的原因以前只被拼进「未找到会话: <id>。请确认 id 正确…」
+ * 后面的括号里——第一句就把人引去核对一串没写错的 uuid，或者引去重装一个装着的 CLI。
+ * 这里按两种处境改写第一句，三条按 id 反查的路径（`open <id>` / `--from` / `--to`）共用。
+ *
+ * 返回 null = 各家都干净地没有这个会话，调用方保留原来的「未找到」文案。
+ */
+export function lookupMissHeadline(
+  subject: string,
+  id: string,
+  misses: LookupMiss[],
+  providerId?: string,
+): string | null {
+  const scope = providerId ? `（--provider ${providerId} 已限定在这一家）` : '';
+  const found = misses.filter((m) => m.kind === 'found-unreadable');
+  if (found.length) {
+    const list = found.map((m) => `${m.provider}：${m.reason}`).join('；');
+    return (
+      `${subject} ${id} 找到了，但读不出来${scope}：${list}。` +
+      '这不是 id 写错——先修好这条会话再重试（权限、路径是否还是普通文件、文件内容是否损坏），' +
+      '或用原生 CLI 确认它还能不能打开'
+    );
+  }
+  const incomplete = misses.filter((m) => m.kind === 'incomplete');
+  if (incomplete.length) {
+    const list = incomplete.map((m) => `${m.provider}：${m.reason}`).join('；');
+    return `无法确认${subject} ${id} 是否存在${scope}：${list}。先把这些会话存储修到可读再重试`;
+  }
+  return null;
+}
+
 /**
  * 按原生 session id 全局反查；providerId 指定时只在对应 provider 里查。
  * store 提供时：先查本地映射表快返（记住的 cwd/filePath 且文件仍在），
  * miss 才全盘扫描各 provider 原生库，命中即写回映射，下次免扫。
+ *
+ * `lookupMisses` 收集「没查成」的结构化结论（见 `LookupMiss`）：失败原因进 `diagnostics`
+ * 是给人看的，`lookupMisses` 是给调用方改第一句结论用的——两者不能互相替代。
  */
 export async function resolveById(
   sessionId: string,
@@ -138,6 +179,7 @@ export async function resolveById(
   store?: Store | null,
   adapters: ProviderAdapter[] = listAdapters(),
   diagnostics?: string[],
+  lookupMisses?: LookupMiss[],
 ): Promise<{ adapter: ProviderAdapter; found: { ref: SessionRef; updatedAt: number } } | null> {
   const candidates = providerId
     ? ([getAdapter(providerId)].filter((a): a is ProviderAdapter => Boolean(a)) ?? [])
@@ -216,7 +258,13 @@ export async function resolveById(
       // 一家存储读失败不该拖垮反查，但必须披露：否则「没找到」和「没查成」分不清。
       // 这里不假定对象是会话文件（findById 可能死在目录 / 索引 / 库上），所以按路径来说；
       // 适配器自己写好的中文原因原样保留，只有漏网的 fs errno 才翻成中文。
-      diagnostics?.push(`${a.id} 反查失败：${describePathReadFailureReason(error)}`);
+      const reason = describePathReadFailureReason(error);
+      diagnostics?.push(`${a.id} 反查失败：${reason}`);
+      // 同一份原因再记一条结构化结论：调用方要据它决定第一句说「未找到」还是「找到了但读不出来」。
+      // 只认适配器显式抛出的 kind——裸 Error 分不出「按 id 命中了文件」与「目录没读成」。
+      if (error instanceof SessionLookupFailureError) {
+        lookupMisses?.push({ provider: a.id, kind: error.kind, reason });
+      }
       continue;
     }
   }
@@ -304,7 +352,8 @@ export async function openSession(
   const warnings: string[] = [];
   const mapping = store ?? openMappingDb(warnings);
   const lookup: string[] = [];
-  const target = await resolveById(targetId, provider, mapping, adapters, lookup);
+  const misses: LookupMiss[] = [];
+  const target = await resolveById(targetId, provider, mapping, adapters, lookup, misses);
   if (!target) {
     // 映射库打不开也要进「未找到」的说明：否则用户只看到「没找到」，不知道这次是全盘扫描、
     // 也不知道本地库坏了（成功路径走 warnings）
@@ -326,6 +375,17 @@ export async function openSession(
     const unchecked = elsewhere.unreadable.length
       ? `另有 ${elsewhere.unreadable.length} 家没能查（${elsewhere.unreadable.join('、')}），无法确认它是否属于那些 provider`
       : '';
+    // 有一家按 id 命中了文件却读不出来（或压根没查全）时，「未找到会话…请确认 id 正确」
+    // 就是错的第一句：id 往往是对的，要修的是那个文件 / 那个目录。
+    const headline = lookupMissHeadline('会话', targetId, misses, provider);
+    if (headline) {
+      // 原因已经在第一句里逐家说过，这里只补映射库打不开这类不进 misses 的说明
+      const extra = warnings.length ? `（${warnings.join('；')}）` : '';
+      return {
+        ok: false,
+        error: `${chainUse ? `${chainUse}；` : ''}${headline}${unchecked ? `。${unchecked}` : ''}${extra}`,
+      };
+    }
     return {
       ok: false,
       error: `${chainUse ? `${chainUse}；` : ''}未找到会话: ${targetId}${provider ? `（provider=${provider}）` : ''}。请确认 id 正确且对应 CLI 已安装登录。${LOOKUP_NEXT_STEP}${unchecked ? `。${unchecked}` : ''}${detail}`,
@@ -345,12 +405,26 @@ export async function openSession(
   }
 
   if (from) {
-    const source = await resolveById(from, undefined, mapping, adapters, lookup);
+    const beforeSource = lookup.length;
+    const srcMisses: LookupMiss[] = [];
+    const source = await resolveById(from, undefined, mapping, adapters, lookup, srcMisses);
     if (!source) {
       const detail = lookup.length ? `（${lookup.join('；')}）` : '';
       // 来源侧与目标侧是同一件事：链 id 与会话 id 都是 UUID、`chain list` 还把它们印在同一行，
       // 只回「未找到来源会话」会让人反复核对那串抄得没错的 id。目标侧早就认链 id，这里补齐。
       const chainUse = mapping ? mapping.describeChainIdMisuse(from) : null;
+      // 来源那家按 id 命中了文件却读不出来（或压根没查全）时，「未找到来源会话…请确认 id 正确」
+      // 是错的第一句——它与目标侧共用同一套改写
+      const headline = lookupMissHeadline('来源会话', from, srcMisses);
+      if (headline) {
+        // 来源侧原因已逐家写在第一句里，这里只补目标侧那几家（如果有）的说明
+        const prior = lookup.slice(0, beforeSource);
+        const extra = prior.length ? `（${prior.join('；')}）` : '';
+        return {
+          ok: false,
+          error: `${chainUse ? `${chainUse}；` : ''}${headline}${extra}；本次未写入任何内容`,
+        };
+      }
       return {
         ok: false,
         error: chainUse
@@ -605,11 +679,18 @@ async function planOpenInProvider(
   if (!target) return { ok: false, error: unknownProviderMessage(providerId) };
   // 反查失败原因只在「真的没找到」时报；命中了就别拿别家存储的毛病打扰用户
   const lookup: string[] = [];
-  const source = await resolveById(sourceId, undefined, mapping, undefined, lookup);
+  const misses: LookupMiss[] = [];
+  const source = await resolveById(sourceId, undefined, mapping, undefined, lookup, misses);
   if (!source) {
     const detail = lookup.length ? `（${lookup.join('；')}）` : '';
     // 与 openSession 同理：这条路径也会被链 id 撞上（`open <链 id> --to codex`）
     const chainUse = mapping ? mapping.describeChainIdMisuse(sourceId) : null;
+    // 来源那家按 id 命中了文件却读不出来（或压根没查全）时，「未找到来源会话…请确认 id 正确」
+    // 是错的第一句：id 往往是对的，要修的是那个文件 / 那个目录
+    const headline = lookupMissHeadline('来源会话', sourceId, misses);
+    if (headline) {
+      return { ok: false, error: `${chainUse ? `${chainUse}；` : ''}${headline}；本次未写入任何内容` };
+    }
     // 这是**来源**那一侧：命令还给了 --to <provider>，只说「未找到会话」看不出是哪一侧没找到，
     // 更看不出这次有没有已经往目标写进去（决策顺序里来源先解析，所以确实什么都没写）
     return {
