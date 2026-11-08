@@ -546,7 +546,10 @@ async function cmdOpen(
       if (cwdIgnored) checked.warnings = [...(checked.warnings ?? []), cwdIgnored];
       if (json) {
         console.log(JSON.stringify(checked));
-        process.exit(checked.ok ? 0 : 1);
+        // `checked.ok` 只表示「预检这个动作跑通了」，不是「目标可写」——不可写体现在 `writable`
+        // 与 `blocked` 上（桌面端也按这两个字段区分 error / blocked）。以前这里只看 `ok`，
+        // 于是同一份预检结论在文本模式 exit 1、`--json` 却 exit 0，脚本靠退出码判断就会被骗过。
+        process.exit(checked.ok && checked.writable !== false ? 0 : 1);
       }
       if (!checked.ok) fail(false, checked.error ?? '预检失败');
       const target = checked.sessionId ? `${checked.sessionId}` : '（将新建会话）';
