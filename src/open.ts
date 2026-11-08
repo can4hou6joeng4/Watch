@@ -17,6 +17,16 @@ import {
 } from './core/read-text.js';
 import { sessionCwdProblem } from './core/cwd.js';
 
+/**
+ * 按 id 反查不到会话时的「下一步」，三条路径共用（`open <id>` / `open --from` / `open <id> --to`）。
+ *
+ * 三处各写一句的结果是 `open <id> --to <provider>` 只剩一句「未找到会话: <id>」：用户既没有
+ * 办法核对那串 id，也不知道这次到底有没有写入，而它偏偏是唯一会真往目标 provider 写内容的
+ * 那条。同一句话写三遍也是本仓库反复修过的维护陷阱——改一处漏两处，下次还会再分叉。
+ */
+const LOOKUP_NEXT_STEP =
+  '可用 watch sessions 或 watch recent 核对会话 id，若它在别的目录请用 watch recent --cwd <目录> 查看';
+
 /** `watch open` 的返回协议：桌面 GUI 通过 CLI `--json` 消费 */
 export type SessionSummary = {
   turnCount: number;
@@ -316,7 +326,7 @@ export async function openSession(
       : '';
     return {
       ok: false,
-      error: `${chainUse ? `${chainUse}；` : ''}未找到会话: ${targetId}${provider ? `（provider=${provider}）` : ''}。请确认 id 正确且对应 CLI 已安装登录。${unchecked}${detail}`,
+      error: `${chainUse ? `${chainUse}；` : ''}未找到会话: ${targetId}${provider ? `（provider=${provider}）` : ''}。请确认 id 正确且对应 CLI 已安装登录。${LOOKUP_NEXT_STEP}${unchecked ? `。${unchecked}` : ''}${detail}`,
     };
   }
   const notes: string[] = [];
@@ -343,7 +353,7 @@ export async function openSession(
         ok: false,
         error: chainUse
           ? `未找到来源会话: ${from}；${chainUse}${detail}`
-          : `未找到来源会话: ${from}。请确认 id 正确，且该会话属于已安装登录的 CLI；可用 watch sessions 或 watch recent 核对会话 id，若它在别的目录请用 watch recent --cwd <目录> 查看${detail}`,
+          : `未找到来源会话: ${from}。请确认 id 正确，且该会话属于已安装登录的 CLI；${LOOKUP_NEXT_STEP}${detail}`,
       };
     }
     try {
@@ -598,7 +608,12 @@ async function planOpenInProvider(
     const detail = lookup.length ? `（${lookup.join('；')}）` : '';
     // 与 openSession 同理：这条路径也会被链 id 撞上（`open <链 id> --to codex`）
     const chainUse = mapping ? mapping.describeChainIdMisuse(sourceId) : null;
-    return { ok: false, error: `${chainUse ? `${chainUse}；` : ''}未找到会话: ${sourceId}${detail}` };
+    // 这是**来源**那一侧：命令还给了 --to <provider>，只说「未找到会话」看不出是哪一侧没找到，
+    // 更看不出这次有没有已经往目标写进去（决策顺序里来源先解析，所以确实什么都没写）
+    return {
+      ok: false,
+      error: `${chainUse ? `${chainUse}；` : ''}未找到来源会话: ${sourceId}${detail}。请确认 id 正确且该会话属于已安装登录的 CLI；${LOOKUP_NEXT_STEP}。本次未写入任何内容`,
+    };
   }
   const cwd = source.found.ref.cwd;
   // 预检与写入都用这个目录：它不在了要提前说，别等用户照着一句必失败的 cd 去执行
