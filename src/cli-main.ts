@@ -960,7 +960,15 @@ async function cmdRecent(cwd: string, json: boolean, limit: number = 8, cwdGiven
   const cwdIssue = await cwdProblem(cwd);
   if (cwdIssue) warnings.push(cwdIssue);
 
-  if (!store) unavailable.push('本地库');
+  if (!store) {
+    // 只记一个「本地库」看不出为什么：同一份坏库下 `sessions` / `status` / `usage` 都会带出
+    // 真实原因（权限 / 库损坏 / 被占用 / 路径被同名文件占住 / schema 比本程序新，各带路径与
+    // 下一步）。而 `recent` 的空列表分支还写着「原因见上方警告」——上方必须真有一条。
+    unavailable.push('本地库');
+    warnings.push(
+      storeUnavailableWarning('近期的映射表与链信息未参与，列表只来自原生存储', lastStoreError ?? undefined),
+    );
+  }
   if (store) {
     try {
       // 显式 --cwd 时映射表也要按目录过滤：原生扫描一直按 cwd 精确匹配，
@@ -1247,8 +1255,12 @@ async function cmdNew(cwd: string, providerId: string, json: boolean, chain?: st
   const cwdIssue = describeCwdProblem(cwdProbe, cwd);
   const cwdWriteIssue = describeNewSessionCwd(cwdProbe, cwd);
   if (!store) {
-    // 会话本身能建出来，但没有 switch_events：后续 switch 不认这条绑定，必须说明
-    warnings.push('本地库不可用，本次新会话未写入链记录（后续切换不会认同这条绑定）');
+    // 会话本身能建出来，但没有 switch_events：后续 switch 不认这条绑定，必须说明。
+    // 原因同样要走 `storeUnavailableWarning()`：只说「未写入链记录」时用户不知道该修权限、
+    // 修路径还是换 WATCH_DB，而原因里本来就带着路径与下一步。
+    warnings.push(
+      storeUnavailableWarning('本次新会话未写入链记录（后续切换不会认同这条绑定）', lastStoreError ?? undefined),
+    );
   }
   try {
     let historyLen = 0;
