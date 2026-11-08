@@ -9,7 +9,7 @@ import {
   stripEmptyEvents,
   summarize,
 } from '../../core/rich.js';
-import type { ProcessEvent, SessionRef, UnifiedTurn } from '../../core/types.js';
+import type { ProcessEvent, SessionRef, TokenUsage, UnifiedTurn } from '../../core/types.js';
 
 /**
  * Codex rollout JSONL → 统一时间线（Rich）：
@@ -82,6 +82,20 @@ export async function parseCodexSession(ref: SessionRef): Promise<UnifiedTurn[]>
     }
 
     if (r.type === 'event_msg') {
+      if (p.type === 'token_count') {
+        const usage = readTurnUsage(p.info);
+        if (usage) {
+          // 挂到这一轮最后一条 assistant 上——原生 rollout 里 `token_count` 紧跟在本次模型调用
+          // 之后写出，一轮多次调用会各来一条 `last_token_usage`，逐条累加才是该轮真实用量。
+          // **不能 `ensureAssistant()`**：那会在没有 assistant 回复的轮（纯 user 记录、
+          // 会话开头那条只带 `total_token_usage` 的 token_count）凭空造一个空 turn。
+          // 只在**正在用的那条时间线**上找目标：现代 rollout 同时写 response_item 与
+          // event_msg（回退时间线会被整份丢弃），跨两条找会把用量挂到一条不会被返回的 turn 上。
+          const target = turns.length ? lastAssistantOf(turns) : lastAssistantOf(fallback);
+          if (target) target.usage = addUsage(target.usage, usage);
+        }
+        continue;
+      }
       if (p.type === 'user_message' && typeof p.message === 'string') {
         const text = p.message;
         if (text.trim() === '' || isInternalCodexContext(text)) continue;
@@ -99,6 +113,45 @@ export async function parseCodexSession(ref: SessionRef): Promise<UnifiedTurn[]>
     }
   }
   return stripEmptyEvents(hasResponseMessages ? turns : fallback);
+}
+
+/**
+ * `token_count` 里的 `info.last_token_usage` 才是**本轮**量。
+ *
+ * `total_token_usage` 是整条会话的累计（本机只读采样：524 个 rollout、其中 493 个含 3 条以上
+ * `token_count` 的文件里它单调不减），拿它当 per-turn 会让第 N 轮记成「前 N 轮之和」，
+ * 转入别家后用量虚高数倍。这与 `codexSessionUsage()` 的分工不同：那边要的是会话合计，
+ * 所以读累计；这边要的是每一轮的增量，所以读 `last_token_usage`。
+ *
+ * 0/0 是占位：Watch 的写出侧在没有 `turn.usage` 时仍会写一条 `token_count`
+ * （`last_token_usage` / `total_token_usage` 都是 0），把它当成真实用量会让「这条会话没有
+ * 用量数据」变成「确实用了 0 token」。判据与 claude / kimi / grok 的读取侧一致。
+ */
+function readTurnUsage(info: unknown): TokenUsage | undefined {
+  if (typeof info !== 'object' || info === null) return undefined;
+  const last = (info as Record<string, unknown>).last_token_usage;
+  if (typeof last !== 'object' || last === null) return undefined;
+  const u = last as Record<string, unknown>;
+  const inputTokens = num(u.input_tokens);
+  const outputTokens = num(u.output_tokens);
+  if (inputTokens === undefined || outputTokens === undefined) return undefined;
+  if (inputTokens === 0 && outputTokens === 0) return undefined;
+  return { inputTokens, outputTokens };
+}
+
+/** `cached_input_tokens` 是 `input_tokens` 的子集（OpenAI responses 口径），不再相加。 */
+function num(v: unknown): number | undefined {
+  return typeof v === 'number' && Number.isFinite(v) ? v : undefined;
+}
+
+function addUsage(prev: TokenUsage | undefined, add: TokenUsage): TokenUsage {
+  if (!prev) return { inputTokens: add.inputTokens, outputTokens: add.outputTokens };
+  return { inputTokens: prev.inputTokens + add.inputTokens, outputTokens: prev.outputTokens + add.outputTokens };
+}
+
+function lastAssistantOf(turns: UnifiedTurn[]): UnifiedTurn | undefined {
+  const last = turns[turns.length - 1];
+  return last && last.role === 'assistant' ? last : undefined;
 }
 
 function processItemToEvents(p: Record<string, unknown>, timestamp: string): ProcessEvent[] {
