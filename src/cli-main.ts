@@ -3,7 +3,7 @@ import { stat } from 'node:fs/promises';
 import path from 'node:path';
 import { SEARCH_MAX_HITS, Store, defaultDbPath, describeStoreErrorReason, describeStoreOpenFailure } from './core/store.js';
 import { describeFindings } from './core/findings.js';
-import { adoptIntoChain, blockedHint, chainStatus, chainUsage, collectTips, createChainSession, currentChainShiftNote, emptyChainBindHint, handoff, HandoffBlockedError, notCurrentChainWarning, rebindHint } from './core/handoff.js';
+import { adoptIntoChain, blockedHint, chainStatus, chainUsage, collectTips, createChainSession, currentChainShiftNote, emptyChainBindHint, handoff, HandoffBlockedError, notCurrentChainWarning, rebindHint, storeUnavailableWarning } from './core/handoff.js';
 import { reindexCwd } from './core/search.js';
 import type { SessionRef } from './core/types.js';
 import { getAdapter, listAdapters, listProviders, noSessionHint, unknownProviderMessage } from './providers/registry.js';
@@ -607,10 +607,13 @@ async function cmdSessions(cwd: string, json: boolean, chain?: string): Promise<
     // 用户明确要按链过滤却打不开库：不说是「已忽略」，列表看起来就像链上会话。
     // 不带 --chain 时同样要披露：列表只来自原生扫描，本地库里的映射与链信息都没参与，
     // 否则降级后的「未发现会话」会被读成「这个目录确实没有会话」——`status` / `usage` / `recent` 都会说明
+    // 原因（权限 / 库损坏 / 被占用 / 路径被同名文件占住 / schema 比本程序新）每一档都带路径与
+    // 下一步，且与 Node 版本无关：只写「可检查 WATCH_DB 路径与库状态」会把人引去查一个
+    // 本来没问题的设置，而 `status` / `usage` 早在同一环境下把真实原因带出来了
     warnings.push(
       chain
-        ? `本地库不可用，--chain ${chain} 过滤已忽略，下面是该目录的全部会话`
-        : '本地库不可用，会话列表只来自原生存储（本地库里的映射与链信息未参与；可检查 WATCH_DB 路径与库状态）',
+        ? storeUnavailableWarning(`--chain ${chain} 过滤已忽略，下面是该目录的全部会话`, lastStoreError ?? undefined)
+        : storeUnavailableWarning('会话列表只来自原生存储（本地库里的映射与链信息未参与）', lastStoreError ?? undefined),
     );
   }
   if (store) {

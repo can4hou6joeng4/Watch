@@ -447,7 +447,7 @@ export function pairedRef(history: SwitchRecord[], provider: string): SessionRef
  * `storeUnavailableError()` 早就改过的规则矛盾（见 `cli-main.ts` 那条注释）。
  * 只有真的拿不到原因（直接传 `null` store 的调用方）才退回那句通用提示。
  */
-function storeUnavailableWarning(subject: string, storeError?: string): string {
+export function storeUnavailableWarning(subject: string, storeError?: string): string {
   if (storeError) return `本地库不可用，${subject}：${storeError}`;
   return `本地库不可用，${subject}（可检查 WATCH_DB 路径与 Node 版本）`;
 }
