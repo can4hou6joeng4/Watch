@@ -1729,15 +1729,41 @@ async function cmdChain(cwd: string, json: boolean, action?: string, a?: string,
       // 归档只是「不再是默认链」，链记录与历史都还在：以前这里直接报「链已归档」，
       // 却没有任何命令能把它恢复回来（rename / archive / use 三条路全堵死）
       if (found.status === 'archived') {
-        store.restoreChain(found.id);
-        const restored = store.findActiveChain(cwd, found.id) ?? { ...found, status: 'active' };
+        // `restoreChain()` 返回真正落盘的那份（含 touchChain 算出的 lastUsedAt）：
+        // 以前这里自己再查一次、查不到还退成 `{ ...found, status: 'active' }`，
+        // 报出去的 lastUsedAt 是归档前的旧值
+        const restored = store.restoreChain(found.id);
         if (json) console.log(JSON.stringify({ ok: true, restored: true, chain: restored }));
         else console.log(`已恢复并设为当前链: ${escapeControlChars(restored.name)}  (${restored.id})`);
         return;
       }
-      store.touchChain(found.id);
-      if (json) console.log(JSON.stringify({ ok: true, chain: { ...found, lastUsedAt: Date.now() } }));
-      else console.log(`当前链: ${escapeControlChars(found.name)}  (${found.id})`);
+      // 切换之前先看当前链是谁：「本来就在这条链上」与「刚切过来」以前输出一字不差
+      // （`--json` 都是 `{ok:true,chain:{…}}`、文本都是「当前链: X」），用户照着自己刚收到的
+      // 提示（「要回到原来那条用 watch chain use X」）跑完，看到「当前链: X」会以为切换成功；
+      // 若它本来就没离开过，说明他此前那些带 `--chain` 的操作根本没换走当前链——这条信息
+      // 恰恰是「为什么我后面的 switch 落到了别的链上」的答案，一个字都没有。
+      // `chain rename <同名>` / `chain archive <已归档>` 早已是 `unchanged:true` 加一句说明，
+      // 这里对齐，但**不能说成「没有做任何改动」**：`touchChain()` 确实抬高了 last_used_at。
+      const previous = store.findActiveChain(cwd);
+      const touched = store.touchChain(found.id);
+      const unchanged = previous?.id === found.id;
+      const note = unchanged
+        ? `「${escapeControlChars(found.name)}」本来就是本目录的当前链，本次没有发生切换；` +
+          `不带 --chain 的 status / switch / new / adopt 一直作用在它上面（本次只刷新了它的最近使用时间）`
+        : null;
+      if (json) {
+        console.log(
+          JSON.stringify({
+            ok: true,
+            ...(unchanged ? { unchanged: true } : {}),
+            chain: touched,
+            ...(note ? { warnings: [note] } : {}),
+          }),
+        );
+      } else {
+        console.log(`当前链: ${escapeControlChars(touched.name)}  (${touched.id})`);
+        if (note) console.log(`  ${note}`);
+      }
       return;
     }
     // 拼错的子命令（`chain lsit`）以前一律落到通用用法错误「参数不完整或不合法」，

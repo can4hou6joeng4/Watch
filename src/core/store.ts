@@ -1055,18 +1055,33 @@ export class Store {
   /**
    * 取消归档：`chain use <已归档链>` 用它恢复成当前链。
    * 归档只是「不再是默认链」，链记录与 switch_events 都还在，没有理由不可逆。
+   *
+   * 返回恢复后的链记录（含 `touchChain()` 真正写进去的 `lastUsedAt`），理由同 `touchChain()`：
+   * 调用方回报什么就必须是写进去的那个，不能自己再取一次 `Date.now()`。
    */
-  restoreChain(id: string): void {
+  restoreChain(id: string): Chain {
     const chain = this.mustChain(id);
-    if (chain.status === 'active') return;
+    if (chain.status === 'active') return chain; // 已经是活跃链：空操作，不动 last_used_at
     this.db.prepare("UPDATE chains SET status='active' WHERE id=?").run(id);
-    this.touchChain(id);
+    return this.touchChain(id);
   }
 
-  touchChain(id: string): void {
+  /**
+   * 抬高 `last_used_at`，**返回落盘后的链记录**。
+   *
+   * 写入的值是 `max(Date.now(), lastUsedAt + 1)`——防的是「同一毫秒内连点两次，第二条不生效」。
+   * 因此它**不等于**调用方自己取的 `Date.now()`：库里若已有值大于当前时钟（系统时钟被回拨过，
+   * 或另一台机器 / 另一次运行写入过），落盘的是「库里值 + 1」，而调用方手里的 `Date.now()`
+   * 会明显偏小。以前 `cmdChain` 的 `chain use` 正是回报 `{ ...found, lastUsedAt: Date.now() }`，
+   * 于是 `--json` 给出一个库里根本不存在的时刻，与 `chain list` 同一份数据两个值
+   * （2026-11-09 实测库里放一个晚 6 小时的值，回报 20:03:45 vs 落盘 02:03:45+1d）。
+   * 回报什么就必须是写进去的那个，所以这里把新记录返回给调用方，别让它们再自己造一份。
+   */
+  touchChain(id: string): Chain {
     const chain = this.mustChain(id);
     const at = Math.max(Date.now(), chain.lastUsedAt + 1);
     this.db.prepare('UPDATE chains SET last_used_at=? WHERE id=?').run(at, id);
+    return { ...chain, lastUsedAt: at };
   }
 
   /**
