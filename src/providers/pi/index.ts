@@ -6,8 +6,12 @@ import { promisify } from 'node:util';
 import { SessionLookupFailureError } from '../adapter.js';
 import type { ProviderAdapter } from '../adapter.js';
 import { digestFile, type FileDigest } from '../../core/atomic.js';
-import { describePathReadFailureReason, isMissingPathError } from '../../core/read-text.js';
-import type { SessionRef } from '../../core/types.js';
+import {
+  describePathReadFailureReason,
+  describeSessionReadFailure,
+  isMissingPathError,
+} from '../../core/read-text.js';
+import type { SessionRef, TokenUsage, UnifiedTurn } from '../../core/types.js';
 import { parsePiSession } from './parse.js';
 import { encodePiProjectDir, importTurnsToPi, piSessionsRoot } from './build.js';
 
@@ -159,6 +163,47 @@ export async function findPiSessionById(
   return null;
 }
 
+/**
+ * 信息层：链上这条 pi 会话一共用了多少 token。
+ *
+ * 口径刻意与搬运层复用同一个 `parsePiSession()`，而不是直接累加每条 assistant 消息的
+ * `message.usage`：
+ * ① `readPiUsage()` 已按 pi 自己的口径把缓存两块加回输入（`input + cacheRead + cacheWrite`，
+ *    `cacheWrite1h` 是 `cacheWrite` 的子集不重复加），两条路径共用一份折算，不会再分叉；
+ * ② `importTurnsToPi()` 在带工具的轮次里把**同一份** usage 写在两条 assistant 消息上
+ *    （tool-call 一条、final text 一条，pi TUI footer 要求每条都带），直接按消息累加会翻倍，
+ *    而 parse 已把它们合并成一个 turn、用量只留一份；
+ * ③ 0/0 占位在 `readPiUsage()` 里已被丢弃，不会把「源侧没有用量」算成真实 0 token。
+ *
+ * 已知边界：原生一轮里发生多次 API 调用时，parse 的合并规则取**最后一次调用**的用量
+ * （与 claude 的 parse 一致，见 `parse.ts` 的注释），这里同样如此。宁可少算，也不用
+ * 「usage 完全相同就当成重复」这种启发式去猜——真正的多次调用可以有任意数值。
+ * 这样信息层与搬运层始终是同一份数字：`watch usage` 说用了多少，转出去就是多少。
+ *
+ * 没有 assistant usage 时返回 null（表示「原生没有用量记录」），读不出来照常抛出——
+ * 与另外五家 `sessionUsage` 的约定一致，`chainUsage()` 会据此区分 `totalMissingUsage`
+ * 与读取失败。
+ */
+async function piSessionUsage(ref: SessionRef): Promise<TokenUsage | null> {
+  let turns: UnifiedTurn[];
+  try {
+    turns = await parsePiSession(ref);
+  } catch (error) {
+    // 读不出来不等于「原生没有 usage 字段」：按会话文件的口径翻成中文再抛，交给 chainUsage / open 披露
+    throw new Error(describeSessionReadFailure(ref.filePath, error));
+  }
+  let inputTokens = 0;
+  let outputTokens = 0;
+  let saw = false;
+  for (const turn of turns) {
+    if (!turn.usage) continue;
+    saw = true;
+    inputTokens += turn.usage.inputTokens;
+    outputTokens += turn.usage.outputTokens;
+  }
+  return saw ? { inputTokens, outputTokens } : null;
+}
+
 export const piAdapter: ProviderAdapter = {
   id: 'pi',
   displayName: 'Pi',
@@ -181,6 +226,7 @@ export const piAdapter: ProviderAdapter = {
   },
   findLatestSession: findLatestPiSession,
   listSessions: listPiSessions,
+  sessionUsage: piSessionUsage,
 
   /** nezha 式启动：预写一条占位 user 消息，让 `pi --session <id>` 进 PTY 后能直接交互 */
   async createEmptySession(cwd: string): Promise<SessionRef> {
