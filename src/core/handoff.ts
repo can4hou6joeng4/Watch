@@ -56,21 +56,12 @@ export function rebindHint(provider: string, providerLabel = provider): string {
 }
 
 /**
- * 链上一条绑定都没有时的下一步（`usage` 与 `sessions --chain` 共用）。
+ * 链上一条绑定都没有时的下一步（`usage` / `sessions --chain` 共用）。
  *
- * 这里**不能**把 `watch switch` 与 `adopt` 并列成「都能绑定」：空链上 `switch`
- * 只在同目录还有**另一家**的会话时才 `recordSwitch`；目录里只有一家时它走
- * `alreadyAtTarget` 分支，自己都印「本次未写入链记录」，链仍然空着——用户照
- * 「先用 watch switch 绑定」执行完，再查 `sessions --chain` 还是同一句空链提示
- * （2026-11-08 实测）。无条件能写入绑定的只有 `adopt`，所以先给 adopt，并把
- * switch 的前提写出来。
+ * 实现在 `store.ts`：`describeChainIdMisuse()` 也要用同一句，而 `handoff.ts` 本就依赖
+ * `store.ts`，反向依赖会成环。这里原样再导出，既有调用点不用改。
  */
-export function emptyChainBindHint(): string {
-  return (
-    '用 watch adopt <provider> --session <会话 id> 把一个已有会话接进这条链（会直接写入链尾）；' +
-    'watch switch 只有在同目录还有另一家的会话时才会写入绑定'
-  );
-}
+export { emptyChainBindHint } from './store.js';
 
 /**
  * 写前 TOCTOU 校验：目标会话指纹与快照不一致（被外部写入）则拒绝。

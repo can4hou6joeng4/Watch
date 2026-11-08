@@ -7,6 +7,26 @@ import { normalizePath } from './platform.js';
 import { probeSqliteTables, readSqliteFileHead } from './sqlite-file.js';
 import type { ProcessEvent, SessionRef, UnifiedTurn } from './types.js';
 
+/**
+ * 链上一条绑定都没有时的下一步（`usage` / `sessions --chain` / `describeChainIdMisuse` 共用）。
+ *
+ * 这里**不能**把 `watch switch` 与 `adopt` 并列成「都能绑定」：空链上 `switch`
+ * 只在同目录还有**另一家**的会话时才 `recordSwitch`；目录里只有一家时它走
+ * `alreadyAtTarget` 分支，自己都印「本次未写入链记录」，链仍然空着——用户照
+ * 「先用 watch switch 绑定」执行完，再查 `sessions --chain` 还是同一句空链提示
+ * （2026-11-08 实测）。无条件能写入绑定的只有 `adopt`，所以先给 adopt，并把
+ * switch 的前提写出来。
+ *
+ * 定义在 `store.ts` 而不是 `handoff.ts`：`describeChainIdMisuse()` 也要用，而
+ * `handoff.ts` 已经 import 了 `store.ts`，反向依赖会成环。`handoff.ts` 原样再导出。
+ */
+export function emptyChainBindHint(): string {
+  return (
+    '用 watch adopt <provider> --session <会话 id> 把一个已有会话接进这条链（会直接写入链尾）；' +
+    'watch switch 只有在同目录还有另一家的会话时才会写入绑定'
+  );
+}
+
 const SCHEMA_VERSION = 6;
 const REQUIRED_TABLES = ['sessions', 'turns', 'switch_events', 'turn_events', 'chains', 'messages_fts', 'search_index'] as const;
 const FTS_TEXT_LIMIT = 8192;
@@ -808,7 +828,7 @@ export class Store {
       const tipRef = events.length ? events[events.length - 1].toRef : null;
       tip = tipRef
         ? `；它当前停在这条链尾的 ${tipRef.provider} 会话 ${tipRef.sessionId}`
-        : '；这条链上还没有绑定任何会话（先用 switch / adopt 绑定）';
+        : `；这条链上还没有绑定任何会话——${emptyChainBindHint()}`;
     } catch {
       // 链尾只是补充说明，读不出来不影响「这是链不是会话」这条结论
     }
