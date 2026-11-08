@@ -619,6 +619,8 @@ export async function collectTips(
   cwd: string,
   adapters: ProviderAdapter[],
   warnings?: string[],
+  /** 收集「这一家根本没读成」的 provider id：调用方要据此判断能否下「这个目录没有会话」的结论 */
+  unreadable?: string[],
 ): Promise<ProviderTip[]> {
   const tips: ProviderTip[] = [];
   for (const adapter of adapters) {
@@ -627,6 +629,7 @@ export async function collectTips(
     try {
       found = await adapter.findLatestSession(cwd);
     } catch (error) {
+      unreadable?.push(adapter.id);
       // 单个 provider 的原生存储读不出来时跳过，不影响其它家，但要披露；原因按路径说（这里
       // 可能是目录 / 索引 / 库），不能把 `EACCES: permission denied, scandir '…'` 原文交给用户
       warnings?.push(`${adapter.id} 原生会话读取失败，已跳过：${describePathReadFailureReason(error)}`);
@@ -659,13 +662,20 @@ export async function chainStatus(
    * 否则 `status` 会在警告之后照样说「请先在任一受支持的 Agent 里开聊」。
    */
   chainTipUnusable: boolean;
+  /**
+   * 这次根本没读成的 provider（findLatestSession 抛错）。
+   * 文本模式靠它区分「这个目录真没聊过」与「有几家没查成」——后者不能给出
+   * 「请先在任一受支持的 Agent 里开聊」这类结论性建议。
+   */
+  unreadable: string[];
   history: SwitchRecord[];
   chain: Chain | null;
   chains: Chain[];
   warnings: string[];
 }> {
   const warnings: string[] = [];
-  const allTips = await collectTips(cwd, adapters, warnings);
+  const unreadable: string[] = [];
+  const allTips = await collectTips(cwd, adapters, warnings, unreadable);
   let history: SwitchRecord[] = [];
   let chain: Chain | null = null;
   let chains: Chain[] = [];
@@ -732,7 +742,7 @@ export async function chainStatus(
     }
   }
   const tips = allTips.map((t) => ({ ...t, onChain: boundIds.get(t.provider)?.has(t.ref.sessionId) ?? false }));
-  return { tips, chainTip, chainTipUnusable, history, chain, chains, warnings };
+  return { tips, chainTip, chainTipUnusable, unreadable, history, chain, chains, warnings };
 }
 
 /** 把链尾会话转换到 targetId，落 switch_events（store 可选）；opts.forceNew 强制新建目标会话（不追加既有配对） */

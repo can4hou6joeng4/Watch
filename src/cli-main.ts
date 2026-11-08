@@ -329,7 +329,7 @@ async function cmdStatus(cwd: string, json: boolean, chain?: string): Promise<vo
     console.log(JSON.stringify({ ok: true, ...result }));
     return;
   }
-  const { tips, chainTip, chainTipUnusable, history, chain: current, warnings } = result;
+  const { tips, chainTip, chainTipUnusable, unreadable, history, chain: current, warnings } = result;
   for (const warning of warnings) console.error(`警告: ${warning}`);
   // 链名是用户输入、库里可能留着写入守卫上线前的坏名字：进终端前转义，别把 ESC / 换行打出去
   if (current) console.log(`链: ${escapeControlChars(current.name)}${current.status === 'archived' ? ' [归档]' : ''}  (${current.id})`);
@@ -349,6 +349,13 @@ async function cmdStatus(cwd: string, json: boolean, chain?: string): Promise<vo
     console.log(
       `未发现可列出的原生会话；链尾记录的是 ${chainTip.provider} 会话 ${chainTip.ref.sessionId}，` +
         `其文件当前不可用（原因见上方警告）——可先恢复该文件，或 ${rebindHint(chainTip.provider)}`,
+    );
+  } else if (!tips.length && unreadable.length) {
+    // 有几家的原生存储根本没读成：此时「未发现会话」只是「没列出来」，不是「这个目录没聊过」。
+    // 上一行警告刚说「无法确认是否存在」，下一行却让人去开新会话，用户会以为旧会话已经没了
+    console.log(
+      `未发现可列出的原生会话；但 ${unreadable.join(' / ')} 这次没能读取（原因见上方警告），` +
+        '无法确认这个目录里是否还有它们的会话——先修好这些存储（权限、路径或库状态）再重试',
     );
   } else if (!tips.length) {
     console.log(`未发现会话（${noSessionHint()}）`);
@@ -832,7 +839,13 @@ async function cmdSessions(cwd: string, json: boolean, chain?: string): Promise<
     }
     for (const warning of warnings) console.error(`警告: ${warning}`);
     if (!result.length) {
-      console.log('未发现会话');
+      // 有 provider 没读成时，「未发现会话」只是「没列出来」：下面那行 stderr 的「未读取」
+      // 太容易在长输出里被漏掉，而 stdout 那句结论会留下来被当成事实
+      console.log(
+        unavailable.length
+          ? `未发现会话；但 ${unavailable.join(' / ')} 没能读取（原因见上方警告），无法确认这个目录里是否还有它们的会话——先修好这些存储再重试`
+          : `未发现会话（${noSessionHint()}）`,
+      );
       if (unavailable.length) console.error(`未读取: ${unavailable.join('、')}（原生存储读取失败）`);
       return;
     }
@@ -972,7 +985,12 @@ async function cmdRecent(cwd: string, json: boolean, limit: number = 8, cwdGiven
     console.error(`提示: 只显示最近 ${final.length} 条，另有 ${results.length - final.length} 条更早的会话未列出（--limit 可调，最大 50）`);
   }
   if (!final.length) {
-    console.log('暂无最近会话记录');
+    // 与 sessions / status 同一口径：有来源没读成时说「暂无记录」会被当成「这个目录真的没聊过」
+    console.log(
+      unavailable.length
+        ? `暂无最近会话记录；但 ${unavailable.join(' / ')} 没能读取（原因见上方警告），无法确认近期是否有它们的会话——先修好这些存储再重试`
+        : '暂无最近会话记录',
+    );
     return;
   }
   for (const s of final) {
