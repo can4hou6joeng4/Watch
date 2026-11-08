@@ -56,6 +56,31 @@ export function rebindHint(provider: string, providerLabel = provider): string {
 }
 
 /**
+ * `--chain <活跃但非当前链>` 时的说明（`status` / `usage` / `sessions --chain` 共用）。
+ *
+ * 归档链早就有自己的警告（「已归档，不再是本目录的当前链」），但**活跃**的非当前链一句都说没有：
+ * `chain new A` → `chain new B` 之后当前链是 B，`watch status --chain A` 与 `watch status`
+ * 的输出只差一个链名，用户看完 A 接着跑不带 `--chain` 的 `watch switch codex`，以为接在 A 上，
+ * 实际写的是 B 的 `switch_events`（2026-11-08 实测：B 的链尾跟过去了、A 原封不动）。
+ * 预检与执行之间隔着一条看不见的链，正是本项目反复在修的那一类。
+ *
+ * 当前链按 `findActiveChain(cwd)` 的判定（活跃链里 last_used_at 最新的一条），与
+ * `chain list` 的 `← 当前` 标记同一口径。
+ */
+export function notCurrentChainWarning(chain: Chain, current: Chain | null): string | null {
+  if (chain.status !== 'active') return null; // 归档链有自己那句，不重复
+  if (current && current.id === chain.id) return null;
+  const currentLabel = current
+    ? `当前链是 ${current.name}`
+    : '本目录当前没有活跃链（现有链都已归档或还没建链）';
+  return (
+    `链 ${chain.name} 不是本目录的当前链（${currentLabel}）；` +
+    `不带 --chain 的 status / switch / new / adopt 都作用在当前链上，本次输出的只有 ${chain.name}——` +
+    `要切到它：watch chain use ${chain.name}`
+  );
+}
+
+/**
  * 链上一条绑定都没有时的下一步（`usage` / `sessions --chain` 共用）。
  *
  * 实现在 `store.ts`：`describeChainIdMisuse()` 也要用同一句，而 `handoff.ts` 本就依赖
@@ -346,6 +371,10 @@ export async function chainUsage(
   // `--json` 里虽有 status，文本模式只印名字，容易被当成「现在还在用这条」
   if (chain?.status === 'archived') {
     warnings.push(`链 ${chain.name} 已归档（不再是本目录的当前链），下面的用量是历史记录`);
+  } else if (chain && chainId) {
+    // 活跃但非当前链：与「已归档」同一类误导，而且更隐蔽（状态栏里一点异常都没有）
+    const notCurrent = notCurrentChainWarning(chain, store.findActiveChain(cwd));
+    if (notCurrent) warnings.push(notCurrent);
   }
   const history = chain ? store.listSwitchEvents(chain.id) : [];
   const byProvider: { provider: string; sessionId: string; usage: TokenUsage | null; error?: string }[] = [];
@@ -498,6 +527,10 @@ export async function chainStatus(
       // 不说清就会被当成「现在还在用这条」，与 sessions --chain / usage 的同一句话对齐
       if (chain?.status === 'archived') {
         warnings.push(`链 ${chain.name} 已归档（不再是本目录的当前链），下面显示的是它的历史记录`);
+      } else if (chain && chainId) {
+        // 活跃但非当前链：不及时说明，用户会把这份 status 当成「不带 --chain 也会作用在这条链上」
+        const notCurrent = notCurrentChainWarning(chain, store.findActiveChain(cwd));
+        if (notCurrent) warnings.push(notCurrent);
       }
       history = chain ? store.listSwitchEvents(chain.id) : [];
     } catch (error) {

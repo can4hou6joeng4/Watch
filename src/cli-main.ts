@@ -3,7 +3,7 @@ import { stat } from 'node:fs/promises';
 import path from 'node:path';
 import { SEARCH_MAX_HITS, Store, defaultDbPath, describeStoreErrorReason, describeStoreOpenFailure } from './core/store.js';
 import { describeFindings } from './core/findings.js';
-import { adoptIntoChain, blockedHint, chainStatus, chainUsage, collectTips, createChainSession, emptyChainBindHint, handoff, HandoffBlockedError, rebindHint } from './core/handoff.js';
+import { adoptIntoChain, blockedHint, chainStatus, chainUsage, collectTips, createChainSession, emptyChainBindHint, handoff, HandoffBlockedError, notCurrentChainWarning, rebindHint } from './core/handoff.js';
 import { reindexCwd } from './core/search.js';
 import type { SessionRef } from './core/types.js';
 import { getAdapter, listAdapters, listProviders, noSessionHint, unknownProviderMessage } from './providers/registry.js';
@@ -593,6 +593,10 @@ async function cmdSessions(cwd: string, json: boolean, chain?: string): Promise<
         // 但它已不是本目录的当前链，不说明会被当成「现在还在用这条」
         if (chainRow.status === 'archived') {
           warnings.push(`链 ${chainRow.name} 已归档（不再是本目录的当前链），下面按它的绑定过滤`);
+        } else {
+          // 活跃但非当前链：列出来的会话看着就像「现在这条链的使用情况」
+          const notCurrent = notCurrentChainWarning(chainRow, store.findActiveChain(cwd));
+          if (notCurrent) warnings.push(notCurrent);
         }
         // 链存在但一条绑定都没有：过滤后必然是空列表，不说原因会被当成「目录里没有会话」
         if (bound.size === 0) {
@@ -1088,10 +1092,17 @@ async function cmdChain(cwd: string, json: boolean, action?: string, a?: string,
         }
       }
       if (json) {
+        // 文本模式一直有 `← 当前`，`--json` 却没有任何标记：脚本看 `chains[]` 只能靠
+        // lastUsedAt 自己猜（而它只是「上次被用到的时刻」，归档链同样有值）
+        const current = store.findActiveChain(cwd);
         console.log(JSON.stringify({
           ok: true,
           cwd,
-          chains: chains.map((c) => ({ ...c, ...(tips.has(c.id) ? { tip: tips.get(c.id) } : {}) })),
+          chains: chains.map((c) => ({
+            ...c,
+            ...(current && current.id === c.id ? { current: true } : {}),
+            ...(tips.has(c.id) ? { tip: tips.get(c.id) } : {}),
+          })),
           ...(warnings.length ? { warnings } : {}),
         }));
         return;
