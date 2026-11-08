@@ -81,6 +81,32 @@ export function notCurrentChainWarning(chain: Chain, current: Chain | null): str
 }
 
 /**
+ * 写命令把「当前链」换成另一条时的说明（`switch --chain` / `adopt --chain` / `chain new` 共用）。
+ *
+ * 「当前链」= 活跃链里 `last_used_at` 最新的一条（`findActiveChain(cwd)` 不带 key，与
+ * `chain list` 的 `← 当前` 同一口径）。三条写路径都会经 `touchChain()` 抬高目标链的
+ * `last_used_at`（`getOrCreateChainSession()` 命中既有链时 / `createChain()` 建链时），
+ * 于是**当前链被静默换走**，而输出只报「已切换 / 已接入 / 已创建链」。
+ *
+ * `switch <p> --chain A` / `adopt <p> --session <id> --chain A` 尤其该说：用户显式写了
+ * `--chain A`，动机恰恰是「这一次操作 A，别动当前链」。实测当前链是 B 时跑完这两条，
+ * `chain list` 里 A 变成 `← 当前`，一整段输出一个字都没提（2026-11-08）；此后所有不带
+ * `--chain` 的 `switch` / `new` / `adopt` 都作用在 A 上。而只读的 `status --chain A`
+ * 早就会警告「链 A 不是本目录的当前链」，写命令反而把它变成当前链却不吭声。
+ */
+export function currentChainShiftNote(
+  previous: Pick<Chain, 'id' | 'name'> | null,
+  next: Pick<Chain, 'id' | 'name'> | null,
+): string | null {
+  if (!previous || !next || previous.id === next.id) return null;
+  return (
+    `当前链已从「${previous.name}」换成「${next.name}」；` +
+    `之后不带 --chain 的 status / switch / new / adopt 都作用在「${next.name}」上` +
+    `（要回到原来那条用 watch chain use ${previous.name}）`
+  );
+}
+
+/**
  * 链上一条绑定都没有时的下一步（`usage` / `sessions --chain` 共用）。
  *
  * 实现在 `store.ts`：`describeChainIdMisuse()` 也要用同一句，而 `handoff.ts` 本就依赖

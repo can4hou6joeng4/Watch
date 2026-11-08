@@ -3,7 +3,7 @@ import { stat } from 'node:fs/promises';
 import path from 'node:path';
 import { SEARCH_MAX_HITS, Store, defaultDbPath, describeStoreErrorReason, describeStoreOpenFailure } from './core/store.js';
 import { describeFindings } from './core/findings.js';
-import { adoptIntoChain, blockedHint, chainStatus, chainUsage, collectTips, createChainSession, emptyChainBindHint, handoff, HandoffBlockedError, notCurrentChainWarning, rebindHint } from './core/handoff.js';
+import { adoptIntoChain, blockedHint, chainStatus, chainUsage, collectTips, createChainSession, currentChainShiftNote, emptyChainBindHint, handoff, HandoffBlockedError, notCurrentChainWarning, rebindHint } from './core/handoff.js';
 import { reindexCwd } from './core/search.js';
 import type { SessionRef } from './core/types.js';
 import { getAdapter, listAdapters, listProviders, noSessionHint, unknownProviderMessage } from './providers/registry.js';
@@ -322,12 +322,25 @@ async function cmdStatus(cwd: string, json: boolean, chain?: string): Promise<vo
 async function cmdSwitch(cwd: string, targetId: string, json: boolean, chain?: string): Promise<void> {
   const store = openStore();
   const cwdIssue = await cwdProblem(cwd);
+  // 写之前先记下当前链：handoff() 经 getOrCreateChainSession() 调 touchChain() 抬高
+  // `--chain` 指定那条的 last_used_at，而「当前链」就是按它算的——写完当前链就换人了
+  const previousChain = store?.findActiveChain(cwd) ?? null;
   try {
     const result = await handoff(targetId, cwd, listAdapters(), getAdapter, store, { chainId: chain });
     // 路径不对时 handoff 只会说「没有可接力的会话」，补上真正的原因
     if (cwdIssue) result.warnings.push(cwdIssue);
+    // 显式写了 --chain 却把当前链换走了，是这条命令最该说的一句：用户的动机恰恰是
+    // 「这一次操作那条链，别动当前链」，而输出只有「已从 X 交接 → Y」
+    const currentChain = store?.findActiveChain(cwd) ?? null;
+    const shiftNote = currentChainShiftNote(previousChain, currentChain);
     if (json) {
-      console.log(JSON.stringify({ ok: true, ...result }));
+      console.log(
+        JSON.stringify({
+          ok: true,
+          ...result,
+          ...(shiftNote ? { warnings: [...result.warnings, shiftNote], previousChain, currentChain } : {}),
+        }),
+      );
       return;
     }
     // 警告先打：alreadyAtTarget 分支同样可能带「读库/写链失败」，提前 return 会把它吞掉
@@ -354,6 +367,8 @@ async function cmdSwitch(cwd: string, targetId: string, json: boolean, chain?: s
     console.log(`文件:   ${result.newRef.filePath}`);
     console.log('');
     console.log(`resume: ${result.resumeCommand}`);
+    // 结果说明走 stdout（同 chain new / chain archive 的位置），不是降级警告
+    if (shiftNote) console.log(`\n${shiftNote}`);
     // exact 之外的处置（整文件重写、去重跳过等）--json 里一直有，文本模式也要说，否则看不出内容被改写过
     for (const line of describeFindings(result.findings ?? [])) console.error(`说明: ${line}`);
   } catch (error) {
@@ -378,6 +393,9 @@ async function cmdAdopt(
 ): Promise<void> {
   const store = openStore();
   const cwdIssue = await cwdProblem(cwd);
+  // 同 switch：adoptIntoChain() 经 getOrCreateChainSession() 抬高目标链的 last_used_at，
+  // 而「当前链」就是按它算的。先记下来，写完如实说明当前链是否被换走
+  const previousChain = store?.findActiveChain(cwd) ?? null;
   try {
     let targetRef: SessionRef | undefined;
     if (sessionId) {
@@ -447,9 +465,20 @@ async function cmdAdopt(
     // 与 switch 对齐：接入之后用户下一步就是打开这个会话，resume 命令不能只给 --json
     const adoptedAdapter = listAdapters().find((a) => a.id === result.adoptedRef.provider);
     const resumeCommand = adoptedAdapter ? adoptedAdapter.resumeCommand(result.adoptedRef) : undefined;
+    // 同 switch：显式 --chain 却把当前链换走了，必须在结果里说（空操作时链没被 touch，
+    // previousChain 与 currentChain 相同，自然不冒这句）
+    const currentChain = store?.findActiveChain(cwd) ?? null;
+    const shiftNote = currentChainShiftNote(previousChain, currentChain);
     if (json) {
       // `warnings` 只放降级原因，`note` 放结果说明（同 open 的 warnings / notes 分法）
-      console.log(JSON.stringify({ ok: true, ...result, ...(resumeCommand ? { resumeCommand } : {}) }));
+      console.log(
+        JSON.stringify({
+          ok: true,
+          ...result,
+          ...(shiftNote ? { warnings: [...result.warnings, shiftNote], previousChain, currentChain } : {}),
+          ...(resumeCommand ? { resumeCommand } : {}),
+        }),
+      );
       return;
     }
     // 与 switch 一致：警告先打（未写入链记录这类说明不能排在成功之后被漏看），且走 stderr
@@ -469,6 +498,8 @@ async function cmdAdopt(
       console.log('');
       console.log(`resume: ${resumeCommand}`);
     }
+    // 结果说明走 stdout（文本 mode 与 --json 的 warnings 同一条文案）
+    if (shiftNote) console.log(`\n${shiftNote}`);
   } catch (error) {
     if (error instanceof HandoffBlockedError || error instanceof PreflightBlockedError) failBlocked(error, json);
     const message = error instanceof Error ? error.message : String(error);
@@ -1142,9 +1173,7 @@ async function cmdChain(cwd: string, json: boolean, action?: string, a?: string,
       const chain = store.createChain(cwd, a);
       // 本目录第一条活跃链时没有「被换下的链」，此时不出声（每次建链都弹提示就是假警）
       const switchedFrom = previous && previous.id !== chain.id ? previous : null;
-      const switchNote = switchedFrom
-        ? `当前链已从「${switchedFrom.name}」换成「${chain.name}」；之后不带 --chain 的 status / switch / new / adopt 都作用在「${chain.name}」上（要回到原来那条用 watch chain use ${switchedFrom.name}）`
-        : null;
+      const switchNote = currentChainShiftNote(switchedFrom, switchedFrom ? chain : null);
       // 与 watch new 同理：路径错了照样建出链，但绑定指向不存在的项目，必须说明
       // （cwd 问题走降级警告通道；当前链变更走结果说明通道，见 `chain archive` 的同一分法）
       if (json) {
