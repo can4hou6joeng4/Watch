@@ -513,7 +513,7 @@ export async function chainUsage(
   /** 没有 usage 数据（原生无该字段 / 文件读不出，`sessionUsage` 返回 null）、同样没计入 total 的会话数：不说明会被当成「用量就是这么多」 */
   totalMissingUsage: number;
   byProvider: { provider: string; sessionId: string; usage: TokenUsage | null; error?: string }[];
-  /** 链上有绑定、但适配器根本不给用量（未实现 `sessionUsage`，当前 pi / opencode）：不列出来会被当成「这一家没有用量」 */
+  /** 链上有绑定、但适配器根本不给用量（未实现 `sessionUsage`，当前 pi）：不列出来会被当成「这一家没有用量」 */
   unsupported: string[];
   /** 用量读不出来的会话：null 可能是「原生没有 usage」，这里单独说明是真失败 */
   warnings: string[];
@@ -558,7 +558,7 @@ export async function chainUsage(
   let total = { ...empty };
   let totalExcluded = 0;
   let totalMissingUsage = 0;
-  // 链上绑定了也没法统计的 provider（适配器未实现 sessionUsage，如 pi / opencode）：
+  // 链上绑定了也没法统计的 provider（适配器未实现 sessionUsage，如 pi）：
   // 直接 continue 会让「按会话」里少一行，用户看成分家没有用量
   const unsupported: string[] = [];
   for (const adapter of adapters) {

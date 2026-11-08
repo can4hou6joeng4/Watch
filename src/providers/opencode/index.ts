@@ -1,7 +1,7 @@
 import { spawn } from 'node:child_process';
 import { describeDetectFailure, isCommandMissing, resolveCli } from '../../core/platform.js';
 import type { ProviderAdapter } from '../adapter.js';
-import type { ProcessEvent, SessionRef, UnifiedTurn } from '../../core/types.js';
+import type { ProcessEvent, SessionRef, TokenUsage, UnifiedTurn } from '../../core/types.js';
 import { parseOpencodeSession } from './parse.js';
 import {
   createEmptyOpencodeSession,
@@ -85,6 +85,35 @@ export {
   opencodeDbPath,
 };
 
+/**
+ * 信息层：链上这条 opencode 会话一共用了多少 token。
+ *
+ * 口径刻意与搬运层复用同一个 `parseOpencodeSession()`，而不是直接累加 `message.data.tokens`：
+ * ① `messageUsage()` 已按 OpenCode 的非重叠分解求和（input + cache.read + cache.write、
+ *    output + reasoning），两条路径共用一份折算，不会再分叉；
+ * ② Watch 自己写出的工具轮把**同一份** usage 写在两条 message 上（tool-calls 与
+ *    final text），直接累加 message 行会翻倍，而 parse 已把它们合并成一个 turn、
+ *    用量只留一份；
+ * ③ 0/0 占位在 `messageUsage()` 里已被丢弃，不会把「源侧没有用量」算成真实 0 token。
+ *
+ * 没有 assistant usage 时返回 null（表示「原生没有用量记录」），读不出来照常抛出——
+ * 与另外五家 `sessionUsage` 的约定一致，`chainUsage()` 会据此区分 `totalMissingUsage`
+ * 与读取失败。
+ */
+async function opencodeSessionUsage(ref: SessionRef): Promise<TokenUsage | null> {
+  const turns = await parseOpencodeSession(ref);
+  let inputTokens = 0;
+  let outputTokens = 0;
+  let saw = false;
+  for (const turn of turns) {
+    if (!turn.usage) continue;
+    saw = true;
+    inputTokens += turn.usage.inputTokens;
+    outputTokens += turn.usage.outputTokens;
+  }
+  return saw ? { inputTokens, outputTokens } : null;
+}
+
 export const opencodeAdapter: ProviderAdapter = {
   id: 'opencode',
   displayName: 'OpenCode',
@@ -141,6 +170,7 @@ export const opencodeAdapter: ProviderAdapter = {
   findLatestSession: findLatestOpencodeSession,
   listSessions: listOpencodeSessions,
   findById: findOpencodeSessionById,
+  sessionUsage: opencodeSessionUsage,
 
   async createEmptySession(cwd: string): Promise<SessionRef> {
     return createEmptyOpencodeSession(cwd);
