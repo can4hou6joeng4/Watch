@@ -637,6 +637,13 @@ export type ProviderTip = {
   ref: SessionRef;
   updatedAt: number;
   onChain?: boolean;
+  /**
+   * 文件列得出来、但读不出来（`chmod 000` 之类）。
+   *
+   * `updatedAt` / `filePath` 都只是元数据，`stat` 对读不出来的文件照常成功，所以不加这一档时
+   * `status` 会把一条 open / switch 必然失败的会话当成「最新原生会话」正常展示。
+   */
+  unreadable?: boolean;
 };
 
 export type HandoffResult = {
@@ -799,7 +806,27 @@ export async function chainStatus(
       boundIds.set(h.toProvider, (boundIds.get(h.toProvider) ?? new Set()).add(h.toRef.sessionId));
     }
   }
-  const tips = allTips.map((t) => ({ ...t, onChain: boundIds.get(t.provider)?.has(t.ref.sessionId) ?? false }));
+  // `findLatestSession` 只说明「目录里有这条会话」，`stat` 对 `chmod 000` 的文件照常成功，
+  // 于是 `status` 会把一条 open / switch 一读内容就失败的会话当成「最新原生会话」正常展示。
+  // 链尾读不出来上面已经逐档说过（带链名与下一步），这里只报其余 tip，同一份文件不重复警告；
+  // `tips[].unreadable` 这条事实照常带出，文本模式也照常标出
+  const warnedFiles = new Set<string>();
+  if (chainTipUnusable && chainTip) warnedFiles.add(chainTip.ref.filePath);
+  const tips: ProviderTip[] = [];
+  for (const t of allTips) {
+    const readProblem = await probeSessionReadable(t.ref.filePath);
+    if (readProblem && !warnedFiles.has(t.ref.filePath)) {
+      warnings.push(
+        `${t.provider} 的最新会话 ${t.ref.sessionId} 的文件当前读不出来：${readProblem}；` +
+          'open / switch 读这条会话时同样会失败——先确认该文件可读（权限、路径）再重试',
+      );
+    }
+    tips.push({
+      ...t,
+      onChain: boundIds.get(t.provider)?.has(t.ref.sessionId) ?? false,
+      ...(readProblem ? { unreadable: true } : {}),
+    });
+  }
   return { tips, chainTip, chainTipUnusable, unreadable, history, chain, chains, warnings };
 }
 

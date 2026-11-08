@@ -394,7 +394,12 @@ async function cmdStatus(cwd: string, json: boolean, chain?: string): Promise<vo
           ? ' ← 链尾'
           : '';
       const chainMark = tip.onChain ? ' 🔗' : '';
-      console.log(`  ${tip.provider.padEnd(8)} ${tip.ref.sessionId}  mtime=${fmtTime(tip.updatedAt)}${chainMark}${mark}`);
+      // 文件读不出来时必须标在行上：这一行本身就是「最新原生会话」的推荐，读者不会去猜
+      // 一条看起来正常的 mtime 背后打不开（原因已由上方警告给出）
+      const readMark = tip.unreadable ? '（文件读不出来，原因见上方警告）' : '';
+      console.log(
+        `  ${tip.provider.padEnd(8)} ${tip.ref.sessionId}  mtime=${fmtTime(tip.updatedAt)}${chainMark}${mark}${readMark}`,
+      );
       console.log(`           ${tip.ref.filePath}`);
     }
   }
