@@ -177,6 +177,23 @@ export function describeStoreErrorReason(error: unknown): string {
 }
 
 /**
+ * 这个错误是不是**本地库读写失败**（而不是业务结论）。
+ *
+ * 命令级 `catch` 里两者混在一个 `error.message` 上：SQLite 的
+ * `no such column: last_used_at` 既不说这是库的问题，也不给下一步，而
+ * 「链已归档」「未发现原生会话」这类已经是写好的中文结论，翻译反而会破坏它。
+ * 判定只看 SQLite 自己的错误码与几句话——`describeStoreErrorReason()` 认得的那些。
+ */
+export function isStoreError(error: unknown): boolean {
+  const code = (error as NodeJS.ErrnoException | undefined)?.code;
+  if (typeof code === 'string' && /^ERR_SQLITE_|^SQLITE_/.test(code)) return true;
+  const raw = error instanceof Error ? error.message : String(error);
+  return /no such table|no such column|has no column named|not a database|malformed|disk I\/O error|unable to open database file|database is (locked|busy)/i.test(
+    raw,
+  );
+}
+
+/**
  * 打开本地库失败的说明：带路径、原因与下一步。
  *
  * 这些字符串会原样进 `chain` / `search` 的 `{ ok:false, error }`、stderr 的降级提示与

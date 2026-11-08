@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 import { stat } from 'node:fs/promises';
 import path from 'node:path';
-import { chainsElsewhereHint, SEARCH_MAX_HITS, searchElsewhereHint, Store, defaultDbPath, describeStoreErrorReason, describeStoreOpenFailure } from './core/store.js';
-import type { ChainsElsewhere, SearchElsewhere } from './core/store.js';
+import { chainsElsewhereHint, isStoreError, SEARCH_MAX_HITS, searchElsewhereHint, Store, defaultDbPath, describeStoreErrorReason, describeStoreOpenFailure } from './core/store.js';
+import type { Chain, ChainsElsewhere, SearchElsewhere } from './core/store.js';
 import { describeFindings } from './core/findings.js';
 import { adoptIntoChain, blockedHint, chainStatus, chainUsage, collectTips, createChainSession, currentChainShiftNote, emptyChainBindHint, handoff, HandoffBlockedError, notCurrentChainWarning, rebindHint, storeUnavailableWarning } from './core/handoff.js';
 import { reindexCwd } from './core/search.js';
@@ -78,6 +78,42 @@ function fail(json: boolean, message: string, extra?: Record<string, unknown>): 
  */
 function failWithCwd(json: boolean, cwdIssue: string | null, message: string): never {
   fail(json, cwdIssue ? `${cwdIssue}；${message}` : message);
+}
+
+/**
+ * 命令级 `catch` 里把异常变成用户面文案：库故障翻成中文（带原因与下一步），其余原样带出。
+ *
+ * 以前这些 `catch` 一律 `error instanceof Error ? error.message : String(error)`，于是
+ * schema 少一列时 `usage` / `chain *` / `open --to` 直接回裸 `no such column: last_used_at`
+ * ——用户既看不出是库的问题，也拿不到「先备份再删三件套重建」这条下一步。同一状态下
+ * `status` / `doctor` 早就经 `describeStoreErrorReason()` 说了中文，两条口径互相矛盾。
+ * 业务结论（「链已归档」「未发现原生会话」「未知的 chain 子命令」）不走翻译，原样保留。
+ */
+function describeCommandError(error: unknown): string {
+  if (isStoreError(error)) return describeStoreOpenFailure(process.env.WATCH_DB ?? defaultDbPath(), error);
+  return error instanceof Error ? error.message : String(error);
+}
+
+/**
+ * 「只为记下前后对比」的 `findActiveChain`：读不出来就当没有，并披露一次。
+ *
+ * `switch` / `adopt` / `new` 都在命令级 `try` **之前**读一次当前链（有的还在成功路径末尾
+ * 再读一次），用途只有一个——判断「当前链有没有被换走」这条补充说明。可 schema 少一列时
+ * （`no such column: last_used_at`）这一读直接抛，`switch` / `adopt` 那次写在 `try` 外面，
+ * 异常逃出 `catch` 落到 `main().catch()`：`--json` 下一行 JSON 都没有，Rust 桥只能回
+ * 「CLI 无输出, exit=1」；`new` 的那次在 `try` 里，则会把一次**已经写好了会话**的成功
+ * 讲成失败。两种都是让一条补充说明毁掉整条命令，所以这里降级成「没有当前链」并披露。
+ */
+function safeActiveChain(store: Store | null, cwd: string, warnings: string[]): Chain | null {
+  if (!store) return null;
+  try {
+    return store.findActiveChain(cwd);
+  } catch (error) {
+    warnings.push(
+      `无法读取当前链（${describeStoreErrorReason(error)}）；本次操作照常进行，但不会提示「当前链是否被换走」`,
+    );
+    return null;
+  }
 }
 
 /** 写入被拒（目标被占用 / TOCTOU）：统一输出 `blocked:*` 结构；未写入任何内容，可重试 */
@@ -347,7 +383,7 @@ async function cmdStatus(cwd: string, json: boolean, chain?: string): Promise<vo
     result = await chainStatus(cwd, listAdapters(), store, chain, lastStoreError ?? undefined);
   } catch (error) {
     // 链名 / 目录都是精确匹配：目录写错时链同样查不到，失败时也要带出路径原因
-    failWithCwd(json, cwdIssue, error instanceof Error ? error.message : String(error));
+    failWithCwd(json, cwdIssue, describeCommandError(error));
   }
   if (cwdIssue) result.warnings.push(cwdIssue);
   // 零会话 + `--cwd` 是同一个目录的另一种写法（软链 / 大小写）：正文那句「未发现会话」是结论，
@@ -431,8 +467,10 @@ async function cmdSwitch(cwd: string, targetId: string, json: boolean, chain?: s
   const store = openStore();
   const cwdIssue = await cwdProblem(cwd);
   // 写之前先记下当前链：handoff() 经 getOrCreateChainSession() 调 touchChain() 抬高
-  // `--chain` 指定那条的 last_used_at，而「当前链」就是按它算的——写完当前链就换人了
-  const previousChain = store?.findActiveChain(cwd) ?? null;
+  // `--chain` 指定那条的 last_used_at，而「当前链」就是按它算的——写完当前链就换人了。
+  // 这一读只为事后对比，读不出来不能让整条命令崩在 try 外面（见 safeActiveChain）
+  const chainProbe: string[] = [];
+  const previousChain = safeActiveChain(store, cwd, chainProbe);
   try {
     const result = await handoff(targetId, cwd, listAdapters(), getAdapter, store, {
       chainId: chain,
@@ -440,9 +478,10 @@ async function cmdSwitch(cwd: string, targetId: string, json: boolean, chain?: s
     });
     // 路径不对时 handoff 只会说「没有可接力的会话」，补上真正的原因
     if (cwdIssue) result.warnings.push(cwdIssue);
+    result.warnings.push(...chainProbe);
     // 显式写了 --chain 却把当前链换走了，是这条命令最该说的一句：用户的动机恰恰是
     // 「这一次操作那条链，别动当前链」，而输出只有「已从 X 交接 → Y」
-    const currentChain = store?.findActiveChain(cwd) ?? null;
+    const currentChain = safeActiveChain(store, cwd, result.warnings);
     const shiftNote = currentChainShiftNote(previousChain, currentChain);
     if (json) {
       console.log(
@@ -496,7 +535,9 @@ async function cmdSwitch(cwd: string, targetId: string, json: boolean, chain?: s
     for (const line of describeFindings(result.findings ?? [])) console.error(`说明: ${line}`);
   } catch (error) {
     if (error instanceof HandoffBlockedError || error instanceof PreflightBlockedError) failBlocked(error, json);
-    const message = error instanceof Error ? error.message : String(error);
+    // 「当前链没读成」只在失败原因本身不是库故障时才补：库坏掉时下面那句已经带原因与下一步
+    const probe = !isStoreError(error) && chainProbe.length ? chainProbe.join('；') : '';
+    const message = [probe, describeCommandError(error)].filter(Boolean).join('；');
     // 目录本身有问题时，失败原因先说路径，否则「找不到来源会话」会被当成「目录里没东西」
     if (json) {
       console.log(JSON.stringify({ ok: false, error: cwdIssue ? `${cwdIssue}；${message}` : message }));
@@ -517,8 +558,10 @@ async function cmdAdopt(
   const store = openStore();
   const cwdIssue = await cwdProblem(cwd);
   // 同 switch：adoptIntoChain() 经 getOrCreateChainSession() 抬高目标链的 last_used_at，
-  // 而「当前链」就是按它算的。先记下来，写完如实说明当前链是否被换走
-  const previousChain = store?.findActiveChain(cwd) ?? null;
+  // 而「当前链」就是按它算的。先记下来，写完如实说明当前链是否被换走。
+  // 这一读只为事后对比，读不出来不能让整条写命令崩在 try 外面（见 safeActiveChain）
+  const chainProbe: string[] = [];
+  const previousChain = safeActiveChain(store, cwd, chainProbe);
   try {
     let targetRef: SessionRef | undefined;
     if (sessionId) {
@@ -635,9 +678,10 @@ async function cmdAdopt(
           }一执行就会失败，先修好这个文件再打开，或用 watch adopt <provider> --session <会话 id> 换成另一条会话`,
       );
     }
+    result.warnings.push(...chainProbe);
     // 同 switch：显式 --chain 却把当前链换走了，必须在结果里说（空操作时链没被 touch，
     // previousChain 与 currentChain 相同，自然不冒这句）
-    const currentChain = store?.findActiveChain(cwd) ?? null;
+    const currentChain = safeActiveChain(store, cwd, result.warnings);
     const shiftNote = currentChainShiftNote(previousChain, currentChain);
     if (json) {
       // `warnings` 只放降级原因，`note` 放结果说明（同 open 的 warnings / notes 分法）
@@ -672,7 +716,9 @@ async function cmdAdopt(
     if (shiftNote) console.log(`\n${shiftNote}`);
   } catch (error) {
     if (error instanceof HandoffBlockedError || error instanceof PreflightBlockedError) failBlocked(error, json);
-    const message = error instanceof Error ? error.message : String(error);
+    // 同 switch：「当前链没读成」只在失败原因本身不是库故障时才补，避免同一件事说两遍
+    const probe = !isStoreError(error) && chainProbe.length ? chainProbe.join('；') : '';
+    const message = [probe, describeCommandError(error)].filter(Boolean).join('；');
     if (json) console.log(JSON.stringify({ ok: false, error: cwdIssue ? `${cwdIssue}；${message}` : message }));
     else console.error(cwdIssue ? `${cwdIssue}；${message}` : message);
     process.exit(1);
@@ -759,7 +805,9 @@ async function cmdOpen(
     console.log(result.cd);
     console.log(result.resumeCommand);
   } catch (error) {
-    fail(json, error instanceof Error ? error.message : String(error));
+    // 半坏 schema（`REQUIRED_TABLES` 只查表名，缺列只在查询时才炸）下这里是 `open --to` 的
+    // 最后一道：裸 `no such column: xxx` 既不说这是库的问题，也给不出版本 / 重建的下一步
+    fail(json, describeCommandError(error));
   }
 }
 
@@ -948,7 +996,9 @@ async function cmdSessions(cwd: string, json: boolean, chain?: string): Promise<
     }
     if (unavailable.length) console.error(`未读取: ${unavailable.join('、')}（原生存储读取失败）`);
   } catch (error) {
-    fail(json, error instanceof Error ? error.message : String(error));
+    // 查询类命令同样会撞上坏库（`search_index` 缺列、`messages_fts` 缺表…）：
+    // 裸 SQLite 原文既不说这是库的问题，也给不出重建的下一步
+    fail(json, describeCommandError(error));
   }
 }
 
@@ -1117,7 +1167,9 @@ async function cmdProviders(json: boolean): Promise<void> {
       console.log(`  ${p.id.padEnd(10)} ${p.displayName.padEnd(12)} ${state}`);
     }
   } catch (error) {
-    fail(json, error instanceof Error ? error.message : String(error));
+    // 查询类命令同样会撞上坏库（`search_index` 缺列、`messages_fts` 缺表…）：
+    // 裸 SQLite 原文既不说这是库的问题，也给不出重建的下一步
+    fail(json, describeCommandError(error));
   }
 }
 
@@ -1232,7 +1284,9 @@ async function cmdDoctor(cwd: string, json: boolean, strict: boolean): Promise<v
     }
     if (failed || strictFailed) process.exitCode = 1;
   } catch (error) {
-    fail(json, error instanceof Error ? error.message : String(error));
+    // 查询类命令同样会撞上坏库（`search_index` 缺列、`messages_fts` 缺表…）：
+    // 裸 SQLite 原文既不说这是库的问题，也给不出重建的下一步
+    fail(json, describeCommandError(error));
   }
 }
 
@@ -1255,8 +1309,13 @@ async function cmdNew(cwd: string, providerId: string, json: boolean, chain?: st
   const store = openStore();
   const warnings: string[] = [];
   // 与 switch / adopt 同一处根因：两条分支都经 getOrCreateChainSession() → touchChain()
-  // 抬高 `--chain` 指定那条链的 last_used_at，而「当前链」就是按它算的。先记下来，写完如实说明
-  const previousChain = store?.findActiveChain(cwd) ?? null;
+  // 抬高 `--chain` 指定那条链的 last_used_at，而「当前链」就是按它算的。先记下来，写完如实说明。
+  // 这一读只为事后对比，读不出来不能让整条写命令崩在 try 外面（见 safeActiveChain）
+  const chainProbe: string[] = [];
+  const previousChain = safeActiveChain(store, cwd, chainProbe);
+  // 「当前链没读成」是这次操作本身的降级原因：两条成功分支都要带出（已有链分支会并进 allWarnings），
+  // 失败分支在 catch 里按「原因本身是不是库故障」决定要不要补
+  warnings.push(...chainProbe);
   // 目录不可用时 `new` 与查询类命令的后果完全不同：查询只是「列不出会话、显示 0」，
   // 而 `new` 会真的把会话写进原生存储（claude / pi / grok 落在自家目录，kimi 还要在 cwd 里跑一次 CLI），
   // 再往链上写一条绑定；随后打印的 resume 命令会在进入目录这一步失败。
@@ -1332,7 +1391,7 @@ async function cmdNew(cwd: string, providerId: string, json: boolean, chain?: st
       if (cwdWriteIssue) warnings.push(newSessionCwdWarning(cwdWriteIssue, ref.filePath));
       const resumeCommand = adapter.resumeCommand(ref);
       // 空链分支同样会 touchChain（getOrCreateChainSession 在建会话之后就跑过）
-      const currentChain = store?.findActiveChain(cwd) ?? null;
+      const currentChain = safeActiveChain(store, cwd, warnings);
       const shiftNote = currentChainShiftNote(previousChain, currentChain);
       for (const warning of warnings) console.error(`警告: ${warning}`);
       if (json) {
@@ -1362,7 +1421,7 @@ async function cmdNew(cwd: string, providerId: string, json: boolean, chain?: st
     // 已有链分支可能复用配对会话，也可能新建；无论哪种，只要目录进不去，resume 都会在这一步失败
     if (cwdWriteIssue) allWarnings.push(newSessionCwdWarning(cwdWriteIssue, result.newRef.filePath));
     // createChainSession() 内部同样经 getOrCreateChainSession() 写 last_used_at
-    const currentChain = store?.findActiveChain(cwd) ?? null;
+    const currentChain = safeActiveChain(store, cwd, allWarnings);
     const shiftNote = currentChainShiftNote(previousChain, currentChain);
     if (json) {
       console.log(
@@ -1383,7 +1442,9 @@ async function cmdNew(cwd: string, providerId: string, json: boolean, chain?: st
     // 结构化阻断（新建会话需要的原生 CLI 没装等）与 switch 走同一份输出：这两条都是写路径，
     // 脚本 / 桌面端只看 blocked / code，退回一句 error 文本就成了「内部错误」
     if (error instanceof HandoffBlockedError || error instanceof PreflightBlockedError) failBlocked(error, json);
-    const msg = error instanceof Error ? error.message : String(error);
+    // 同 switch / adopt：「当前链没读成」只在失败原因本身不是库故障时才补
+    const probe = !isStoreError(error) && chainProbe.length ? chainProbe.join('；') : '';
+    const msg = [probe, describeCommandError(error)].filter(Boolean).join('；');
     // 与 switch / adopt 一致：目录本身有问题时先说路径，否则「还没有切换链」会被当成「目录里没东西」
     const message = cwdIssue ? `${cwdIssue}；${msg}` : msg;
     if (json) console.log(JSON.stringify({ ok: false, error: message }));
@@ -1661,7 +1722,9 @@ async function cmdChain(cwd: string, json: boolean, action?: string, a?: string,
     // 用户看不出是子命令写错、也不知道有哪几个，得自己翻整页用法
     throw new Error(`未知的 chain 子命令: ${action}；可用: ${CHAIN_SUBCOMMANDS}`);
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
+    // 链库读写失败（缺列 / 表被改坏）时把原因翻成中文；业务结论（「链已归档」「找不到链」）
+    // 原样带出，翻译只会破坏已经写好的下一步
+    const message = describeCommandError(error);
     fail(json, cwdIssue ? `${cwdIssue}；${message}` : message);
   }
 }
@@ -1865,8 +1928,8 @@ async function cmdUsage(cwd: string, json: boolean, chain?: string): Promise<voi
       );
     }
   } catch (error) {
-    const msg = error instanceof Error ? error.message : String(error);
-    failWithCwd(json, cwdIssue, msg);
+    // 链库读写失败时把原因翻成中文（半坏 schema 下这里是第二条出口），业务结论原样带出
+    failWithCwd(json, cwdIssue, describeCommandError(error));
   }
 }
 
@@ -1953,7 +2016,9 @@ async function cmdSearch(cwd: string, json: boolean, query: string): Promise<voi
       console.error('提示: session id 前缀命中超过 10 个，只列出前 10 个，可用更长的 id 前缀缩小范围');
     }
   } catch (error) {
-    fail(json, error instanceof Error ? error.message : String(error));
+    // 查询类命令同样会撞上坏库（`search_index` 缺列、`messages_fts` 缺表…）：
+    // 裸 SQLite 原文既不说这是库的问题，也给不出重建的下一步
+    fail(json, describeCommandError(error));
   }
 }
 
