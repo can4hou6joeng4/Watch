@@ -1086,6 +1086,10 @@ async function cmdDoctor(cwd: string, json: boolean): Promise<void> {
       console.log(
         `本地库: 可用，本目录 ${report.store.chains} 条链（${report.store.activeChains} 条活跃${broken ? `，${broken} 条链尾缺失` : ''}${unreadable ? `，${unreadable} 条链尾状态无法确认` : ''}${drifted ? `，${drifted} 条链尾内容落后于来源` : ''}）`,
       );
+      // 上一行是结论：本目录没有链。别处有链时必须接着指路，否则会被当成链丢了 / 没建成功
+      if (!report.store.chains && report.store.chainsElsewhere.length) {
+        console.log(chainsElsewhereHint(report.store.chainsElsewhere));
+      }
       for (const d of report.store.driftedPairs) {
         console.log(
           `  链「${escapeControlChars(d.chainName)}」: ${d.from.provider}:${d.from.sessionId} → ${d.to.provider}:${d.to.sessionId}，缺 ${d.missingTurns}/${d.sourceTurns} 条`,

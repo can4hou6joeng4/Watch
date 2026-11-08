@@ -2,7 +2,7 @@ import { realpath, stat } from 'node:fs/promises';
 import type { ProviderAdapter } from '../providers/adapter.js';
 import { listAdapters, listProviders } from '../providers/registry.js';
 import type { ProviderInfo } from './types.js';
-import type { Chain } from './store.js';
+import type { Chain, ChainsElsewhere } from './store.js';
 import type { ImportJobs } from './import-jobs.js';
 import { defaultDbPath, describeStoreErrorReason } from './store.js';
 import { diffTurns, rebindHint } from './handoff.js';
@@ -58,7 +58,18 @@ export type DoctorReport = {
   providers: ProviderInfo[];
   storage: StorageProbe[];
   store:
-    | { available: true; chains: number; activeChains: number; brokenTips: BrokenTip[]; driftedPairs: DriftedPair[] }
+    | {
+        available: true;
+        chains: number;
+        activeChains: number;
+        /**
+         * 本地库里属于其它目录的链（本目录没有链时才有内容）。
+         * 「本目录 0 条链」是结论：不指出它在哪，用户会以为链丢了或没建成功。
+         */
+        chainsElsewhere: ChainsElsewhere[];
+        brokenTips: BrokenTip[];
+        driftedPairs: DriftedPair[];
+      }
     | { available: false; error: string };
   imports:
     | {
@@ -82,6 +93,8 @@ export type DoctorReport = {
 /** 诊断用的最小 Store 面：列出当前 cwd 的链、读某条链的切换记录；测试可注入假实现 */
 export type DoctorStore = {
   listChains(cwd: string): Chain[];
+  /** 列出其它目录的链（可选：注入的假 Store 可以不给，报告里就是空数组） */
+  chainsElsewhere?(cwd: string): ChainsElsewhere[];
   listSwitchEvents?(chainId: string): {
     fromRef?: SessionRef | null;
     toRef?: SessionRef | null;
@@ -314,7 +327,24 @@ export async function doctorReport(cwd: string, deps: DoctorDeps): Promise<Docto
           }
         }
       }
-      store = { available: true, chains: chains.length, activeChains: activeChains.length, brokenTips, driftedPairs };
+      // 本目录没有链时，本地库里别的目录的链是排障的关键线索：
+      // 「本目录 0 条链」是结论，不指出它在哪就会被当成链丢了 / 没建成功
+      let chainsElsewhere: ChainsElsewhere[] = [];
+      if (!chains.length && deps.store.chainsElsewhere) {
+        try {
+          chainsElsewhere = deps.store.chainsElsewhere(cwd);
+        } catch {
+          // 补充说明而已：库读不出来时正文照常给，真正的库故障已由 listChains 那条处理
+        }
+      }
+      store = {
+        available: true,
+        chains: chains.length,
+        activeChains: activeChains.length,
+        chainsElsewhere,
+        brokenTips,
+        driftedPairs,
+      };
     } catch (error) {
       const reason = describeStoreErrorReason(error);
       store = { available: false, error: reason };
