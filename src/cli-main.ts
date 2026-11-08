@@ -1099,6 +1099,9 @@ async function cmdNew(cwd: string, providerId: string, json: boolean, chain?: st
     console.log(`resume: ${result.resumeCommand}`);
     if (shiftNote) console.log(`\n${shiftNote}`);
   } catch (error) {
+    // 结构化阻断（新建会话需要的原生 CLI 没装等）与 switch 走同一份输出：这两条都是写路径，
+    // 脚本 / 桌面端只看 blocked / code，退回一句 error 文本就成了「内部错误」
+    if (error instanceof HandoffBlockedError || error instanceof PreflightBlockedError) failBlocked(error, json);
     const msg = error instanceof Error ? error.message : String(error);
     // 与 switch / adopt 一致：目录本身有问题时先说路径，否则「还没有切换链」会被当成「目录里没东西」
     const message = cwdIssue ? `${cwdIssue}；${msg}` : msg;

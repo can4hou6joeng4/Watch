@@ -12,6 +12,7 @@ import { describePathReadFailureReason } from '../../core/read-text.js';
 import { verifyWrittenTurns } from '../../core/verify.js';
 import { parseKimiSession } from './parse.js';
 import type { ImportTurnsOpts } from '../adapter.js';
+import { cliMissingBlock, PreflightBlockedError } from '../adapter.js';
 import type { ProcessEvent, SessionRef, UnifiedTurn } from '../../core/types.js';
 
 const execFileAsync = promisify(execFile);
@@ -134,7 +135,10 @@ async function createRealKimiSession(cwd: string): Promise<{ sessionId: string; 
   } catch (error) {
     const err = error as NodeJS.ErrnoException & { stderr?: unknown; stdout?: unknown };
     if (err.code === 'ENOENT') {
-      throw new Error('找不到 kimi 命令：新建 Kimi 会话需要本机 PATH 中已安装并登录 kimi CLI');
+      // 与 `open --to` / `--check` 走同一份阻断：CLI 没装是**预期内的前置条件不满足**，
+      // 不是内部错误。以前这里抛裸 Error，`new` / `switch` 只能回一句「找不到 kimi 命令」，
+      // 既没有 blocked / code，也不说「未写入任何内容」——同一件事四条写路径两种口径
+      throw new PreflightBlockedError(cliMissingBlock('kimi', 'Kimi'));
     }
     const pick = (v: unknown): string => (typeof v === 'string' ? v.trim() : '');
     const detail = (pick(err.stderr) || pick(err.stdout) || err.message || String(error)).slice(0, 500);

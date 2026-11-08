@@ -6,7 +6,7 @@ import { Store, defaultDbPath, describeStoreErrorReason, describeStoreOpenFailur
 import { IS_WIN, stripDevicePrefix } from './core/platform.js';
 import type { SessionRef, TokenUsage, UnifiedTurn } from './core/types.js';
 import type { ProviderAdapter } from './providers/adapter.js';
-import { PreflightBlockedError } from './providers/adapter.js';
+import { cliMissingBlock, PreflightBlockedError } from './providers/adapter.js';
 import { getAdapter, listAdapters, unknownProviderMessage } from './providers/registry.js';
 import { countUnparsableJsonLines } from './core/jsonl.js';
 import {
@@ -933,11 +933,9 @@ export async function newSessionCliBlock(
     };
   }
   if (available) return undefined;
-  return {
-    code: 'cli_missing',
-    hint: `未写入任何内容；新建 ${target.displayName} 会话需要本机已安装并登录 ${target.id} CLI。`,
-    error: `${target.displayName} 未检测到：新建 ${target.id} 会话需要本机已安装并登录 ${target.id} CLI`,
-  };
+  // 文案与 new / switch 共用一份：同一件事（CLI 没装）四条写路径不许各说各的
+  const block = cliMissingBlock(target.id, target.displayName);
+  return { code: block.code, hint: block.hint ?? '', error: block.message };
 }
 
 function describePlan(target: ProviderAdapter, plan: OpenPlan): string {

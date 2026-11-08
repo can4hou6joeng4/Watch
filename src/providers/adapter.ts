@@ -18,6 +18,24 @@ export type PreflightBlock = {
   holders?: { pid: number; command: string }[];
 };
 
+/**
+ * 「新建会话需要原生 CLI，但这台机器上没有」的统一阻断。
+ *
+ * 同一个前置条件以前有四种说法：`open --to` / `--check` 走 `newSessionCliBlock()` 给结构化
+ * `blocked` + `code=cli_missing` + `hint`，而 `new` / `switch` 拿到的是适配器里抛的裸
+ * 「找不到 kimi 命令：…」——没有 `blocked`、不说「未写入任何内容」、也不给下一步。
+ * 桌面端与脚本只看 `.blocked` / `.code`，这两条写路径的失败于是只能当内部错误处理。
+ * 文案只写这一份：`newSessionCliBlock()` 与各适配器（当前是 kimi 的 `createRealKimiSession`）
+ * 都从这里取，改口径只改一处。
+ */
+export function cliMissingBlock(providerId: string, displayName: string): PreflightBlock {
+  return {
+    code: 'cli_missing',
+    message: `${displayName} 未检测到：新建 ${providerId} 会话需要本机已安装并登录 ${providerId} CLI`,
+    hint: `未写入任何内容；新建 ${displayName} 会话需要本机已安装并登录 ${providerId} CLI。`,
+  };
+}
+
 /** 适配器拒绝写入（目标被占用等）。调用方应把它转成结构化输出，不要当作内部错误 */
 export class PreflightBlockedError extends Error {
   readonly block: PreflightBlock;
