@@ -1277,7 +1277,24 @@ export async function handoff(
     };
   }
 
+  // 目标会话被截成 0 字节时（进程被杀 / 只写了一半 / 磁盘满），`parse` 只得到 0 轮，
+  // 增量于是等于「来源的全部内容」，与「目标还是个空壳」逐字相同。以前这里直接写进去，
+  // 结果里只有「已从 X 交接 → Y（N 轮）」，用户不知道 Y 侧原有的历史已经没了——而
+  // `open <目标> --from <来源>` 对同一形状早已披露（`zeroByteSessionReason`），`switch`
+  // 又是 resume 命令最常被复制的地方，不能比它更安静。必须在 `guardedWrite` **之前**探：
+  // 写完之后文件就不再是 0 字节了。
+  const emptiedTargetFile = into && destTurns.length === 0 ? await probeSessionReadable(into.filePath) : null;
+  const emptiedTarget =
+    emptiedTargetFile && isEmptySessionFileReason(emptiedTargetFile) ? emptiedTargetFile : null;
+
   const newRef = await guardedWrite(dedupeCallEvents(outgoing), replace ? { replace: true } : undefined);
+  if (emptiedTarget && into) {
+    warnings.push(
+      `目标会话 ${into.sessionId}（${target.displayName}）的${emptiedTarget}；` +
+        `它原有的历史已经没了，本次并入的只有来源会话 ${sourceTip.ref.sessionId}（${source.displayName}）的 ${outgoing.length} 轮内容` +
+        `——如果这条会话本该有更早的历史，先从备份恢复那次丢失的内容（Watch 不会替你重建历史）`,
+    );
+  }
   if (replace) addFinding(findings, 'handoff.rewrite', 'degraded', destTurns.length);
   else addFinding(findings, 'handoff.append', 'exact', outgoing.length);
   // 追加之后最后一条 turn 已是并入的内容，「最后停在用户消息上」不再成立（merged > 0 只报
