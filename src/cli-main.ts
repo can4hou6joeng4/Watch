@@ -668,6 +668,12 @@ async function cmdStatus(cwd: string, json: boolean, chain?: string): Promise<vo
 }
 
 async function cmdSwitch(cwd: string, targetId: string, json: boolean, chain?: string): Promise<void> {
+  // provider id 是注册表键（`adapters` 里的 `a.id`：claude / codex / pi / kimi / opencode / grok），
+  // 六家全是固定小写、无空白——与链名 / 会话 id 同一类「写入侧从不产生首尾空白」的标识符，
+  // 所以对它做 `trimUserKey()` 同样**无损**（见 `src/core/cli-input.ts`）。
+  // 不归一的话 `switch " claude "` 会回「未知 provider:  claude ；可用: claude / codex / …」——
+  // 清单里正含那个名字，而多出来的空白在终端上几乎看不见，用户只会反复核对一串正确的拼写。
+  targetId = trimUserKey(targetId);
   const store = openStore();
   const cwdIssue = await cwdProblem(cwd);
   // 写之前先记下当前链：handoff() 经 getOrCreateChainSession() 调 touchChain() 抬高
@@ -774,6 +780,8 @@ async function cmdAdopt(
   // 是精确比较，不归一就会「id 一个字符都没抄错、只是从表格里连空格复制了」却回「找不到会话」。
   // 会话 id 是各家 CLI 生成的 UUID，去掉首尾空白不可能指向另一条会话（见 `src/core/cli-input.ts`）
   if (sessionId !== undefined) sessionId = trimUserKey(sessionId);
+  // provider id 同理：注册表键固定小写、无空白，归一无损（与 cmdSwitch 同一段论证）
+  providerId = trimUserKey(providerId);
   const store = openStore();
   const cwdIssue = await cwdProblem(cwd);
   // 同 switch：adoptIntoChain() 经 getOrCreateChainSession() 抬高目标链的 last_used_at，
@@ -1002,6 +1010,12 @@ async function cmdOpen(
   check?: boolean,
   cwdGiven = false,
 ): Promise<void> {
+  // `--to` / `--provider` 的取值都是 provider id（注册表键），归一无损：
+  // 不归一的话 `open --to " codex "` 与 `open <id> --provider " claude "` 都会回
+  // 「未知 provider:  codex ；可用: …」——清单里正含那个名字，肉眼却看不出多出来的空白。
+  // 与 cmdSwitch 同一段论证；会话 id（targetId / fromId）的归一在 `src/open.ts` 里做。
+  if (providerId !== undefined) providerId = trimUserKey(providerId);
+  if (toId !== undefined) toId = trimUserKey(toId);
   // open 按 session id 全局反查，目录由会话自身记录决定；显式给的 --cwd 不参与任何一步。
   // 静默忽略会让人以为「只在某个目录里查」——必须说出来。
   const cwdIgnored = cwdGiven
@@ -1638,6 +1652,8 @@ function chainCwdWarning(reason: string, chainName: string): string {
 }
 
 async function cmdNew(cwd: string, providerId: string, json: boolean, chain?: string): Promise<void> {
+  // provider id 是注册表键，归一无损（与 cmdSwitch 同一段论证）
+  providerId = trimUserKey(providerId);
   const store = openStore();
   const warnings: string[] = [];
   // 与 switch / adopt 同一处根因：两条分支都经 getOrCreateChainSession() → touchChain()
