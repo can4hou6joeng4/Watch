@@ -797,7 +797,7 @@ export async function collectTips(
       unreadableReasons?.push({ provider: adapter.id, reason });
       // 单个 provider 的原生存储读不出来时跳过，不影响其它家，但要披露；原因按路径说（这里
       // 可能是目录 / 索引 / 库），不能把 `EACCES: permission denied, scandir '…'` 原文交给用户
-      warnings?.push(`${adapter.id} 原生会话读取失败，已跳过：${reason}`);
+      warnings?.push(`${adapter.id} 原生会话读取失败，已跳过：${escapeControlChars(reason)}`);
       continue;
     }
     if (found) tips.push({ provider: adapter.id, ref: found.ref, updatedAt: found.updatedAt });
@@ -1034,7 +1034,7 @@ export async function handoff(
     // 存储 chmod 000）`watch switch codex --json` 的 error 只有「未发现原生会话；…把 --cwd 换成
     // /private/var/… 重试…请先在任一受支持的 Agent 里开聊」，一个字都没提那两次读取失败。
     if (unreadableTips.length) {
-      const detail = unreadableReasons.map((u) => `${u.provider}（${u.reason}）`).join('；');
+      const detail = unreadableReasons.map((u) => `${u.provider}（${escapeControlChars(u.reason)}）`).join('；');
       throw new Error(
         `无法确认这个目录里有没有可交接的会话：${detail}——这不代表这里没有会话，` +
           `先修好这些会话存储（权限、路径或库状态）再重试；本次未写入任何内容`,

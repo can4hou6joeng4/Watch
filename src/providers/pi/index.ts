@@ -6,6 +6,7 @@ import { promisify } from 'node:util';
 import { SessionLookupFailureError } from '../adapter.js';
 import type { ProviderAdapter } from '../adapter.js';
 import { digestFile, type FileDigest } from '../../core/atomic.js';
+import { escapeControlChars } from '../../core/display.js';
 import {
   describeEmptySessionFile,
   describePathReadFailureReason,
@@ -44,7 +45,7 @@ export async function listPiSessions(
     // 否则权限或路径出错会被讲成「这个目录没聊过」
     if (code === 'ENOENT' || code === 'ENOTDIR') return [];
     throw new Error(
-      `无法读取 Pi 会话目录 ${dir}：${describePathReadFailureReason(error)}`,
+      `无法读取 Pi 会话目录 ${escapeControlChars(dir)}：${describePathReadFailureReason(error)}`,
     );
   }
   const items: { ref: SessionRef; updatedAt: number; previewError?: string }[] = [];
@@ -69,7 +70,7 @@ export async function listPiSessions(
       // 列目录到取状态之间被删掉算正常；其余读不出来不能静默跳过——列表因此不完整
       if (code === 'ENOENT' || code === 'ENOTDIR') continue;
       throw new Error(
-        `无法读取 Pi 会话文件状态 ${filePath}：${describePathReadFailureReason(error)}`,
+        `无法读取 Pi 会话文件状态 ${escapeControlChars(filePath)}：${describePathReadFailureReason(error)}`,
       );
     }
   }
@@ -123,7 +124,7 @@ export async function findPiSessionById(
     if (isMissingPathError(error)) return null;
     throw new SessionLookupFailureError(
       'incomplete',
-      `无法列出 Pi 会话目录 ${root}：${describePathReadFailureReason(error)}`,
+      `无法列出 Pi 会话目录 ${escapeControlChars(root)}：${describePathReadFailureReason(error)}`,
     );
   }
   const unreadable: string[] = [];
@@ -135,7 +136,7 @@ export async function findPiSessionById(
     } catch (error) {
       const code = (error as NodeJS.ErrnoException).code;
       if (code !== 'ENOENT' && code !== 'ENOTDIR') {
-        unreadable.push(`${path.join(root, dir)}（${describePathReadFailureReason(error)}）`);
+        unreadable.push(`${escapeControlChars(path.join(root, dir))}（${describePathReadFailureReason(error)}）`);
       }
       continue;
     }
@@ -148,25 +149,25 @@ export async function findPiSessionById(
     } catch (error) {
       const code = (error as NodeJS.ErrnoException).code;
       if (code !== 'ENOENT' && code !== 'ENOTDIR') {
-        unreadable.push(`${filePath}（${describePathReadFailureReason(error)}）`);
+        unreadable.push(`${escapeControlChars(filePath)}（${describePathReadFailureReason(error)}）`);
       }
       continue;
     }
     const { cwd, error } = await piSessionCwdDetail(filePath);
     if (cwd) return { ref: { provider: 'pi', sessionId, filePath, cwd }, updatedAt: st.mtimeMs };
     // 文件确实在，只是读不出 cwd：结论不能是「会话不存在」
-    foundButUnreadable.push(`${filePath}（${error ?? '原因未知'}）`);
+    foundButUnreadable.push(`${escapeControlChars(filePath)}（${error ?? '原因未知'}）`);
   }
   if (foundButUnreadable.length) {
     throw new SessionLookupFailureError(
       'found-unreadable',
-      `找到会话文件 ${foundButUnreadable[0]}，但读不出它的工作目录，无法确认会话 ${sessionId}`,
+      `找到会话文件 ${escapeControlChars(foundButUnreadable[0])}，但读不出它的工作目录，无法确认会话 ${sessionId}`,
     );
   }
   if (unreadable.length) {
     throw new SessionLookupFailureError(
       'incomplete',
-      `在 ${root} 下没找到会话 ${sessionId}，但有 ${unreadable.length} 个位置读不出来，无法确认它是否存在：${unreadable[0]}`,
+      `在 ${escapeControlChars(root)} 下没找到会话 ${sessionId}，但有 ${unreadable.length} 个位置读不出来，无法确认它是否存在：${escapeControlChars(unreadable[0])}`,
     );
   }
   return null;

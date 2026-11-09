@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { copyFile, mkdir, open, readFile, rename, rm, stat } from 'node:fs/promises';
 import path from 'node:path';
+import { escapeControlChars } from './display.js';
 import { isFileSystemErrorCode } from './read-text.js';
 
 export type FileDigest = { sha256: string; sizeBytes: number };
@@ -19,7 +20,7 @@ export function describeWriteFailureReason(error: unknown): string | null {
   const code = (error as NodeJS.ErrnoException).code;
   if (!isFileSystemErrorCode(code)) return null;
   const rawPath = (error as NodeJS.ErrnoException).path;
-  const where = rawPath ? `：${rawPath}` : '';
+  const where = rawPath ? `：${escapeControlChars(rawPath)}` : '';
   switch (code) {
     case 'EACCES':
     case 'EPERM':

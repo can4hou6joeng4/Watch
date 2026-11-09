@@ -1,6 +1,7 @@
 import { lstat, readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { asRecord } from './app-server.js';
+import { escapeControlChars } from '../../core/display.js';
 
 const UUID = /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i;
 
@@ -26,13 +27,13 @@ function describeStateFileFailure(error: unknown, statePath: string): string {
     return '找不到 Codex Desktop 的本地项目状态；请先在桌面端把这个目录添加为项目，再导入';
   }
   if (code === 'ENOTDIR') {
-    return `Codex Desktop 项目状态路径上的某一级不是目录（被同名文件占住了？）：${statePath}；先修好这个路径，再重新预览`;
+    return `Codex Desktop 项目状态路径上的某一级不是目录（被同名文件占住了？）：${escapeControlChars(statePath)}；先修好这个路径，再重新预览`;
   }
   if (code === 'EACCES' || code === 'EPERM') {
-    return `Codex Desktop 的项目状态文件无权读取（权限或归属变了，不是文件内容坏了）：${statePath}；先确认当前用户能读取它，再重新预览`;
+    return `Codex Desktop 的项目状态文件无权读取（权限或归属变了，不是文件内容坏了）：${escapeControlChars(statePath)}；先确认当前用户能读取它，再重新预览`;
   }
   const reason = code ?? (error instanceof Error ? error.message : String(error));
-  return `Codex Desktop 的项目状态文件读不出来（${reason}）：${statePath}；先确认这个路径可读，再重新预览`;
+  return `Codex Desktop 的项目状态文件读不出来（${reason}）：${escapeControlChars(statePath)}；先确认这个路径可读，再重新预览`;
 }
 
 async function readCodexDesktopState(codexHome: string): Promise<Record<string, unknown>> {
@@ -57,7 +58,7 @@ async function readCodexDesktopState(codexHome: string): Promise<Record<string, 
   try {
     state = asRecord(JSON.parse(raw));
   } catch {
-    throw new Error(`Codex Desktop 项目状态无法解析（不是合法的 JSON 对象，桌面端可能只写了一半）：${statePath}；在桌面端重新打开该项目后再预览`);
+    throw new Error(`Codex Desktop 项目状态无法解析（不是合法的 JSON 对象，桌面端可能只写了一半）：${escapeControlChars(statePath)}；在桌面端重新打开该项目后再预览`);
   }
   return state;
 }

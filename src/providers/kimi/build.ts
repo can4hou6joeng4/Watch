@@ -160,8 +160,8 @@ export async function kimiIndexLoss(
       ? '文件是空的（0 字节，进程被杀或只写了一半，内容已丢失）'
       : '全部行都无法解析（截断或损坏，内容已丢失）';
   return (
-    `Kimi 会话索引 ${indexPath} 里没有任何可解析的记录：${what}，` +
-    `而 ${kimiSessionsRoot()} 下还有 ${onDisk} 个会话目录——这些会话无法归属到任何目录，` +
+    `Kimi 会话索引 ${escapeControlChars(indexPath)} 里没有任何可解析的记录：${what}，` +
+    `而 ${escapeControlChars(kimiSessionsRoot())} 下还有 ${onDisk} 个会话目录——这些会话无法归属到任何目录，` +
     '因此不会出现在任何目录的会话列表里，按 id 也查不到；这不代表它们不存在，' +
     '先确认索引文件能否从备份恢复（别直接删掉它）再重试'
   );
@@ -185,7 +185,7 @@ export async function listKimiSessionsByCwd(
     // 否则「索引损坏 / 没权限」会被讲成「这个目录没聊过」
     if (code === 'ENOENT' || code === 'ENOTDIR') return [];
     throw new Error(
-      `无法读取 Kimi 会话索引 ${indexPath}：${describePathReadFailureReason(error)}`,
+      `无法读取 Kimi 会话索引 ${escapeControlChars(indexPath)}：${describePathReadFailureReason(error)}`,
     );
   }
   let parseable = 0;
@@ -214,7 +214,7 @@ export async function listKimiSessionsByCwd(
       // wire 已删（索引陈旧）就跳过；其余读不出来不能静默丢——列表会少掉一条却毫无提示
       if (code === 'ENOENT' || code === 'ENOTDIR') continue;
       throw new Error(
-        `无法读取 Kimi 会话文件状态 ${wirePath}：${describePathReadFailureReason(error)}`,
+        `无法读取 Kimi 会话文件状态 ${escapeControlChars(wirePath)}：${describePathReadFailureReason(error)}`,
       );
     }
   }

@@ -265,7 +265,7 @@ export async function listGrokSessions(
     // 否则「权限 / 路径出错」会被讲成「这个目录没聊过」
     if (code === 'ENOENT' || code === 'ENOTDIR') return [];
     throw new Error(
-      `无法读取 Grok 会话目录 ${dir}：${describePathReadFailureReason(error)}`,
+      `无法读取 Grok 会话目录 ${escapeControlChars(dir)}：${describePathReadFailureReason(error)}`,
     );
   }
 
@@ -307,10 +307,10 @@ export async function listGrokSessions(
         if (code === 'ENOENT' || code === 'ENOTDIR') continue;
         if (code === 'NOT_REGULAR_FILE') {
           throw new Error(
-            `会话 ${id} 的路径现在不是普通文件（被同名目录或设备文件占住了）：${chatPath}；无法把它当作会话读取，请先恢复该路径再重试`,
+            `会话 ${id} 的路径现在不是普通文件（被同名目录或设备文件占住了）：${escapeControlChars(chatPath)}；无法把它当作会话读取，请先恢复该路径再重试`,
           );
         }
-        throw new Error(`无法读取 Grok 会话文件状态 ${chatPath}：${describePathReadFailureReason(error)}`);
+        throw new Error(`无法读取 Grok 会话文件状态 ${escapeControlChars(chatPath)}：${describePathReadFailureReason(error)}`);
       }
     } else {
       // summary 已经给了时间，这次 stat 只为披露：它不参与「是否列出」与 updatedAt 的判定。
@@ -318,14 +318,14 @@ export async function listGrokSessions(
         const st = await stat(chatPath);
         previewError = st.isFile()
           ? emptySessionFileReasonFromStat(st, chatPath)
-          : `会话文件路径现在不是普通文件（被同名目录或设备文件占住了）：${chatPath}；请先恢复该路径`;
+          : `会话文件路径现在不是普通文件（被同名目录或设备文件占住了）：${escapeControlChars(chatPath)}；请先恢复该路径`;
       } catch (error) {
         const code = (error as NodeJS.ErrnoException).code;
         // summary 说这条会话在、会话文件却没了：`open` / resume 读的正是这份，不能当成正常的一条
         previewError =
           code === 'ENOENT' || code === 'ENOTDIR'
-            ? `会话文件已不存在：${chatPath}`
-            : `无法读取 Grok 会话文件状态 ${chatPath}：${describePathReadFailureReason(error)}`;
+            ? `会话文件已不存在：${escapeControlChars(chatPath)}`
+            : `无法读取 Grok 会话文件状态 ${escapeControlChars(chatPath)}：${describePathReadFailureReason(error)}`;
       }
     }
     const preview =
@@ -364,7 +364,7 @@ export async function findGrokSessionById(
     if (code === 'ENOENT' || code === 'ENOTDIR') return null;
     throw new SessionLookupFailureError(
       'incomplete',
-      `无法列出 Grok 会话目录 ${root}：${describePathReadFailureReason(error)}`,
+      `无法列出 Grok 会话目录 ${escapeControlChars(root)}：${describePathReadFailureReason(error)}`,
     );
   }
   const unreadable: string[] = [];
@@ -384,7 +384,7 @@ export async function findGrokSessionById(
       // 路径在但不是普通文件（被同名目录 / 设备文件占住）：会话确实存在，只是读不出来。
       // 静默 continue 会让最终返回 null 变成「这家没有这个会话」
       if (!st.isFile()) {
-        notRegularFile.push(chatPath);
+        notRegularFile.push(escapeControlChars(chatPath));
         continue;
       }
       const summary = await readSummary(path.join(sessionDir, 'summary.json'));
@@ -406,7 +406,7 @@ export async function findGrokSessionById(
       const code = (error as NodeJS.ErrnoException).code;
       // 这个目录里没有该会话是常态；读不出来（EACCES 等）要记下来，不能当成「没有」
       if (code !== 'ENOENT' && code !== 'ENOTDIR') {
-        unreadable.push(`${chatPath}（${describePathReadFailureReason(error)}）`);
+        unreadable.push(`${escapeControlChars(chatPath)}（${describePathReadFailureReason(error)}）`);
       }
       continue;
     }
@@ -420,7 +420,7 @@ export async function findGrokSessionById(
   if (unreadable.length) {
     throw new SessionLookupFailureError(
       'incomplete',
-      `在 ${root} 下没找到会话 ${sessionId}，但有 ${unreadable.length} 个位置读不出来，无法确认它是否存在：${unreadable[0]}`,
+      `在 ${escapeControlChars(root)} 下没找到会话 ${sessionId}，但有 ${unreadable.length} 个位置读不出来，无法确认它是否存在：${unreadable[0]}`,
     );
   }
   return null;

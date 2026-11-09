@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import { lstat, mkdir, open, readFile, readdir } from 'node:fs/promises';
 import path from 'node:path';
 import { writeFileAtomic, type FileDigest } from './atomic.js';
+import { escapeControlChars } from './display.js';
 import type { SessionRef } from './types.js';
 import type { ImportTarget } from '../providers/codex/import-target.js';
 import type { CodexDesktopProject } from '../providers/codex/desktop-project.js';

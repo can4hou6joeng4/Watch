@@ -55,11 +55,11 @@ async function fingerprint(ref: SessionRef): Promise<FileDigest> {
     // 所以这里只说「这一次没查成」，**不**承诺「本次未写入任何内容」——那句话在后者是假话。
     throw new Error(
       isMissingPathError(error)
-        ? `来源会话文件已不存在：${ref.filePath}（预览拿到路径之后被删除或移动了）；请确认这条会话还在，再重新 prepare`
-        : `无法读取来源会话文件 ${ref.filePath}：${describePathReadFailureReason(error)}；先修好它的权限或恢复路径，再重新 prepare`,
+        ? `来源会话文件已不存在：${escapeControlChars(ref.filePath)}（预览拿到路径之后被删除或移动了）；请确认这条会话还在，再重新 prepare`
+        : `无法读取来源会话文件 ${escapeControlChars(ref.filePath)}：${describePathReadFailureReason(error)}；先修好它的权限或恢复路径，再重新 prepare`,
     );
   }
-  if (!info.isFile()) throw new Error(`来源会话必须是普通文件，不能是符号链接：${ref.filePath}`);
+  if (!info.isFile()) throw new Error(`来源会话必须是普通文件，不能是符号链接：${escapeControlChars(ref.filePath)}`);
   const digest = await digestFile(ref.filePath);
   if (!digest) throw new Error('无法计算来源会话的指纹');
   return digest;
@@ -167,21 +167,21 @@ function notInProjectMessage(sourceId: string, cwd: string, found: ElsewhereSess
         `来源会话就在同一个目录的另一种写法下（不是「不属于这个项目」）：这个 id 的会话记录的工作目录是 ` +
         `${escapeControlChars(found.cwd)}（${escapeControlChars(found.filePath)}），而 --cwd 给的是 ${escapeControlChars(cwd)}；导入按路径字符串精确匹配` +
         '（符号链接、/var 与 /private/var 这类前缀、大小写都会一条都找不到）——' +
-        `把 --cwd 换成 ${found.cwd} 重跑同一条命令（其余参数照旧）——本次未写入任何内容`
+        `把 --cwd 换成 ${escapeControlChars(found.cwd)} 重跑同一条命令（其余参数照旧）——本次未写入任何内容`
       );
     case 'misplaced':
       return (
         `${what}；这个 id 的会话文件确实记录着工作目录 ${escapeControlChars(cwd)}，只是它不在按这个路径编码出来的项目目录里：` +
-        `${found.filePath}（那里应该是 ${found.expectedPath}）——把它移回该位置再重试——本次未写入任何内容`
+        `${escapeControlChars(found.filePath)}（那里应该是 ${escapeControlChars(found.expectedPath)}）——把它移回该位置再重试——本次未写入任何内容`
       );
     case 'other-directory':
       return (
         `${what}；这个 id 的会话记录的工作目录是 ${escapeControlChars(found.cwd)}，不是这次的 ${escapeControlChars(cwd)}（${escapeControlChars(found.filePath)}）——` +
-        `要导入它请把 --cwd 换成 ${found.cwd} 重跑，或确认是不是抄错了会话 id——本次未写入任何内容`
+        `要导入它请把 --cwd 换成 ${escapeControlChars(found.cwd)} 重跑，或确认是不是抄错了会话 id——本次未写入任何内容`
       );
     case 'unreadable':
       return (
-        `${what}；但按这个 id 在 ${found.filePath} 找到了会话文件，只是读不出它记录的工作目录：` +
+        `${what}；但按这个 id 在 ${escapeControlChars(found.filePath)} 找到了会话文件，只是读不出它记录的工作目录：` +
         `${found.reason}——无法判断它是否属于 ${escapeControlChars(cwd)}，先确认这个文件可读再重试——本次未写入任何内容`
       );
     case 'none':
@@ -481,7 +481,7 @@ export function createOfficialCodexImport(): OfficialCodexImport {
       // 路径被同名目录 / 设备文件占住时同样不能返回 null：这个 id 是对的，只是文件被换掉了
       if (!info.isFile()) {
         throw new Error(
-          `来源会话 ${id} 的路径现在不是普通文件：${filePath}（被同名目录或设备文件占住了）；` +
+          `来源会话 ${id} 的路径现在不是普通文件：${escapeControlChars(filePath)}（被同名目录或设备文件占住了）；` +
             '先恢复该路径再重试——本次未写入任何内容',
         );
       }

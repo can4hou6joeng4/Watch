@@ -6,6 +6,7 @@ import path from 'node:path';
 import { digestFile } from '../../core/atomic.js';
 import type { FileDigest } from '../../core/atomic.js';
 import { describeEmptySessionFile, describePathReadFailureReason, isMissingPathError } from '../../core/read-text.js';
+import { escapeControlChars } from '../../core/display.js';
 import { SessionLookupFailureError } from '../adapter.js';
 import type { ProviderAdapter } from '../adapter.js';
 import type { ProcessEvent, SessionRef, TokenUsage, UnifiedTurn } from '../../core/types.js';
@@ -172,7 +173,7 @@ export async function findKimiSessionById(
     if (isMissingPathError(error)) return null;
     throw new SessionLookupFailureError(
       'incomplete',
-      `无法读取 Kimi 会话索引 ${idxFile}：${describePathReadFailureReason(error)}`,
+      `无法读取 Kimi 会话索引 ${escapeControlChars(idxFile)}：${describePathReadFailureReason(error)}`,
     );
   }
   const unreadable: string[] = [];
@@ -192,7 +193,7 @@ export async function findKimiSessionById(
     const sessionDir = typeof rec.sessionDir === 'string' ? rec.sessionDir : '';
     const workDir = typeof rec.workDir === 'string' ? rec.workDir : '';
     if (!sessionDir || !workDir) {
-      unreadable.push(`${idxFile} 里该会话缺少 sessionDir / workDir`);
+      unreadable.push(`${escapeControlChars(idxFile)} 里该会话缺少 sessionDir / workDir`);
       continue;
     }
     const wirePath = path.join(sessionDir, 'agents', 'main', 'wire.jsonl');
@@ -201,7 +202,7 @@ export async function findKimiSessionById(
       // 路径在但不是普通文件（被同名目录 / 设备文件占住）：不能返回一个指向目录的 ref，
       // 否则这里报「找到了」，下游 parse / usage 才抛出裸 EISDIR（英文）
       if (!st.isFile()) {
-        unreadable.push(`${wirePath} 现在不是普通文件（被同名目录或设备文件占住了）`);
+        unreadable.push(`${escapeControlChars(wirePath)} 现在不是普通文件（被同名目录或设备文件占住了）`);
         continue;
       }
       return { ref: { provider: 'kimi', sessionId, filePath: wirePath, cwd: workDir }, updatedAt: st.mtimeMs };
@@ -210,8 +211,8 @@ export async function findKimiSessionById(
       // 索引里明确记着这个会话，wire 却没了 / 读不出来：都不是「会话不存在」
       unreadable.push(
         code === 'ENOENT' || code === 'ENOTDIR'
-          ? `${wirePath} 不存在（索引里有这条会话，可能已被删除）`
-          : `${wirePath}（${describePathReadFailureReason(error)}）`,
+          ? `${escapeControlChars(wirePath)} 不存在（索引里有这条会话，可能已被删除）`
+          : `${escapeControlChars(wirePath)}（${describePathReadFailureReason(error)}）`,
       );
       continue;
     }
@@ -219,7 +220,7 @@ export async function findKimiSessionById(
   if (unreadable.length) {
     throw new SessionLookupFailureError(
       'found-unreadable',
-      `Kimi 索引里有会话 ${sessionId}，但读不出它的会话文件，无法确认它是否可用：${unreadable[0]}`,
+      `Kimi 索引里有会话 ${sessionId}，但读不出它的会话文件，无法确认它是否可用：${escapeControlChars(unreadable[0])}`,
     );
   }
   // 索引里有些行损坏时，这个 id 可能正是随着坏行一起丢掉的那一条：磁盘上有它的目录，
@@ -230,7 +231,7 @@ export async function findKimiSessionById(
     if (wirePath) {
       throw new SessionLookupFailureError(
         'incomplete',
-        `Kimi 会话索引 ${idxFile} 里有 ${unparsable} 行无法解析，磁盘上存在会话 ${sessionId} 的目录（${wirePath}），` +
+        `Kimi 会话索引 ${escapeControlChars(idxFile)} 里有 ${unparsable} 行无法解析，磁盘上存在会话 ${sessionId} 的目录（${escapeControlChars(wirePath)}），` +
           '但它在索引里的那条记录已经损坏，读不出它属于哪个工作目录，因此无法确认它是否可用；' +
           '这不代表这个会话不存在——先确认索引文件能否从备份恢复（别直接删掉它）再重试',
       );

@@ -5,6 +5,7 @@ import { homedir, tmpdir } from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
 import { digestFile, type FileDigest } from '../../core/atomic.js';
+import { escapeControlChars } from '../../core/display.js';
 import { ImportJobs, type ImportJobPlan } from '../../core/import-jobs.js';
 import { resolveCli } from '../../core/platform.js';
 import type { SessionRef, UnifiedTurn } from '../../core/types.js';
@@ -131,11 +132,11 @@ export function opencodeNativeConfigDigest(source: NodeJS.ProcessEnv = process.e
 
 async function fingerprint(ref: SessionRef): Promise<FileDigest> {
   if (ref.provider === 'opencode' || !path.isAbsolute(ref.cwd) || !path.isAbsolute(ref.filePath)) {
-    throw new Error(`来源会话必须是本地非 OpenCode 会话（provider=${ref.provider}，路径=${ref.filePath}）`);
+    throw new Error(`来源会话必须是本地非 OpenCode 会话（provider=${ref.provider}，路径=${escapeControlChars(ref.filePath)}）`);
   }
-  if (!(await lstat(ref.filePath)).isFile()) throw new Error(`来源会话必须是普通文件，不能是符号链接：${ref.filePath}`);
+  if (!(await lstat(ref.filePath)).isFile()) throw new Error(`来源会话必须是普通文件，不能是符号链接：${escapeControlChars(ref.filePath)}`);
   const value = await digestFile(ref.filePath);
-  if (!value) throw new Error(`无法读取来源会话的文件摘要（读不出来或内容为空）：${ref.filePath}；请确认文件仍存在且可读`);
+  if (!value) throw new Error(`无法读取来源会话的文件摘要（读不出来或内容为空）：${escapeControlChars(ref.filePath)}；请确认文件仍存在且可读`);
   return value;
 }
 

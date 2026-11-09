@@ -6,6 +6,7 @@ import { promisify } from 'node:util';
 import { digestFile } from '../../core/atomic.js';
 import type { FileDigest } from '../../core/atomic.js';
 import { describeEmptySessionFile, describePathReadFailureReason, isMissingPathError } from '../../core/read-text.js';
+import { escapeControlChars } from '../../core/display.js';
 import { SessionLookupFailureError } from '../adapter.js';
 import type { ProviderAdapter } from '../adapter.js';
 import type { ProcessEvent, SessionRef, UnifiedTurn } from '../../core/types.js';
@@ -38,7 +39,7 @@ export async function findLatestClaudeSession(
     // 否则「权限 / 路径出错」会被讲成「这个目录没有会话」
     if (code === 'ENOENT' || code === 'ENOTDIR') return null;
     throw new Error(
-      `无法列出 Claude 会话目录 ${projectDir}：${describePathReadFailureReason(error)}`,
+      `无法列出 Claude 会话目录 ${escapeControlChars(projectDir)}：${describePathReadFailureReason(error)}`,
     );
   }
   let best: { filePath: string; sessionId: string; updatedAt: number } | null = null;
@@ -57,7 +58,7 @@ export async function findLatestClaudeSession(
       // 与 listClaudeSessions 同一规则：只有文件确实不在才跳过，读不出来要抛出
       if (code === 'ENOENT' || code === 'ENOTDIR') continue;
       throw new Error(
-        `无法读取 Claude 会话文件状态 ${filePath}：${describePathReadFailureReason(error)}`,
+        `无法读取 Claude 会话文件状态 ${escapeControlChars(filePath)}：${describePathReadFailureReason(error)}`,
       );
     }
   }
@@ -126,7 +127,7 @@ export async function findClaudeSessionById(
     if (isMissingPathError(error)) return null;
     throw new SessionLookupFailureError(
       'incomplete',
-      `无法列出 Claude 会话目录 ${root}：${describePathReadFailureReason(error)}`,
+      `无法列出 Claude 会话目录 ${escapeControlChars(root)}：${describePathReadFailureReason(error)}`,
     );
   }
   const unreadable: string[] = [];
@@ -141,20 +142,20 @@ export async function findClaudeSessionById(
       const code = (error as NodeJS.ErrnoException).code;
       // ENOENT / ENOTDIR：这个 projectDir 里没有该会话，正常跳过；其余是读不出来，要记下来
       if (code !== 'ENOENT' && code !== 'ENOTDIR') {
-        unreadable.push(`${filePath}（${describePathReadFailureReason(error)}）`);
+        unreadable.push(`${escapeControlChars(filePath)}（${describePathReadFailureReason(error)}）`);
       }
       continue;
     }
     // 路径在但不是普通文件（被同名目录 / 设备文件占住）：会话确实存在，只是读不出来。
     // 静默 continue 会让最终返回 null 变成「这家没有这个会话」，把人引去核对 id
     if (!st.isFile()) {
-      notRegularFile.push(filePath);
+      notRegularFile.push(escapeControlChars(filePath));
       continue;
     }
     const { cwd, error } = await claudeSessionCwdDetail(filePath);
     if (cwd) return { ref: { provider: 'claude', sessionId, filePath, cwd }, updatedAt: st.mtimeMs };
     // 文件确实在，只是读不出 cwd：继续找同名副本，但结论不能是「会话不存在」
-    foundButUnreadable.push(`${filePath}（${error ?? '原因未知'}）`);
+    foundButUnreadable.push(`${escapeControlChars(filePath)}（${error ?? '原因未知'}）`);
   }
   if (notRegularFile.length) {
     throw new SessionLookupFailureError(
@@ -171,7 +172,7 @@ export async function findClaudeSessionById(
   if (unreadable.length) {
     throw new SessionLookupFailureError(
       'incomplete',
-      `在 ${root} 下没找到会话 ${sessionId}，但有 ${unreadable.length} 个位置读不出来，无法确认它是否存在：${unreadable[0]}`,
+      `在 ${escapeControlChars(root)} 下没找到会话 ${sessionId}，但有 ${unreadable.length} 个位置读不出来，无法确认它是否存在：${unreadable[0]}`,
     );
   }
   return null;
@@ -192,7 +193,7 @@ export async function listClaudeSessions(
     // 目录不存在 = 这个 cwd 没聊过；读不出来要抛出，让 sessions / recent / doctor 披露
     if (code === 'ENOENT' || code === 'ENOTDIR') return [];
     throw new Error(
-      `无法读取 Claude 会话目录 ${projectDir}：${describePathReadFailureReason(error)}`,
+      `无法读取 Claude 会话目录 ${escapeControlChars(projectDir)}：${describePathReadFailureReason(error)}`,
     );
   }
   const items: { ref: SessionRef; updatedAt: number }[] = [];
@@ -212,7 +213,7 @@ export async function listClaudeSessions(
       // 整个目录都 stat 不出来时会被读成「这个 cwd 没聊过」
       if (code === 'ENOENT' || code === 'ENOTDIR') continue;
       throw new Error(
-        `无法读取 Claude 会话文件状态 ${filePath}：${describePathReadFailureReason(error)}`,
+        `无法读取 Claude 会话文件状态 ${escapeControlChars(filePath)}：${describePathReadFailureReason(error)}`,
       );
     }
   }

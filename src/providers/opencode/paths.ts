@@ -5,6 +5,7 @@ import path from 'node:path';
 import { describeWriteFailureReason } from '../../core/atomic.js';
 import { isMissingPathError } from '../../core/read-text.js';
 import { probeSqliteTables, readSqliteFileHead } from '../../core/sqlite-file.js';
+import { escapeControlChars } from '../../core/display.js';
 
 export function opencodeDbPath(): string {
   if (process.env.WATCH_OPENCODE_DB) return process.env.WATCH_OPENCODE_DB;
@@ -32,7 +33,7 @@ export function opencodeNativeDataRoot(
  */
 export function opencodeDbNotFileError(dbPath: string): Error {
   return new Error(
-    `OpenCode 数据库路径不是普通文件（被同名目录或设备文件占住了）：${dbPath}；无法读取或写入会话，请先恢复该路径再重试`,
+    `OpenCode 数据库路径不是普通文件（被同名目录或设备文件占住了）：${escapeControlChars(dbPath)}；无法读取或写入会话，请先恢复该路径再重试`,
   );
 }
 
@@ -76,7 +77,7 @@ function describeSqliteFailure(raw: string): { reason: string; hint: string } {
 export function opencodeDbSqliteError(dbPath: string, action: '打开' | '查询', error: unknown): Error {
   const raw = error instanceof Error ? error.message : String(error);
   const { reason, hint } = describeSqliteFailure(raw);
-  return new Error(`无法${action} OpenCode 数据库 ${dbPath}：${reason}——${hint}`);
+  return new Error(`无法${action} OpenCode 数据库 ${escapeControlChars(dbPath)}：${reason}——${hint}`);
 }
 
 /** 一张都没有就可能不是 opencode 的库；只要命中任意必备表就按 opencode 的库处理 */
@@ -107,14 +108,14 @@ export function ensureOpencodeDbDir(dbPath: string): void {
     // 落到下面的通用分支会变成「写入失败（EEXIST）」，看不出该挪走什么
     if (code === 'EEXIST') {
       throw new Error(
-        `无法使用 OpenCode 数据目录：${dir}——路径上的某一级是已存在的文件（不是目录）；` +
+        `无法使用 OpenCode 数据目录：${escapeControlChars(dir)}——路径上的某一级是已存在的文件（不是目录）；` +
           `本次未写入任何内容，先挪走占住它的文件再重试`,
       );
     }
     const reason = describeWriteFailureReason(error);
     if (!reason) {
       const raw = error instanceof Error ? error.message : String(error);
-      throw new Error(`无法使用 OpenCode 数据目录：${dir}（${raw}）；本次未写入任何内容`);
+      throw new Error(`无法使用 OpenCode 数据目录：${escapeControlChars(dir)}（${raw}）；本次未写入任何内容`);
     }
     // describeWriteFailureReason 的几条里只有部分带了「本次未写入」，补齐一次别再重复
     throw new Error(
@@ -139,7 +140,7 @@ export function assertUsableOpencodeDb(dbPath: string): void {
 
   if (!head.hasMagic) {
     throw new Error(
-      `OpenCode 数据库路径上已有一个不是有效的 SQLite 数据库的文件：${dbPath}（${head.size} 字节）。为避免把它覆盖成 opencode 的库，本次未写入任何内容；请先备份并挪走这个文件，或改用另一个 WATCH_OPENCODE_DB`,
+      `OpenCode 数据库路径上已有一个不是有效的 SQLite 数据库的文件：${escapeControlChars(dbPath)}（${head.size} 字节）。为避免把它覆盖成 opencode 的库，本次未写入任何内容；请先备份并挪走这个文件，或改用另一个 WATCH_OPENCODE_DB`,
     );
   }
   // 刚初始化、还没有任何表的库接管不破坏数据（opencode 首次运行前也可能长这样）
@@ -148,7 +149,7 @@ export function assertUsableOpencodeDb(dbPath: string): void {
   const probe = probeSqliteTables(dbPath);
   if ('error' in probe) {
     throw new Error(
-      `无法确认 OpenCode 数据库是不是 opencode 的库（表结构读不出来）：${dbPath}；` +
+      `无法确认 OpenCode 数据库是不是 opencode 的库（表结构读不出来）：${escapeControlChars(dbPath)}；` +
         `本次未写入任何内容——先确认该文件可读、并关掉可能占用它的 opencode 进程，再重试`,
     );
   }
@@ -156,7 +157,7 @@ export function assertUsableOpencodeDb(dbPath: string): void {
   if (probe.tables.some((t) => OPENCODE_KNOWN_TABLES.includes(t))) return;
 
   throw new Error(
-    `OpenCode 数据库路径上已有一个不是 opencode 的 SQLite 数据库：${dbPath}（表: ${probe.tables.slice(0, 5).join(' / ')}）。` +
+    `OpenCode 数据库路径上已有一个不是 opencode 的 SQLite 数据库：${escapeControlChars(dbPath)}（表: ${probe.tables.slice(0, 5).join(' / ')}）。` +
       `为避免把 opencode 的表写进别人的库，本次未写入任何内容；请改用另一个 WATCH_OPENCODE_DB；` +
       `如果这其实是 opencode 的库损坏了，先备份，再挪走它让 opencode 重建`,
   );
@@ -175,10 +176,10 @@ export async function probeOpencodeDbFile(dbPath: string): Promise<'missing' | '
     if (isMissingPathError(error)) return 'missing';
     const code = (error as NodeJS.ErrnoException).code;
     if (code === 'EACCES' || code === 'EPERM') {
-      throw new Error(`无法确认 OpenCode 数据库路径能否使用：无权限访问（权限问题，不是路径写错）：${dbPath}`);
+      throw new Error(`无法确认 OpenCode 数据库路径能否使用：无权限访问（权限问题，不是路径写错）：${escapeControlChars(dbPath)}`);
     }
     throw new Error(
-      `无法确认 OpenCode 数据库路径能否使用：读取路径状态失败（${code ?? (error instanceof Error ? error.message : String(error))}）：${dbPath}`,
+      `无法确认 OpenCode 数据库路径能否使用：读取路径状态失败（${code ?? (error instanceof Error ? error.message : String(error))}）：${escapeControlChars(dbPath)}`,
     );
   }
   if (!info.isFile()) throw opencodeDbNotFileError(dbPath);

@@ -72,7 +72,7 @@ async function newestJsonlPaths(sessionsDir: string, max: number, errors?: strin
       entries = await readdir(dir);
     } catch (error) {
       if (!isMissingPathError(error)) {
-        errors?.push(`${dir}（${describePathReadFailureReason(error)}）`);
+        errors?.push(`${escapeControlChars(dir)}（${describePathReadFailureReason(error)}）`);
       }
       return;
     }
@@ -86,7 +86,7 @@ async function newestJsonlPaths(sessionsDir: string, max: number, errors?: strin
         }
       } catch (error) {
         if (!isMissingPathError(error)) {
-          errors?.push(`${p}（${describePathReadFailureReason(error)}）`);
+          errors?.push(`${escapeControlChars(p)}（${describePathReadFailureReason(error)}）`);
         }
         continue;
       }

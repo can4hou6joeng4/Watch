@@ -46,7 +46,7 @@ async function collectRecentRolloutFiles(
     const code = (error as NodeJS.ErrnoException).code;
     // 根目录不存在 = 这台机器没用过 codex，空结果就是事实；读不出来则必须记下来
     if (code !== 'ENOENT' && code !== 'ENOTDIR') {
-      errors?.push(`${sessionsRoot}（${describePathReadFailureReason(error)}）`);
+      errors?.push(`${escapeControlChars(sessionsRoot)}（${describePathReadFailureReason(error)}）`);
     }
     return [];
   }
@@ -60,7 +60,7 @@ async function collectRecentRolloutFiles(
     } catch (error) {
       const code = (error as NodeJS.ErrnoException).code;
       if (code !== 'ENOENT' && code !== 'ENOTDIR') {
-        errors?.push(`${path.join(sessionsRoot, y)}（${describePathReadFailureReason(error)}）`);
+        errors?.push(`${escapeControlChars(path.join(sessionsRoot, y))}（${describePathReadFailureReason(error)}）`);
       }
       continue;
     }
@@ -74,7 +74,7 @@ async function collectRecentRolloutFiles(
       } catch (error) {
         const code = (error as NodeJS.ErrnoException).code;
         if (code !== 'ENOENT' && code !== 'ENOTDIR') {
-          errors?.push(`${path.join(sessionsRoot, y, m)}（${describePathReadFailureReason(error)}）`);
+          errors?.push(`${escapeControlChars(path.join(sessionsRoot, y, m))}（${describePathReadFailureReason(error)}）`);
         }
         continue;
       }
@@ -86,7 +86,7 @@ async function collectRecentRolloutFiles(
         } catch (error) {
           const code = (error as NodeJS.ErrnoException).code;
           if (code !== 'ENOENT' && code !== 'ENOTDIR') {
-            errors?.push(`${dayDir}（${describePathReadFailureReason(error)}）`);
+            errors?.push(`${escapeControlChars(dayDir)}（${describePathReadFailureReason(error)}）`);
           }
           continue;
         }
@@ -98,7 +98,7 @@ async function collectRecentRolloutFiles(
           } catch (error) {
             const code = (error as NodeJS.ErrnoException).code;
             if (code !== 'ENOENT' && code !== 'ENOTDIR') {
-              errors?.push(`${filePath}（${describePathReadFailureReason(error)}）`);
+              errors?.push(`${escapeControlChars(filePath)}（${describePathReadFailureReason(error)}）`);
             }
             continue;
           }
@@ -201,7 +201,7 @@ export async function findLatestCodexRollout(
     if (!metaCwd) {
       // 读不出来（EACCES 等）时它可能是本 cwd 的会话，不能当成「不属于这里」直接跳过；
       // 空文件 / 首行不是 JSON 属于会话内容不可用，跳过是既有语义
-      if (code) unreadCwd.push(`${f.filePath}（${cwdError ?? code}）`);
+      if (code) unreadCwd.push(`${escapeControlChars(f.filePath)}（${cwdError ?? code}）`);
       continue;
     }
     if (metaCwd !== cwd) continue;
@@ -214,7 +214,7 @@ export async function findLatestCodexRollout(
   if (incomplete) {
     // 有位置读不出来时「这个目录没有 Codex 会话」不是结论
     throw new Error(
-      `在 ${escapeControlChars(root)} 下没找到属于 ${escapeControlChars(cwd)} 的 Codex 会话，但有 ${incomplete} 个位置读不出来，无法确认是否存在：${walkErrors[0] ?? unreadCwd[0]}`,
+      `在 ${escapeControlChars(root)} 下没找到属于 ${escapeControlChars(cwd)} 的 Codex 会话，但有 ${incomplete} 个位置读不出来，无法确认是否存在：${escapeControlChars(walkErrors[0] ?? unreadCwd[0])}`,
     );
   }
   return null;
@@ -240,7 +240,7 @@ export async function listCodexRollouts(
     const { cwd: metaCwd, error: cwdError, code } = await rolloutCwdDetail(f.filePath);
     if (!metaCwd) {
       // 读不出来时可能正是本 cwd 的会话：静默跳过会让列表少一条且毫无提示
-      if (code) unreadCwd.push(`${f.filePath}（${cwdError ?? code}）`);
+      if (code) unreadCwd.push(`${escapeControlChars(f.filePath)}（${cwdError ?? code}）`);
       continue;
     }
     if (metaCwd !== cwd) continue;
@@ -251,7 +251,7 @@ export async function listCodexRollouts(
   if (incomplete) {
     // 静默少列会被读成「这个目录就这些会话」，必须让 sessions / recent / doctor 披露
     throw new Error(
-      `列出 Codex 会话时有不完整：有 ${incomplete} 个位置读不出来，列表可能少了几条：${walkErrors[0] ?? unreadCwd[0]}`,
+      `列出 Codex 会话时有不完整：有 ${incomplete} 个位置读不出来，列表可能少了几条：${escapeControlChars(walkErrors[0] ?? unreadCwd[0])}`,
     );
   }
   return Promise.all(
@@ -289,7 +289,7 @@ export async function codexUnattributableRollouts(
     const { cwd: metaCwd, error, code } = await rolloutCwdDetail(f.filePath);
     if (metaCwd || code) continue;
     count += 1;
-    if (samples.length < 3) samples.push(`${f.filePath}（${error ?? '原因未知'}）`);
+    if (samples.length < 3) samples.push(`${escapeControlChars(f.filePath)}（${error ?? '原因未知'}）`);
   }
   // summary 直接点名那一行：共用文案不写死 provider 名，但用户需要知道「修的是首行」
   return { count, samples, summary: 'session_meta 首行' };
@@ -309,7 +309,7 @@ export async function findCodexSessionById(
     if (walkErrors.length) {
       throw new SessionLookupFailureError(
         'incomplete',
-        `在 ${root} 下没找到会话 ${sessionId}，但有 ${walkErrors.length} 个位置读不出来，无法确认它是否存在：${walkErrors[0]}`,
+        `在 ${escapeControlChars(root)} 下没找到会话 ${sessionId}，但有 ${walkErrors.length} 个位置读不出来，无法确认它是否存在：${escapeControlChars(walkErrors[0])}`,
       );
     }
     return null;
@@ -320,7 +320,7 @@ export async function findCodexSessionById(
   if (!cwd) {
     throw new SessionLookupFailureError(
       'found-unreadable',
-      `找到 rollout 文件 ${filePath}，但读不出它的工作目录：${error ?? '原因未知'}`,
+      `找到 rollout 文件 ${escapeControlChars(filePath)}，但读不出它的工作目录：${error ?? '原因未知'}`,
     );
   }
   const fileRef: SessionRef = { provider: 'codex', sessionId, filePath, cwd };
@@ -663,7 +663,7 @@ export const codexAdapter: ProviderAdapter = {
       throw new PreflightBlockedError({
         code: 'codex_lock_unreadable',
         sessionId: ref.sessionId,
-        message: `无法读取 Codex 会话 ${ref.sessionId} 的 writer 锁状态（${lockPath}），已保守拒绝写入`,
+        message: `无法读取 Codex 会话 ${ref.sessionId} 的 writer 锁状态（${escapeControlChars(lockPath)}），已保守拒绝写入`,
         hint: '检查该路径的权限，或是否有同名文件占住了 thread-writer-locks 目录后重试；本次未写入任何内容。',
       });
     }
