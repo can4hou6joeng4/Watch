@@ -1,7 +1,8 @@
 import { execFile } from 'node:child_process';
 import { describeBrokenCommandStart, resolveCli } from '../../core/platform.js';
 import { readFileSync } from 'node:fs';
-import { readFile, stat } from 'node:fs/promises';
+import type { Dirent } from 'node:fs';
+import { readFile, readdir, stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
@@ -40,6 +41,69 @@ export function kimidir(): string {
 }
 
 /**
+ * 磁盘上真实存在的 Kimi 会话目录数（数到 `agents/main/wire.jsonl` 为止）。
+ *
+ * 用来分辨两种「索引里一条会话都查不到」：真没用过 Kimi（目录也是空的），与索引被截断 / 损坏
+ * （会话目录还在，只是没人记得它们属于哪个目录）。读不出来的目录**不计入**——查不出来就不能
+ * 反过来断言「磁盘上确实还有会话」。
+ */
+async function countKimiSessionDirs(): Promise<number> {
+  const root = kimiSessionsRoot();
+  let workspaces: Dirent[];
+  try {
+    workspaces = await readdir(root, { withFileTypes: true });
+  } catch {
+    return 0;
+  }
+  let total = 0;
+  for (const ws of workspaces) {
+    if (!ws.isDirectory()) continue;
+    let sessions: Dirent[];
+    try {
+      sessions = await readdir(path.join(root, ws.name), { withFileTypes: true });
+    } catch {
+      continue;
+    }
+    for (const s of sessions) {
+      if (!s.isDirectory()) continue;
+      try {
+        const st = await stat(path.join(root, ws.name, s.name, 'agents', 'main', 'wire.jsonl'));
+        if (st.isFile()) total += 1;
+      } catch {
+        // 没有 wire.jsonl 的目录不是会话；读不出来同样不计入
+      }
+    }
+  }
+  return total;
+}
+
+/**
+ * 「索引在、却一条可解析记录都没有，而磁盘上还有会话目录」时的说明；`null` = 不是这一档。
+ *
+ * 判据只有一处：`listKimiSessionsByCwd()`（列表 / `findLatestSession`）与 `findKimiSessionById()`
+ * （按 id 反查）都要区分「没用过 Kimi」与「索引已经没了」，两边各写一套必然跑偏。
+ */
+export async function kimiIndexLoss(
+  indexPath: string,
+  raw: string,
+  parseable: number,
+): Promise<string | null> {
+  if (parseable > 0) return null;
+  const onDisk = await countKimiSessionDirs();
+  if (onDisk === 0) return null;
+  const what =
+    raw.trim().length === 0
+      ? '文件是空的（0 字节，进程被杀或只写了一半，内容已丢失）'
+      : '全部行都无法解析（截断或损坏，内容已丢失）';
+  return (
+    `Kimi 会话索引 ${indexPath} 里没有任何可解析的记录：${what}，` +
+    `而 ${kimiSessionsRoot()} 下还有 ${onDisk} 个会话目录——这些会话无法归属到任何目录，` +
+    '因此不会出现在任何目录的会话列表里，按 id 也查不到；这不代表它们不存在，' +
+    '先确认索引文件能否从备份恢复（别直接删掉它）再重试'
+  );
+}
+
+/**
  * 通过 session_index.jsonl 把 workDir 映射到 session 目录。
  * 该文件由 Kimi 维护，比扫描目录更可靠。
  */
@@ -60,6 +124,7 @@ export async function listKimiSessionsByCwd(
       `无法读取 Kimi 会话索引 ${indexPath}：${describePathReadFailureReason(error)}`,
     );
   }
+  let parseable = 0;
   for (const line of raw.split('\n')) {
     if (!line.trim()) continue;
     let rec: Record<string, unknown>;
@@ -68,6 +133,7 @@ export async function listKimiSessionsByCwd(
     } catch {
       continue;
     }
+    parseable += 1;
     if (rec.workDir !== cwd) continue;
     const sessionDir = typeof rec.sessionDir === 'string' ? rec.sessionDir : '';
     const sessionId = typeof rec.sessionId === 'string' ? rec.sessionId : '';
@@ -88,6 +154,10 @@ export async function listKimiSessionsByCwd(
       );
     }
   }
+  // 索引读得出来、却一条记录都解析不出来时，「这个目录没有 Kimi 会话」是句结论而不是事实：
+  // 先看磁盘上还有没有会话目录（有就是索引被截断 / 损坏，得说「查不了」）
+  const loss = await kimiIndexLoss(indexPath, raw, parseable);
+  if (loss) throw new Error(loss);
   items.sort((a, b) => b.updatedAt - a.updatedAt);
   return items;
 }

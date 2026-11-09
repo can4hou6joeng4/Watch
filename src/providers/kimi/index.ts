@@ -14,6 +14,7 @@ import {
   encodeKimiWorkspaceDir,
   importTurnsToKimi,
   kimidir,
+  kimiIndexLoss,
   kimiSessionsRoot,
   listKimiSessionsByCwd,
 } from './build.js';
@@ -173,6 +174,7 @@ export async function findKimiSessionById(
     );
   }
   const unreadable: string[] = [];
+  let parseable = 0;
   for (const line of raw.split('\n')) {
     if (!line.trim()) continue;
     let rec: Record<string, unknown>;
@@ -181,6 +183,7 @@ export async function findKimiSessionById(
     } catch {
       continue;
     }
+    parseable += 1;
     if (rec.sessionId !== sessionId) continue;
     const sessionDir = typeof rec.sessionDir === 'string' ? rec.sessionDir : '';
     const workDir = typeof rec.workDir === 'string' ? rec.workDir : '';
@@ -215,6 +218,10 @@ export async function findKimiSessionById(
       `Kimi 索引里有会话 ${sessionId}，但读不出它的会话文件，无法确认它是否可用：${unreadable[0]}`,
     );
   }
+  // 索引里一条记录都解析不出来、磁盘上却还有会话目录：这不是「这家没有这个会话」，是查不了。
+  // 返回 null 会让 `open` 说「未找到会话…请确认 id 正确」，而 id 恰恰是抄对的
+  const loss = await kimiIndexLoss(idxFile, raw, parseable);
+  if (loss) throw new SessionLookupFailureError('incomplete', loss);
   return null;
 }
 
