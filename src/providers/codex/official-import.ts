@@ -1,14 +1,15 @@
 import { execFile } from 'node:child_process';
-import { lstat, realpath } from 'node:fs/promises';
+import { lstat, realpath, stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
 import { digestFile, type FileDigest } from '../../core/atomic.js';
 import { ImportJobs, type ImportOutcome, type ImportPlan } from '../../core/import-jobs.js';
 import { resolveCli } from '../../core/platform.js';
+import { describePathReadFailureReason, isEmptySessionFileReason, isMissingPathError } from '../../core/read-text.js';
 import type { SessionRef } from '../../core/types.js';
 import { claudeProjectsDir, encodeClaudeProjectDir } from '../claude/build.js';
-import { claudeSessionCwd } from '../claude/index.js';
+import { claudeSessionCwdDetail } from '../claude/index.js';
 import { asRecord, connectImportRpc, type ImportRpc, type RpcProfile } from './app-server.js';
 import {
   assertCodexDesktopThreadPlacement,
@@ -44,7 +45,19 @@ async function fingerprint(ref: SessionRef): Promise<FileDigest> {
   if (ref.provider !== 'claude' || !UUID.test(ref.sessionId) || !path.isAbsolute(ref.filePath) || !path.isAbsolute(ref.cwd)) {
     throw new Error('来源必须是本地 Claude Code 会话');
   }
-  if (!(await lstat(ref.filePath)).isFile()) throw new Error('来源会话必须是普通文件，不能是符号链接');
+  let info;
+  try {
+    info = await lstat(ref.filePath);
+  } catch (error) {
+    // 这个函数在 prepare 与 confirm 里都要跑：前者还没写盘，后者可能在导入已提交之后（L248 那次复核）。
+    // 所以这里只说「这一次没查成」，**不**承诺「本次未写入任何内容」——那句话在后者是假话。
+    throw new Error(
+      isMissingPathError(error)
+        ? `来源会话文件已不存在：${ref.filePath}（预览拿到路径之后被删除或移动了）；请确认这条会话还在，再重新 prepare`
+        : `无法读取来源会话文件 ${ref.filePath}：${describePathReadFailureReason(error)}；先修好它的权限或恢复路径，再重新 prepare`,
+    );
+  }
+  if (!info.isFile()) throw new Error(`来源会话必须是普通文件，不能是符号链接：${ref.filePath}`);
   const digest = await digestFile(ref.filePath);
   if (!digest) throw new Error('无法计算来源会话的指纹');
   return digest;
@@ -110,7 +123,16 @@ export class OfficialCodexImport {
     const version = await this.deps.version();
     if (version !== SUPPORTED_VERSION) throw new Error(`实验性导入路径目前只支持 ${SUPPORTED_VERSION}`);
     const source = await this.deps.findSource(sourceId, cwd);
-    if (!source || source.sessionId !== sourceId || source.cwd !== cwd) throw new Error('来源会话不属于指定的项目目录');
+    // 这句只在「内容读得出来、但 cwd 不是这个」时才成立：findSource 已经把「读不出来」单独抛出，
+    // 所以到这里 source 为 null 就确实是「不属于这个目录」。补上核对办法与「未写入」，否则用户
+    // 只能看到一句结论，不知道是 id 抄错还是 --cwd 指错了项目。
+    if (!source || source.sessionId !== sourceId || source.cwd !== cwd) {
+      throw new Error(
+        `来源会话不属于指定的项目目录：在 ${cwd} 下没有找到 id 为 ${sourceId} 的 Claude Code 会话` +
+          `（导入按目录定位，只在这个项目的会话目录里找）；可用 watch sessions --cwd ${cwd} 核对会话 id，` +
+          '或确认 --cwd 与当初开这个会话的工作目录一致后重试——本次未写入任何内容',
+      );
+    }
     const plan: ImportPlan = {
       schema: 1, route: 'claude-code-to-codex-official', source, digest: await fingerprint(source),
       cliVersion: version, codexHome: this.deps.codexHome, home: this.deps.home,
@@ -322,11 +344,42 @@ export function createOfficialCodexImport(): OfficialCodexImport {
     findSource: async (id, cwd) => {
       // Scope lookup to one project instead of scanning every Claude transcript.
       const filePath = path.join(claudeProjectsDir(), encodeClaudeProjectDir(cwd), `${id}.jsonl`);
-      if (!(await lstat(filePath)).isFile()) return null;
+      let info;
+      try {
+        // 用 `stat` 而不是 `lstat`：这里只看「按这个 id 找得到的是一个能读的会话文件吗」，
+        // 符号链接指向的真实文件照样算（下面 `realpath` 会统一到规范路径）。`fingerprint()` 刻意用
+        // `lstat` 拒绝符号链接是另一件事——那里要保证重算的摘要是同一个文件，不是同一个链接。
+        info = await stat(filePath);
+      } catch (error) {
+        // 这个目录里没有这个会话是正常的一档（ENOENT / ENOTDIR）：与 `findById` 同一条约定——
+        // 只有「找不到」才返回 null。其余是「没查成」，不能返回 null 冒充「这家没有这个会话」，
+        // 那会被 prepare() 讲成「不属于指定的项目目录」
+        if (isMissingPathError(error)) return null;
+        throw new Error(
+          `无法确认来源会话 ${id} 是否存在：${describePathReadFailureReason(error)}；本次未写入任何内容`,
+        );
+      }
+      // 路径被同名目录 / 设备文件占住时同样不能返回 null：这个 id 是对的，只是文件被换掉了
+      if (!info.isFile()) {
+        throw new Error(
+          `来源会话 ${id} 的路径现在不是普通文件：${filePath}（被同名目录或设备文件占住了）；` +
+            '先恢复该路径再重试——本次未写入任何内容',
+        );
+      }
       const canonical = await realpath(filePath);
-      return await claudeSessionCwd(canonical) === cwd
-        ? { provider: 'claude', sessionId: id, filePath: canonical, cwd }
-        : null;
+      const detail = await claudeSessionCwdDetail(canonical);
+      if (detail.cwd === cwd) return { provider: 'claude', sessionId: id, filePath: canonical, cwd };
+      // 内容读得出来、只是不属于这个目录：这才是真正的「不属于指定的项目目录」
+      if (detail.cwd !== null) return null;
+      // 读不出来（0 字节 / 权限 / 缺 cwd 字段）：claude 侧已经算好了中文原因，原样抛出。
+      // 以前这里用 claudeSessionCwd() 丢掉 error，三种完全不同的处境一起塌缩成上面那句假结论。
+      // 下一步按档分开：0 字节是内容已经没了（只能从备份恢复），格式 / 权限问题才是「先修好再重试」。
+      // `error` 在类型上是可选的（cwd 为 null 时它实际一定存在），兜底一句，免得把 `undefined` 拼进文案。
+      const reason = detail.error ?? '读不出它的工作目录（原因未知）';
+      const next = isEmptySessionFileReason(reason)
+        ? '如果这条会话本该有内容，先从备份恢复该文件（Watch 不会替你重建历史）再重试——本次未写入任何内容'
+        : '先确认这个文件的内容可以读取再重试——本次未写入任何内容';
+      throw new Error(`无法读取来源会话 ${id} 的内容：${reason}；${next}`);
     },
     connect: (cwd, canonicalHome, profile) => connectImportRpc(executable, cwd, { ...env, CODEX_HOME: canonicalHome }, profile),
   });
