@@ -1,6 +1,7 @@
 import path from 'node:path';
 import { parseArgs } from 'node:util';
 import { trimUserKey } from './core/cli-input.js';
+import { escapeControlChars } from './core/display.js';
 import { createOfficialCodexImport } from './providers/codex/official-import.js';
 
 const IMPORT_BOOLEAN_FLAGS = new Set(['json', 'experimental', 'desktop-project']);
@@ -132,7 +133,7 @@ export async function runImportCodex(args: string[]): Promise<void> {
         if (!project) missing.push('--project <UUID>');
       } else if (!values.cwd || !path.isAbsolute(values.cwd)) {
         missing.push(
-          values.cwd ? `--cwd 需要绝对路径，收到: ${values.cwd}` : '--cwd <绝对路径>',
+          values.cwd ? `--cwd 需要绝对路径，收到: ${escapeControlChars(values.cwd)}` : '--cwd <绝对路径>',
         );
       }
       if (missing.length) {
@@ -183,8 +184,8 @@ export async function runImportCodex(args: string[]): Promise<void> {
     if (json) console.log(JSON.stringify({ ok, ...result }));
     else {
       console.log(`计划: ${result.planId}\n状态: ${result.status}`);
-      if ('thread' in result.plan) console.log(`线程: ${result.plan.thread.sessionId}\n项目: ${result.plan.projectName} (${result.plan.projectId})\n目录: ${result.plan.thread.cwd}`);
-      else console.log(`来源: ${result.plan.source.sessionId}\n项目目录: ${result.plan.source.cwd}`);
+      if ('thread' in result.plan) console.log(`线程: ${result.plan.thread.sessionId}\n项目: ${result.plan.projectName} (${result.plan.projectId})\n目录: ${escapeControlChars(result.plan.thread.cwd)}`);
+      else console.log(`来源: ${result.plan.source.sessionId}\n项目目录: ${escapeControlChars(result.plan.source.cwd)}`);
       if ('evidenceScope' in result && result.status === 'associated') console.log('这里只记录关联结果；status 不查询实时项目成员关系。');
       console.log(`Codex 数据目录: ${result.plan.target?.path ?? result.plan.codexHome}`);
       if ('warnings' in result) for (const warning of result.warnings) console.error(`警告: ${warning}`);

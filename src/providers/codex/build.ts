@@ -3,6 +3,7 @@ import { homedir } from 'node:os';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { appendFileAtomic, writeFileAtomic } from '../../core/atomic.js';
+import { escapeControlChars } from '../../core/display.js';
 import { verifyWrittenTurns } from '../../core/verify.js';
 import { ENCRYPTED_THINKING, codexToolInput, toCodexToolName, turnHasContent } from '../../core/rich.js';
 import { describePathReadFailureReason, isMissingPathError } from '../../core/read-text.js';
@@ -408,7 +409,7 @@ export async function importTurnsToCodex(
   buildOpts?: { includeMeta?: boolean; requireUser?: boolean },
 ): Promise<SessionRef> {
   if (!path.isAbsolute(cwd)) {
-    throw new Error(`cwd 必须是绝对路径: ${cwd}`);
+    throw new Error(`cwd 必须是绝对路径: ${escapeControlChars(cwd)}`);
   }
   const now = new Date();
   const provider = await readModelProvider(codexDir());

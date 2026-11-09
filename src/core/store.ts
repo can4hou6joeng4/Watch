@@ -3,7 +3,7 @@ import { chmodSync, mkdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { homedir } from 'node:os';
 import { randomUUID } from 'node:crypto';
-import { sameDirectorySync } from './cwd.js';
+import { cwdControlCharsNote, sameDirectorySync } from './cwd.js';
 import { escapeControlChars } from './display.js';
 import { normalizePath } from './platform.js';
 import { probeSqliteTables, readSqliteFileHead } from './sqlite-file.js';
@@ -54,7 +54,7 @@ export type ChainsElsewhere = {
 export function chainsElsewhereHint(rows: ChainsElsewhere[]): string {
   const shown = rows
     .slice(0, 3)
-    .map((r) => `${r.cwd}（${r.total} 条${r.active ? `，${r.active} 条活跃` : ''}）`)
+    .map((r) => `${escapeControlChars(r.cwd)}（${r.total} 条${r.active ? `，${r.active} 条活跃` : ''}）`)
     .join('、');
   const more = rows.length > 3 ? ` 等 ${rows.length} 个目录` : '';
   return (
@@ -72,13 +72,15 @@ export function chainsElsewhereHint(rows: ChainsElsewhere[]): string {
 export function chainsSameDirectoryHint(rows: ChainsElsewhere[]): string {
   const shown = rows
     .slice(0, 3)
-    .map((r) => `${r.cwd}（${r.total} 条${r.active ? `，${r.active} 条活跃` : ''}）`)
+    .map((r) => `${escapeControlChars(r.cwd)}（${r.total} 条${r.active ? `，${r.active} 条活跃` : ''}）`)
     .join('、');
   const more = rows.length > 3 ? ` 等 ${rows.length} 个写法` : '';
   const target = rows[0]!.cwd;
+  const typed = escapeControlChars(target);
   return (
     `本目录没有链，但本地库里同一个目录的另一种写法下有链（链按 --cwd 精确匹配，写法不同就一条都看不到）：${shown}${more}；` +
-    `把 --cwd 换成 ${target} 重跑同一条命令（其余参数照旧），或用 watch chain list --cwd ${target} 查看`
+    `把 --cwd 换成 ${typed} 重跑同一条命令（其余参数照旧），或用 watch chain list --cwd ${typed} 查看` +
+    cwdControlCharsNote(target)
   );
 }
 
@@ -112,12 +114,12 @@ export type SearchElsewhere = { cwd: string; hits: number };
 export function searchElsewhereHint(rows: SearchElsewhere[], cwd: string, query: string): string {
   const shown = rows
     .slice(0, 3)
-    .map((r) => `${r.cwd}（${r.hits} 条）`)
+    .map((r) => `${escapeControlChars(r.cwd)}（${r.hits} 条）`)
     .join('、');
   const more = rows.length > 3 ? ` 等 ${rows.length} 个目录` : '';
   return (
     `本地搜索索引里其它目录有匹配：${shown}${more}；` +
-    `搜索按目录限定（--cwd ${cwd} 只查这一条），要看那个目录里的命中，用 watch search ${query} --cwd <那个目录>`
+    `搜索按目录限定（--cwd ${escapeControlChars(cwd)} 只查这一条），要看那个目录里的命中，用 watch search ${query} --cwd <那个目录>`
   );
 }
 
@@ -130,13 +132,15 @@ export function searchElsewhereHint(rows: SearchElsewhere[], cwd: string, query:
 export function searchSameDirectoryHint(rows: SearchElsewhere[], cwd: string, query: string): string {
   const shown = rows
     .slice(0, 3)
-    .map((r) => `${r.cwd}（${r.hits} 条）`)
+    .map((r) => `${escapeControlChars(r.cwd)}（${r.hits} 条）`)
     .join('、');
   const more = rows.length > 3 ? ` 等 ${rows.length} 个写法` : '';
   const target = rows[0]!.cwd;
+  const typed = escapeControlChars(target);
   return (
     `本地搜索索引里，同一个目录的另一种写法下有匹配：${shown}${more}；` +
-    `搜索按 --cwd 精确匹配（${cwd} 一条都查不到），把 --cwd 换成 ${target} 重跑：watch search ${query} --cwd ${target}`
+    `搜索按 --cwd 精确匹配（${escapeControlChars(cwd)} 一条都查不到），把 --cwd 换成 ${typed} 重跑：watch search ${query} --cwd ${typed}` +
+    cwdControlCharsNote(target)
   );
 }
 
@@ -247,26 +251,26 @@ export function isStoreError(error: unknown): boolean {
 export function describeStoreOpenFailure(dbPath: string, error: unknown): string {
   const reason = describeStoreErrorReason(error);
   const code = (error as NodeJS.ErrnoException | undefined)?.code;
-  if (code === 'EACCES' || code === 'EPERM') return `${reason}：${dbPath}；先确认 ${dirname(dbPath)} 可写，再重试`;
-  if (code === 'ENOTDIR') return `${reason}：${dbPath}；先删掉占用它的文件再重试`;
-  if (code === 'EEXIST') return `${reason}：${dbPath}；先删掉或挪走占住它的文件，让 watch 重建目录与库`;
-  if (code === 'EISDIR') return `${reason}：${dbPath}；先把它挪走，让 watch 重新建库`;
+  if (code === 'EACCES' || code === 'EPERM') return `${reason}：${escapeControlChars(dbPath)}；先确认 ${escapeControlChars(dirname(dbPath))} 可写，再重试`;
+  if (code === 'ENOTDIR') return `${reason}：${escapeControlChars(dbPath)}；先删掉占用它的文件再重试`;
+  if (code === 'EEXIST') return `${reason}：${escapeControlChars(dbPath)}；先删掉或挪走占住它的文件，让 watch 重建目录与库`;
+  if (code === 'EISDIR') return `${reason}：${escapeControlChars(dbPath)}；先把它挪走，让 watch 重新建库`;
   const raw = error instanceof Error ? error.message : String(error);
   // 打开前文件头检查的两句已带路径与下一步，再拼一次路径就是同一件事说两遍
   if (/^本地库路径上已有一个/.test(raw)) return raw;
   if (/not a database|malformed/i.test(raw)) {
-    return `${reason}：${dbPath}；可先备份，再删掉 watch.db / watch.db-wal / watch.db-shm 让它重建（链记录会随之丢失）`;
+    return `${reason}：${escapeControlChars(dbPath)}；可先备份，再删掉 watch.db / watch.db-wal / watch.db-shm 让它重建（链记录会随之丢失）`;
   }
-  if (/unable to open database file/i.test(raw)) return `${reason}：${dbPath}；先确认该路径可用，再重试`;
-  if (/disk I\/O error/i.test(raw)) return `${reason}：${dbPath}；先确认磁盘可用，再重试`;
+  if (/unable to open database file/i.test(raw)) return `${reason}：${escapeControlChars(dbPath)}；先确认该路径可用，再重试`;
+  if (/disk I\/O error/i.test(raw)) return `${reason}：${escapeControlChars(dbPath)}；先确认磁盘可用，再重试`;
   if (/no such table|no such column|has no column named/i.test(raw)) {
-    return `${reason}：${dbPath}；可先备份，再删掉 watch.db / watch.db-wal / watch.db-shm 让它重建（链记录会随之丢失）`;
+    return `${reason}：${escapeControlChars(dbPath)}；可先备份，再删掉 watch.db / watch.db-wal / watch.db-shm 让它重建（链记录会随之丢失）`;
   }
-  if (/database is locked|database is busy|SQLITE_BUSY/i.test(raw)) return `${reason}：${dbPath}；等它结束或关掉后重试`;
+  if (/database is locked|database is busy|SQLITE_BUSY/i.test(raw)) return `${reason}：${escapeControlChars(dbPath)}；等它结束或关掉后重试`;
   if (/本地库 schema 版本 \d+ 比本程序支持的 \d+ 更新/.test(raw)) {
-    return `${reason}：${dbPath}；请升级 Watch 后再试——旧版本继续写会破坏新版本的数据，临时想让旧版本可用可换一个 WATCH_DB`;
+    return `${reason}：${escapeControlChars(dbPath)}；请升级 Watch 后再试——旧版本继续写会破坏新版本的数据，临时想让旧版本可用可换一个 WATCH_DB`;
   }
-  return `${reason}：${dbPath}`;
+  return `${reason}：${escapeControlChars(dbPath)}`;
 }
 
 /**
@@ -287,7 +291,7 @@ function assertUsableStoreFile(dbPath: string): void {
   if (!head.hasMagic) {
     throw Object.assign(
       new Error(
-        `本地库路径上已有一个不是有效的 SQLite 数据库的文件：${dbPath}（${head.size} 字节）。为避免把它覆盖成 Watch 的库，本次未写入任何内容；请先备份并挪走这个文件，或改用另一个 WATCH_DB`,
+        `本地库路径上已有一个不是有效的 SQLite 数据库的文件：${escapeControlChars(dbPath)}（${head.size} 字节）。为避免把它覆盖成 Watch 的库，本次未写入任何内容；请先备份并挪走这个文件，或改用另一个 WATCH_DB`,
       ),
       { code: 'EWATCHNOTSQLITE' },
     );
@@ -307,7 +311,7 @@ function assertUsableStoreFile(dbPath: string): void {
         : `表: ${tables.slice(0, 5).join(' / ') || '（没有任何表）'}`;
     throw Object.assign(
       new Error(
-        `本地库路径上已有一个不是 Watch 的 SQLite 数据库：${dbPath}（user_version=0，${detail}）。` +
+        `本地库路径上已有一个不是 Watch 的 SQLite 数据库：${escapeControlChars(dbPath)}（user_version=0，${detail}）。` +
           `为避免把 Watch 的表写进别人的库、改掉它的 user_version，本次未写入任何内容；` +
           `请改用另一个 WATCH_DB（默认 ~/.watch/watch.db）；如果这其实是 Watch 的库损坏了，先备份，再删掉 watch.db / watch.db-wal / watch.db-shm 让它重建`,
       ),
@@ -932,7 +936,9 @@ export class Store {
     // 走到这里时也要用 trim 后的值来措辞与比对——否则报错内容会是「找不到链:  nope 」，
     // 用户看不出自己打的名字与清单里那个差在哪（首尾空白在终端里根本看不见）
     chainId = chainId.trim();
-    const base = `找不到链: ${chainId}`;
+    // 链名与 cwd 都要过转义：两者都直接进终端，而 `chain use $'x\e[31m'` 这种输入里的 ESC
+    // 会真的改掉终端颜色（`--json` 里由 JSON.stringify 转义，不受影响）
+    const base = `找不到链: ${escapeControlChars(chainId)}`;
     const normalized = this.normCwd(cwd);
     const byId = this.db.prepare('SELECT id, cwd, name, status FROM chains WHERE id=?').get(chainId) as
       | { id: string; cwd: string; name: string; status: string }
@@ -952,12 +958,18 @@ export class Store {
       // 以为链丢了、或以为该去另一个项目找。下一步不变——链按 `--cwd` 精确匹配，
       // 只有换成记录里的原字符串才查得到。
       if (sameDirectorySync(cwd, hit.cwd)) {
+        const typed = escapeControlChars(hit.cwd);
         return (
-          `${base}——链「${escapeControlChars(hit.name)}」${status}在同一个目录的另一种写法下: ${hit.cwd}；` +
-          `把 --cwd 换成 ${hit.cwd} 重跑同一条命令（其余参数照旧）——链按 --cwd 原字符串匹配，写法不同就一条都看不到`
+          `${base}——链「${escapeControlChars(hit.name)}」${status}在同一个目录的另一种写法下: ${typed}；` +
+          `把 --cwd 换成 ${typed} 重跑同一条命令（其余参数照旧）——链按 --cwd 原字符串匹配，写法不同就一条都看不到` +
+          cwdControlCharsNote(hit.cwd)
         );
       }
-      return `${base}——链「${escapeControlChars(hit.name)}」${status}属于另一个目录: ${hit.cwd}；请用 --cwd ${hit.cwd}`;
+      return (
+        `${base}——链「${escapeControlChars(hit.name)}」${status}属于另一个目录: ${escapeControlChars(hit.cwd)}；` +
+        `请用 --cwd ${escapeControlChars(hit.cwd)}` +
+        cwdControlCharsNote(hit.cwd)
+      );
     }
     // 本目录里一条链都没有：没有可列的清单，也不该暗示「你有别的链可选」，
     // 但「没有链」本身是另一种错——不是名字打错，而是还没有可用的链，要给建第一条的办法。
@@ -1017,9 +1029,11 @@ export class Store {
     // 只有换成它才查得到。
     let where = '';
     if (cwd && this.normCwd(cwd) !== row.cwd) {
+      const typed = escapeControlChars(row.cwd);
       where = sameDirectorySync(cwd, row.cwd)
-        ? `（这条链记录在同一个目录的另一种写法下: ${row.cwd}，不是你这次的 --cwd——要看它请把 --cwd 换成 ${row.cwd}）`
-        : `（它属于另一个目录 ${row.cwd}，不是你这次的 --cwd）`;
+        ? `（这条链记录在同一个目录的另一种写法下: ${typed}，不是你这次的 --cwd——要看它请把 --cwd 换成 ${typed}）`
+        : `（它属于另一个目录 ${typed}，不是你这次的 --cwd）`;
+      where += cwdControlCharsNote(row.cwd);
     }
     return `这个 id 是链「${escapeControlChars(row.name)}」（${status}）的 id，不是会话 id${where}${tip}；要打开会话请用 watch status --cwd <目录> 或 watch chain list 里链尾的实际会话 id`;
   }

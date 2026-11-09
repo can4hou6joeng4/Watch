@@ -1,4 +1,5 @@
 import type { ProviderAdapter } from '../providers/adapter.js';
+import { escapeControlChars } from './display.js';
 import { countUnparsableJsonLines } from './jsonl.js';
 import { emptySessionFileReasonFromStat, sessionFilePresence } from './read-text.js';
 import type { SessionRef } from './types.js';
@@ -27,7 +28,7 @@ export async function usageBadLinesReason(
   const bad = await countUnparsableJsonLines(filePath);
   if (bad === 0) return null;
   return (
-    `${label}的用量数据源 ${filePath} 有 ${bad} 行无法解析（截断或损坏），这些行的用量没有计入：` +
+    `${label}的用量数据源 ${escapeControlChars(filePath)} 有 ${bad} 行无法解析（截断或损坏），这些行的用量没有计入：` +
     `合计可能偏少——先确认该文件是否被截断（可从备份恢复），再以原生 CLI 显示的用量为准`
   );
 }
@@ -58,13 +59,13 @@ export async function usageSidecarProblem(
   if (presence.state === 'missing') return null;
   if (presence.state === 'unknown') {
     return (
-      `${label}的用量数据源 ${usagePath} 状态无法确认：${presence.reason}；` +
+      `${label}的用量数据源 ${escapeControlChars(usagePath)} 状态无法确认：${presence.reason}；` +
       `合计可能偏少——先确认该文件可读再重试`
     );
   }
   if (!presence.isFile) {
     return (
-      `${label}的用量数据源 ${usagePath} 现在不是普通文件（被同名目录或设备文件占住了）；` +
+      `${label}的用量数据源 ${escapeControlChars(usagePath)} 现在不是普通文件（被同名目录或设备文件占住了）；` +
       `合计可能偏少——先恢复该路径再重试`
     );
   }

@@ -3,6 +3,7 @@ import { homedir } from 'node:os';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { appendFileAtomic, writeFileAtomic } from '../../core/atomic.js';
+import { escapeControlChars } from '../../core/display.js';
 import { verifyWrittenTurns } from '../../core/verify.js';
 import { claudeBashInput, CLAUDE_THINKING_PREFIX, ENCRYPTED_THINKING, toClaudeToolName, turnHasContent } from '../../core/rich.js';
 import { parseClaudeSession } from './parse.js';
@@ -357,7 +358,7 @@ export async function importTurnsToClaude(
   opts?: ImportTurnsOpts,
 ): Promise<SessionRef> {
   if (!path.isAbsolute(cwd)) {
-    throw new Error(`cwd 必须是绝对路径: ${cwd}`);
+    throw new Error(`cwd 必须是绝对路径: ${escapeControlChars(cwd)}`);
   }
   const projectsDir = claudeProjectsDir();
   const identity = await detectClaudeIdentity(projectsDir);

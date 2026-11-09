@@ -195,7 +195,7 @@ export async function assertTargetUnchanged(
     if (presence.state === 'missing') {
       throw new HandoffBlockedError(
         'target_missing',
-        `目标会话文件已不存在：${ref.filePath}；已中止本次${action}（未写入任何内容），请重新选择目标会话`,
+        `目标会话文件已不存在：${escapeControlChars(ref.filePath)}；已中止本次${action}（未写入任何内容），请重新选择目标会话`,
       );
     }
     if (presence.state === 'unknown') {
@@ -210,12 +210,12 @@ export async function assertTargetUnchanged(
     if (!presence.isFile) {
       throw new HandoffBlockedError(
         'target_unreadable',
-        `目标会话路径现在不是普通文件（被同名目录或设备文件占住了）：${ref.filePath}；已中止本次${action}（未写入任何内容），先恢复该路径再重试`,
+        `目标会话路径现在不是普通文件（被同名目录或设备文件占住了）：${escapeControlChars(ref.filePath)}；已中止本次${action}（未写入任何内容），先恢复该路径再重试`,
       );
     }
     throw new HandoffBlockedError(
       'target_unreadable',
-      `目标会话文件读不出来（可能是权限或 I/O 问题）：${ref.filePath}；已中止本次${action}（未写入任何内容），先确认它可读再重试`,
+      `目标会话文件读不出来（可能是权限或 I/O 问题）：${escapeControlChars(ref.filePath)}；已中止本次${action}（未写入任何内容），先确认它可读再重试`,
     );
   }
   throw new HandoffBlockedError('target_changed', `目标会话正在被外部写入，已中止本次${action}，请稍后重试`);
@@ -461,7 +461,7 @@ export async function createChainSession(
             : null;
     if (broken) {
       throw new Error(
-        `链尾已是 ${providerId}，但链尾会话 ${tail.toRef.sessionId} ${broken}：${tail.toRef.filePath}；` +
+        `链尾已是 ${providerId}，但链尾会话 ${tail.toRef.sessionId} ${broken}：${escapeControlChars(tail.toRef.filePath)}；` +
           `本次无法交接也无法 resume——可先恢复该文件，或用 watch chain new <新名字> 另起一条链`,
       );
     }
@@ -657,9 +657,9 @@ export async function chainUsage(
         // 否则权限问题会被讲成会话丢了，用户会去重新绑定而不是修权限
         const msg =
           presence.state === 'missing'
-            ? `会话文件已不存在：${ref.filePath}`
+            ? `会话文件已不存在：${escapeControlChars(ref.filePath)}`
             : presence.state === 'present'
-              ? `该路径现在不是普通文件（被同名目录或设备文件占住了）：${ref.filePath}`
+              ? `该路径现在不是普通文件（被同名目录或设备文件占住了）：${escapeControlChars(ref.filePath)}`
               : presence.reason;
         warnings.push(`${adapter.id} 用量读取失败：${msg}`);
         byProvider.push({ provider: adapter.id, sessionId: ref.sessionId, usage: null, error: msg });
@@ -880,14 +880,14 @@ export async function chainStatus(
     if (tipPresence.state === 'missing') {
       chainTipUnusable = true;
       warnings.push(
-        `链尾会话文件已不存在：${last.toRef.filePath}（${last.toProvider} ${last.toRef.sessionId}，文件不存在）；下次切换会失败，${rebindHint(last.toProvider)}`,
+        `链尾会话文件已不存在：${escapeControlChars(last.toRef.filePath)}（${last.toProvider} ${last.toRef.sessionId}，文件不存在）；下次切换会失败，${rebindHint(last.toProvider)}`,
       );
     } else if (tipPresence.state === 'present' && !tipPresence.isFile) {
       // 路径还在、只是不是普通文件：说成「文件已不存在」自相矛盾，还会把人引去 adopt；
       // 与 chain list / doctor 的「该路径现在不是普通文件」保持同一说法
       chainTipUnusable = true;
       warnings.push(
-        `链尾会话文件的路径现在不是普通文件（被同名目录或设备文件占住了）：${last.toRef.filePath}（${last.toProvider} ${last.toRef.sessionId}）；下次切换会失败，先恢复该路径，再决定是否需要 ${rebindHint(last.toProvider)}`,
+        `链尾会话文件的路径现在不是普通文件（被同名目录或设备文件占住了）：${escapeControlChars(last.toRef.filePath)}（${last.toProvider} ${last.toRef.sessionId}）；下次切换会失败，先恢复该路径，再决定是否需要 ${rebindHint(last.toProvider)}`,
       );
     } else if (tipPresence.state === 'unknown') {
       chainTipUnusable = true;
@@ -1008,13 +1008,13 @@ export async function handoff(
       const tipPresence = await sessionFilePresence(chainTipRef.filePath);
       if (tipPresence.state === 'missing') {
         throw new Error(
-          `未发现原生会话；而链尾记录的 ${chainTipRef.provider} 会话 ${chainTipRef.sessionId} 文件已不存在（${chainTipRef.filePath}）：` +
+          `未发现原生会话；而链尾记录的 ${chainTipRef.provider} 会话 ${chainTipRef.sessionId} 文件已不存在（${escapeControlChars(chainTipRef.filePath)}）：` +
             `${rebindHint(chainTipRef.provider)}，或在原生 CLI 里新开一个会话`,
         );
       }
       if (tipPresence.state === 'unknown') {
         throw new Error(
-          `未发现原生会话；链尾记录的 ${chainTipRef.provider} 会话 ${chainTipRef.sessionId} 状态无法确认：${chainTipRef.filePath}；${tipPresence.reason}` +
+          `未发现原生会话；链尾记录的 ${chainTipRef.provider} 会话 ${chainTipRef.sessionId} 状态无法确认：${escapeControlChars(chainTipRef.filePath)}；${tipPresence.reason}` +
             `——可能是权限或路径问题，先确认它是否还在，再决定是否 watch switch ${chainTipRef.provider} 重新绑定`,
         );
       }
@@ -1022,7 +1022,7 @@ export async function handoff(
       // 「请先在…里开聊」，把「路径不可用」讲成「目录里没东西」
       if (tipPresence.state === 'present' && !tipPresence.isFile) {
         throw new Error(
-          `未发现原生会话；而链尾记录的 ${chainTipRef.provider} 会话 ${chainTipRef.sessionId} 的路径现在不是普通文件（被同名目录或设备文件占住了）：${chainTipRef.filePath}` +
+          `未发现原生会话；而链尾记录的 ${chainTipRef.provider} 会话 ${chainTipRef.sessionId} 的路径现在不是普通文件（被同名目录或设备文件占住了）：${escapeControlChars(chainTipRef.filePath)}` +
             `——先恢复该路径，再决定是否 watch switch ${chainTipRef.provider} 重新绑定，或在原生 CLI 里新开一个会话`,
         );
       }
@@ -1216,10 +1216,10 @@ export async function handoff(
     const code = (error as NodeJS.ErrnoException).code;
     const gone = code === 'ENOENT' || code === 'ENOTDIR';
     const reason = gone
-      ? `文件 ${sourceTip.ref.filePath} 已不存在，而链记录仍指向它：${rebindHint(sourceTip.provider)}，或用 watch sessions 查看该目录还有哪些可接力的会话`
+      ? `文件 ${escapeControlChars(sourceTip.ref.filePath)} 已不存在，而链记录仍指向它：${rebindHint(sourceTip.provider)}，或用 watch sessions 查看该目录还有哪些可接力的会话`
       : code === 'EACCES' || code === 'EPERM'
-        ? `文件 ${sourceTip.ref.filePath} 无权读取（权限问题，不是被删除）：先修权限或换一个有权限的路径，再重试`
-        : `文件 ${sourceTip.ref.filePath} 读不出来：如果只是格式坏掉可先确认文件内容；确认文件确实没了再 watch switch ${sourceTip.provider} 重新绑定`;
+        ? `文件 ${escapeControlChars(sourceTip.ref.filePath)} 无权读取（权限问题，不是被删除）：先修权限或换一个有权限的路径，再重试`
+        : `文件 ${escapeControlChars(sourceTip.ref.filePath)} 读不出来：如果只是格式坏掉可先确认文件内容；确认文件确实没了再 watch switch ${sourceTip.provider} 重新绑定`;
     const knownFsError = gone || code === 'EACCES' || code === 'EPERM';
     const detail = knownFsError ? '' : `${describeReadFailureOrSelf(error)}；`;
     throw new Error(

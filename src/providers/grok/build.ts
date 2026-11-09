@@ -2,6 +2,7 @@ import { mkdir, open, readdir, readFile, stat, writeFile } from 'node:fs/promise
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { resolveCli } from '../../core/platform.js';
+import { escapeControlChars } from '../../core/display.js';
 import { createHash, randomUUID } from 'node:crypto';
 import { homedir } from 'node:os';
 import path from 'node:path';
@@ -432,7 +433,7 @@ export async function createEmptyGrokSession(
   identityOverride?: GrokIdentity,
 ): Promise<SessionRef> {
   if (!path.isAbsolute(cwd)) {
-    throw new Error(`cwd 必须是绝对路径: ${cwd}`);
+    throw new Error(`cwd 必须是绝对路径: ${escapeControlChars(cwd)}`);
   }
   const sessionId = randomUUID();
   const root = sessionsRoot ?? grokSessionsRoot();
@@ -662,7 +663,7 @@ export async function importTurnsToGrok(
   sessionsRoot?: string,
 ): Promise<SessionRef> {
   if (!path.isAbsolute(cwd)) {
-    throw new Error(`cwd 必须是绝对路径: ${cwd}`);
+    throw new Error(`cwd 必须是绝对路径: ${escapeControlChars(cwd)}`);
   }
   if (!turns.some((t) => t.role === 'user' && t.text.trim())) {
     throw new Error('没有可迁移的用户消息');

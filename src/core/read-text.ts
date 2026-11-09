@@ -1,4 +1,5 @@
 import { open, readFile, stat } from 'node:fs/promises';
+import { escapeControlChars } from './display.js';
 
 /**
  * 读文本；文件不存在按空串处理（新建分支依赖这个语义）。
@@ -36,7 +37,7 @@ export function isMissingPathError(error: unknown): boolean {
  * 不要去重新绑定或换会话），其余带上 code / 原文。读不出来不等于「这家原生没有这项数据」。
  */
 export function describeSessionReadFailure(filePath: string, error: unknown): string {
-  return `${describeSessionReadFailureReason(error)}：${filePath}`;
+  return `${describeSessionReadFailureReason(error)}：${escapeControlChars(filePath)}`;
 }
 
 /**
@@ -126,7 +127,7 @@ export async function sessionFilePresence(filePath: string): Promise<SessionFile
  * 空会话（`new` 建出来的）每家都写了占位内容，不会是 0 字节（见 `src/providers/CLAUDE.md`）。
  */
 export function describeEmptySessionFile(filePath: string, subject = '会话文件'): string {
-  return `${subject}是空的（0 字节，进程被杀或只写了一半，内容已丢失）：${filePath}`;
+  return `${subject}是空的（0 字节，进程被杀或只写了一半，内容已丢失）：${escapeControlChars(filePath)}`;
 }
 
 /**
@@ -194,7 +195,7 @@ export async function probeSessionReadable(filePath: string): Promise<string | n
     return null;
   } catch (error) {
     // 这里只报「读不出来」：文件确实不在时也要说清，否则用户会去反复试 resume
-    if (isMissingPathError(error)) return `会话文件已不存在：${filePath}`;
+    if (isMissingPathError(error)) return `会话文件已不存在：${escapeControlChars(filePath)}`;
     return describeSessionReadFailure(filePath, error);
   } finally {
     await handle?.close().catch(() => {});

@@ -14,7 +14,7 @@ import { runImportCodex } from './import-codex.js';
 import { ImportJobs } from './core/import-jobs.js';
 import { officialImportJournalRoot } from './providers/codex/official-import.js';
 import { doctorReport } from './core/doctor.js';
-import { cwdAliasHint, cwdProblem, describeCwdProblem, describeWriteCwd, inspectCwd, sameDirectorySync, splitElsewhereByDirectory } from './core/cwd.js';
+import { cwdAliasHint, cwdControlCharsNote, cwdProblem, describeCwdProblem, describeWriteCwd, inspectCwd, sameDirectorySync, splitElsewhereByDirectory } from './core/cwd.js';
 import { escapeControlChars, hasControlChars } from './core/display.js';
 import { trimUserKey } from './core/cli-input.js';
 import { describeResumeTargetUnfinished } from './core/rich.js';
@@ -548,27 +548,31 @@ async function aliasChainGroupWarning(
   const groups: string[] = [];
   const collisions: string[] = [];
   let total = 0;
+  const shownCwd = escapeControlChars(cwd);
   for (const row of same) {
     total += row.total;
     const names = chainNamesOf(store, row.cwd) ?? [];
     if (createdName && names.includes(createdName)) collisions.push(row.cwd);
     const shown = names.slice(0, 3).map((name) => `「${escapeControlChars(name)}」`).join(' / ');
-    groups.push(shown ? `${row.cwd} 下有 ${shown}${names.length > 3 ? ` 等 ${names.length} 条` : ''}` : `${row.cwd} 下有 ${row.total} 条链（名字读不出来）`);
+    const rowCwd = escapeControlChars(row.cwd);
+    groups.push(shown ? `${rowCwd} 下有 ${shown}${names.length > 3 ? ` 等 ${names.length} 条` : ''}` : `${rowCwd} 下有 ${row.total} 条链（名字读不出来）`);
   }
   const created = createdName
-    ? `在 ${cwd} 下建了链「${escapeControlChars(createdName)}」`
-    : `在 ${cwd} 下写了链记录`;
+    ? `在 ${shownCwd} 下建了链「${escapeControlChars(createdName)}」`
+    : `在 ${shownCwd} 下写了链记录`;
   const collision = collisions.length
     ? `；两个写法下都有「${escapeControlChars(createdName!)}」，但它们不是同一条链`
     : '';
   const moreGroup = same.length > 3 ? ` 等 ${same.length} 个写法` : '';
+  const target = escapeControlChars(same[0].cwd);
   return (
-    `${cwd} 和 ${same.slice(0, 3).map((r) => r.cwd).join('、')}${moreGroup} 是同一个目录的另一种写法` +
+    `${shownCwd} 和 ${same.slice(0, 3).map((r) => escapeControlChars(r.cwd)).join('、')}${moreGroup} 是同一个目录的另一种写法` +
     '（链按 --cwd 的原字符串分组，两种写法在本地库里是两个目录、互相看不到）。' +
     `这次${created}，而那个写法下已经有 ${total} 条链（${groups.join('；')}）${collision}。` +
     `同一个项目里现在有两组链：之后不带 --cwd 的 status / switch / new / adopt 只作用在当前这条 --cwd 对应的那一组上。` +
-    `要接着用原来那一组，把 --cwd 换成 ${same[0].cwd} 重跑同一条命令（其余参数照旧）` +
-    '——链记录的工作目录在创建时定死，没有改名 / 移动的办法'
+    `要接着用原来那一组，把 --cwd 换成 ${target} 重跑同一条命令（其余参数照旧）` +
+    '——链记录的工作目录在创建时定死，没有改名 / 移动的办法' +
+    cwdControlCharsNote(cwd)
   );
 }
 
@@ -661,7 +665,7 @@ async function cmdStatus(cwd: string, json: boolean, chain?: string): Promise<vo
   } else if (!tips.length) {
     console.log(`未发现会话（${noSessionHint()}）`);
   } else {
-    console.log(`cwd: ${cwd}`);
+    console.log(`cwd: ${escapeControlChars(cwd)}`);
     console.log('');
     console.log('最新原生会话:');
     for (const tip of tips.sort((a, b) => b.updatedAt - a.updatedAt)) {
@@ -676,7 +680,7 @@ async function cmdStatus(cwd: string, json: boolean, chain?: string): Promise<vo
       console.log(
         `  ${tip.provider.padEnd(8)} ${tip.ref.sessionId}  mtime=${fmtTime(tip.updatedAt)}${chainMark}${mark}${readMark}`,
       );
-      console.log(`           ${tip.ref.filePath}`);
+      console.log(`           ${escapeControlChars(tip.ref.filePath)}`);
     }
   }
   if (history.length) {
@@ -776,7 +780,7 @@ async function cmdSwitch(cwd: string, targetId: string, json: boolean, chain?: s
     }
     console.log(`已从 ${result.fromProvider} 交接 → ${targetId}（${result.turnCount} 轮）`);
     console.log(`新会话: ${result.newRef.sessionId}`);
-    console.log(`文件:   ${result.newRef.filePath}`);
+    console.log(`文件:   ${escapeControlChars(result.newRef.filePath)}`);
     console.log('');
     console.log(`resume: ${result.resumeCommand}`);
     // 结果说明走 stdout（同 chain new / chain archive 的位置），不是降级警告
@@ -883,8 +887,8 @@ async function cmdAdopt(
                 found.ref.cwd === cwd
                   ? ''
                   : sameDirectorySync(cwd, found.ref.cwd)
-                    ? `（它在同一个目录的另一种写法下: ${found.ref.cwd}，还要把 --cwd 换成 ${found.ref.cwd}）`
-                    : `（它属于另一个目录: ${found.ref.cwd}，还要加 --cwd ${found.ref.cwd}）`
+                    ? `（它在同一个目录的另一种写法下: ${escapeControlChars(found.ref.cwd)}，还要把 --cwd 换成 ${escapeControlChars(found.ref.cwd)}）`
+                    : `（它属于另一个目录: ${escapeControlChars(found.ref.cwd)}，还要加 --cwd ${escapeControlChars(found.ref.cwd)}）`
               }`,
             );
           }
@@ -1370,7 +1374,7 @@ async function cmdRecent(cwd: string, json: boolean, limit: number = 8, cwdGiven
             // 路径还在，但被同名目录 / 设备文件占住：既不是「已删除」（原生扫描也列不出来），
             // 也不是能用的会话。静默跳过会让它从「近期」里凭空消失
             warnings.push(
-              `${loc.provider} 会话 ${loc.sessionId} 的映射记录指向的路径现在不是普通文件（被同名目录或设备文件占住了）：${loc.filePath}；已跳过映射命中，先恢复该路径再重试`,
+              `${loc.provider} 会话 ${loc.sessionId} 的映射记录指向的路径现在不是普通文件（被同名目录或设备文件占住了）：${escapeControlChars(loc.filePath)}；已跳过映射命中，先恢复该路径再重试`,
             );
             continue;
           }
@@ -1389,7 +1393,7 @@ async function cmdRecent(cwd: string, json: boolean, limit: number = 8, cwdGiven
           if (code !== 'ENOENT' && code !== 'ENOTDIR') {
             // 原因要翻成中文：`EACCES: permission denied, stat '…'` 这类原文看不出该修权限还是路径
             warnings.push(
-              `${loc.provider} 会话 ${loc.sessionId} 的映射记录无法确认文件状态（${loc.filePath}）：${describeSessionReadFailureReason(error)}；已跳过映射命中，先确认该路径是否可读再重试`,
+              `${loc.provider} 会话 ${loc.sessionId} 的映射记录无法确认文件状态（${escapeControlChars(loc.filePath)}）：${describeSessionReadFailureReason(error)}；已跳过映射命中，先确认该路径是否可读再重试`,
             );
           }
         }
@@ -1491,7 +1495,7 @@ async function cmdRecent(cwd: string, json: boolean, limit: number = 8, cwdGiven
   }
   for (const s of final) {
     // 「最近」的价值就在时间与摘要：JSON 一直带 updatedAt / preview，文本模式不能只留 id
-    console.log(`  [${s.provider}] ${s.sessionId} (${s.cwd})  mtime=${fmtTime(s.updatedAt)}`);
+    console.log(`  [${s.provider}] ${s.sessionId} (${escapeControlChars(s.cwd)})  mtime=${fmtTime(s.updatedAt)}`);
     if (s.preview) console.log(`    ${escapeControlChars(s.preview)}`);
   }
 }
@@ -1547,9 +1551,9 @@ async function cmdDoctor(cwd: string, json: boolean, strict: boolean): Promise<v
       return;
     }
     const env = report.environment;
-    console.log(`诊断 cwd: ${report.cwd}`);
+    console.log(`诊断 cwd: ${escapeControlChars(report.cwd)}`);
     console.log(`环境: watch ${env.watchVersion ?? '未知版本'} · node ${env.node} · ${env.platform}`);
-    console.log(`本地库文件: ${env.dbPath}`);
+    console.log(`本地库文件: ${escapeControlChars(env.dbPath)}`);
     console.log(`导入日志目录: ${env.importsRoot ?? '（不可用）'}`);
     console.log('Agent 检测:');
     for (const p of report.providers) {
@@ -1599,10 +1603,10 @@ async function cmdDoctor(cwd: string, json: boolean, strict: boolean): Promise<v
       for (const b of report.store.brokenTips) {
         console.log(
           b.missing
-            ? `  链「${escapeControlChars(b.chainName)}」: ${b.provider}:${b.sessionId} 链尾文件已不存在（${b.filePath}），${rebindHint(b.provider)}`
+            ? `  链「${escapeControlChars(b.chainName)}」: ${b.provider}:${b.sessionId} 链尾文件已不存在（${escapeControlChars(b.filePath)}），${rebindHint(b.provider)}`
             : b.unreadable
-              ? `  链「${escapeControlChars(b.chainName)}」: ${b.provider}:${b.sessionId} 链尾文件读不出来（${b.filePath}，${b.error}）；resume 与下次切换都会失败——先修好这个文件（权限或内容），或 watch switch ${b.provider} 重新绑定`
-              : `  链「${escapeControlChars(b.chainName)}」: ${b.provider}:${b.sessionId} 链尾文件状态无法确认（${b.filePath}，${b.error}）；先确认文件是否还在，再决定是否需要 adopt`,
+              ? `  链「${escapeControlChars(b.chainName)}」: ${b.provider}:${b.sessionId} 链尾文件读不出来（${escapeControlChars(b.filePath)}，${b.error}）；resume 与下次切换都会失败——先修好这个文件（权限或内容），或 watch switch ${b.provider} 重新绑定`
+              : `  链「${escapeControlChars(b.chainName)}」: ${b.provider}:${b.sessionId} 链尾文件状态无法确认（${escapeControlChars(b.filePath)}，${b.error}）；先确认文件是否还在，再决定是否需要 adopt`,
         );
       }
     } else {
@@ -1655,7 +1659,7 @@ async function cmdDoctor(cwd: string, json: boolean, strict: boolean): Promise<v
  */
 function newSessionCwdWarning(reason: string, filePath: string): string {
   return (
-    `${reason}；会话文件：${filePath}，它绑定的项目目录进不去——打印的 resume 命令会在这里失败。` +
+    `${reason}；会话文件：${escapeControlChars(filePath)}，它绑定的项目目录进不去——打印的 resume 命令会在这里失败。` +
     `先创建 / 修复该目录再 resume，或改用 --cwd 指向正确的项目目录后重跑`
   );
 }
@@ -1990,7 +1994,7 @@ async function cmdChain(cwd: string, json: boolean, action?: string, a?: string,
       // 「当前」= 活跃链里 last_used_at 最新的一条（与 status / switch 的默认链同一判定）。
       // 以前只给名字 + id：同一目录多条链时看不出哪条在用、哪条最近没动（--json 一直有 lastUsedAt）
       const current = store.findActiveChain(cwd);
-      console.log(`链（cwd: ${cwd}）:`);
+      console.log(`链（cwd: ${escapeControlChars(cwd)}）:`);
       for (const c of chains) {
         const mark = c.status === 'archived' ? ' [归档]' : '';
         const here = current && c.id === current.id ? ' ← 当前' : '';
@@ -2530,7 +2534,7 @@ async function cmdSearch(cwd: string, json: boolean, query: string): Promise<voi
       console.log(
         cwdIssue
           ? cwdUnusableConclusion('无结果', '本次搜索不能说明这个目录里有没有匹配')
-          : `无结果：本目录没有匹配（搜索按目录限定，只查了 ${cwd}）`,
+          : `无结果：本目录没有匹配（搜索按目录限定，只查了 ${escapeControlChars(cwd)}）`,
       );
       for (const note of notes) console.log(note);
       return;

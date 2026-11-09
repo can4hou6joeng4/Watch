@@ -22,6 +22,7 @@ import {
   probeSessionReadable,
 } from './core/read-text.js';
 import { sessionCwdProblem } from './core/cwd.js';
+import { escapeControlChars } from './core/display.js';
 
 /**
  * 按 id 反查不到会话时的「下一步」，所有按 id 反查的路径共用
@@ -1066,7 +1067,7 @@ async function planOpenInProvider(
   // 文案要说清「不是没有」，以及后果（多一份会话）——否则「新建」看起来像正常决策。
   if (scanCappedAt > 0) {
     diagnostics?.push(
-      `${target.displayName} 在 ${cwd} 的会话已达列表上限 ${scanCappedAt} 个，本次只在最近 ${scanCappedAt} 个里找可复用的既有会话` +
+      `${target.displayName} 在 ${escapeControlChars(cwd)} 的会话已达列表上限 ${scanCappedAt} 个，本次只在最近 ${scanCappedAt} 个里找可复用的既有会话` +
         `（更早的会话没参与匹配，无法确认其中是否已有能承接这些内容的会话）；本次将新建一份，项目里可能因此多出一份重复会话——` +
         `若记得那条会话，可用 watch open <它的会话 id> 直接打开，或先在原生 CLI 里确认后再决定是否删掉这一份`,
     );

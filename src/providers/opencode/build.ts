@@ -4,6 +4,7 @@ import path from 'node:path';
 import type { ImportTurnsOpts } from '../adapter.js';
 import { SessionLookupFailureError } from '../adapter.js';
 import type { ProcessEvent, SessionRef, TokenUsage, UnifiedTurn } from '../../core/types.js';
+import { escapeControlChars } from '../../core/display.js';
 import {
   assertUsableOpencodeDb,
   ensureOpencodeDbDir,
@@ -195,7 +196,7 @@ function ensureMinimalSchema(db: DatabaseSync): void {
 }
 
 export async function createEmptyOpencodeSession(cwd: string): Promise<SessionRef> {
-  if (!path.isAbsolute(cwd)) throw new Error(`cwd 必须是绝对路径: ${cwd}`);
+  if (!path.isAbsolute(cwd)) throw new Error(`cwd 必须是绝对路径: ${escapeControlChars(cwd)}`);
   const dbPath = opencodeDbPath();
   // 库不存在就让它新建；路径被同名目录占住要在这里说清，否则 SQLite 只回一句英文
   // `unable to open database file`，看不出要修的是那个路径
@@ -338,7 +339,7 @@ export async function importTurnsToOpencode(
   into?: SessionRef,
   opts?: ImportTurnsOpts,
 ): Promise<SessionRef> {
-  if (!path.isAbsolute(cwd)) throw new Error(`cwd 必须是绝对路径: ${cwd}`);
+  if (!path.isAbsolute(cwd)) throw new Error(`cwd 必须是绝对路径: ${escapeControlChars(cwd)}`);
   const dbPath = opencodeDbPath();
   // 写入前先确认库路径可用：被同名目录 / 设备文件占住时这里就要说清，不把 SQLite 原文抛给用户
   if ((await probeOpencodeDbFile(dbPath)) === 'missing') ensureOpencodeDbDir(dbPath);

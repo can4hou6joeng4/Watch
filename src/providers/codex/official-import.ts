@@ -5,6 +5,7 @@ import path from 'node:path';
 import { promisify } from 'node:util';
 import { digestFile, type FileDigest } from '../../core/atomic.js';
 import { sameDirectorySync } from '../../core/cwd.js';
+import { escapeControlChars } from '../../core/display.js';
 import { ImportJobs, type ImportOutcome, type ImportPlan } from '../../core/import-jobs.js';
 import { resolveCli } from '../../core/platform.js';
 import { describePathReadFailureReason, isEmptySessionFileReason, isMissingPathError } from '../../core/read-text.js';
@@ -158,34 +159,34 @@ async function locateClaudeSessionElsewhere(
  */
 function notInProjectMessage(sourceId: string, cwd: string, found: ElsewhereSession): string {
   const what =
-    `来源会话不属于指定的项目目录：在 ${cwd} 下没有找到 id 为 ${sourceId} 的 Claude Code 会话` +
+    `来源会话不属于指定的项目目录：在 ${escapeControlChars(cwd)} 下没有找到 id 为 ${sourceId} 的 Claude Code 会话` +
     '（导入按目录定位，只在这个项目的会话目录里找）';
   switch (found.kind) {
     case 'same-directory':
       return (
         `来源会话就在同一个目录的另一种写法下（不是「不属于这个项目」）：这个 id 的会话记录的工作目录是 ` +
-        `${found.cwd}（${found.filePath}），而 --cwd 给的是 ${cwd}；导入按路径字符串精确匹配` +
+        `${escapeControlChars(found.cwd)}（${escapeControlChars(found.filePath)}），而 --cwd 给的是 ${escapeControlChars(cwd)}；导入按路径字符串精确匹配` +
         '（符号链接、/var 与 /private/var 这类前缀、大小写都会一条都找不到）——' +
         `把 --cwd 换成 ${found.cwd} 重跑同一条命令（其余参数照旧）——本次未写入任何内容`
       );
     case 'misplaced':
       return (
-        `${what}；这个 id 的会话文件确实记录着工作目录 ${cwd}，只是它不在按这个路径编码出来的项目目录里：` +
+        `${what}；这个 id 的会话文件确实记录着工作目录 ${escapeControlChars(cwd)}，只是它不在按这个路径编码出来的项目目录里：` +
         `${found.filePath}（那里应该是 ${found.expectedPath}）——把它移回该位置再重试——本次未写入任何内容`
       );
     case 'other-directory':
       return (
-        `${what}；这个 id 的会话记录的工作目录是 ${found.cwd}，不是这次的 ${cwd}（${found.filePath}）——` +
+        `${what}；这个 id 的会话记录的工作目录是 ${escapeControlChars(found.cwd)}，不是这次的 ${escapeControlChars(cwd)}（${escapeControlChars(found.filePath)}）——` +
         `要导入它请把 --cwd 换成 ${found.cwd} 重跑，或确认是不是抄错了会话 id——本次未写入任何内容`
       );
     case 'unreadable':
       return (
         `${what}；但按这个 id 在 ${found.filePath} 找到了会话文件，只是读不出它记录的工作目录：` +
-        `${found.reason}——无法判断它是否属于 ${cwd}，先确认这个文件可读再重试——本次未写入任何内容`
+        `${found.reason}——无法判断它是否属于 ${escapeControlChars(cwd)}，先确认这个文件可读再重试——本次未写入任何内容`
       );
     case 'none':
       return (
-        `${what}；可用 watch sessions --cwd ${cwd} 核对会话 id，` +
+        `${what}；可用 watch sessions --cwd ${escapeControlChars(cwd)} 核对会话 id，` +
         '或确认 --cwd 与当初开这个会话的工作目录一致后重试——本次未写入任何内容'
       );
   }
@@ -240,7 +241,7 @@ export class OfficialCodexImport {
     // 两件事分开说：--cwd 是否绝对路径这条在 runImportCodex 里已先拦过，到这里多半是来源 id 写错，
     // 合成一句「需要 Claude 会话 UUID 与绝对路径 --cwd」会把人引去核对一个本来没问题的路径。
     if (!UUID.test(sourceId)) throw new Error(`来源会话 id 需要 Claude 会话 UUID（8-4-4-4-12 位十六进制），收到: ${sourceId}；可用 watch sessions --cwd <目录> 核对`);
-    if (!path.isAbsolute(cwd)) throw new Error(`--cwd 需要绝对路径，收到: ${cwd}`);
+    if (!path.isAbsolute(cwd)) throw new Error(`--cwd 需要绝对路径，收到: ${escapeControlChars(cwd)}`);
     const version = await this.deps.version();
     if (version !== SUPPORTED_VERSION) throw new Error(`实验性导入路径目前只支持 ${SUPPORTED_VERSION}`);
     const source = await this.deps.findSource(sourceId, cwd);

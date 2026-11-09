@@ -2,6 +2,7 @@ import { stat } from 'node:fs/promises';
 import type { Store } from './store.js';
 import type { ProviderAdapter } from '../providers/adapter.js';
 import type { EmptiedSession } from './session-coverage.js';
+import { escapeControlChars } from './display.js';
 import {
   describePathReadFailureReason,
   describeSessionReadFailureReason,
@@ -75,7 +76,7 @@ export async function reindexCwd(
         // 其余（ENOTDIR / EACCES / EIO…）不能当成没事跳过 —— 这一轮就没更新它，必须披露
         if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
           unreadable += 1;
-          firstUnreadable ||= `${s.ref.filePath}（${describePathReadFailureReason(error)}）`;
+          firstUnreadable ||= `${escapeControlChars(s.ref.filePath)}（${describePathReadFailureReason(error)}）`;
         }
         continue;
       }
@@ -145,7 +146,7 @@ export async function reindexCwd(
         // 当成「没有聊过」：搜索结果会静默变少，权限恢复后还得重新全量解析
         if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
           keepFailed += 1;
-          firstKeepError ||= `${indexed.filePath}（${describePathReadFailureReason(error)}）`;
+          firstKeepError ||= `${escapeControlChars(indexed.filePath)}（${describePathReadFailureReason(error)}）`;
           continue;
         }
         gone = true;

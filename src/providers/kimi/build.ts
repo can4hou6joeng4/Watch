@@ -1,5 +1,6 @@
 import { execFile } from 'node:child_process';
 import { describeBrokenCommandStart, resolveCli } from '../../core/platform.js';
+import { escapeControlChars } from '../../core/display.js';
 import { readFileSync } from 'node:fs';
 import type { Dirent } from 'node:fs';
 import { readFile, readdir, stat } from 'node:fs/promises';
@@ -234,13 +235,13 @@ function describeUnusableTargetCwd(cwd: string, probe: Exclude<CwdInspection, { 
   const tail = '新建 Kimi 会话需要在目标目录里运行 kimi CLI';
   switch (probe.state) {
     case 'missing':
-      return `目标工作目录不存在（路径上的某一级可能被同名文件占住）：${cwd}；${tail}`;
+      return `目标工作目录不存在（路径上的某一级可能被同名文件占住）：${escapeControlChars(cwd)}；${tail}`;
     case 'not-directory':
-      return `目标工作目录不是目录（被同名文件占住了）：${cwd}；${tail}`;
+      return `目标工作目录不是目录（被同名文件占住了）：${escapeControlChars(cwd)}；${tail}`;
     case 'denied':
-      return `目标工作目录无权访问（权限问题，不是路径写错）：${cwd}；${tail}`;
+      return `目标工作目录无权访问（权限问题，不是路径写错）：${escapeControlChars(cwd)}；${tail}`;
     case 'unknown':
-      return `无法确认目标工作目录能否使用（${probe.reason}）：${cwd}；${tail}`;
+      return `无法确认目标工作目录能否使用（${probe.reason}）：${escapeControlChars(cwd)}；${tail}`;
   }
 }
 
@@ -613,7 +614,7 @@ export async function importTurnsToKimi(
   opts?: ImportTurnsOpts,
 ): Promise<SessionRef> {
   if (!path.isAbsolute(cwd)) {
-    throw new Error(`cwd 必须是绝对路径: ${cwd}`);
+    throw new Error(`cwd 必须是绝对路径: ${escapeControlChars(cwd)}`);
   }
 
   let filePath: string;

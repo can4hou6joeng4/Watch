@@ -1,5 +1,6 @@
 import { execFile } from 'node:child_process';
 import { describeDetectFailure, isCommandMissing, resolveCli } from '../../core/platform.js';
+import { escapeControlChars } from '../../core/display.js';
 import { createReadStream } from 'node:fs';
 import { mkdtemp, open, readdir, readFile, rm, stat } from 'node:fs/promises';
 import { homedir, tmpdir } from 'node:os';
@@ -213,7 +214,7 @@ export async function findLatestCodexRollout(
   if (incomplete) {
     // 有位置读不出来时「这个目录没有 Codex 会话」不是结论
     throw new Error(
-      `在 ${root} 下没找到属于 ${cwd} 的 Codex 会话，但有 ${incomplete} 个位置读不出来，无法确认是否存在：${walkErrors[0] ?? unreadCwd[0]}`,
+      `在 ${escapeControlChars(root)} 下没找到属于 ${escapeControlChars(cwd)} 的 Codex 会话，但有 ${incomplete} 个位置读不出来，无法确认是否存在：${walkErrors[0] ?? unreadCwd[0]}`,
     );
   }
   return null;

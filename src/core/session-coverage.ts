@@ -1,4 +1,5 @@
 import type { ProviderAdapter } from '../providers/adapter.js';
+import { escapeControlChars } from './display.js';
 
 /**
  * 「连目录归属都读不出来」的会话统计（见 `ProviderAdapter.unattributable`）。
@@ -46,7 +47,8 @@ export async function collectUnattributable(
 
 function sampleText(stat: UnattributableStat): string {
   const more = stat.count > stat.samples.length ? ` 等 ${stat.count} 个` : '';
-  return `${stat.samples.join('、')}${more}`;
+  // 样本是会话文件路径，同样直接进终端（文件名里的 ESC / 换行会改掉终端状态）
+  return `${stat.samples.map((x) => escapeControlChars(x)).join('、')}${more}`;
 }
 
 /**
@@ -60,7 +62,7 @@ export function unattributableWarning(stat: UnattributableStat, cwd?: string): s
   return (
     `${stat.displayName} 有 ${stat.count} 个会话文件读不出目录归属（${what}缺失或损坏），` +
     `因此不会出现在任何目录的会话列表里：${sampleText(stat)}；` +
-    `这不代表它们不存在${cwd ? `，也无法判断它们是否属于 ${cwd}` : ''}——` +
+    `这不代表它们不存在${cwd ? `，也无法判断它们是否属于 ${escapeControlChars(cwd)}` : ''}——` +
     `先确认这些文件的内容（可能是被截断），能从备份恢复就别直接删`
   );
 }
@@ -101,7 +103,7 @@ function hiddenByAttribution(
   const whats = [...new Set(stats.map((s) => s.summary ?? '会话归属的元数据'))];
   const samples = stats
     .filter((s) => s.samples.length > 0)
-    .map((s) => (stats.length > 1 ? `${s.displayName}：${s.samples[0]}` : s.samples[0]))
+    .map((s) => (stats.length > 1 ? `${s.displayName}：${escapeControlChars(s.samples[0])}` : escapeControlChars(s.samples[0])))
     .slice(0, 3)
     .join('、');
   return { names, total, what: whats.join(' / '), samples };

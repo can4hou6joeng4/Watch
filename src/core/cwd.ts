@@ -3,6 +3,7 @@
 // `watch doctor` 统一用这里的说明做披露，避免同一个坑每处各写一份文案。
 import { realpathSync } from 'node:fs';
 import { realpath, stat } from 'node:fs/promises';
+import { escapeControlChars, hasControlChars } from './display.js';
 import { normalizePath } from './platform.js';
 
 /**
@@ -34,6 +35,45 @@ export async function inspectCwd(cwd: string): Promise<CwdInspection> {
 }
 
 /**
+ * 路径放进用户可见文案时的统一处理。
+ *
+ * 路径与链名、会话预览一样是**不可信输入**：`--cwd` 是用户手输 / 从别处粘贴的，链记录里的
+ * `cwd` 是从本地库读回来的（它当初也来自 `--cwd` 或原生会话文件）。2026-11-09 实测（修复前，
+ * 隔离 HOME，文本模式）：
+ *
+ *   $ watch chain new ESC1 --cwd $'<proj>\e[31mRED'
+ *   [watch] --cwd 目录不存在：…/probe310/proj^[[31mRED；链「ESC1」已经按这个路径写进本地库…
+ *
+ * ESC 序列**真的进了终端**（能改颜色、改标题、清屏）；换成 `$'<proj>\n'` 时，换行把那条警告
+ * 折成两行，后半句「各 provider 按原生记录的路径字符串精确比较」看着像独立的一句话。
+ * 这与 `escapeControlChars()` 修链名 / 会话预览时是同一件事（见 `src/core/display.ts` 的头注释），
+ * 只是路径这一路当时漏了：`--json` 里的 `cwd` 字段由 `JSON.stringify` 转义、不会注入终端，
+ * 而**文案里的路径**是直接拼进 stdout / stderr 的。
+ *
+ * 只转义、不改路径：`--cwd` 不 `trim()`（目录名允许首尾空白，与链名 / 会话 id 那种「写入侧
+ * 从不产生首尾空白」的标识符不同），也不替用户猜「真正的目录」。
+ */
+export function showPathInMessage(path: string): string {
+  return escapeControlChars(path);
+}
+
+/**
+ * `--cwd` 里**真有**控制字符时补的一句。
+ *
+ * 只把字符转义还不够：用户看到 `\n` / `\u001B` 会以为是 Watch 打印了什么怪东西，而问题是
+ * 自己的输入里混进了换行 / 制表符 / ESC（复制粘贴最常见）。这句话说明「哪些字符被转义了」
+ * 与「下一步怎么办」，且不假定那串控制字符一定不是目录名的一部分——目录名里真可以有它们。
+ */
+export function cwdControlCharsNote(cwd: string): string {
+  if (!hasControlChars(cwd)) return '';
+  return (
+    '；--cwd 的取值里有控制字符（换行、制表符、ESC 等，多来自复制粘贴），上面显示时已转义成 ' +
+    '\\n / \\u001B 这类可见形式——不要把换行 / 制表符一起粘进来，把 --cwd 写成一个普通目录路径重试' +
+    '（若这个目录名里确实含控制字符，只能改用另一条不含它的路径，或先给目录改名）'
+  );
+}
+
+/**
  * 查询类命令（`status` / `sessions` / `recent` / `search` / `usage` / `chain list`）的口径：
  * 路径不对时各 provider 只会安静返回 0 条，所以要说清「下面的 0 不代表目录里真没有会话」。
  */
@@ -42,17 +82,19 @@ export function describeCwdProblem(probe: CwdInspection, cwd: string): string | 
   // 于是 `chain new` 在不可用目录上建出的那条链，`status` / `chain list` 带同一个 `--cwd` 照样列得出来
   // （2026-11-09 实测）。原来的说法不只是过头，用户还会在同一份输出里看到「全部显示 0」与一条链并存。
   const tail = '各 provider 按原生记录的路径字符串精确比较，路径不对时不会列出任何会话';
+  const shown = showPathInMessage(cwd);
+  const note = cwdControlCharsNote(cwd);
   switch (probe.state) {
     case 'ok':
       return null;
     case 'not-directory':
-      return `--cwd 指向的不是目录：${cwd}；会话与链都按路径精确匹配，结果不代表任何真实项目`;
+      return `--cwd 指向的不是目录：${shown}；会话与链都按路径精确匹配，结果不代表任何真实项目${note}`;
     case 'missing':
-      return `--cwd 目录不存在：${cwd}；${tail}`;
+      return `--cwd 目录不存在：${shown}；${tail}${note}`;
     case 'denied':
-      return `--cwd 目录无权访问：${cwd}（权限问题，不是路径写错）；${tail}`;
+      return `--cwd 目录无权访问：${shown}（权限问题，不是路径写错）；${tail}${note}`;
     case 'unknown':
-      return `--cwd 目录无法访问：${cwd}（${probe.reason}）；${tail}`;
+      return `--cwd 目录无法访问：${shown}（${probe.reason}）；${tail}${note}`;
   }
 }
 
@@ -69,13 +111,13 @@ export function describeWriteCwd(probe: CwdInspection, cwd: string): string | nu
     case 'ok':
       return null;
     case 'not-directory':
-      return `--cwd 不是目录（被同名文件占住了）：${cwd}`;
+      return `--cwd 不是目录（被同名文件占住了）：${showPathInMessage(cwd)}${cwdControlCharsNote(cwd)}`;
     case 'missing':
-      return `--cwd 目录不存在：${cwd}`;
+      return `--cwd 目录不存在：${showPathInMessage(cwd)}${cwdControlCharsNote(cwd)}`;
     case 'denied':
-      return `--cwd 目录无权访问：${cwd}（权限问题，不是路径写错）`;
+      return `--cwd 目录无权访问：${showPathInMessage(cwd)}（权限问题，不是路径写错）${cwdControlCharsNote(cwd)}`;
     case 'unknown':
-      return `--cwd 目录无法访问：${cwd}（${probe.reason}）`;
+      return `--cwd 目录无法访问：${showPathInMessage(cwd)}（${probe.reason}）${cwdControlCharsNote(cwd)}`;
   }
 }
 
@@ -122,9 +164,10 @@ export async function cwdAliasHint(
   const target = knownSpelling ?? real;
   const hedge = knownSpelling ? '' : '（若会话 / 链是在同一目录的另一个写法下建的，就用那个写法）';
   return (
-    `--cwd 指向的目录还有另一种写法（realpath: ${real}），而本目录没扫到任何会话；` +
+    `--cwd 指向的目录还有另一种写法（realpath: ${showPathInMessage(real)}），而本目录没扫到任何会话；` +
     '各 provider 按原生记录的路径字符串精确比较，同一个目录换个写法（符号链接、/var 与 /private/var 这类前缀、大小写）就会一条都查不到' +
-    `——把 --cwd 换成 ${target} 重试同一条命令${hedge}；其余参数照旧`
+    `——把 --cwd 换成 ${showPathInMessage(target)} 重试同一条命令${hedge}；其余参数照旧` +
+    cwdControlCharsNote(target)
   );
 }
 
@@ -195,17 +238,19 @@ export async function splitElsewhereByDirectory<T extends { cwd: string }>(
  */
 export async function sessionCwdProblem(cwd: string): Promise<string | null> {
   const probe = await inspectCwd(cwd);
+  const shown = showPathInMessage(cwd);
+  const note = cwdControlCharsNote(cwd);
   const tail = '下面的 cd 命令会在这里失败——先恢复这个目录，或手动 cd 到新位置再执行 resume 命令';
   switch (probe.state) {
     case 'ok':
       return null;
     case 'not-directory':
-      return `会话记录的工作目录不是目录（被同名文件占住了）：${cwd}；下面的 cd 命令会失败——先让这个路径重新成为目录`;
+      return `会话记录的工作目录不是目录（被同名文件占住了）：${shown}；下面的 cd 命令会失败——先让这个路径重新成为目录${note}`;
     case 'missing':
-      return `会话记录的工作目录已不存在：${cwd}（项目可能被移动或删除）；${tail}；会话内容本身仍可读取 / 转入`;
+      return `会话记录的工作目录已不存在：${shown}（项目可能被移动或删除）；${tail}；会话内容本身仍可读取 / 转入${note}`;
     case 'denied':
-      return `会话记录的工作目录无权访问：${cwd}（权限问题，不是被删除）；${tail}`;
+      return `会话记录的工作目录无权访问：${shown}（权限问题，不是被删除）；${tail}${note}`;
     case 'unknown':
-      return `无法确认会话记录的工作目录能否进入：${cwd}（${probe.reason}）；${tail}`;
+      return `无法确认会话记录的工作目录能否进入：${shown}（${probe.reason}）；${tail}${note}`;
   }
 }
