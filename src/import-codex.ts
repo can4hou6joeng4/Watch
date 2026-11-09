@@ -1,5 +1,6 @@
 import path from 'node:path';
 import { parseArgs } from 'node:util';
+import { trimUserKey } from './core/cli-input.js';
 import { createOfficialCodexImport } from './providers/codex/official-import.js';
 
 const IMPORT_BOOLEAN_FLAGS = new Set(['json', 'experimental', 'desktop-project']);
@@ -91,7 +92,17 @@ export async function runImportCodex(args: string[]): Promise<void> {
       throw error;
     }
     const { values, positionals } = parsed;
-    const [action, id] = positionals;
+    const [action, rawId] = positionals;
+    // 位置参数与 `--project` 都是**从我们自己的输出里复制的标识符**（`计划: <planId>`、
+    // `watch sessions` 里的会话 id、Codex 项目列表里的项目 UUID），与主 CLI 的 `trimUserKey()`
+    // 同一约定：写入侧从不产生首尾空白（计划 id 是 sha256 十六进制、会话 id 是各家生成的 UUID），
+    // 去掉空白不可能指向另一个对象；而这条路径自己解析参数，主 CLI 的归一化到不了这里。
+    // 2026-11-09 实测（隔离 HOME，假 codex 过版本门禁）：`status " <planId> "` 回
+    // 「导入计划 id 需要 64 位小写十六进制（sha256），收到:  b1318ff5… 」，`prepare " <uuid> "`
+    // 回「来源会话 id 需要 Claude 会话 UUID…收到:  1111… 」——报错里那串 id 一个字符都没抄错，
+    // 多出来的空白在终端上几乎看不见，用户只会反复核对一串正确的值。
+    const id = rawId === undefined ? undefined : trimUserKey(rawId);
+    const project = values.project === undefined ? undefined : trimUserKey(values.project);
     // 子命令拼错与「少给位置参数」以前落到同一条整页用法：用户得逐字比对六条子命令才知道
     // `prepr` 是 `prepare` 打错，还是确实少给了一个参数。两种分开说，与 `cmdChain` 对齐。
     if (action && !(IMPORT_ACTIONS as readonly string[]).includes(action)) {
@@ -118,7 +129,7 @@ export async function runImportCodex(args: string[]): Promise<void> {
       const missing: string[] = [];
       if (!values.experimental) missing.push('--experimental（写操作必须显式确认）');
       if (action === 'project-prepare') {
-        if (!values.project) missing.push('--project <UUID>');
+        if (!project) missing.push('--project <UUID>');
       } else if (!values.cwd || !path.isAbsolute(values.cwd)) {
         missing.push(
           values.cwd ? `--cwd 需要绝对路径，收到: ${values.cwd}` : '--cwd <绝对路径>',
@@ -150,7 +161,7 @@ export async function runImportCodex(args: string[]): Promise<void> {
         `import-codex ${action} 不接受 --desktop-project（只有 prepare 接受）；去掉它重跑：watch import-codex ${action} ${id}`,
       );
     }
-    if (action !== 'project-prepare' && values.project) {
+    if (action !== 'project-prepare' && project) {
       throw new Error(
         `import-codex ${action} 不接受 --project（只有 project-prepare 接受）；要按项目导入请改用 watch import-codex project-prepare ${id} --project <UUID> --experimental，否则去掉 --project 重跑`,
       );
@@ -165,7 +176,7 @@ export async function runImportCodex(args: string[]): Promise<void> {
     const result = action === 'prepare'
       ? await service.prepare(id, cwd!, { desktopProject: values['desktop-project'] })
       : action === 'confirm' ? await service.confirm(id)
-        : action === 'project-prepare' ? await service.projects.prepare(id, values.project!)
+        : action === 'project-prepare' ? await service.projects.prepare(id, project!)
           : action === 'project-confirm' ? await service.projects.confirm(id)
             : action === 'project-status' ? await service.projects.status(id) : await service.status(id);
     const ok = result.status !== 'uncertain';
