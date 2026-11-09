@@ -246,12 +246,20 @@ export function danglingToolCalls(turns: UnifiedTurn[]): string[] {
  * 交接前的披露文案（`open` 与 `switch` 共用一份措辞）：没有未完成的调用时返回 null。
  * `label` 由调用方给（「来源会话 <id>（<provider>）」/「会话 <id>（<provider>）」），
  * 两条路径各写一套会让同一件事在桌面端和 CLI 里说法不一致。
+ *
+ * `next` 只换最后那句后果 / 下一步，默认是「交接」的口径。**目标会话即将被 resume** 时
+ * 没有交接发生（`open --from` 零增量、`open --to` 复用既有会话），照说「交接后那一轮不完整」
+ * 会让人以为刚写进了一份不完整的内容——那种情况由调用方换一句。
  */
-export function describeDanglingToolCalls(turns: UnifiedTurn[], label: string): string | null {
+export function describeDanglingToolCalls(
+  turns: UnifiedTurn[],
+  label: string,
+  next = '交接后那一轮不完整，先在原生 CLI 里确认再继续',
+): string | null {
   const dangling = danglingToolCalls(turns);
   if (dangling.length === 0) return null;
   const shown = dangling.slice(0, 3).join(', ');
-  return `${label}有 ${dangling.length} 次工具调用没有结果（callId: ${shown}${dangling.length > 3 ? ' 等' : ''}），可能在中断或仍在运行：交接后那一轮不完整，先在原生 CLI 里确认再继续`;
+  return `${label}有 ${dangling.length} 次工具调用没有结果（callId: ${shown}${dangling.length > 3 ? ' 等' : ''}），可能在中断或仍在运行：${next}`;
 }
 
 /**
@@ -273,13 +281,17 @@ export function unansweredUserTail(turns: UnifiedTurn[]): UnifiedTurn | null {
   return last;
 }
 
-/** 与 `describeDanglingToolCalls` 同一套披露口径，未闭合时返回 null。 */
-export function describeUnansweredTail(turns: UnifiedTurn[], label: string): string | null {
+/** 与 `describeDanglingToolCalls` 同一套披露口径（含可替换的结尾那句），未闭合时返回 null。 */
+export function describeUnansweredTail(
+  turns: UnifiedTurn[],
+  label: string,
+  next = '交接后接手的一侧会看到一句悬空的问题，先在原生 CLI 里确认再继续',
+): string | null {
   const tail = unansweredUserTail(turns);
   if (!tail) return null;
   const full = tail.text.trim().replace(/\s+/g, ' ');
   const preview = full.length > 40 ? `${full.slice(0, 40)}…` : full;
-  return `${label}最后停在用户消息上（「${preview}」），没有对应的助手回复：这一轮可能被中断或还在生成，交接后接手的一侧会看到一句悬空的问题，先在原生 CLI 里确认再继续`;
+  return `${label}最后停在用户消息上（「${preview}」），没有对应的助手回复：这一轮可能被中断或还在生成，${next}`;
 }
 
 export function ensureAssistant(turns: UnifiedTurn[], timestamp: string, provider: string): UnifiedTurn {  const last = turns.at(-1);

@@ -500,6 +500,10 @@ export async function openSession(
       // 写前快照：与 handoff 一致，写入前再比一次（目标被外部写入则中止）
       const dstDigest = (await target.adapter.contentFingerprint?.(target.found.ref)) ?? null;
       const outgoing = diffTurns(srcTurns, dstTurns);
+      // 目标就是这条即将 resume 的会话：它自己没收尾要说，与来源那一侧各说各的
+      warnResumeTargetUnfinished(dstTurns, `目标会话 ${targetId}（${target.adapter.displayName}）`, outgoing.length, (msg) =>
+        warnings.push(msg),
+      );
       if (outgoing.length === 0) {
         notes.push(`${from} 的内容已全部包含在 ${targetId} 中，无需并入`);
       } else {
@@ -683,6 +687,39 @@ function warnUnfinishedTurns(turns: UnifiedTurn[], label: string, push: (msg: st
 }
 
 /**
+ * **目标**会话是即将被 resume 的那一条（`--from` 并入既有会话、`--to` 复用或链上配对），
+ * 可它自己停在做了一半的一轮上时，以前一句都不提——`open <同一个 id>` 单独打开时明明会说
+ * （那里 label 是「会话 …（…）」），同一条会话换个入口就两种说法。
+ *
+ * 判定分两档，都不误报：
+ * - 工具调用没有结果：它在会话中途，**这次并入多少轮都不会闭合**，所以一直说；
+ * - 最后停在用户消息上：并入增量之后最后一条 turn 已不是它，「最后停在用户消息上」会变成假话，
+ *   所以只在这轮**零增量**（也就是「直接打开」）时说。
+ *
+ * 结尾那句也换掉：这里没有交接发生，说「交接后那一轮不完整」会让人以为刚写进了坏内容。
+ */
+function warnResumeTargetUnfinished(
+  turns: UnifiedTurn[],
+  label: string,
+  merged: number,
+  push: (msg: string) => void,
+): void {
+  const dangling = describeDanglingToolCalls(
+    turns,
+    label,
+    '即将 resume 的这条会话里那一轮仍是断的——先在原生 CLI 里确认或收尾再继续',
+  );
+  if (dangling) push(dangling);
+  if (merged > 0) return;
+  const tail = describeUnansweredTail(
+    turns,
+    label,
+    '即将 resume 时接手的一侧同样会看到一句悬空的问题——先在原生 CLI 里确认或收尾再继续',
+  );
+  if (tail) push(tail);
+}
+
+/**
  * 目标会话里的坏行会被 parse 跳过，于是 `diffTurns(来源, 目标)` 把「已有但解析不出」的内容
  * 当成缺失、再追加一遍；round-trip 也查不出来（比对的是解析结果）。只能在这里主动披露。
  */
@@ -799,6 +836,13 @@ async function planOpenInProvider(
       const delta = dedupeCallEvents(diffTurns(turns, pairTurns));
       if (delta.length < turns.length / 2) {
         await warnTargetBadLines(chainPaired, target, diagnostics);
+        // 复用后 resume 的就是这条会话：它自己的断点要披露，与来源那一侧分开说
+        warnResumeTargetUnfinished(
+          pairTurns,
+          `目标会话 ${chainPaired.sessionId}（${target.displayName}）`,
+          delta.length,
+          (msg) => diagnostics?.push(msg),
+        );
         const snapshot = (await target.contentFingerprint?.(chainPaired)) ?? null;
         return {
           ...base,
@@ -890,6 +934,10 @@ async function planOpenInProvider(
     }
     await warnTargetBadLines(reuse, target, diagnostics);
     const delta = dedupeCallEvents(diffTurns(turns, destinationTurns));
+    // 复用后 resume 的就是这条会话：它自己的断点要披露，与来源那一侧分开说
+    warnResumeTargetUnfinished(destinationTurns, `目标会话 ${reuse.sessionId}（${target.displayName}）`, delta.length, (msg) =>
+      diagnostics?.push(msg),
+    );
     const snapshot = (await target.contentFingerprint?.(reuse)) ?? null;
     return {
       ...base,
