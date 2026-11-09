@@ -145,10 +145,12 @@ export function isEmptySessionFileReason(reason: string): boolean {
  * 一执行就失败。返回 `null` 表示读得出来，否则是中文原因（已带路径）。
  *
  * **`open` 成功也不代表有内容可恢复**：进程被杀 / 只写了一半 / 磁盘满时，会话文件会被
- * 截成 0 字节，`open` 依然成功，而这条会话连 cwd 都读不出来（`open <id>` 会说「找到了，
- * 但读不出来：前 60 行里没有 cwd 字段」）。七处调用点（`switch` 的链尾、`new` 的同家拒绝、
- * `status` 的链尾与 tips、`chain list` 的 tip、`doctor` 的 pathPresence、`adopt`）都靠这一个
- * 判定，漏了它就会集体替一条空文件宣称「可以直接打开」。判据放在这里而不是各调用点各写一遍。
+ * 截成 0 字节，`open` 依然成功。claude / codex / pi 的 cwd 来自文件内容，`findById` 会报
+ * 「找到了，但读不出来：…（会话文件是空的…）」；grok 的 cwd 来自目录名、kimi 来自索引，
+ * 一条 0 字节的文件照样反查得到，`open` 的四条分支（摘要、`--from` 的来源与目标、
+ * `--to` 同家快路径、`--to` 的空来源）得自己探这一下。`switch` 的链尾、`new` 的同家拒绝、
+ * `status` 的链尾与 tips、`chain list` 的 tip、`doctor` 的 pathPresence、`adopt` 也共用它；
+ * 漏了任何一处都会替一条空文件宣称「可以直接打开」。判据放在这里而不是各调用点各写一遍。
  */
 export async function probeSessionReadable(filePath: string): Promise<string | null> {
   let handle: Awaited<ReturnType<typeof open>> | undefined;

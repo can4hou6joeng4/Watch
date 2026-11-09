@@ -16,6 +16,8 @@ import {
   describeReadFailureOrSelf,
   describeSessionReadFailure,
   describeSessionReadFailureReason,
+  isEmptySessionFileReason,
+  probeSessionReadable,
 } from './core/read-text.js';
 import { sessionCwdProblem } from './core/cwd.js';
 
@@ -313,6 +315,20 @@ function fileReadReason(error: unknown): string {
   return describeReadFailureOrSelf(error);
 }
 
+/**
+ * 解析出 0 轮时再探一次文件：0 字节是内容已丢失，与「这条会话本来就没有内容」是两回事。
+ *
+ * 只有 cwd 不来自文件内容的适配器会带着一条 0 字节的文件走到 `open` 的这几条分支上
+ * （grok 从目录名解出 cwd、kimi 从索引读），claude / codex / pi 在 `findById` 就因为读不出
+ * cwd 抛 `found-unreadable` 了——于是同一个状态在 `open <id>` 上被讲成「没有可转入的内容」
+ * 或干脆什么都不说，而 `sessions` / `status` / `switch` 从 275–284 轮起都会说「0 字节，内容已丢失」。
+ * 判据仍只有一处（`probeSessionReadable()` + `isEmptySessionFileReason()`）。
+ */
+async function zeroByteSessionReason(ref: SessionRef): Promise<string | null> {
+  const reason = await probeSessionReadable(ref.filePath);
+  return reason && isEmptySessionFileReason(reason) ? reason : null;
+}
+
 /** POSIX 单引号包裹（含单引号转义），供拼接可复制的 cd / command */
 export function shellQuote(s: string): string {
   return `'${s.replace(/'/g, `'\\''`)}'`;
@@ -486,6 +502,23 @@ export async function openSession(
           error: `目标会话 ${target.found.ref.sessionId}（${target.adapter.displayName}）读取失败：${describeReadFailureOrSelf(error)}；本次未写入任何内容`,
         };
       }
+      // 解析出 0 轮不代表「这条会话本来就没有内容」：grok / kimi 这类 cwd 不来自文件内容的
+      // 适配器会带着一条 0 字节的文件一路走到这里。以前 0 字节来源只得到一句「内容已全部包含在
+      // 目标中，无需并入」——看着像一次真的并入，实际来源的历史早就没了。
+      const sourceZeroByte = srcTurns.length === 0 ? await zeroByteSessionReason(source.found.ref) : null;
+      const targetZeroByte = dstTurns.length === 0 ? await zeroByteSessionReason(target.found.ref) : null;
+      if (sourceZeroByte) {
+        warnings.push(
+          `来源会话 ${source.found.ref.sessionId}（${source.adapter.displayName}）的${sourceZeroByte}；` +
+            `这次没有任何可并入的内容，目标会话 ${targetId} 未被改动——如果这条会话本该有内容，先从备份恢复该文件再重试（Watch 不会替你重建历史）`,
+        );
+      }
+      if (targetZeroByte) {
+        warnings.push(
+          `目标会话 ${targetId}（${target.adapter.displayName}）的${targetZeroByte}；` +
+            `它原有的历史已经没了，本次并入的只有来源的内容——如果目标会话本该有内容，先从备份恢复该文件再重试（Watch 不会替你重建历史）`,
+        );
+      }
       warnUnfinishedTurns(
         srcTurns,
         `来源会话 ${source.found.ref.sessionId}（${source.adapter.displayName}）`,
@@ -505,7 +538,11 @@ export async function openSession(
         warnings.push(msg),
       );
       if (outgoing.length === 0) {
-        notes.push(`${from} 的内容已全部包含在 ${targetId} 中，无需并入`);
+        notes.push(
+          sourceZeroByte
+            ? `${from} 的会话文件是空的（内容已丢失），没有可并入的内容`
+            : `${from} 的内容已全部包含在 ${targetId} 中，无需并入`,
+        );
       } else {
         const dedup = dedupeCallEvents(outgoing);
         // 工作目录要在写入之前取：`importTurns` 之后 `target.found` 会换成它返回的 ref
@@ -554,6 +591,17 @@ export async function openSession(
     }
     try {
       const turns = await target.adapter.parse(target.found.ref);
+      // 0 轮不一定是「这条会话本来就没内容」（grok / kimi 的 cwd 不来自文件内容，0 字节也能走到这里）：
+      // 不探一次，`open` 就会对着一条内容已经丢了的会话打印一条看起来完全正常的 resume
+      if (turns.length === 0) {
+        const empty = await zeroByteSessionReason(target.found.ref);
+        if (empty) {
+          warnings.push(
+            `会话 ${target.found.ref.sessionId}（${target.adapter.displayName}）的${empty}；` +
+              `下面这条 resume 命令虽然能打开它，但历史内容已经没有了——如果它本该有内容，先从备份恢复这个文件（Watch 不会替你重建历史）`,
+          );
+        }
+      }
       // 即将 resume 的这个会话本身就停在做了一半的工具调用上：resume 后客户端多半也停在那里
       warnUnfinishedTurns(
         turns,
@@ -778,6 +826,17 @@ async function planOpenInProvider(
     // `diagnostics` 同时喂给预检与写入，所以 `--check` 也会提前说。
     try {
       const ownTurns = await source.adapter.parse(sourceRef);
+      // 这条快路径要 resume 的就是来源会话自己：0 轮时同样探一次，否则一条 0 字节的会话
+      // 会得到「来源即目标，直接恢复原会话」而没有任何「内容已丢失」的说明
+      if (ownTurns.length === 0) {
+        const empty = await zeroByteSessionReason(sourceRef);
+        if (empty) {
+          diagnostics?.push(
+            `目标会话 ${sourceRef.sessionId}（${target.displayName}）的${empty}；` +
+              `这次要 resume 的就是它，历史内容已经没有了——如果它本该有内容，先从备份恢复这个文件再重试（Watch 不会替你重建历史）`,
+          );
+        }
+      }
       warnResumeTargetUnfinished(ownTurns, `目标会话 ${sourceRef.sessionId}（${target.displayName}）`, 0, (msg) =>
         diagnostics?.push(msg),
       );
@@ -815,7 +874,22 @@ async function planOpenInProvider(
     `来源会话 ${sourceId}（${source.adapter.displayName}）`,
     (msg) => diagnostics?.push(msg),
   );
-  if (outgoing.length === 0) return { ok: false, error: `来源会话 ${sourceId} 没有可转入的内容` };
+  if (outgoing.length === 0) {
+    // 0 字节来源在这句话里曾是同一句「没有可转入的内容」：看不出内容已经丢了，也不说这次
+    // 到底有没有写入（确实是零写入，但必须说出来），更不给下一步——而 handoff 那边的同一种
+    // 状态从 284 轮起已经会说「0 字节，内容已丢失」+ 两条可照抄的路径。
+    const empty = await zeroByteSessionReason(sourceRef);
+    const lead = empty
+      ? `来源会话 ${sourceId}（${source.adapter.displayName}）的${empty}；没有可转入的内容（0 轮）。` +
+        `本次未写入任何内容——如果这条会话本该有内容，先从备份恢复该文件（Watch 不会替你重建历史）再重试`
+      : `来源会话 ${sourceId} 没有可转入的内容（0 轮）；本次未写入任何内容`;
+    return {
+      ok: false,
+      error:
+        `${lead}。要从零在 ${target.displayName} 侧开新会话，请先另起一条链：watch chain new <新名字> 之后 watch new ${providerId}` +
+        `；若 ${target.displayName} 侧已有会话，可用 watch adopt ${providerId} --session <会话 id> 接进来`,
+    };
+  }
 
   // 决策 1：来源在链上 → 回链上另一侧配对会话并并入增量；
   // 但目标 provider 的链上「最新配对」不一定对应该输入（同链会分叉出多条线），
