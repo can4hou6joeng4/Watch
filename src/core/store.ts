@@ -1010,7 +1010,17 @@ export class Store {
     } catch {
       // 链尾只是补充说明，读不出来不影响「这是链不是会话」这条结论
     }
-    const where = cwd && this.normCwd(cwd) !== row.cwd ? `（它属于目录 ${row.cwd}，不是你这次的 --cwd）` : '';
+    // 「它属于目录 X」是一句断言：`--cwd` 只是同一个目录的另一种写法（软链、`/var` 与
+    // `/private/var` 这类前缀、大小写）时，链就在用户当前的目录里，说成别处会让人以为
+    // 该去另一个项目找——而 `chain list --cwd <link>` 在同一次运行里已经把它认成
+    // `sameDirectory: true`，两条命令会互相矛盾。下一步不变：链按记录里的原字符串匹配，
+    // 只有换成它才查得到。
+    let where = '';
+    if (cwd && this.normCwd(cwd) !== row.cwd) {
+      where = sameDirectorySync(cwd, row.cwd)
+        ? `（这条链记录在同一个目录的另一种写法下: ${row.cwd}，不是你这次的 --cwd——要看它请把 --cwd 换成 ${row.cwd}）`
+        : `（它属于另一个目录 ${row.cwd}，不是你这次的 --cwd）`;
+    }
     return `这个 id 是链「${escapeControlChars(row.name)}」（${status}）的 id，不是会话 id${where}${tip}；要打开会话请用 watch status --cwd <目录> 或 watch chain list 里链尾的实际会话 id`;
   }
 
