@@ -150,6 +150,14 @@ export type DoctorDeps = {
   importJobsError?: string;
   /** 执行日志根目录（供报告标注路径）；不传则报告记为 null */
   importsRoot?: string;
+  /**
+   * 本地库是 `WATCH_DB=:memory:`（由 CLI 判）时的一条说明。
+   *
+   * 这一档库是**好的**——读得到、写也成功，只是每条命令都是全新的空库。于是「本目录 0 条链」
+   * 会被读成「你从来没建过链」，而真正的原因是链记录只活在上一条命令的进程里。
+   * 排障入口说不出这一点的后果最严重：用户正是来问「为什么全是 0」的。
+   */
+  ephemeralNote?: string;
   /** 测试可覆盖；默认读当前进程与 package.json */
   environment?: DoctorEnvironment;
 };
@@ -442,6 +450,9 @@ export async function doctorReport(cwd: string, deps: DoctorDeps): Promise<Docto
           // 补充说明而已：库读不出来时正文照常给，真正的库故障已由 listChains 那条处理
         }
       }
+      // 与 `chainsElsewhere` 分开：那一档说「链在别的目录」，这一档说「链只活在上一条命令里」。
+      // 两者都不成立时（真没建过链）一个字都不多说
+      if (!chains.length && deps.ephemeralNote) warnings.push(deps.ephemeralNote);
       store = {
         available: true,
         chains: chains.length,

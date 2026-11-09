@@ -474,6 +474,11 @@ async function cmdStatus(cwd: string, json: boolean, chain?: string): Promise<vo
   // 「这个目录没有链」与「一条链都没建过」原本长得一样：链按 cwd 精确分组，--cwd 指错地方
   // 时正文只有「切换链: （空）」，用户会以为链丢了。别处的链要说出来，并给出可照抄的 --cwd
   const elsewhere = result.chains.length ? [] : chainsElsewhereOf(store, cwd);
+  // `:memory:` 时这条命令拿到的是全新的空库：上面那句「本目录 0 条链」是结论，而用户上一句
+  // 刚跑过 chain new / switch / adopt——不说清库的性质，就只剩「链丢了 / 库坏了」一种读法
+  if (ephemeralDb && !result.chains.length) {
+    result.warnings.push(ephemeralStoreWarning('本目录的链与链尾都来自这份临时库，它每条命令都是空的'));
+  }
   // 同一个目录的另一种写法单独算：说成「其它目录」会让人以为项目根本没有链
   const splitElsewhere = await splitChainsElsewhere(elsewhere, cwd);
   // 零会话 + `--cwd` 是同一个目录的另一种写法（软链 / 大小写）：正文那句「未发现会话」是结论，
@@ -1029,6 +1034,11 @@ async function cmdSessions(cwd: string, json: boolean, chain?: string): Promise<
       } else if (chain) {
         // 跨目录的链在这里同样是「找不到」，但指名它在哪个目录，用户才知道该改 --cwd
         warnings.push(`${store.missingChainMessage(cwd, chain)}；已列出该目录全部会话`);
+        // 「本目录还没有任何链」在 :memory: 下是假结论：那条链可能刚在上一条命令里建过，
+        // 只是它的库随进程消失了。与 status / usage / doctor 同一条披露
+        if (ephemeralDb) {
+          warnings.push(ephemeralStoreWarning('本目录的链与链尾都来自这份临时库，它每条命令都是空的'));
+        }
       }
     } catch (error) {
       // 链查询失败时退化为全量列表，但要说清楚，否则 --chain 的输出会被误读
@@ -1372,7 +1382,11 @@ async function cmdDoctor(cwd: string, json: boolean, strict: boolean): Promise<v
         ? 'WATCH_DB=:memory: 不落盘，没有导入日志'
         : error instanceof Error ? error.message : String(error);
     }
-    const report = await doctorReport(cwd, { store, storeError: lastStoreError ?? undefined, importJobs, importJobsError, importsRoot });
+    const report = await doctorReport(cwd, { store, storeError: lastStoreError ?? undefined, importJobs, importJobsError, importsRoot,
+      // 「本目录 0 条链」在 :memory: 下同样是一句结论：排障入口说不出库是临时的，
+      // 用户得到的唯一解释就是「你从来没建过链」
+      ...(ephemeralDb ? { ephemeralNote: ephemeralStoreWarning('本目录 0 条链来自这份临时库，它每条命令都是空的') } : {}),
+    });
     // 退出码与 `open --check` 同一口径：`ok` 只表示「诊断这个动作跑通了」，
     // 检查结论在 `summary` 里。以前 doctor 无论发现什么都 exit 0，CI / 脚本拿它当
     // 健康检查时会被骗过——本地库打不开、链尾全坏，退出码仍是 0。
@@ -2144,6 +2158,16 @@ async function cmdUsage(cwd: string, json: boolean, chain?: string): Promise<voi
   try {
     const result = await chainUsage(cwd, listAdapters(), store, chain, lastStoreError ?? undefined);
     if (cwdIssue) result.warnings.push(cwdIssue);
+    // `:memory:` 下 notes 那句「还没建链，或现有链都已归档」是假结论：这条命令拿到的是全新的
+    // 空库，上一条命令里建的链早就随那个进程消失了。warning 讲库的性质，notes 讲这份报告
+    // 为什么是空的——两者都改，否则同一份输出里既说「还没建链」又说「记录已随进程消失」
+    if (ephemeralDb && !result.chain) {
+      result.warnings.push(ephemeralStoreWarning('本目录的链与链尾都来自这份临时库，它每条命令都是空的'));
+      result.notes = [
+        '这份临时库里本目录没有可用的当前链，无用量可统计——之前用 chain new / switch / adopt 写的链记录都只活在各自那一条命令里',
+        ...(result.notes ?? []).filter((note) => !note.includes('还没建链')),
+      ];
+    }
     if (json) {
       console.log(JSON.stringify({ ok: true, ...result }));
       return;
