@@ -141,8 +141,17 @@ function failBlocked(error: HandoffBlockedError | PreflightBlockedError, json: b
 /** 最近一次 openStore 失败的原因；供「需要库」的子命令拼进错误文案 */
 let lastStoreError: string | null = null;
 
+/**
+ * 本次进程用的是 `WATCH_DB=:memory:`：库在**这一次**命令里完全可用（读得到自己刚写的东西），
+ * 但 CLI 每条命令都是一个新进程，命令一结束它就没了——下一次 `chain list` / `status` / `switch`
+ * 看到的是全新的空库。`:memory:` 本来是给测试用的（两条官方导入路径已明确拒绝它），
+ * 其余路径既不拒绝也不说，用户拿到 `ok:true` 只会以为写进磁盘了。
+ */
+let ephemeralDb = false;
+
 function openStore(): Store | null {
   const dbPath = process.env.WATCH_DB ?? defaultDbPath();
+  ephemeralDb = dbPath === ':memory:';
   try {
     lastStoreError = null;
     return new Store(dbPath);
@@ -161,6 +170,21 @@ function storeUnavailableError(): string {
   // 门槛会把人引去查 Node，而这几类失败与 Node 版本无关
   if (lastStoreError) return `无法打开本地库：${lastStoreError}`;
   return `无法打开本地库 ${db}；可检查路径与权限，Node ≥ 22.13 才提供 node:sqlite`;
+}
+
+/**
+ * `WATCH_DB=:memory:` 的披露文案，`subject` 说明这条命令本来写进去了什么。
+ *
+ * 这一档与「库打不开」完全不同：库是好的，`ok:true` 也是真的，只是它随进程消失。
+ * 以前写路径一个字都不说——`chain new alpha` 回 `{"ok":true,"chain":{…}}`，下一条
+ * `chain list` 是 `{"chains":[]}`，与「链丢了 / 库坏了」长得一模一样，用户会去查库文件。
+ */
+function ephemeralStoreWarning(subject: string): string {
+  return (
+    `WATCH_DB 指向 :memory:，本地库只存在于本次进程内（不是磁盘上的库）：${subject}——` +
+    '命令一结束这份库里的一切就没了，之后 status / chain list / switch 都看不到它；' +
+    '要让它保留下来，去掉 WATCH_DB=:memory: 再重跑（缺省写到 ~/.watch/watch.db）'
+  );
 }
 
 function fmtTime(ms: number): string {
@@ -558,6 +582,17 @@ async function cmdSwitch(cwd: string, targetId: string, json: boolean, chain?: s
     });
     // 路径不对时 handoff 只会说「没有可接力的会话」，补上真正的原因
     if (cwdIssue) result.warnings.push(cwdIssue);
+    // `:memory:` 时链记录随进程消失：会话内容是真的写进了原生文件的，链上却什么都没留下。
+    // `alreadyAtTarget` 本来就不写记录，按「这份库里记不到之前的切换」说，别把它讲成刚写过
+    if (ephemeralDb) {
+      result.warnings.push(
+        ephemeralStoreWarning(
+          result.alreadyAtTarget
+            ? '这份临时库里记录不到之前的切换（每条命令都是全新的空库）'
+            : '本次切换的链记录（链尾 / 切换记录）只在这份临时库里',
+        ),
+      );
+    }
     result.warnings.push(...chainProbe);
     // 显式写了 --chain 却把当前链换走了，是这条命令最该说的一句：用户的动机恰恰是
     // 「这一次操作那条链，别动当前链」，而输出只有「已从 X 交接 → Y」
@@ -762,6 +797,16 @@ async function cmdAdopt(
       lastStoreError ?? undefined,
     );
     if (cwdIssue) result.warnings.push(cwdIssue);
+    // 同 switch：`:memory:` 下链记录随进程消失，而 resume 命令是真的、会话文件也是真的
+    if (ephemeralDb) {
+      result.warnings.push(
+        ephemeralStoreWarning(
+          result.unchanged
+            ? '这份临时库里记录不到之前的接入（每条命令都是全新的空库）'
+            : '本次接入的链记录（链尾 / 切换记录）只在这份临时库里',
+        ),
+      );
+    }
     // 与 switch 对齐：接入之后用户下一步就是打开这个会话，resume 命令不能只给 --json
     const adoptedAdapter = listAdapters().find((a) => a.id === result.adoptedRef.provider);
     const resumeCommand = adoptedAdapter ? adoptedAdapter.resumeCommand(result.adoptedRef) : undefined;
@@ -1480,6 +1525,10 @@ async function cmdNew(cwd: string, providerId: string, json: boolean, chain?: st
     warnings.push(
       storeUnavailableWarning('本次新会话未写入链记录（后续切换不会认同这条绑定）', lastStoreError ?? undefined),
     );
+  } else if (ephemeralDb) {
+    // `:memory:` 时库是好的、绑定也写进去了，但它随进程消失：会话文件是真的，
+    // 链记录却没有。不说的话 `new` 的 ok:true + resume 会被读成「链上已经记好了」
+    warnings.push(ephemeralStoreWarning('本次新会话的链记录（链尾 / 切换记录）只在这份临时库里'));
   }
   try {
     let historyLen = 0;
@@ -1610,6 +1659,9 @@ async function cmdChain(cwd: string, json: boolean, action?: string, a?: string,
   // 链名 / cwd 都是精确匹配：路径写错时 rename / archive / use 只会说「找不到链」，
   // 跟 switch / adopt 一样先把路径原因带出来，否则会被当成「这条链不存在」
   const cwdIssue = await cwdProblem(cwd);
+  // `:memory:` 时每条命令都是一份全新的库：写进去的链记录随进程消失（见 `ephemeralStoreWarning`）。
+  // 四个写分支（new / rename / archive / use）都要带这一句，`list` 的版本在下面单独给。
+  const ephemeralWrite = ephemeralDb ? ephemeralStoreWarning('这次写入的链记录只在这份临时库里') : null;
   try {
     if (!action || action === 'list') {
       const chains = store.listChains(cwd);
@@ -1620,6 +1672,9 @@ async function cmdChain(cwd: string, json: boolean, action?: string, a?: string,
       const splitElsewhere = await splitChainsElsewhere(rawElsewhere, cwd);
       const elsewhere = [...splitElsewhere.same, ...splitElsewhere.other];
       const warnings = cwdIssue ? [cwdIssue] : [];
+      // `:memory:` 下这份库在每条命令里都是新的：正文「（无链）」/ 空清单是结论，
+      // 不解释的话会被当成链丢了或没建成功（见 `ephemeralStoreWarning`）
+      if (ephemeralDb) warnings.push(ephemeralStoreWarning('本目录的链来自这份临时库，它每条命令都是空的'));
       // 写入守卫（`assertChainNameUsable()`）只拦得住新名字：库里可能留着它上线前建出的
       // 坏名字。文本输出一律转义（`escapeControlChars`），但用户看到 `\u001B` 时得知道
       // 那不是自己打的名字，也知道怎么改掉——不说就等于把名字悄悄改成了另一串字符。
@@ -1759,8 +1814,14 @@ async function cmdChain(cwd: string, json: boolean, action?: string, a?: string,
       const switchNote = currentChainShiftNote(switchedFrom, switchedFrom ? chain : null);
       // 与 watch new 同理：路径错了照样建出链，但绑定指向不存在的项目，必须说明
       // （cwd 问题走降级警告通道；当前链变更走结果说明通道，见 `chain archive` 的同一分法）
+      // `:memory:` 时这条链只活在本次进程内：命令本身成功，但下一次 chain list 就看不到它
+      const ephemeralNote = ephemeralWrite;
       if (json) {
-        const warnings = [...(cwdIssue ? [cwdIssue] : []), ...(switchNote ? [switchNote] : [])];
+        const warnings = [
+          ...(cwdIssue ? [cwdIssue] : []),
+          ...(switchNote ? [switchNote] : []),
+          ...(ephemeralNote ? [ephemeralNote] : []),
+        ];
         console.log(
           JSON.stringify({
             ok: true,
@@ -1771,6 +1832,7 @@ async function cmdChain(cwd: string, json: boolean, action?: string, a?: string,
         );
       } else {
         if (cwdIssue) console.error(`警告: ${cwdIssue}`);
+        if (ephemeralNote) console.error(`警告: ${ephemeralNote}`);
         console.log(`已创建链: ${escapeControlChars(chain.name)}  (${chain.id})`);
         // 与 `chain rename` / `chain archive` 的提示同一位置：跟在结果下一行，不是降级警告
         if (switchNote) console.log(`  ${switchNote}`);
@@ -1802,8 +1864,13 @@ async function cmdChain(cwd: string, json: boolean, action?: string, a?: string,
       const renameHint = wasArchived
         ? `这条链是归档状态，改名不会让它变成当前链；可用 watch chain use ${escapeControlChars(chain.name)} 恢复`
         : null;
-      if (json) console.log(JSON.stringify({ ok: true, chain, ...(renameHint ? { warnings: [renameHint] } : {}) }));
-      else {
+      const renameWarnings = [renameHint, ephemeralWrite].filter((w): w is string => Boolean(w));
+      if (json) {
+        console.log(
+          JSON.stringify({ ok: true, chain, ...(renameWarnings.length ? { warnings: renameWarnings } : {}) }),
+        );
+      } else {
+        if (ephemeralWrite) console.error(`警告: ${ephemeralWrite}`);
         console.log(`已重命名: ${escapeControlChars(chain.name)}  (${chain.id})`);
         if (renameHint) console.log(`  ${renameHint}`);
       }
@@ -1837,16 +1904,18 @@ async function cmdChain(cwd: string, json: boolean, action?: string, a?: string,
           ? `当前链已从「${escapeControlChars(found.name)}」换成「${escapeControlChars(nextCurrent.name)}」；之后不带 --chain 的 status / switch / new / adopt 都作用在「${escapeControlChars(nextCurrent.name)}」上（要按名字指定这条链用 watch chain use ${escapeControlChars(nextCurrent.name)}）`
           : `「${escapeControlChars(found.name)}」原本是本目录的当前链，归档后已经没有其它活跃链了；status / switch / new / adopt 需要先用 watch chain new <新名字> 建一条，或 watch chain use ${escapeControlChars(found.name)} 恢复`
         : null;
+      const archiveWarnings = [currentNote, ephemeralWrite].filter((w): w is string => Boolean(w));
       if (json) {
         console.log(
           JSON.stringify({
             ok: true,
             id: found.id,
             ...(nextCurrent ? { currentChain: nextCurrent } : {}),
-            ...(currentNote ? { warnings: [currentNote] } : {}),
+            ...(archiveWarnings.length ? { warnings: archiveWarnings } : {}),
           }),
         );
       } else {
+        if (ephemeralWrite) console.error(`警告: ${ephemeralWrite}`);
         console.log(`已归档: ${escapeControlChars(found.name)}（可用 watch chain use ${escapeControlChars(found.name)} 恢复）`);
         // 与 `chain rename` 对归档链的提示同一位置：跟在结果下一行，不是降级警告
         if (currentNote) console.log(`  ${currentNote}`);
@@ -1864,8 +1933,19 @@ async function cmdChain(cwd: string, json: boolean, action?: string, a?: string,
         // 以前这里自己再查一次、查不到还退成 `{ ...found, status: 'active' }`，
         // 报出去的 lastUsedAt 是归档前的旧值
         const restored = store.restoreChain(found.id);
-        if (json) console.log(JSON.stringify({ ok: true, restored: true, chain: restored }));
-        else console.log(`已恢复并设为当前链: ${escapeControlChars(restored.name)}  (${restored.id})`);
+        if (json) {
+          console.log(
+            JSON.stringify({
+              ok: true,
+              restored: true,
+              chain: restored,
+              ...(ephemeralWrite ? { warnings: [ephemeralWrite] } : {}),
+            }),
+          );
+        } else {
+          if (ephemeralWrite) console.error(`警告: ${ephemeralWrite}`);
+          console.log(`已恢复并设为当前链: ${escapeControlChars(restored.name)}  (${restored.id})`);
+        }
         return;
       }
       // 切换之前先看当前链是谁：「本来就在这条链上」与「刚切过来」以前输出一字不差
@@ -1882,16 +1962,18 @@ async function cmdChain(cwd: string, json: boolean, action?: string, a?: string,
         ? `「${escapeControlChars(found.name)}」本来就是本目录的当前链，本次没有发生切换；` +
           `不带 --chain 的 status / switch / new / adopt 一直作用在它上面（本次只刷新了它的最近使用时间）`
         : null;
+      const useWarnings = [note, ephemeralWrite].filter((w): w is string => Boolean(w));
       if (json) {
         console.log(
           JSON.stringify({
             ok: true,
             ...(unchanged ? { unchanged: true } : {}),
             chain: touched,
-            ...(note ? { warnings: [note] } : {}),
+            ...(useWarnings.length ? { warnings: useWarnings } : {}),
           }),
         );
       } else {
+        if (ephemeralWrite) console.error(`警告: ${ephemeralWrite}`);
         console.log(`当前链: ${escapeControlChars(touched.name)}  (${touched.id})`);
         if (note) console.log(`  ${note}`);
       }
@@ -2121,6 +2203,11 @@ async function cmdSearch(cwd: string, json: boolean, query: string): Promise<voi
     const emptied: EmptiedSession[] = [];
     const cwdIssue = await cwdProblem(cwd);
     if (cwdIssue) warnings.push(cwdIssue);
+    // `:memory:` 时索引只活在本次进程内：每次 search 都得从头全量建一遍，
+    // 命令结束后也没有任何东西留下来。不说的话只会表现为「搜什么都慢、而且只有本次能搜到」
+    if (ephemeralDb) {
+      warnings.push(ephemeralStoreWarning('搜索索引建在这份临时库里，命令结束就没了（每次 search 都要重新全量索引）'));
+    }
     await reindexCwd(cwd, listAdapters(), store, warnings, unavailable, emptied);
     // 0 字节会话（进程被杀 / 只写了一半 / 磁盘满）索引里一行内容都没有，命中永远为零。
     // 只回「没有匹配」会被读成「那句话没聊过」，而它可能正躺在一条内容已丢失的会话里。
