@@ -444,7 +444,31 @@ export async function createChainSession(
           `若这个会话不再需要，用 watch chain new <新名字> 另起一条链后再 watch new ${providerId}`,
       );
     }
-    throw new Error(`链尾已是 ${providerId}，直接 resume 即可；要开新对话请先切到另一侧`);
+    // 「直接 resume 即可」还隐含一个前提：这条会话本身是收尾的。同一条会话改用 `open <id>`
+    // 单独打开、或用 `switch <同一家>` 时都会说「有 N 次工具调用没有结果」/「最后停在用户消息上」，
+    // 只有 `new` 什么都不看——而且连会话 id 都不给（用户还得再跑一次 `watch status` 才找得到）。
+    // 解析失败也不能当成「没问题」：`probeSessionReadable` 只证明打得开，不代表读得出内容。
+    const tipAdapter = resolve(providerId);
+    let tipUnfinished: string[] = [];
+    if (tipAdapter) {
+      try {
+        tipUnfinished = describeResumeTargetUnfinished(
+          await tipAdapter.parse(tail.toRef),
+          // 前半句刚印过会话 id，这里不再重复一遍
+          `链尾会话（${tipAdapter.displayName}）`,
+          0,
+        );
+      } catch {
+        tipUnfinished = [
+          `但读不出它的内容，无法确认它是否停在做了一半的一轮上——先确认这个会话文件可读再 resume`,
+        ];
+      }
+    }
+    const resume = tipAdapter ? tipAdapter.resumeCommand(tail.toRef) : `resume 会话 ${tail.toRef.sessionId}`;
+    throw new Error(
+      `链尾已是 ${providerId}：会话 ${tail.toRef.sessionId}（${resume}），直接 resume 即可；要开新对话请先切到另一侧` +
+        (tipUnfinished.length ? `。注意：${tipUnfinished.join('；')}` : ''),
+    );
   }
   const paired = pairedRef(history, providerId);
   if (paired) {
