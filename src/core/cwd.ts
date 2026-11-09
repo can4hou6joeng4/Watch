@@ -1,6 +1,7 @@
 // `--cwd` 指向的路径是否有问题：各 provider 的 listSessions / findLatestSession 按原生记录的
 // 路径字符串精确比较，路径错了只会安静返回 0，看起来像「这个目录没有会话」。查询类命令与
 // `watch doctor` 统一用这里的说明做披露，避免同一个坑每处各写一份文案。
+import { realpathSync } from 'node:fs';
 import { realpath, stat } from 'node:fs/promises';
 import { normalizePath } from './platform.js';
 
@@ -128,6 +129,25 @@ async function safeRealpath(target: string): Promise<string | null> {
   } catch {
     // 不存在 / 读不出来：不能据此断言「是同一个目录」，调用方退回原串比较
     return null;
+  }
+}
+
+/**
+ * 两个路径字符串是不是指向**同一个目录**（同步版，供必须在同步 API 里给结论的地方用）。
+ *
+ * 「属于另一个目录」是一句断言：链与链尾会话都按 `--cwd` 的**原字符串**记录，`--cwd` 只是
+ * 同一个目录的另一种写法（软链、`/var` 与 `/private/var` 这类前缀、大小写）时，那句话就是错的。
+ * `Store.missingChainMessage()` 与 `cmdAdopt` 都在同步上下文里（前者是 `Store` 方法、后者在
+ * `catch` 里直接拼文案），所以给一份同步实现，而不是把它们改成异步。
+ *
+ * 只调 `realpathSync`、不碰别的：两者都能解析时才敢说「同一个目录」；读不出来退回 `normalizePath`
+ * 的字符串比较——读不出来不能反过来讲成「就是同一个」。
+ */
+export function sameDirectorySync(a: string, b: string): boolean {
+  try {
+    return normalizePath(realpathSync(a)) === normalizePath(realpathSync(b));
+  } catch {
+    return normalizePath(a) === normalizePath(b);
   }
 }
 

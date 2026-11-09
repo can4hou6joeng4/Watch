@@ -3,6 +3,7 @@ import { chmodSync, mkdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { homedir } from 'node:os';
 import { randomUUID } from 'node:crypto';
+import { sameDirectorySync } from './cwd.js';
 import { escapeControlChars } from './display.js';
 import { normalizePath } from './platform.js';
 import { probeSqliteTables, readSqliteFileHead } from './sqlite-file.js';
@@ -946,6 +947,16 @@ export class Store {
       }[])[0];
     if (hit && hit.cwd !== normalized) {
       const status = hit.status === 'archived' ? '（已归档）' : '';
+      // 「属于另一个目录」是一句断言：`--cwd` 只是同一个目录的另一种写法时（软链、
+      // `/var` 与 `/private/var` 这类前缀、大小写），链就在这个项目里，说成别处会让人
+      // 以为链丢了、或以为该去另一个项目找。下一步不变——链按 `--cwd` 精确匹配，
+      // 只有换成记录里的原字符串才查得到。
+      if (sameDirectorySync(cwd, hit.cwd)) {
+        return (
+          `${base}——链「${escapeControlChars(hit.name)}」${status}在同一个目录的另一种写法下: ${hit.cwd}；` +
+          `把 --cwd 换成 ${hit.cwd} 重跑同一条命令（其余参数照旧）——链按 --cwd 原字符串匹配，写法不同就一条都看不到`
+        );
+      }
       return `${base}——链「${escapeControlChars(hit.name)}」${status}属于另一个目录: ${hit.cwd}；请用 --cwd ${hit.cwd}`;
     }
     // 本目录里一条链都没有：没有可列的清单，也不该暗示「你有别的链可选」，

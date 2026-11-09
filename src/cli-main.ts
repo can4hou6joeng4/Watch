@@ -14,7 +14,7 @@ import { runImportCodex } from './import-codex.js';
 import { ImportJobs } from './core/import-jobs.js';
 import { officialImportJournalRoot } from './providers/codex/official-import.js';
 import { doctorReport } from './core/doctor.js';
-import { cwdAliasHint, cwdProblem, describeCwdProblem, describeNewSessionCwd, inspectCwd, splitElsewhereByDirectory } from './core/cwd.js';
+import { cwdAliasHint, cwdProblem, describeCwdProblem, describeNewSessionCwd, inspectCwd, sameDirectorySync, splitElsewhereByDirectory } from './core/cwd.js';
 import { escapeControlChars, hasControlChars } from './core/display.js';
 import { trimUserKey } from './core/cli-input.js';
 import { describePathReadFailureReason, describeSessionReadFailureReason, probeSessionReadable, sessionFilePresence } from './core/read-text.js';
@@ -625,11 +625,17 @@ async function cmdAdopt(
         // 会话确实存在、只是属于另一个目录时，说「在当前目录找不到」会让人以为 id 写错了。
         // findById 是按 id 全局反查，不受 listSessions 的 cwd 过滤与条数上限影响。
         let elsewhere: string | null = null;
+        // `--cwd` 只是同一个目录的另一种写法时记在这里：会话就在这个项目里，
+        // 说成「另一个目录」会让人以为 id 抄错了或该去别的项目找
+        let sameDirAs: string | null = null;
         let lookupError: string | null = null;
         if (adapter.findById) {
           try {
             const found = await adapter.findById(sessionId);
-            if (found && found.ref.cwd !== cwd) elsewhere = found.ref.cwd;
+            if (found && found.ref.cwd !== cwd) {
+              if (sameDirectorySync(cwd, found.ref.cwd)) sameDirAs = found.ref.cwd;
+              else elsewhere = found.ref.cwd;
+            }
           } catch (error) {
             // 反查失败不能静默退成「在当前目录找不到会话」：权限、库损坏会被读成 id 写错或会话不存在。
             // 适配器自己写好的中文原因原样保留（`describePathReadFailureReason` 只翻漏网的 fs errno），
@@ -637,9 +643,15 @@ async function cmdAdopt(
             lookupError = describePathReadFailureReason(error);
           }
         }
+        if (sameDirAs) {
+          throw new Error(
+            `会话 ${sessionId} 在同一个目录的另一种写法下: ${sameDirAs}；adopt 按 cwd 绑定、按字符串精确匹配，` +
+              `把 --cwd 换成 ${sameDirAs} 重跑同一条命令（其余参数照旧）。本次未写入任何内容`,
+          );
+        }
         if (elsewhere) {
           throw new Error(
-            `会话 ${sessionId} 属于另一个目录: ${elsewhere}；adopt 按 cwd 绑定，请用 --cwd ${elsewhere}`,
+            `会话 ${sessionId} 属于另一个目录: ${elsewhere}；adopt 按 cwd 绑定，请用 --cwd ${elsewhere}。本次未写入任何内容`,
           );
         }
         // id 属于另一家 provider 时，「在当前目录找不到」会被读成 id 写错：adopt <provider>
@@ -664,7 +676,11 @@ async function cmdAdopt(
           if (found) {
             throw new Error(
               `会话 ${sessionId} 属于 ${other.id}，不是 ${providerId}；请改用 watch adopt ${other.id} --session ${sessionId}${
-                found.ref.cwd !== cwd ? `（它属于另一个目录: ${found.ref.cwd}，还要加 --cwd ${found.ref.cwd}）` : ''
+                found.ref.cwd === cwd
+                  ? ''
+                  : sameDirectorySync(cwd, found.ref.cwd)
+                    ? `（它在同一个目录的另一种写法下: ${found.ref.cwd}，还要把 --cwd 换成 ${found.ref.cwd}）`
+                    : `（它属于另一个目录: ${found.ref.cwd}，还要加 --cwd ${found.ref.cwd}）`
               }`,
             );
           }
