@@ -1,10 +1,9 @@
 import { createHash } from 'node:crypto';
-import { realpath } from 'node:fs/promises';
 import path from 'node:path';
 import { ImportJobs, type ProjectBindingOutcome, type ProjectBindingPlan } from '../../core/import-jobs.js';
 import type { SessionRef } from '../../core/types.js';
 import { asRecord, type ImportRpc, type RpcProfile } from './app-server.js';
-import { acquireImportTarget, assertImportTarget, assertTargetFile, IMPORT_TARGET_LOCK, inspectImportTarget, type ImportTarget } from './import-target.js';
+import { acquireImportTarget, assertImportTarget, assertNativeSqliteHome, assertTargetFile, IMPORT_TARGET_LOCK, inspectImportTarget, type ImportTarget } from './import-target.js';
 
 const UUID = /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i;
 type Dependencies = {
@@ -20,12 +19,10 @@ function historyDigest(thread: Record<string, unknown>): string {
   return createHash('sha256').update(JSON.stringify(thread.turns)).digest('hex');
 }
 
-async function inspectAssociation(rpc: ImportRpc, ref: SessionRef, projectId: string, target: ImportTarget) {
+// `next` 只在还没 claim 时带「；未提交导入」——`confirm()` 里 claim 之后那次读后复核不能再这么承诺
+async function inspectAssociation(rpc: ImportRpc, ref: SessionRef, projectId: string, target: ImportTarget, next = '') {
   const config = asRecord(asRecord(await rpc.request('config/read', { includeLayers: false })).config);
-  if (config.sqlite_home != null && (typeof config.sqlite_home !== 'string' || !path.isAbsolute(config.sqlite_home) ||
-    await realpath(config.sqlite_home) !== target.path)) {
-    throw new Error('原生 SQLite 目录与确认的目标不一致，需要额外验证');
-  }
+  await assertNativeSqliteHome(config, target, next);
   const project = asRecord(asRecord(await rpc.request('project/read', { projectId })).project);
   if (project.id !== projectId || typeof project.name !== 'string' || !Array.isArray(project.roots) ||
     project.roots.length !== 1 || asRecord(project.roots[0]).path !== ref.cwd) {
@@ -79,7 +76,7 @@ export class CodexProjectBinding {
     let rpc: ImportRpc | undefined;
     try {
       rpc = await this.deps.connect(imported.target.cwd, target.path, 'project-binding');
-      const inspected = await inspectAssociation(rpc, imported.target, projectId, target);
+      const inspected = await inspectAssociation(rpc, imported.target, projectId, target, '；未提交导入');
       await assertImportTarget(this.deps.codexHome, target);
       const plan: ProjectBindingPlan = {
         schema: 1, route: 'codex-project-association', importPlanId: importId, thread: imported.target,
@@ -123,7 +120,7 @@ export class CodexProjectBinding {
     let outcome: ProjectBindingOutcome = { status: 'uncertain', threadId: plan.thread.sessionId, projectId: plan.projectId };
     try {
       rpc = await this.deps.connect(plan.thread.cwd, plan.target.path, 'project-binding');
-      const before = await inspectAssociation(rpc, plan.thread, plan.projectId, plan.target);
+      const before = await inspectAssociation(rpc, plan.thread, plan.projectId, plan.target, '；未提交导入');
       if (before.historyDigest !== plan.historyDigest) throw new Error('会话历史在项目预览之后已变化');
       await assertImportTarget(this.deps.codexHome, plan.target);
       await this.deps.jobs.claim(planId);
@@ -131,6 +128,7 @@ export class CodexProjectBinding {
       if (before.currentProjectId !== plan.projectId) {
         await rpc.request('thread/metadata/update', { threadId: plan.thread.sessionId, projectId: plan.projectId });
       }
+      // claim 已发生：这里读不出来只能说「无法确认」，不能承诺「未提交导入」
       const after = await inspectAssociation(rpc, plan.thread, plan.projectId, plan.target);
       if (after.currentProjectId !== plan.projectId || after.historyDigest !== plan.historyDigest ||
         !await listedInProject(rpc, plan.projectId, plan.thread)) throw new Error('项目关联验证失败');

@@ -136,6 +136,40 @@ export async function assertTargetFile(target: ImportTarget, file: string): Prom
   }
 }
 
+/**
+ * Codex 配置里的 `sqlite_home` 必须就是已确认的目标目录。
+ *
+ * 这条判定的结论是「两者是同一个目录」。`realpath` 一旦抛错（目录被删、没权限、路径被同名文件
+ * 占住），结论根本无从成立：`ENOENT` 既不能证明一致，也不能证明不一致。以前它是裸调用，英文原文
+ * 直接冒到 `confirm`——而这一步在 `jobs.claim()` **之前**，`claimed` 还是 false，`catch` 里
+ * `if (!claimed) throw error` 会把 Node 原文放进 `{ ok:false, error }` 与桌面卡片：
+ *   2026-11-09 实测：{"ok":false,"error":"ENOENT: no such file or directory, realpath '…/gone-sqlite'"}
+ *
+ * `next` 由调用点按阶段给：还没 claim 时可以说「；未提交导入」，已 claim 之后（`project-binding`
+ * 那次读后复核）不能这么说——那时写入可能已经发生。
+ */
+export async function assertNativeSqliteHome(
+  config: Record<string, unknown>,
+  target: ImportTarget,
+  next = '',
+): Promise<void> {
+  const home = config.sqlite_home;
+  if (home == null) return;
+  const mismatch = () => new Error(`原生 SQLite 目录与确认的目标不一致，需要额外验证${next}`);
+  if (typeof home !== 'string' || !path.isAbsolute(home)) throw mismatch();
+  let canonical: string;
+  try {
+    canonical = await realpath(home);
+  } catch (error) {
+    throw new Error(
+      `无法确认原生 SQLite 目录 ${home}：${describePathReadFailureReason(error)}；` +
+        'Codex 的配置声明它用这个目录存会话，但读不到它，所以无法判断它是否就是本次导入的目标——' +
+        `先恢复该目录（或修正 Codex 配置里的 sqlite_home）再重试${next}`,
+    );
+  }
+  if (canonical !== target.path) throw mismatch();
+}
+
 /** Serializes Watch submissions across journals; native clients do not honor this lock. */
 export async function acquireImportTarget(target: ImportTarget, planId: string): Promise<{ release(): Promise<void> }> {
   await assertImportTarget(target.path, target);

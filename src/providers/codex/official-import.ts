@@ -18,7 +18,7 @@ import {
   type CodexDesktopProject,
 } from './desktop-project.js';
 import { CodexProjectBinding } from './project-binding.js';
-import { acquireImportTarget, assertImportTarget, assertTargetFile, IMPORT_TARGET_LOCK, inspectImportTarget } from './import-target.js';
+import { acquireImportTarget, assertImportTarget, assertNativeSqliteHome, assertTargetFile, IMPORT_TARGET_LOCK, inspectImportTarget } from './import-target.js';
 
 const SUPPORTED_VERSION = 'codex-cli 0.153.4';
 const UUID = /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i;
@@ -205,10 +205,8 @@ export class OfficialCodexImport {
     try {
       rpc = await this.deps.connect(plan.source.cwd, target.path, plan.desktopProject ? 'desktop-import' : 'import');
       const config = asRecord(asRecord(await rpc.request('config/read', { includeLayers: false })).config);
-      if (config.sqlite_home != null && (typeof config.sqlite_home !== 'string' ||
-        !path.isAbsolute(config.sqlite_home) || await realpath(config.sqlite_home) !== target.path)) {
-        throw new Error('原生 SQLite 目录与确认的目标不一致，需要额外验证；未提交导入');
-      }
+      // 这一步在 claim 之前，所以可以说「未提交导入」；读不出来时只会说「无法确认」，不会谎称一致 / 不一致
+      await assertNativeSqliteHome(config, target, '；未提交导入');
       if (plan.desktopProject) await this.assertNativeProject(rpc, plan.desktopProject, plan.source.cwd);
       const migrationItem = selectedSession(await rpc.request('externalAgentConfig/detect', {
         includeHome: true, cwds: [plan.source.cwd], maxSessions: 50, maxSessionAgeDays: 30,
