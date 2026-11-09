@@ -20,7 +20,8 @@ import { trimUserKey } from './core/cli-input.js';
 import { describeResumeTargetUnfinished } from './core/rich.js';
 import { describePathReadFailureReason, describeReadFailureOrSelf, describeSessionReadFailureReason, isEmptySessionFileReason, probeSessionReadable, sessionFilePresence } from './core/read-text.js';
 import { describeWriteFailureReason } from './core/atomic.js';
-import { collectUnattributable, unattributableEmptyNote, unattributableJson, unattributableSearchNote, unattributableWarning } from './core/session-coverage.js';
+import { collectUnattributable, emptiedJson, emptiedSearchNote, emptiedSessionsWarning, unattributableEmptyNote, unattributableJson, unattributableSearchNote, unattributableWarning } from './core/session-coverage.js';
+import type { EmptiedSession } from './core/session-coverage.js';
 import { describeSpawnFailure } from './core/platform.js';
 
 /**
@@ -2117,9 +2118,14 @@ async function cmdSearch(cwd: string, json: boolean, query: string): Promise<voi
   try {
     const warnings: string[] = [];
     const unavailable: string[] = [];
+    const emptied: EmptiedSession[] = [];
     const cwdIssue = await cwdProblem(cwd);
     if (cwdIssue) warnings.push(cwdIssue);
-    await reindexCwd(cwd, listAdapters(), store, warnings, unavailable);
+    await reindexCwd(cwd, listAdapters(), store, warnings, unavailable, emptied);
+    // 0 字节会话（进程被杀 / 只写了一半 / 磁盘满）索引里一行内容都没有，命中永远为零。
+    // 只回「没有匹配」会被读成「那句话没聊过」，而它可能正躺在一条内容已丢失的会话里。
+    // `sessions` / `recent` / `doctor` 早已披露这一档，搜索是最后一个沉默的入口。
+    if (emptied.length) warnings.push(emptiedSessionsWarning(emptied));
     // 归属读不出来的会话（Codex 是 `session_meta` 首行坏了）不属于任何 cwd，因此永远进不了索引。
     // 搜索恰恰是「我还记得那句话」的入口：只报「无结果」会把「这几条根本没被搜到」讲成「没聊过」
     const unattributableStats = await collectUnattributable(listAdapters());
@@ -2151,6 +2157,7 @@ async function cmdSearch(cwd: string, json: boolean, query: string): Promise<voi
       const alias = await cwdAliasHint(cwd, sameDirectoryElsewhere[0]?.cwd, [
         ...unavailable,
         ...unattributableStats.map((s) => s.provider),
+        ...emptied.map((r) => r.provider),
       ]);
       if (alias) warnings.push(alias);
     }
@@ -2175,6 +2182,8 @@ async function cmdSearch(cwd: string, json: boolean, query: string): Promise<voi
       }
       const unattrNote = unattributableSearchNote(unattributableStats);
       if (unattrNote) notes.push(unattrNote);
+      const emptiedNote = emptiedSearchNote(emptied);
+      if (emptiedNote) notes.push(emptiedNote);
     }
     if (json) {
       console.log(JSON.stringify({
@@ -2187,6 +2196,7 @@ async function cmdSearch(cwd: string, json: boolean, query: string): Promise<voi
         ...(idPrefixCapped ? { idPrefixCapped: true } : {}),
         ...(unavailable.length ? { unavailable } : {}),
         ...(unattributableStats.length ? { unattributable: unattributableJson(unattributableStats) } : {}),
+        ...(emptied.length ? { emptied: emptiedJson(emptied) } : {}),
         ...(notes.length ? { notes } : {}),
         ...(warnings.length ? { warnings } : {}),
       }));

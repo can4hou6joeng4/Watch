@@ -1,9 +1,11 @@
 import { stat } from 'node:fs/promises';
 import type { Store } from './store.js';
 import type { ProviderAdapter } from '../providers/adapter.js';
+import type { EmptiedSession } from './session-coverage.js';
 import {
   describePathReadFailureReason,
   describeSessionReadFailureReason,
+  isEmptySessionFileReason,
   isFileSystemErrorCode,
 } from './read-text.js';
 
@@ -16,6 +18,10 @@ import {
  *
  * `unavailable`（可选）收集这轮**压根没读成**的 provider：调用方拿它把「没有匹配」与
  * 「这一家没查成」分开——只有 warnings 字符串时，正文那句「无结果」照样会被当成结论。
+ *
+ * `emptied`（可选）收集列表里**文件是 0 字节**的会话：索引里一行内容都没有，命中永远为零。
+ * 判定用列表已经给出的 `previewError`（各家列会话时判过，判据与 `describeEmptySessionFile()` 同源），
+ * 不在这里再 `stat` 一次，也不把「读不出来」（权限）混进这一档——两者下一步相反。
  */
 export async function reindexCwd(
   cwd: string,
@@ -23,6 +29,7 @@ export async function reindexCwd(
   store: Store,
   warnings?: string[],
   unavailable?: string[],
+  emptied?: EmptiedSession[],
 ): Promise<number> {
   let n = 0;
   for (const adapter of adapters) {
@@ -54,6 +61,12 @@ export async function reindexCwd(
     let occupied = 0;
     let firstOccupied = '';
     for (const s of list) {
+      // 0 字节的会话在列表里是「正常的一条」（各家按 `previewError` 说明它空了），索引里却
+      // 一行内容都没有：搜索永远命中不了它。放在 `cached` 跳过之前——文件被截断后 size 变了
+      // 会被重新解析一遍，但披露的是「这个目录有几条空会话」，与是否本轮重新索引无关。
+      if (s.previewError && isEmptySessionFileReason(s.previewError)) {
+        emptied?.push({ provider: adapter.id, sessionId: s.ref.sessionId, filePath: s.ref.filePath });
+      }
       let st;
       try {
         st = await stat(s.ref.filePath);

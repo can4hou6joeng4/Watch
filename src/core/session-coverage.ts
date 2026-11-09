@@ -86,6 +86,53 @@ export function unattributableJson(stats: readonly UnattributableStat[]): { prov
 }
 
 /**
+ * 「文件还在、内容却是 0 字节」的会话（判据与 `read-text.ts` 的 `describeEmptySessionFile()` 同源）。
+ *
+ * 这是与上面几档都不同的一件事：`previewError` 里也有权限 / 路径读不出来，但那要修权限；
+ * 0 字节是**内容已经没了**（进程被杀 / 只写了一半 / 磁盘满），只能重新开一次会话或从备份恢复。
+ * 两者混在一句话里会把人引去对着一个空文件反复查权限（第 289 轮在 `sessions` / `doctor`
+ * 上拆过档，这里是同一件事在 `search` 侧的形状）。
+ */
+export type EmptiedSession = { provider: string; sessionId: string; filePath: string };
+
+/**
+ * 搜索是最后一个沉默的入口：索引里这些会话一行内容都没有，命中永远为零。
+ *
+ * 正文只回一句「本目录没有匹配」时，用户会以为那句话没聊过——而它可能正躺在一条内容已经
+ * 丢失的会话里。`sessions` / `recent` / `doctor` 早已披露，这条补齐同一个事实。
+ */
+export function emptiedSessionsWarning(rows: readonly EmptiedSession[]): string {
+  const samples = rows
+    .slice(0, 3)
+    .map((r) => `${r.provider}:${r.sessionId}`)
+    .join('、');
+  const more = rows.length > 3 ? ` 等 ${rows.length} 条` : '';
+  return (
+    `本目录有 ${rows.length} 条会话的文件是空的（0 字节，进程被杀或只写了一半，内容已丢失）：${samples}${more}；` +
+    '它们没有任何可搜索的内容——如果那句话本来在它们里面，只能从备份恢复（Watch 不会替你重建历史）'
+  );
+}
+
+/**
+ * 零命中时补的说明：讲的是**这次搜索的覆盖范围**，与上面那条讲事实与后果的警告分开。
+ * 有命中时不说这句（命中了就说明这句话不在那些空文件里）。
+ */
+export function emptiedSearchNote(rows: readonly EmptiedSession[]): string | null {
+  if (!rows.length) return null;
+  return (
+    `本次没有命中，其中 ${rows.length} 条会话的文件是空的（0 字节，内容已丢失，原因见上方警告）——` +
+    '它们没有任何可搜索的内容，搜索即使覆盖到也搜不到；如果那句话本来在它们里面，只能从备份恢复'
+  );
+}
+
+/** `--json` 用的结构化形状：脚本不必解析中文文案 */
+export function emptiedJson(rows: readonly EmptiedSession[]): { provider: string; count: number }[] {
+  const counts = new Map<string, number>();
+  for (const r of rows) counts.set(r.provider, (counts.get(r.provider) ?? 0) + 1);
+  return [...counts].map(([provider, count]) => ({ provider, count }));
+}
+
+/**
  * `watch search` 零命中时补的说明。
  * 搜索只遍历各家的 `listSessions(cwd)`，而这一档的文件**不属于任何 cwd**，永远进不了任何索引——
  * 于是「无结果」可能只是「这几条根本没被搜到」，而不是「没聊过」。
