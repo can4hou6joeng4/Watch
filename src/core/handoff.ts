@@ -8,7 +8,7 @@ import { addFinding, type Finding } from './findings.js';
 import { escapeControlChars } from './display.js';
 import { countUnparsableJsonLines } from './jsonl.js';
 import { cwdAliasHint, splitElsewhereByDirectory } from './cwd.js';
-import { describePathReadFailureReason, describeReadFailureOrSelf, isEmptySessionFileReason, probeSessionReadable, sessionFilePresence } from './read-text.js';
+import { describePathReadFailureReason, describeReadFailureOrSelf, emptySessionFileReasonFromStat, isEmptySessionFileReason, probeSessionReadable, sessionFilePresence } from './read-text.js';
 import { noSessionHint, unknownProviderMessage } from '../providers/registry.js';
 
 /** 写回被阻断（如 TOCTOU 检测到目标被外部修改）：一票否决，不产生部分写 */
@@ -619,6 +619,26 @@ export async function chainUsage(
             : presence.state === 'present'
               ? `该路径现在不是普通文件（被同名目录或设备文件占住了）：${ref.filePath}`
               : presence.reason;
+        warnings.push(`${adapter.id} 用量读取失败：${msg}`);
+        byProvider.push({ provider: adapter.id, sessionId: ref.sessionId, usage: null, error: msg });
+        totalExcluded += 1;
+        continue;
+      }
+      // 「文件在、是普通文件、却是 0 字节」是这条链上最容易误报的一档：`sessionUsage` 读到的
+      // 是空串、返回 null，与「这家原生没有 usage 字段」逐字相同，于是整份报告会说成
+      // 「合计（未含 0 个读取失败的会话、1 个无 usage 数据的会话）」——把「内容已经没了」
+      // （进程被杀 / 只写了一半 / 磁盘满）讲成「这条会话没有用量数据」，两者的下一步还相反：
+      // 没有用量数据没什么可做，空文件只能从备份恢复、历史也补不回来。
+      // open / switch / status / chain list / doctor / sessions / recent / adopt 都已披露这一档，
+      // 判据复用 `emptySessionFileReasonFromStat()`，不另写一句。
+      const emptied = emptySessionFileReasonFromStat(
+        { isFile: () => presence.isFile, size: presence.size },
+        ref.filePath,
+      );
+      if (emptied) {
+        const msg =
+          `${emptied}；这条会话的历史与用量都已经没了——如果它本该有内容，先从备份恢复该文件再重试` +
+          `（Watch 不会替你重建历史）`;
         warnings.push(`${adapter.id} 用量读取失败：${msg}`);
         byProvider.push({ provider: adapter.id, sessionId: ref.sessionId, usage: null, error: msg });
         totalExcluded += 1;

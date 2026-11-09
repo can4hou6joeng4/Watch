@@ -94,7 +94,9 @@ export function describeReadFailureOrSelf(error: unknown): string {
 }
 
 export type SessionFilePresence =
-  | { state: 'present'; isFile: boolean }
+  // `size` 只在 present 时给出：调用方要在「文件在、是普通文件」之后继续区分
+  // 「有内容」与「0 字节（内容已丢失）」，不必为了一个字节数再 stat 一次
+  | { state: 'present'; isFile: boolean; size?: number }
   | { state: 'missing' }
   | { state: 'unknown'; reason: string };
 
@@ -108,7 +110,7 @@ export type SessionFilePresence =
 export async function sessionFilePresence(filePath: string): Promise<SessionFilePresence> {
   try {
     const info = await stat(filePath);
-    return { state: 'present', isFile: info.isFile() };
+    return { state: 'present', isFile: info.isFile(), size: info.size };
   } catch (error) {
     const code = (error as NodeJS.ErrnoException).code;
     if (code === 'ENOENT' || code === 'ENOTDIR') return { state: 'missing' };
@@ -128,7 +130,7 @@ export function describeEmptySessionFile(filePath: string): string {
 }
 
 /**
- * 列表路径用：这次 `stat` 拿到的会话文件是不是「空的」。
+ * 已经拿到 `stat` 结果的路径用：这个会话文件是不是「空的」。
  *
  * claude / codex / kimi 的预览都要把会话文件读一遍，0 字节在那里顺手就能发现（`raw.length === 0`）。
  * pi / grok 的预览不读会话内容——pi 干脆没有预览，grok 的标题来自 `summary.json`——于是
@@ -136,11 +138,15 @@ export function describeEmptySessionFile(filePath: string): string {
  * 列表与 `doctor` 却把这条会话算成正常的一条、`warnings` 一个字都没有。判据放在这里，
  * 两家的列表在已经拿到的 `stat` 上判一次即可，不必各写一句（措辞分叉正是本文件开头要避免的）。
  *
+ * `chainUsage()` 用的是同一条：`sessionUsage` 对 0 字节文件返回 `null`，与「这家原生没有
+ * usage 字段」逐字相同，只有在 `sessionFilePresence()` 给出的 `stat` 上再判一次大小，才能
+ * 把「内容已丢失」从「没有用量数据」里分出来。
+ *
  * 只按 `isFile() && size === 0` 判：目录 / 设备文件走 `sessionFilePresence()` 那一档，
- * 两处不重复下结论。
+ * 两处不重复下结论；`size` 缺省（调用方没拿到）时不判成空。
  */
 export function emptySessionFileReasonFromStat(
-  info: { isFile(): boolean; size: number },
+  info: { isFile(): boolean; size?: number },
   filePath: string,
 ): string | undefined {
   return info.isFile() && info.size === 0 ? describeEmptySessionFile(filePath) : undefined;
