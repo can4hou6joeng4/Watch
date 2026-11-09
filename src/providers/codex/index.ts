@@ -271,14 +271,15 @@ export async function listCodexRollouts(
  * 但读不出来」，同一件事在单条反查与列表上两套说法）。
  *
  * 与 `previewError` 的分工：`previewError` 是「列出来了，只是内容读不出来」；这里是「连归属那一行
- * 都没有」。所以走适配器的 `unattributable()`，由 `watch doctor` 汇总披露。
+ * 都没有」。所以走适配器的 `unattributable()`，由 `watch sessions` / `recent` / `status` /
+ * `doctor` 汇总披露（文案统一在 `src/core/session-coverage.ts`，`summary` 说明归属写在哪一行）。
  *
  * 目录 / 文件**读不出来**（`EACCES` 等）不算这一档：`listCodexRollouts` 已经会因它抛「有位置读不出来」，
  * 这里再统计一遍只会把同一个问题说两次。sessionsRoot 可注入供单测。
  */
 export async function codexUnattributableRollouts(
   sessionsRoot?: string,
-): Promise<{ count: number; samples: string[] }> {
+): Promise<{ count: number; samples: string[]; summary: string }> {
   const root = sessionsRoot ?? path.join(codexDir(), 'sessions');
   const files = await collectRecentRolloutFiles(root);
   const samples: string[] = [];
@@ -289,7 +290,8 @@ export async function codexUnattributableRollouts(
     count += 1;
     if (samples.length < 3) samples.push(`${f.filePath}（${error ?? '原因未知'}）`);
   }
-  return { count, samples };
+  // summary 直接点名那一行：共用文案不写死 provider 名，但用户需要知道「修的是首行」
+  return { count, samples, summary: 'session_meta 首行' };
 }
 
 /** 按原生 session id（rollout 文件名尾部 uuid）全局反查 Codex 会话；sessionsRoot 可注入供单测 */

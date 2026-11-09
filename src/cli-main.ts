@@ -20,6 +20,7 @@ import { trimUserKey } from './core/cli-input.js';
 import { describeResumeTargetUnfinished } from './core/rich.js';
 import { describePathReadFailureReason, describeReadFailureOrSelf, describeSessionReadFailureReason, isEmptySessionFileReason, probeSessionReadable, sessionFilePresence } from './core/read-text.js';
 import { describeWriteFailureReason } from './core/atomic.js';
+import { collectUnattributable, unattributableEmptyNote, unattributableJson, unattributableWarning } from './core/session-coverage.js';
 import { describeSpawnFailure } from './core/platform.js';
 
 /**
@@ -441,6 +442,10 @@ async function cmdStatus(cwd: string, json: boolean, chain?: string): Promise<vo
     failWithCwd(json, cwdIssue, describeCommandError(error));
   }
   if (cwdIssue) result.warnings.push(cwdIssue);
+  // 归属那一行坏了的会话不属于任何目录，所以「最新原生会话」里永远不会出现它们。
+  // 与 sessions / recent / doctor 共用一条文案：同一件事在四个入口上不能有两套说法
+  const unattributableStats = await collectUnattributable(listAdapters());
+  for (const stat of unattributableStats) result.warnings.push(unattributableWarning(stat, cwd));
   // 「这个目录没有链」与「一条链都没建过」原本长得一样：链按 cwd 精确分组，--cwd 指错地方
   // 时正文只有「切换链: （空）」，用户会以为链丢了。别处的链要说出来，并给出可照抄的 --cwd
   const elsewhere = result.chains.length ? [] : chainsElsewhereOf(store, cwd);
@@ -450,13 +455,22 @@ async function cmdStatus(cwd: string, json: boolean, chain?: string): Promise<vo
   // 而真正的原因是这个写法与原生记录不一致。只在零结果时补，健康目录不多嘴。
   // 上面已经从库里知道这个目录的另一种写法是什么字符串，用它当下一步（realpath 未必匹配原生记录）
   if (!result.tips.length) {
-    // 有几家压根没读成时不能给「换一种写法」：零结果是读取失败造成的，换写法修不好权限 / 库
-    const alias = await cwdAliasHint(cwd, splitElsewhere.same[0]?.cwd, result.unreadable);
+    // 有几家压根没读成时不能给「换一种写法」：零结果是读取失败造成的，换写法修不好权限 / 库。
+    // 「归属读不出来」同理——那些文件连属于哪个目录都不知道，换写法也查不到
+    const alias = await cwdAliasHint(cwd, splitElsewhere.same[0]?.cwd, [
+      ...result.unreadable,
+      ...unattributableStats.map((s) => s.provider),
+    ]);
     if (alias) result.warnings.push(alias);
   }
   const elsewhereJson = [...splitElsewhere.same, ...splitElsewhere.other];
   if (json) {
-    console.log(JSON.stringify({ ok: true, ...result, ...(elsewhereJson.length ? { chainsElsewhere: elsewhereJson } : {}) }));
+    console.log(JSON.stringify({
+      ok: true,
+      ...result,
+      ...(elsewhereJson.length ? { chainsElsewhere: elsewhereJson } : {}),
+      ...(unattributableStats.length ? { unattributable: unattributableJson(unattributableStats) } : {}),
+    }));
     return;
   }
   const { tips, chainTip, chainTipUnusable, unreadable, history, chain: current, warnings } = result;
@@ -487,6 +501,9 @@ async function cmdStatus(cwd: string, json: boolean, chain?: string): Promise<vo
       `未发现可列出的原生会话；但 ${unreadable.join(' / ')} 这次没能读取（原因见上方警告），` +
         '无法确认这个目录里是否还有它们的会话——先修好这些存储（权限、路径或库状态）再重试',
     );
+  } else if (!tips.length && unattributableStats.length) {
+    // 列表里一条都没有，但库外还有读不出归属的文件：这时「请先开聊」是错的下一步
+    console.log(unattributableEmptyNote(unattributableStats) as string);
   } else if (!tips.length) {
     console.log(`未发现会话（${noSessionHint()}）`);
   } else {
@@ -974,6 +991,10 @@ async function cmdSessions(cwd: string, json: boolean, chain?: string): Promise<
   }
   try {
     const unavailable: string[] = [];
+    // 「归属那一行坏了」的条目不属于任何目录，列表里根本不会出现：放在这里披露，
+    // 否则「这个目录就这些会话」是一句假结论（doctor 会说明，但用户看的是列表）
+    const unattributableStats = await collectUnattributable(adapters);
+    for (const stat of unattributableStats) warnings.push(unattributableWarning(stat, cwd));
     const groups = await Promise.all(
       adapters
         .filter((a) => a.listSessions)
@@ -1046,8 +1067,9 @@ async function cmdSessions(cwd: string, json: boolean, chain?: string): Promise<
     // 零会话 + `--cwd` 只是同一个目录的另一种写法：正文的「未发现会话」会被当成「真的没聊过」，
     // 而会话可能全记在 realpath 那种写法下（软链 / 大小写），先给可照抄的路径
     if (!result.length) {
-      // 与 status 同一口径：有一家没读成时，零结果不是「写法不对」的证据
-      const alias = await cwdAliasHint(cwd, undefined, unavailable);
+      // 与 status 同一口径：有一家没读成时，零结果不是「写法不对」的证据；
+      // 「归属读不出来」同理——换一种写法也查不到那些文件，它们连属于哪个目录都不知道
+      const alias = await cwdAliasHint(cwd, undefined, [...unavailable, ...unattributableStats.map((s) => s.provider)]);
       if (alias) warnings.push(alias);
     }
     pushEscapedContentWarning(
@@ -1076,6 +1098,7 @@ async function cmdSessions(cwd: string, json: boolean, chain?: string): Promise<
         cwd,
         providers: result,
         ...(unavailable.length ? { unavailable } : {}),
+        ...(unattributableStats.length ? { unattributable: unattributableJson(unattributableStats) } : {}),
         ...(warnings.length ? { warnings } : {}),
       }));
       return;
@@ -1087,7 +1110,8 @@ async function cmdSessions(cwd: string, json: boolean, chain?: string): Promise<
       console.log(
         unavailable.length
           ? `未发现会话；但 ${unavailable.join(' / ')} 没能读取（原因见上方警告），无法确认这个目录里是否还有它们的会话——先修好这些存储再重试`
-          : `未发现会话（${noSessionHint()}）`,
+          : // 归属读不出来的那些同样不在任何目录的列表里：空列表不是「这个目录没聊过」的证据
+            (unattributableEmptyNote(unattributableStats) ?? `未发现会话（${noSessionHint()}）`),
       );
       if (unavailable.length) console.error(`未读取: ${unavailable.join('、')}（原生存储读取失败）`);
       return;
@@ -1181,7 +1205,11 @@ async function cmdRecent(cwd: string, json: boolean, limit: number = 8, cwdGiven
 
   // 原生存储里可能有映射表还没见过的更新会话，所以始终扫一遍；
   // 不能凑够 limit 条就提前收手——那会按 registry 顺序先到先得，把别家更新的会话挤掉。
-  for (const adapter of listAdapters()) {
+  const recentAdapters = listAdapters();
+  // 归属那一行坏了的条目不属于任何目录，因此不会出现在「近期」里；不说就会被读成「最近没聊过」
+  const unattributableStats = await collectUnattributable(recentAdapters);
+  for (const stat of unattributableStats) warnings.push(unattributableWarning(stat, cwd));
+  for (const adapter of recentAdapters) {
     if (!adapter.listSessions) continue;
     try {
       const sessions = await adapter.listSessions(cwd);
@@ -1216,12 +1244,12 @@ async function cmdRecent(cwd: string, json: boolean, limit: number = 8, cwdGiven
   // 同 status / sessions：零结果时先看 --cwd 是不是同一个目录的另一种写法，
   // 否则「暂无最近会话记录」会被当成「这个目录真的没聊过」
   if (!final.length) {
-    // 只算原生存储没读成的那些：本地映射表坏了不影响原生扫描，「这个目录没会话」的结论照样成立
-    const alias = await cwdAliasHint(
-      cwd,
-      undefined,
-      unavailable.filter((id) => id !== '本地库'),
-    );
+    // 只算原生存储没读成的那些：本地映射表坏了不影响原生扫描，「这个目录没会话」的结论照样成立。
+    // 「归属读不出来」也算扫得不完整：换一种写法同样查不到那些文件（连属于哪个目录都不知道）
+    const alias = await cwdAliasHint(cwd, undefined, [
+      ...unavailable.filter((id) => id !== '本地库'),
+      ...unattributableStats.map((s) => s.provider),
+    ]);
     if (alias) warnings.push(alias);
   }
   // 列表被 --limit（默认 8）截断时要说出来，否则用户会把「最近 8 条」当成全部
@@ -1239,6 +1267,7 @@ async function cmdRecent(cwd: string, json: boolean, limit: number = 8, cwdGiven
       sessions: final,
       ...(truncated ? { truncated: true, total: results.length } : {}),
       ...(unavailable.length ? { unavailable } : {}),
+      ...(unattributableStats.length ? { unattributable: unattributableJson(unattributableStats) } : {}),
       ...(warnings.length ? { warnings } : {}),
     }));
     return;
@@ -1253,7 +1282,7 @@ async function cmdRecent(cwd: string, json: boolean, limit: number = 8, cwdGiven
     console.log(
       unavailable.length
         ? `暂无最近会话记录；但 ${unavailable.join(' / ')} 没能读取（原因见上方警告），无法确认近期是否有它们的会话——先修好这些存储再重试`
-        : '暂无最近会话记录',
+        : (unattributableEmptyNote(unattributableStats) ?? '暂无最近会话记录'),
     );
     return;
   }

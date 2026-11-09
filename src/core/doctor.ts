@@ -12,6 +12,7 @@ import { cwdProblem, splitElsewhereByDirectory } from './cwd.js';
 import { escapeControlChars } from './display.js';
 import { countUnparsableJsonLines } from './jsonl.js';
 import { describeSessionReadFailureReason, isEmptySessionFileReason, isFileSystemErrorCode, probeSessionReadable } from './read-text.js';
+import { collectUnattributable, unattributableWarning } from './session-coverage.js';
 
 export type BrokenTip = {
   chainId: string;
@@ -230,7 +231,9 @@ export async function doctorReport(cwd: string, deps: DoctorDeps): Promise<Docto
   // 这里收集是为了覆盖「不是链尾、却同样打不开」的那一类
   const unreadableSessions: { provider: string; sessionId: string; filePath: string; reason: string }[] = [];
   // 连归属都读不出来、因而没进任何目录列表的条目。它不属于任何 cwd，所以只能在全局诊断里说
-  const unattributableStats: { provider: string; displayName: string; count: number; samples: string[] }[] = [];
+  // 统计与文案都在 `session-coverage.ts`：`sessions` / `recent` / `status` 说的是同一句话，
+  // 同一份数据在四个入口上不能有两套说法
+  const unattributableStats = await collectUnattributable(adapters);
   for (const adapter of adapters) {
     if (!adapter.listSessions) continue;
     try {
@@ -245,24 +248,7 @@ export async function doctorReport(cwd: string, deps: DoctorDeps): Promise<Docto
           reason: item.previewError as string,
         });
       }
-      // 补充说明而已：这一步自己失败不当故障（真正的存储故障已由上面 catch 记进 failures）
-      let unattributable: number | undefined;
-      if (adapter.unattributable) {
-        try {
-          const stats = await adapter.unattributable();
-          if (stats.count > 0) {
-            unattributable = stats.count;
-            unattributableStats.push({
-              provider: adapter.id,
-              displayName: adapter.displayName,
-              count: stats.count,
-              samples: stats.samples,
-            });
-          }
-        } catch {
-          // 读不出来已经由 listSessions 那条通道说清（或本家本来就没有这一档）
-        }
-      }
+      const unattributable = unattributableStats.find((s) => s.provider === adapter.id)?.count;
       storage.push({
         provider: adapter.id,
         count: listed.length,
@@ -503,11 +489,7 @@ export async function doctorReport(cwd: string, deps: DoctorDeps): Promise<Docto
   // 连归属都读不出来、因此一条目录列表里都不会出现的条目：不说就会被读成「这台机器上没有这条会话」，
   // 而它可能只是被截断，还能从备份恢复（open <id> 会说「找到了，但读不出来」，列表上却什么都没有）
   for (const stat of unattributableStats) {
-    warnings.push(
-      `${stat.displayName} 有 ${stat.count} 个会话文件读不出目录归属（session_meta 首行缺失或损坏），` +
-        `因此不会出现在任何目录的会话列表里：${stat.samples.join('、')}${stat.count > stat.samples.length ? ` 等 ${stat.count} 个` : ''}；` +
-        `这不代表它们不存在——先确认这些文件的内容（可能是被截断），能从备份恢复就别直接删`,
-    );
+    warnings.push(unattributableWarning(stat));
   }
 
   let imports: DoctorReport['imports'];
