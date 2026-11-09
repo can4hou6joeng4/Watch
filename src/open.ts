@@ -12,6 +12,7 @@ import type { SessionLookupFailureKind } from './providers/adapter.js';
 import { getAdapter, listAdapters, unknownProviderMessage } from './providers/registry.js';
 import { countUnparsableJsonLines } from './core/jsonl.js';
 import { usageBadLinesReason, usageSidecarProblem } from './core/usage-integrity.js';
+import { collectUnattributable, unattributablePickWarning } from './core/session-coverage.js';
 import {
   describePathReadFailureReason,
   describeReadFailureOrSelf,
@@ -1070,6 +1071,15 @@ async function planOpenInProvider(
         `若记得那条会话，可用 watch open <它的会话 id> 直接打开，或先在原生 CLI 里确认后再决定是否删掉这一份`,
     );
   }
+  // 同一处后果还有另一半：这一档的会话文件不属于任何目录，`listSessions` 只能跳过它们，
+  // 复用扫描根本看不到。与「撞列表上限」同一类（本次要多建一份重复会话），那一档已披露，
+  // 这一档以前一个字都不说。
+  const hiddenCandidates = unattributablePickWarning(
+    await collectUnattributable([target]),
+    '目标会话的复用匹配',
+    '目标这一侧可能因此多出一份重复会话，而被跳过的那条文件里可能正有能承接这些内容的会话',
+  );
+  if (hiddenCandidates) diagnostics?.push(hiddenCandidates);
   return {
     ...base,
     plan: {

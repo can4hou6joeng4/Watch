@@ -11,6 +11,7 @@ import { usageBadLinesReason, usageSidecarProblem } from './usage-integrity.js';
 import { cwdAliasHint, splitElsewhereByDirectory } from './cwd.js';
 import { describePathReadFailureReason, describeReadFailureOrSelf, emptySessionFileReasonFromStat, isEmptySessionFileReason, probeSessionReadable, sessionFilePresence } from './read-text.js';
 import { noSessionHint, unknownProviderMessage } from '../providers/registry.js';
+import { collectUnattributable, unattributableNoPickMessage, unattributablePickWarning } from './session-coverage.js';
 
 /** 写回被阻断（如 TOCTOU 检测到目标被外部修改）：一票否决，不产生部分写 */
 export class HandoffBlockedError extends Error {
@@ -277,12 +278,42 @@ export async function adoptIntoChain(
     ? { ref: targetRef }
     : await adapter.findLatestSession(cwd);
   if (!found) {
+    // 这一家里「可列出的会话」是 0，但磁盘上可能还有**读不出目录归属**的会话文件
+    // （Codex 的 `session_meta` 首行 0 字节 / 半截 JSON）：`findLatestSession` 只能跳过它们，
+    // 于是照 `adoptNoSessionMessage()` 说「在这个目录还没有会话」就是一句假结论，
+    // 与 `sessions` / `doctor` 早已披露的 unattributable 自相矛盾。
+    const hiddenNote = unattributableNoPickMessage(await collectUnattributable([adapter]));
+    const available = await providersWithSessionsHere(cwd, adapters, providerId);
+    const others = available.length
+      ? `；本目录现在可列出的有: ${available.join(' / ')}——可直接 watch adopt ${available[0]} --session <会话 id> 接入`
+      : '';
+    if (hiddenNote) {
+      throw new Error(
+        `${hiddenNote}；要接入 ${providerId}，先确认这些文件里是不是你要的那条（能从备份恢复就先恢复，` +
+          `恢复后用 watch adopt ${providerId} --session <会话 id> 接入），或在该家的原生 CLI 里开一次新会话再接入${others}`,
+      );
+    }
     // 「这家在这个目录没有会话」同样可能只是 `--cwd` 的写法不同：会话文件在，
     // 只是按另一条路径字符串记录着。这时让人「先开一次会话」会白开一个。
     const alias = await cwdAliasHint(cwd);
-    throw new Error(
-      adoptNoSessionMessage(providerId, await providersWithSessionsHere(cwd, adapters, providerId), alias),
+    throw new Error(adoptNoSessionMessage(providerId, available, alias));
+  }
+
+  // 「按修改时间最新的会话」这句话只在**所有会话都读得出归属**时成立：这一档的文件不属于
+  // 任何目录，`findLatestSession` 只能跳过，于是挑出来的是「在能读出的那些里最新」。
+  // 2026-11-09 实测（隔离 HOME，codex 一条 10:00 的健康 rollout + 一条 11:00 被截成 0 字节的）：
+  // `adopt codex` 接入了 10:00 那条，note 却写着「本次是按修改时间挑的最新会话 5677…」，
+  // `warnings` 一个字都不提被跳过的那条——而同一状态下 `sessions` 已经带出 unattributable
+  // 与点名路径的警告。自动挑选是在替用户做选择，说错就等于让他接错会话。
+  const hiddenPicks = autoPicked ? await collectUnattributable([adapter]) : [];
+  const pickedLabel = hiddenPicks.length ? '在能读出的会话里按修改时间最新' : '按修改时间最新';
+  if (autoPicked) {
+    const pickWarning = unattributablePickWarning(
+      hiddenPicks,
+      '自动挑的会话',
+      '你要接的可能正是被跳过的那一条（用 --session 显式指定会话 id 可以避开这种挑选）',
     );
+    if (pickWarning) warnings.push(pickWarning);
   }
 
   let history: SwitchRecord[] = [];
@@ -326,7 +357,7 @@ export async function adoptIntoChain(
     // 这条会话是「按 mtime 挑出来的」，不是用户指定的：note 里那句「没有需要改动的地方」
     // 只在用户确实想接它时成立。说明它是自动挑的，并给出显式写法，用户才有机会纠正。
     const autoPickedNote = autoPicked
-      ? `未指定 --session，本次自动挑的是按修改时间最新的会话 ${found.ref.sessionId}；要接入指定会话请用 watch adopt ${providerId} --session <会话 id>`
+      ? `未指定 --session，本次自动挑的是${pickedLabel}的会话 ${found.ref.sessionId}；要接入指定会话请用 watch adopt ${providerId} --session <会话 id>`
       : '';
     const note = tipElsewhere
       ? `会话 ${found.ref.sessionId} 已经在链上（${providerId} 这一侧绑定的就是它），本次没有写入任何链记录；` +
@@ -351,9 +382,9 @@ export async function adoptIntoChain(
   // 「最新」与「这条链上的」是两件事。想要换绑就显式给 --session，让选择可见。
   if (autoPicked && replaced) {
     const autoPickedNote =
-      `未指定 --session，本次自动挑的是按修改时间最新的会话 ${found.ref.sessionId}；` +
+      `未指定 --session，本次自动挑的是${pickedLabel}的会话 ${found.ref.sessionId}；` +
       `但链上 ${providerId} 这一侧现在绑的是 ${replaced.sessionId}，本次没有改动它（自动挑的会话可能属于另一条链或另一段工作）；` +
-      `确实要换成最新那条请用 watch adopt ${providerId} --session ${found.ref.sessionId}`;
+      `确实要换成自动挑到的这一条请用 watch adopt ${providerId} --session ${found.ref.sessionId}`;
     return {
       adoptedRef: replaced,
       replacedRef: null,
@@ -385,7 +416,7 @@ export async function adoptIntoChain(
   // 但必须披露它是自动挑的：--json 里只有 id，文本模式也只有一串 uuid，
   // 用户很容易把「挑中的那条」当成自己指定的那条。
   const note = autoPicked
-    ? `未指定 --session，本次是按修改时间挑的最新会话 ${found.ref.sessionId}；要接入指定会话请用 watch adopt ${providerId} --session <会话 id>`
+    ? `未指定 --session，本次挑的是${pickedLabel}的会话 ${found.ref.sessionId}；要接入指定会话请用 watch adopt ${providerId} --session <会话 id>`
     : undefined;
   return { adoptedRef: found.ref, replacedRef: replaced, warnings, ...(note ? { note } : {}) };
 }
@@ -1009,6 +1040,14 @@ export async function handoff(
           `先修好这些会话存储（权限、路径或库状态）再重试；本次未写入任何内容`,
       );
     }
+    // 这一档与「读不出来」不同：文件读得出来，只是归属那一行坏了（Codex 的 `session_meta`
+    // 首行 0 字节 / 半截 JSON），`findLatestSession` / `listSessions` 只能跳过它们。
+    // 零结果是「没列出来」，不是「这里没有会话」——照原句给「请先在…开聊」会让人白开一个，
+    // 而磁盘上那条可能正是要交接的。`warnings` 到不了调用方（这里是 throw），原因内联。
+    const hiddenNote = unattributableNoPickMessage(await collectUnattributable(adapters));
+    if (hiddenNote) {
+      throw new Error(`${hiddenNote}；本次未写入任何内容`);
+    }
     // 按字符串比较确实没有会话时，`--cwd` 仍可能只是同一个目录的另一种写法（软链 / 前缀 / 大小写）：
     // 只留「请先开聊」会把人引去开新会话，而原来的会话一直躺在另一个写法下面。
     // 与 status / sessions / recent 同一口径，零结果时才补这句（健康目录不多一遍 realpath）。
@@ -1079,6 +1118,19 @@ export async function handoff(
   if (!sourceTip) {
     const other = tips.find((t) => t.provider !== targetId);
     sourceTip = mtimeTip.provider === targetId ? (other ?? null) : mtimeTip;
+    // 自动挑来源时同样只能说「在能读出的那些里最新」：这一档的文件不属于任何目录，
+    // `findLatestSession` 会跳过它们，而用户要交接的可能正是被跳过的那一条。
+    // 只看**同一家**的统计：别家读不出归属的文件与这次交接无关，说出来只是噪音。
+    if (sourceTip) {
+      const pickedProvider = sourceTip.provider;
+      const hiddenPicks = (await collectUnattributable(adapters)).filter((s) => s.provider === pickedProvider);
+      const pickWarning = unattributablePickWarning(
+        hiddenPicks,
+        '交接的来源',
+        `你要交接的可能正是被跳过的那一条（可用 watch adopt ${pickedProvider} --session <会话 id> 显式绑定）`,
+      );
+      if (pickWarning) warnings.push(pickWarning);
+    }
     if (!sourceTip) {
       // 这里能确定的只有「没有可交接的来源」。能不能说「链尾已在目标 provider」要看链记录：
       // 链刚建好还没绑过时链尾根本不存在，说成「已在 X」会让人以为链已经指向 X（status 里仍是空链）；

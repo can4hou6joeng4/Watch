@@ -86,6 +86,76 @@ export function unattributableJson(stats: readonly UnattributableStat[]): { prov
 }
 
 /**
+ * 这一档的公共描述（家数 / 条数 / 归属写在哪 / 样本路径）。
+ *
+ * `unattributableWarning()` 是说给「列表里少了东西」的读者；`unattributablePickWarning()` 与
+ * `unattributableNoPickMessage()` 是说给**写路径**的——那两处大多是 `throw` 出去的（错误文案
+ * 就是用户能看到的全部），所以不能写「原因见上方警告」：警告根本没送到。原因内联在这里。
+ */
+function hiddenByAttribution(
+  stats: readonly UnattributableStat[],
+): { names: string; total: number; what: string; samples: string } | null {
+  if (!stats.length) return null;
+  const names = stats.map((s) => s.displayName).join(' / ');
+  const total = stats.reduce((sum, s) => sum + s.count, 0);
+  const whats = [...new Set(stats.map((s) => s.summary ?? '会话归属的元数据'))];
+  const samples = stats
+    .filter((s) => s.samples.length > 0)
+    .map((s) => (stats.length > 1 ? `${s.displayName}：${s.samples[0]}` : s.samples[0]))
+    .slice(0, 3)
+    .join('、');
+  return { names, total, what: whats.join(' / '), samples };
+}
+
+/**
+ * 「自动挑会话」时的披露：这一档的文件不属于任何目录，`listSessions` / `findLatestSession`
+ * 只能跳过它们，于是「按修改时间最新」其实是「在能读出的那些里最新」。
+ *
+ * 第 286–288 轮把这条事实接到了五个**只读**入口（`sessions` / `recent` / `status` / `doctor` /
+ * `search`），**写路径一处都没接**：`adopt` 不带 `--session` 时会宣称「按修改时间挑的最新会话」，
+ * 而真正更新的那一条可能正躺在被跳过的文件里；`switch` 在链上没有来源绑定时同样按 mtime 自动挑来源；
+ * `open --to` 的复用扫描只看得到健康会话，于是可能多建一份重复会话（与「撞列表上限」同一类后果，
+ * 那一档第 302 轮已披露）。这几处都在**替用户做选择**，选的却是「能读出来的那部分里最新的」。
+ *
+ * `subject` 说明这次挑的是什么（「本次自动挑的会话」/「这次交接的来源」/「目标会话的复用匹配」），
+ * `consequence` 说明后果——三处的后果不同，不能共用一句。
+ */
+export function unattributablePickWarning(
+  stats: readonly UnattributableStat[],
+  subject: string,
+  consequence: string,
+): string | null {
+  const hidden = hiddenByAttribution(stats);
+  if (!hidden) return null;
+  const samples = hidden.samples ? `：${hidden.samples}` : '';
+  return (
+    `${hidden.names} 另有 ${hidden.total} 个会话文件读不出目录归属（${hidden.what}缺失或损坏），` +
+    `它们不属于任何目录、不会出现在会话列表里${samples}；` +
+    `本次${subject}只在能读出的会话里挑，没有把它们算进去——${consequence}；` +
+    `先确认这些文件的内容（可能是被截断），能从备份恢复就别直接删`
+  );
+}
+
+/**
+ * 一个都没挑到时的结论句：`null` = 没有这一档，调用方沿用自己的原句（「未发现原生会话」）。
+ *
+ * 与 `unattributableEmptyNote()` 的区别：那条给 `sessions` / `recent` 这类**列表**用，读者能看到
+ * 头顶那条警告；这里给 `handoff()` 的 `throw` 用，警告到不了调用方，所以原因与下一步都要写全，
+ * 并且要明确指出「不能据此说这里没有会话」——否则用户会照着「先开一次会话」白开一个。
+ */
+export function unattributableNoPickMessage(stats: readonly UnattributableStat[]): string | null {
+  const hidden = hiddenByAttribution(stats);
+  if (!hidden) return null;
+  const samples = hidden.samples ? `：${hidden.samples}` : '';
+  return (
+    `未发现可列出的原生会话；但 ${hidden.names} 另有 ${hidden.total} 个会话文件读不出目录归属` +
+    `（${hidden.what}缺失或损坏），它们不属于任何目录、不会出现在会话列表里${samples}——` +
+    `无法确认这个目录里是否还有可交接的会话（不能据此说「这里没有会话」）；` +
+    `先确认这些文件的内容（可能是被截断），能从备份恢复就别直接删`
+  );
+}
+
+/**
  * 「文件还在、内容却是 0 字节」的会话（判据与 `read-text.ts` 的 `describeEmptySessionFile()` 同源）。
  *
  * 这是与上面几档都不同的一件事：`previewError` 里也有权限 / 路径读不出来，但那要修权限；
