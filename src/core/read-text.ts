@@ -117,6 +117,27 @@ export async function sessionFilePresence(filePath: string): Promise<SessionFile
 }
 
 /**
+ * 「这条会话是空的（0 字节）」的说明。`probeSessionReadable()`、各家预览与 cwd 解析共用同一句，
+ * 不想在四五个地方各写一遍——措辞不一致时同一个状态在 `open` / `sessions` / `doctor` 上会有三种说法。
+ *
+ * 0 字节不是「这条会话还没有内容」：进程被杀 / 只写了一半 / 磁盘满都会留下这种文件，而合法的
+ * 空会话（`new` 建出来的）每家都写了占位内容，不会是 0 字节（见 `src/providers/CLAUDE.md`）。
+ */
+export function describeEmptySessionFile(filePath: string): string {
+  return `会话文件是空的（0 字节，进程被杀或只写了一半，内容已丢失）：${filePath}`;
+}
+
+/**
+ * 这条原因是不是「会话文件是空的」那一档。
+ *
+ * 0 字节与读不出来（权限、路径）都会进 `previewError` 与 doctor 的 unreadable 汇总，但下一步
+ * 相反：权限要修权限，空文件的内容已经没了，只能重新开一次会话或从备份恢复。警告文案按它分档。
+ */
+export function isEmptySessionFileReason(reason: string): boolean {
+  return reason.includes('会话文件是空的');
+}
+
+/**
  * 只读探一次「这个会话文件现在读得出来吗」：`open` 一下外加一次 `fstat`，不读内容。
  *
  * `stat` 成功不代表读得出来（`chmod 000` 的文件 `stat` 照常返回），所以只 `stat` /
@@ -137,7 +158,7 @@ export async function probeSessionReadable(filePath: string): Promise<string | n
     // 只有普通文件才按字节数判；目录 / 设备文件走原来的「打得开就算读得出」，
     // 它们的「不是普通文件」由 sessionFilePresence() 单独说，两处不重复下结论
     if (info.isFile() && info.size === 0) {
-      return `会话文件是空的（0 字节，进程被杀或只写了一半，内容已丢失）：${filePath}`;
+      return describeEmptySessionFile(filePath);
     }
     return null;
   } catch (error) {

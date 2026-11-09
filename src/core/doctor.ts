@@ -11,7 +11,7 @@ import { readWatchVersion } from './watch-version.js';
 import { cwdProblem, splitElsewhereByDirectory } from './cwd.js';
 import { escapeControlChars } from './display.js';
 import { countUnparsableJsonLines } from './jsonl.js';
-import { describeSessionReadFailureReason, isFileSystemErrorCode, probeSessionReadable } from './read-text.js';
+import { describeSessionReadFailureReason, isEmptySessionFileReason, isFileSystemErrorCode, probeSessionReadable } from './read-text.js';
 
 export type BrokenTip = {
   chainId: string;
@@ -449,15 +449,25 @@ export async function doctorReport(cwd: string, deps: DoctorDeps): Promise<Docto
   // 同一份报告不把同一条文件讲两遍
   const tipFiles = new Set(store.available ? store.brokenTips.map((tip) => tip.filePath) : []);
   const unreadableBeyondTips = unreadableSessions.filter((item) => !tipFiles.has(item.filePath));
-  if (unreadableBeyondTips.length > 0) {
-    const sample = unreadableBeyondTips
+  // 与 sessions / recent 的 pushPreviewErrorWarning() 同一分档：0 字节是内容已经没了，
+  // 「先确认这些文件可读（权限、路径）」对它不成立，照着做只会白检查一遍权限。
+  const sample = (list: typeof unreadableBeyondTips): string =>
+    list
       .slice(0, 3)
       .map((item) => `${item.provider}:${item.sessionId}（${item.reason}）`)
-      .join('、');
+      .join('、') + (list.length > 3 ? ` 等 ${list.length} 条` : '');
+  const emptyFiles = unreadableBeyondTips.filter((item) => isEmptySessionFileReason(item.reason));
+  const deniedFiles = unreadableBeyondTips.filter((item) => !isEmptySessionFileReason(item.reason));
+  if (emptyFiles.length > 0) {
     warnings.push(
-      `有 ${unreadableBeyondTips.length} 条会话文件读不出来（列得出来，但 open / switch 读内容时会失败）：${sample}${
-        unreadableBeyondTips.length > 3 ? ` 等 ${unreadableBeyondTips.length} 条` : ''
-      }；先确认这些文件可读（权限、路径）再重试`,
+      `有 ${emptyFiles.length} 条会话文件是空的（0 字节，进程被杀或只写了一半，内容已丢失）：${sample(emptyFiles)}；` +
+        `列得出来，但 open / switch 读不出任何内容——只能重新开一次会话或从备份恢复`,
+    );
+  }
+  if (deniedFiles.length > 0) {
+    warnings.push(
+      `有 ${deniedFiles.length} 条会话文件读不出来（列得出来，但 open / switch 读内容时会失败）：${sample(deniedFiles)}；` +
+        `先确认这些文件可读（权限、路径）再重试`,
     );
   }
 

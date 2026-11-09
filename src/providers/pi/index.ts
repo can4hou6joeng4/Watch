@@ -7,6 +7,7 @@ import { SessionLookupFailureError } from '../adapter.js';
 import type { ProviderAdapter } from '../adapter.js';
 import { digestFile, type FileDigest } from '../../core/atomic.js';
 import {
+  describeEmptySessionFile,
   describePathReadFailureReason,
   describeSessionReadFailure,
   isMissingPathError,
@@ -85,6 +86,8 @@ async function piSessionCwdDetail(filePath: string): Promise<{ cwd: string | nul
   } catch (error) {
     return { cwd: null, error: describePathReadFailureReason(error) };
   }
+  // 0 字节文件里没有「首条可解析记录」可言
+  if (raw.length === 0) return { cwd: null, error: describeEmptySessionFile(filePath) };
   for (const line of raw.split('\n')) {
     if (!line.trim()) continue;
     let rec: Record<string, unknown>;

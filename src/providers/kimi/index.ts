@@ -5,7 +5,7 @@ import { promisify } from 'node:util';
 import path from 'node:path';
 import { digestFile } from '../../core/atomic.js';
 import type { FileDigest } from '../../core/atomic.js';
-import { describePathReadFailureReason, isMissingPathError } from '../../core/read-text.js';
+import { describeEmptySessionFile, describePathReadFailureReason, isMissingPathError } from '../../core/read-text.js';
 import { SessionLookupFailureError } from '../adapter.js';
 import type { ProviderAdapter } from '../adapter.js';
 import type { ProcessEvent, SessionRef, TokenUsage, UnifiedTurn } from '../../core/types.js';
@@ -92,6 +92,8 @@ async function firstUserText(filePath: string): Promise<{ text: string | null; e
     if (code === 'ENOENT' || code === 'ENOTDIR') return { text: null };
     return { text: null, error: describePathReadFailureReason(error) };
   }
+  // 0 字节不是「还没有用户消息」：内容已经没了，open / switch 同样读不了它
+  if (raw.length === 0) return { text: null, error: describeEmptySessionFile(filePath) };
   for (const line of raw.split('\n')) {
     if (!line.trim()) continue;
     let event: Record<string, unknown>;

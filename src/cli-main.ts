@@ -18,7 +18,7 @@ import { cwdAliasHint, cwdProblem, describeCwdProblem, describeNewSessionCwd, in
 import { escapeControlChars, hasControlChars } from './core/display.js';
 import { trimUserKey } from './core/cli-input.js';
 import { describeResumeTargetUnfinished } from './core/rich.js';
-import { describePathReadFailureReason, describeReadFailureOrSelf, describeSessionReadFailureReason, probeSessionReadable, sessionFilePresence } from './core/read-text.js';
+import { describePathReadFailureReason, describeReadFailureOrSelf, describeSessionReadFailureReason, isEmptySessionFileReason, probeSessionReadable, sessionFilePresence } from './core/read-text.js';
 import { describeWriteFailureReason } from './core/atomic.js';
 import { describeSpawnFailure } from './core/platform.js';
 
@@ -213,14 +213,27 @@ function pushPreviewErrorWarning(
 ): void {
   const hits = items.filter((s) => s.previewError);
   if (!hits.length) return;
-  const detail = hits
-    .slice(0, 3)
-    .map((s) => `${s.provider}:${s.sessionId}（${s.previewError}）`)
-    .join('、');
-  warnings.push(
-    `有 ${hits.length} 条会话的预览读不出来（不是「这条会话没有内容」，是文件没读成）：${detail}${hits.length > 3 ? ' 等' : ''}；` +
-      `列表照常列出，但 open / switch 读这条会话时同样会失败——先确认该文件可读（权限、路径）再重试`,
-  );
+  const detail = (list: typeof hits): string =>
+    list
+      .slice(0, 3)
+      .map((s) => `${s.provider}:${s.sessionId}（${s.previewError}）`)
+      .join('、') + (list.length > 3 ? ' 等' : '');
+  // 下一步按原因分档：0 字节是内容已经没了，改权限 / 换路径都救不回来；
+  // 读不出来（权限、路径）才是「先修好再重试」。同一句混着说，两种人都会走错方向。
+  const empty = hits.filter((s) => isEmptySessionFileReason(s.previewError!));
+  const denied = hits.filter((s) => !isEmptySessionFileReason(s.previewError!));
+  if (empty.length) {
+    warnings.push(
+      `有 ${empty.length} 条会话的文件是空的（0 字节，进程被杀或只写了一半，内容已丢失）：${detail(empty)}；` +
+        `列表照常列出，但 open / switch 读不出任何内容——这些会话没有可恢复的对话，只能重新开一次会话或从备份恢复`,
+    );
+  }
+  if (denied.length) {
+    warnings.push(
+      `有 ${denied.length} 条会话的预览读不出来（不是「这条会话没有内容」，是文件没读成）：${detail(denied)}；` +
+        `列表照常列出，但 open / switch 读这条会话时同样会失败——先确认该文件可读（权限、路径）再重试`,
+    );
+  }
 }
 
 function parseArgs(argv: string[]): {

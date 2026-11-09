@@ -5,7 +5,7 @@ import path from 'node:path';
 import { promisify } from 'node:util';
 import { digestFile } from '../../core/atomic.js';
 import type { FileDigest } from '../../core/atomic.js';
-import { describePathReadFailureReason, isMissingPathError } from '../../core/read-text.js';
+import { describeEmptySessionFile, describePathReadFailureReason, isMissingPathError } from '../../core/read-text.js';
 import { SessionLookupFailureError } from '../adapter.js';
 import type { ProviderAdapter } from '../adapter.js';
 import type { ProcessEvent, SessionRef, UnifiedTurn } from '../../core/types.js';
@@ -79,6 +79,8 @@ export async function claudeSessionCwdDetail(
   } catch (error) {
     return { cwd: null, error: describePathReadFailureReason(error) };
   }
+  // 0 字节文件里没有任何行：说「前 60 行里没有 cwd 字段」会让人以为文件有 60 行可查
+  if (raw.length === 0) return { cwd: null, error: describeEmptySessionFile(filePath) };
   const cwd = cwdFromClaudeRaw(raw);
   return cwd ? { cwd } : { cwd: null, error: '前 60 行里没有 cwd 字段' };
 }
@@ -235,6 +237,8 @@ async function claudeFirstUserText(filePath: string): Promise<{ text: string | n
     if (code === 'ENOENT' || code === 'ENOTDIR') return { text: null };
     return { text: null, error: describePathReadFailureReason(error) };
   }
+  // 0 字节不是「还没有用户消息」：内容已经没了，open / switch 同样读不了它
+  if (content.length === 0) return { text: null, error: describeEmptySessionFile(filePath) };
   for (const line of content.split('\n')) {
     if (!line.trim()) continue;
     try {
