@@ -20,7 +20,7 @@ import { trimUserKey } from './core/cli-input.js';
 import { describeResumeTargetUnfinished } from './core/rich.js';
 import { describePathReadFailureReason, describeReadFailureOrSelf, describeSessionReadFailureReason, isEmptySessionFileReason, probeSessionReadable, sessionFilePresence } from './core/read-text.js';
 import { describeWriteFailureReason } from './core/atomic.js';
-import { collectUnattributable, unattributableEmptyNote, unattributableJson, unattributableWarning } from './core/session-coverage.js';
+import { collectUnattributable, unattributableEmptyNote, unattributableJson, unattributableSearchNote, unattributableWarning } from './core/session-coverage.js';
 import { describeSpawnFailure } from './core/platform.js';
 
 /**
@@ -2120,6 +2120,10 @@ async function cmdSearch(cwd: string, json: boolean, query: string): Promise<voi
     const cwdIssue = await cwdProblem(cwd);
     if (cwdIssue) warnings.push(cwdIssue);
     await reindexCwd(cwd, listAdapters(), store, warnings, unavailable);
+    // 归属读不出来的会话（Codex 是 `session_meta` 首行坏了）不属于任何 cwd，因此永远进不了索引。
+    // 搜索恰恰是「我还记得那句话」的入口：只报「无结果」会把「这几条根本没被搜到」讲成「没聊过」
+    const unattributableStats = await collectUnattributable(listAdapters());
+    for (const stat of unattributableStats) warnings.push(unattributableWarning(stat, cwd));
     // 三种上限各自独立：全局 40 条、单会话 3 条、session id 前缀 10 条；只说「truncated」会混淆是哪一种
     const { hits, truncated, perSessionCapped, idPrefixCapped } = store.searchMessagesWithMeta(query, cwd);
     // 零命中时先把「本目录之外的命中」查出来：它决定下一步给什么，也决定要不要再问 cwdAliasHint。
@@ -2143,8 +2147,11 @@ async function cmdSearch(cwd: string, json: boolean, query: string): Promise<voi
     // 索引里已经知道这个目录的另一种写法是什么字符串时用它当下一步，与 notes 里那条保持一致
     // （realpath 未必查得到：索引按记录里的原字符串存）
     if (!hits.length && !cwdIssue) {
-      // 有一家没读成时零命中只说明「没搜到」，不是「写法不对」：换了写法照样读不出来
-      const alias = await cwdAliasHint(cwd, sameDirectoryElsewhere[0]?.cwd, unavailable);
+      // 有一家没读成、或有一批文件压根没进索引时，零命中只说明「没搜到」，不是「写法不对」
+      const alias = await cwdAliasHint(cwd, sameDirectoryElsewhere[0]?.cwd, [
+        ...unavailable,
+        ...unattributableStats.map((s) => s.provider),
+      ]);
       if (alias) warnings.push(alias);
     }
     pushEscapedContentWarning(
@@ -2166,6 +2173,8 @@ async function cmdSearch(cwd: string, json: boolean, query: string): Promise<voi
           `本次没有命中，但 ${unavailable.join(' / ')} 的会话列表没能读取（原因见上方警告），搜索没有覆盖到它们——不代表这些 Agent 里没有匹配；先修好这些存储（权限、路径或库状态）再重试`,
         );
       }
+      const unattrNote = unattributableSearchNote(unattributableStats);
+      if (unattrNote) notes.push(unattrNote);
     }
     if (json) {
       console.log(JSON.stringify({
@@ -2177,6 +2186,7 @@ async function cmdSearch(cwd: string, json: boolean, query: string): Promise<voi
         ...(perSessionCapped ? { perSessionCapped: true } : {}),
         ...(idPrefixCapped ? { idPrefixCapped: true } : {}),
         ...(unavailable.length ? { unavailable } : {}),
+        ...(unattributableStats.length ? { unattributable: unattributableJson(unattributableStats) } : {}),
         ...(notes.length ? { notes } : {}),
         ...(warnings.length ? { warnings } : {}),
       }));

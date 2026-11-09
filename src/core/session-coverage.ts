@@ -84,3 +84,20 @@ export function unattributableEmptyNote(stats: readonly UnattributableStat[]): s
 export function unattributableJson(stats: readonly UnattributableStat[]): { provider: string; count: number }[] {
   return stats.map((s) => ({ provider: s.provider, count: s.count }));
 }
+
+/**
+ * `watch search` 零命中时补的说明。
+ * 搜索只遍历各家的 `listSessions(cwd)`，而这一档的文件**不属于任何 cwd**，永远进不了任何索引——
+ * 于是「无结果」可能只是「这几条根本没被搜到」，而不是「没聊过」。
+ * 与 `unattributableWarning()` 分开：那条讲事实与后果，这条讲**这次搜索的覆盖范围**。
+ */
+export function unattributableSearchNote(stats: readonly UnattributableStat[]): string | null {
+  if (!stats.length) return null;
+  const total = stats.reduce((sum, s) => sum + s.count, 0);
+  const names = stats.map((s) => s.displayName).join(' / ');
+  return (
+    `本次没有命中；但 ${names} 另有 ${total} 个会话文件读不出目录归属（原因见上方警告），` +
+    '它们不属于任何目录，也就不会进任何目录的搜索索引——无法确认里面是否有你要找的内容，搜索没有覆盖到它们；' +
+    '先确认这些文件的内容（可能只是首行被截断、正文还在，能从备份恢复就别直接删）再重试'
+  );
+}
