@@ -772,6 +772,22 @@ async function planOpenInProvider(
 
   // 属主即目标：无需转化，直接 resume
   if (sourceProvider === providerId) {
+    // 这条快路径要 resume 的就是来源会话自己，可它以前既不解析也不披露：同一条会话改用
+    // `open <id>` 单独打开时明明会说「有 N 次工具调用没有结果」，带上 `--to <同一个 provider>`
+    // 就变成一句「来源即目标，直接恢复原会话」——用户从 `--check` 到执行都拿不到任何线索。
+    // `diagnostics` 同时喂给预检与写入，所以 `--check` 也会提前说。
+    try {
+      const ownTurns = await source.adapter.parse(sourceRef);
+      warnResumeTargetUnfinished(ownTurns, `目标会话 ${sourceRef.sessionId}（${target.displayName}）`, 0, (msg) =>
+        diagnostics?.push(msg),
+      );
+    } catch (error) {
+      // 解析不了不等于没问题：这次 resume 落在这条会话上，至少要说明「没能确认」
+      diagnostics?.push(
+        `目标会话 ${sourceRef.sessionId}（${target.displayName}）读取失败：${describeReadFailureOrSelf(error)}；` +
+          `无法确认它是否停在做了一半的一轮上（这次要 resume 的就是它）`,
+      );
+    }
     return { ...base, plan: { kind: 'resume', targetRef: sourceRef, turns: [], merged: 0, snapshot: null } };
   }
 
