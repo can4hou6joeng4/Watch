@@ -117,16 +117,28 @@ export async function sessionFilePresence(filePath: string): Promise<SessionFile
 }
 
 /**
- * 只读探一次「这个会话文件现在读得出来吗」：只 `open` 一下，不读内容。
+ * 只读探一次「这个会话文件现在读得出来吗」：`open` 一下外加一次 `fstat`，不读内容。
  *
  * `stat` 成功不代表读得出来（`chmod 000` 的文件 `stat` 照常返回），所以只 `stat` /
  * 只列目录的路径（如 `adopt` 写链记录）会显得一切正常，而它打印的 resume 命令
  * 一执行就失败。返回 `null` 表示读得出来，否则是中文原因（已带路径）。
+ *
+ * **`open` 成功也不代表有内容可恢复**：进程被杀 / 只写了一半 / 磁盘满时，会话文件会被
+ * 截成 0 字节，`open` 依然成功，而这条会话连 cwd 都读不出来（`open <id>` 会说「找到了，
+ * 但读不出来：前 60 行里没有 cwd 字段」）。七处调用点（`switch` 的链尾、`new` 的同家拒绝、
+ * `status` 的链尾与 tips、`chain list` 的 tip、`doctor` 的 pathPresence、`adopt`）都靠这一个
+ * 判定，漏了它就会集体替一条空文件宣称「可以直接打开」。判据放在这里而不是各调用点各写一遍。
  */
 export async function probeSessionReadable(filePath: string): Promise<string | null> {
   let handle: Awaited<ReturnType<typeof open>> | undefined;
   try {
     handle = await open(filePath, 'r');
+    const info = await handle.stat();
+    // 只有普通文件才按字节数判；目录 / 设备文件走原来的「打得开就算读得出」，
+    // 它们的「不是普通文件」由 sessionFilePresence() 单独说，两处不重复下结论
+    if (info.isFile() && info.size === 0) {
+      return `会话文件是空的（0 字节，进程被杀或只写了一半，内容已丢失）：${filePath}`;
+    }
     return null;
   } catch (error) {
     // 这里只报「读不出来」：文件确实不在时也要说清，否则用户会去反复试 resume
