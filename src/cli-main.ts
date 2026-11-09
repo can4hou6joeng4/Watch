@@ -472,6 +472,77 @@ async function splitChainsElsewhere(
   };
 }
 
+/** 读这个 cwd 下的链名；读不出来返回 null（补充说明不该让写命令失败）。 */
+function chainNamesOf(store: Store | null, cwd: string): string[] | null {
+  if (!store) return null;
+  try {
+    return store.listChains(cwd).map((chain) => chain.name);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * 逐条比出这次新建的链名。读不出来（任一侧为 null）或一次新增了多条时返回 null——
+ * 名字只是用来把说明指向那条链，判不出来就退回不带名字的说法，不猜。
+ */
+function newChainName(before: string[] | null, after: string[] | null): string | null {
+  if (!before || !after) return null;
+  const added = after.filter((name) => !before.includes(name));
+  return added.length === 1 ? added[0] : null;
+}
+
+/**
+ * 写入侧（`chain new` / `new`）在「同一个目录的另一种写法」下已经有链时，必须说明这件事。
+ *
+ * 链按 `--cwd` 的**原字符串**分组，而同一个物理目录可以有很多种写法（软链、`/var` 与
+ * `/private/var` 这类前缀、名字大小写）。读路径（`chain list` / `status` / `usage` / `doctor` /
+ * `search` / `switch` / `adopt` / `chain use`）早已会指出「同一个目录的另一种写法下有链」，
+ * 但**写路径一直没有覆盖**：2026-11-09 实测（隔离 HOME，`<tmp>/proj-real` 软链成
+ * `<tmp>/proj-link`）先 `chain new 主力 --cwd <real>`、再 `chain new 主力 --cwd <link>`，两次都是
+ * `ok:true` 且 `warnings` 一个字都没有——同一个项目里于是有了两条都叫「主力」的链，`chain list`
+ * 在两边各自标「← 当前」，之后不带 `--cwd` 的 switch / new / adopt 只作用在用户当前那条写法对应的
+ * 那一组上。`watch new claude --cwd <link>` 同样静默建出第二组「默认」链。
+ *
+ * 下一步只给「换成记录里的原字符串重跑」这一个真实可用的动作：绝不建议
+ * `watch chain archive <刚建的名字>`——`archiveChain()` 拒绝归档本目录唯一的活跃链，而刚建出来的
+ * 这条往往正是那唯一一条，等于给了一条注定失败的命令。
+ */
+async function aliasChainGroupWarning(
+  store: Store | null,
+  cwd: string,
+  createdName: string | null,
+): Promise<string | null> {
+  if (!store) return null;
+  const { same } = await splitChainsElsewhere(chainsElsewhereOf(store, cwd), cwd);
+  if (!same.length) return null;
+  const groups: string[] = [];
+  const collisions: string[] = [];
+  let total = 0;
+  for (const row of same) {
+    total += row.total;
+    const names = chainNamesOf(store, row.cwd) ?? [];
+    if (createdName && names.includes(createdName)) collisions.push(row.cwd);
+    const shown = names.slice(0, 3).map((name) => `「${escapeControlChars(name)}」`).join(' / ');
+    groups.push(shown ? `${row.cwd} 下有 ${shown}${names.length > 3 ? ` 等 ${names.length} 条` : ''}` : `${row.cwd} 下有 ${row.total} 条链（名字读不出来）`);
+  }
+  const created = createdName
+    ? `在 ${cwd} 下建了链「${escapeControlChars(createdName)}」`
+    : `在 ${cwd} 下写了链记录`;
+  const collision = collisions.length
+    ? `；两个写法下都有「${escapeControlChars(createdName!)}」，但它们不是同一条链`
+    : '';
+  const moreGroup = same.length > 3 ? ` 等 ${same.length} 个写法` : '';
+  return (
+    `${cwd} 和 ${same.slice(0, 3).map((r) => r.cwd).join('、')}${moreGroup} 是同一个目录的另一种写法` +
+    '（链按 --cwd 的原字符串分组，两种写法在本地库里是两个目录、互相看不到）。' +
+    `这次${created}，而那个写法下已经有 ${total} 条链（${groups.join('；')}）${collision}。` +
+    `同一个项目里现在有两组链：之后不带 --cwd 的 status / switch / new / adopt 只作用在当前这条 --cwd 对应的那一组上。` +
+    `要接着用原来那一组，把 --cwd 换成 ${same[0].cwd} 重跑同一条命令（其余参数照旧）` +
+    '——链记录的工作目录在创建时定死，没有改名 / 移动的办法'
+  );
+}
+
 async function cmdStatus(cwd: string, json: boolean, chain?: string): Promise<void> {
   const store = openStore();
   // 路径写错时各 provider 会安静返回空列表，先把原因放进同一条 warnings 通道
@@ -1585,6 +1656,15 @@ async function cmdNew(cwd: string, providerId: string, json: boolean, chain?: st
   const cwdProbe = await inspectCwd(cwd);
   const cwdIssue = describeCwdProblem(cwdProbe, cwd);
   const cwdWriteIssue = describeWriteCwd(cwdProbe, cwd);
+  // 与 `chain new` 同一处根因：两条成功分支都会把链记录写到这个 `--cwd` 下，而链按字符串分组，
+  // 同一个目录换个写法就是另一组。写之前先记下本目录已有的链名，写完之后用差集认出「这次新建的
+  // 是哪一条」，交给 `aliasChainGroupWarning()` 与那个写法下的链对账
+  const chainsBefore = chainNamesOf(store, cwd);
+  const aliasWarnings = async (): Promise<void> => {
+    const created = newChainName(chainsBefore, chainNamesOf(store, cwd));
+    const issue = await aliasChainGroupWarning(store, cwd, created);
+    if (issue) warnings.push(issue);
+  };
   if (!store) {
     // 会话本身能建出来，但没有 switch_events：后续 switch 不认这条绑定，必须说明。
     // 原因同样要走 `storeUnavailableWarning()`：只说「未写入链记录」时用户不知道该修权限、
@@ -1654,6 +1734,8 @@ async function cmdNew(cwd: string, providerId: string, json: boolean, chain?: st
       // 会话已经建出来、链绑定也写好了，但目录进不去：与查询类命令不同，这里必须说清
       // 「已经写进去的是什么」以及「resume 会失败」，否则 ok:true + resume 会被读成马上能用
       if (cwdWriteIssue) warnings.push(newSessionCwdWarning(cwdWriteIssue, ref.filePath));
+      // 这次在 `--cwd` 下写出了链记录：同一个目录的另一种写法下若已有链，说明会有两组（见 helper）
+      await aliasWarnings();
       const resumeCommand = adapter.resumeCommand(ref);
       // 空链分支同样会 touchChain（getOrCreateChainSession 在建会话之后就跑过）
       const currentChain = safeActiveChain(store, cwd, warnings);
@@ -1682,6 +1764,8 @@ async function cmdNew(cwd: string, providerId: string, json: boolean, chain?: st
 
     const result = await createChainSession(providerId, cwd, listAdapters(), getAdapter, store, chain);
     // 链已存在时的表单同样要带出 cwd / 读库 / 交接降级说明，不能只在空链分支打印
+    // 先把「另一种写法下已有链」并进 warnings，再由这里统一带出（两条通道共用同一份）
+    await aliasWarnings();
     const allWarnings = [...warnings, ...result.warnings];
     // 已有链分支可能复用配对会话，也可能新建；无论哪种，只要目录进不去，resume 都会在这一步失败
     if (cwdWriteIssue) allWarnings.push(newSessionCwdWarning(cwdWriteIssue, result.newRef.filePath));
@@ -1902,9 +1986,12 @@ async function cmdChain(cwd: string, json: boolean, action?: string, a?: string,
       // `:memory:` 时这条链只活在本次进程内：命令本身成功，但下一次 chain list 就看不到它
       const ephemeralNote = ephemeralWrite;
       const chainCwdIssue = cwdWriteIssue ? chainCwdWarning(cwdWriteIssue, chain.name) : null;
+      // 链记录已经写进本地库了：这一步只是补充说明，读不出来也不该让命令失败
+      const aliasIssue = await aliasChainGroupWarning(store, cwd, chain.name);
       if (json) {
         const warnings = [
           ...(chainCwdIssue ? [chainCwdIssue] : []),
+          ...(aliasIssue ? [aliasIssue] : []),
           ...(switchNote ? [switchNote] : []),
           ...(ephemeralNote ? [ephemeralNote] : []),
         ];
@@ -1918,6 +2005,7 @@ async function cmdChain(cwd: string, json: boolean, action?: string, a?: string,
         );
       } else {
         if (chainCwdIssue) console.error(`警告: ${chainCwdIssue}`);
+        if (aliasIssue) console.error(`警告: ${aliasIssue}`);
         if (ephemeralNote) console.error(`警告: ${ephemeralNote}`);
         console.log(`已创建链: ${escapeControlChars(chain.name)}  (${chain.id})`);
         // 与 `chain rename` / `chain archive` 的提示同一位置：跟在结果下一行，不是降级警告
