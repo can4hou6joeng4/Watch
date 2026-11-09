@@ -8,7 +8,7 @@ import { addFinding, type Finding } from './findings.js';
 import { escapeControlChars } from './display.js';
 import { countUnparsableJsonLines } from './jsonl.js';
 import { cwdAliasHint, splitElsewhereByDirectory } from './cwd.js';
-import { describePathReadFailureReason, describeReadFailureOrSelf, probeSessionReadable, sessionFilePresence } from './read-text.js';
+import { describePathReadFailureReason, describeReadFailureOrSelf, isEmptySessionFileReason, probeSessionReadable, sessionFilePresence } from './read-text.js';
 import { noSessionHint, unknownProviderMessage } from '../providers/registry.js';
 
 /** 写回被阻断（如 TOCTOU 检测到目标被外部修改）：一票否决，不产生部分写 */
@@ -1195,6 +1195,12 @@ export async function handoff(
     if (deduped > 0) addFinding(findings, 'handoff.dedup', 'skipped', deduped);
   }
   if (outgoing.length === 0 && !replace) {
+    // 0 轮有两种形状：`watch new` 建出来的合法空会话（各适配器都写了占位内容，文件非空），
+    // 与会话文件被截成 0 字节（进程被杀 / 只写了一半 / 磁盘满，内容已经丢了）。两者都落到
+    // 「没有可交接的内容」，但下一步相反：前者可以另起一条链从零开新会话，后者只能从备份恢复。
+    // 只探 `turns.length === 0` 的情形——有内容时文件是否空着已无意义，也不该多一次 open。
+    const emptySourceFile = turns.length === 0 ? await probeSessionReadable(sourceTip.ref.filePath) : null;
+    const emptiedSourceFile = emptySourceFile && isEmptySessionFileReason(emptySourceFile) ? emptySourceFile : null;
     // 来源会话本身是空的（`watch new` 建出来的 0 轮会话最典型），目标侧也没有可沿用的会话：
     // 没有任何内容可交接。以前这里照样往下走，把 `toProvider` 记成目标、`toRef` 记成**来源**
     // 那个会话，于是同一份结果里 `resumeCommand` 是 `claude --resume <codex 的 id>`（照抄必然失败），
@@ -1202,15 +1208,34 @@ export async function handoff(
     // 文本模式还印「已从 codex 交接 → claude（0 轮）」。同一个操作走 `open <id> --to` 一直
     // 老实拒绝（「没有可转入的内容」），两条路径对同一件事给出两套结论。
     if (!into && turns.length === 0) {
+      // 0 字节不是「这条会话本来就没内容」：内容已经没了，下一步是恢复备份而不是开新会话。
+      // 以前两种形状共用同一句「没有任何可交接的内容（0 轮）」，而 sessions / recent / doctor /
+      // status / chain list 从 283 轮起都已经会说「0 字节，内容已丢失」——只有真正要 resume 的
+      // 这条路径把「内容丢了」讲成「本来就没有」。
+      const lead = emptiedSourceFile
+        ? `来源会话 ${sourceTip.ref.sessionId}（${source.displayName}）的${emptiedSourceFile}；` +
+          `没有任何可交接的内容（0 轮），本次未写入任何内容，链尾仍在 ${source.displayName}。` +
+          `如果这条会话本该有内容，先从备份恢复该文件（Watch 不会替你重建历史）再重试；`
+        : `来源会话 ${sourceTip.ref.sessionId}（${source.displayName}）没有任何可交接的内容（0 轮）：` +
+          `本次未写入任何内容，链尾仍在 ${source.displayName}。`;
       throw new Error(
-        `来源会话 ${sourceTip.ref.sessionId}（${source.displayName}）没有任何可交接的内容（0 轮）：` +
-          `本次未写入任何内容，链尾仍在 ${source.displayName}。` +
+        lead +
           `要在 ${target.displayName} 侧从零开新会话，请先另起一条链：watch chain new <新名字> 之后 watch new ${targetId}` +
           `（同一条链上直接 new ${targetId} 仍会走这次空交接）；` +
           `若 ${target.displayName} 侧已有会话，可用 watch adopt ${targetId} --session <会话 id> 接进来`,
       );
     }
     const resumeRef = into ?? mtimeTip.ref;
+    // 零增量分支同样要分档：目标已包含全部内容时结果里只有 `turnCount:0`，而 0 轮既可能是
+    // 「来源本来就没内容」也可能是「来源文件被截成 0 字节」——后者内容已经丢了，一句不提
+    // 就等于替一次内容丢失宣称「无需交接」。
+    if (into && emptiedSourceFile) {
+      warnings.push(
+        `来源会话 ${sourceTip.ref.sessionId}（${source.displayName}）的${emptiedSourceFile}；` +
+          `这次没有任何内容可交接，目标会话 ${into.sessionId}（${target.displayName}）未被改动` +
+          `——如果这条会话本该有内容，先从备份恢复该文件再重试（Watch 不会替你重建历史）`,
+      );
+    }
     // 这次零增量：目标会话已包含全部内容，结果里那条 resume 落在 `into` 自己身上。
     // 它停在做了一半的一轮上时要说——与 `open` 的目标侧同一口径（`merged = 0`，两种形状都说）。
     if (into) {
