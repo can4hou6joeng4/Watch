@@ -436,7 +436,8 @@ async function cmdStatus(cwd: string, json: boolean, chain?: string): Promise<vo
   // 而真正的原因是这个写法与原生记录不一致。只在零结果时补，健康目录不多嘴。
   // 上面已经从库里知道这个目录的另一种写法是什么字符串，用它当下一步（realpath 未必匹配原生记录）
   if (!result.tips.length) {
-    const alias = await cwdAliasHint(cwd, splitElsewhere.same[0]?.cwd);
+    // 有几家压根没读成时不能给「换一种写法」：零结果是读取失败造成的，换写法修不好权限 / 库
+    const alias = await cwdAliasHint(cwd, splitElsewhere.same[0]?.cwd, result.unreadable);
     if (alias) result.warnings.push(alias);
   }
   const elsewhereJson = [...splitElsewhere.same, ...splitElsewhere.other];
@@ -993,7 +994,8 @@ async function cmdSessions(cwd: string, json: boolean, chain?: string): Promise<
     // 零会话 + `--cwd` 只是同一个目录的另一种写法：正文的「未发现会话」会被当成「真的没聊过」，
     // 而会话可能全记在 realpath 那种写法下（软链 / 大小写），先给可照抄的路径
     if (!result.length) {
-      const alias = await cwdAliasHint(cwd);
+      // 与 status 同一口径：有一家没读成时，零结果不是「写法不对」的证据
+      const alias = await cwdAliasHint(cwd, undefined, unavailable);
       if (alias) warnings.push(alias);
     }
     pushEscapedContentWarning(
@@ -1162,7 +1164,12 @@ async function cmdRecent(cwd: string, json: boolean, limit: number = 8, cwdGiven
   // 同 status / sessions：零结果时先看 --cwd 是不是同一个目录的另一种写法，
   // 否则「暂无最近会话记录」会被当成「这个目录真的没聊过」
   if (!final.length) {
-    const alias = await cwdAliasHint(cwd);
+    // 只算原生存储没读成的那些：本地映射表坏了不影响原生扫描，「这个目录没会话」的结论照样成立
+    const alias = await cwdAliasHint(
+      cwd,
+      undefined,
+      unavailable.filter((id) => id !== '本地库'),
+    );
     if (alias) warnings.push(alias);
   }
   // 列表被 --limit（默认 8）截断时要说出来，否则用户会把「最近 8 条」当成全部
@@ -2050,7 +2057,8 @@ async function cmdSearch(cwd: string, json: boolean, query: string): Promise<voi
     // 索引里已经知道这个目录的另一种写法是什么字符串时用它当下一步，与 notes 里那条保持一致
     // （realpath 未必查得到：索引按记录里的原字符串存）
     if (!hits.length && !cwdIssue) {
-      const alias = await cwdAliasHint(cwd, sameDirectoryElsewhere[0]?.cwd);
+      // 有一家没读成时零命中只说明「没搜到」，不是「写法不对」：换了写法照样读不出来
+      const alias = await cwdAliasHint(cwd, sameDirectoryElsewhere[0]?.cwd, unavailable);
       if (alias) warnings.push(alias);
     }
     pushEscapedContentWarning(

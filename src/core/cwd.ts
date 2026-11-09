@@ -89,10 +89,18 @@ export async function cwdProblem(cwd: string): Promise<string | null> {
  *
  * 只在调用方**已经确认零结果**时才调：健康目录每次查询都多一遍 realpath 是白花，也多一句噪音。
  * 目录不存在 / 进不去时返回 null——那是 `cwdProblem()` 的活，两句话叠在一起会互相干扰。
+ * `scannedIncomplete` 非空时也返回 null：这时零结果是「有几家压根没读成」造成的，与路径写法无关，
+ * 换一个写法重试解决不了权限 / 库的问题，先给下一步会把人引到错误的方向（原因由调用方自己披露）。
  * 文案不提「符号链接」这一个原因：`/var` 与 `/private/var` 这类**前缀**是软链、名字大小写不同则是
  * 文件系统语义，两者表现完全一样（会话一条都查不到），说错原因会把人引去 `ls -l` 一个本来正常的目录。
  */
-export async function cwdAliasHint(cwd: string, knownSpelling?: string): Promise<string | null> {
+export async function cwdAliasHint(
+  cwd: string,
+  knownSpelling?: string,
+  /** 这次压根没读成的 provider id：零结果不能据此归因到「写法不对」 */
+  scannedIncomplete?: readonly string[],
+): Promise<string | null> {
+  if (scannedIncomplete?.length) return null;
   let real: string;
   try {
     const probe = await stat(cwd);

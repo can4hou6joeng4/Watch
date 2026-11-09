@@ -688,6 +688,11 @@ export async function collectTips(
   warnings?: string[],
   /** 收集「这一家根本没读成」的 provider id：调用方要据此判断能否下「这个目录没有会话」的结论 */
   unreadable?: string[],
+  /**
+   * 同上，但要原因。`handoff()` 零结果时是直接 throw，`warnings` 到不了用户手里，
+   * 所以它得把原因内联进错误文案——否则用户只看到「没有会话」，一点线索都没有。
+   */
+  unreadableReasons?: { provider: string; reason: string }[],
 ): Promise<ProviderTip[]> {
   const tips: ProviderTip[] = [];
   for (const adapter of adapters) {
@@ -696,10 +701,12 @@ export async function collectTips(
     try {
       found = await adapter.findLatestSession(cwd);
     } catch (error) {
+      const reason = describePathReadFailureReason(error);
       unreadable?.push(adapter.id);
+      unreadableReasons?.push({ provider: adapter.id, reason });
       // 单个 provider 的原生存储读不出来时跳过，不影响其它家，但要披露；原因按路径说（这里
       // 可能是目录 / 索引 / 库），不能把 `EACCES: permission denied, scandir '…'` 原文交给用户
-      warnings?.push(`${adapter.id} 原生会话读取失败，已跳过：${describePathReadFailureReason(error)}`);
+      warnings?.push(`${adapter.id} 原生会话读取失败，已跳过：${reason}`);
       continue;
     }
     if (found) tips.push({ provider: adapter.id, ref: found.ref, updatedAt: found.updatedAt });
@@ -896,7 +903,11 @@ export async function handoff(
     }
   }
 
-  const tips = await collectTips(cwd, adapters, warnings);
+  // 零结果时下面要判断「这个目录到底有没有会话」，所以要看这一轮谁压根没读成：
+  // 读不出来 ≠ 没有，原因也要留住（throw 之后 `warnings` 到不了调用方手里）
+  const unreadableTips: string[] = [];
+  const unreadableReasons: { provider: string; reason: string }[] = [];
+  const tips = await collectTips(cwd, adapters, warnings, unreadableTips, unreadableReasons);
   const mtimeTip = pickChainTip(tips);
   if (!mtimeTip) {
     const chainTipRef = history.at(-1)?.toRef ?? null;
@@ -924,6 +935,19 @@ export async function handoff(
             `——先恢复该路径，再决定是否 watch switch ${chainTipRef.provider} 重新绑定，或在原生 CLI 里新开一个会话`,
         );
       }
+    }
+    // 这一轮有几家压根没读成：零结果只说明「没列出来」，不能据此说「这个目录没有会话」，
+    // 更不能给「换个 --cwd 写法」或「先开一次会话」这种下一步（换写法修不好权限 / 库的问题）。
+    // `handoff()` 是 throw 出去的，下面 `warnings` 里那几条「读不出来」的原因用户根本拿不到，
+    // 所以这里把原因内联进错误文案——2026-11-09 实测（修复前，隔离 HOME，claude / codex 两家
+    // 存储 chmod 000）`watch switch codex --json` 的 error 只有「未发现原生会话；…把 --cwd 换成
+    // /private/var/… 重试…请先在任一受支持的 Agent 里开聊」，一个字都没提那两次读取失败。
+    if (unreadableTips.length) {
+      const detail = unreadableReasons.map((u) => `${u.provider}（${u.reason}）`).join('；');
+      throw new Error(
+        `无法确认这个目录里有没有可交接的会话：${detail}——这不代表这里没有会话，` +
+          `先修好这些会话存储（权限、路径或库状态）再重试；本次未写入任何内容`,
+      );
     }
     // 按字符串比较确实没有会话时，`--cwd` 仍可能只是同一个目录的另一种写法（软链 / 前缀 / 大小写）：
     // 只留「请先开聊」会把人引去开新会话，而原来的会话一直躺在另一个写法下面。
