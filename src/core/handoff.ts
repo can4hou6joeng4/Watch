@@ -2,7 +2,7 @@ import type { ImportTurnsOpts, ProviderAdapter } from '../providers/adapter.js';
 import type { SessionRef, TokenUsage, UnifiedTurn } from './types.js';
 import { chainsElsewhereHint, chainsSameDirectoryHint, describeStoreErrorReason, emptyChainBindHint } from './store.js';
 import type { Chain, ChainsElsewhere, Store, SwitchRecord } from './store.js';
-import { dedupeCallEvents, describeDanglingToolCalls, describeUnansweredTail, mergeTurns, shouldReplacePairedSession, unwrapUserQuery } from './rich.js';
+import { dedupeCallEvents, describeDanglingToolCalls, describeUnansweredTail, describeResumeTargetUnfinished, mergeTurns, shouldReplacePairedSession, unwrapUserQuery } from './rich.js';
 import { describeWriteFailureReason, type FileDigest } from './atomic.js';
 import { addFinding, type Finding } from './findings.js';
 import { escapeControlChars } from './display.js';
@@ -972,6 +972,23 @@ export async function handoff(
     await assertTargetUnchanged(target, into, destDigest, '切换');
   };
 
+  // 「即将 resume 的那条会话」自己没收尾时，与 `open` 同一口径披露：用户复制的是结果里那条
+  // resume 命令，接手的就是这一轮断掉的会话。`switch` 是最常被用来拿 resume 命的入口，
+  // 以前只在**来源**侧说（来源说得再清楚，也说的是另一条会话）。
+  // 解析失败不在这里另报——读不出来已由 `probeSessionReadable` / 「目标会话无法沿用」说清，
+  // 再补一句只会把同一件事讲两遍。
+  const warnResumeTarget = async (ref: SessionRef, displayName: string, merged: number): Promise<void> => {
+    let resumeTurns: UnifiedTurn[];
+    try {
+      resumeTurns = await target.parse(ref);
+    } catch {
+      return;
+    }
+    warnings.push(
+      ...describeResumeTargetUnfinished(resumeTurns, `目标会话 ${ref.sessionId}（${displayName}）`, merged),
+    );
+  };
+
   if (history.length > 0) {
     // 链绑定：只认 switch_events 里绑定的会话对，同目录其它会话不串线
     let boundOther: SessionRef | null = null;
@@ -1032,6 +1049,9 @@ export async function handoff(
             `，或 watch adopt ${targetId} --session <另一个会话 id> 换绑，或用 watch chain new <新名字> 另起一条链`,
         );
       }
+      // 这条链尾会话马上就要被 resume：可它自己停在做了一半的一轮上时，`open <同一个 id>`
+      // 会说、`switch` 以前一句话都不提——而 resume 正是从 `switch` 这里复制的。
+      await warnResumeTarget(resumeRef, target.displayName, 0);
       return {
         newRef: resumeRef,
         resumeCommand: target.resumeCommand(resumeRef),
@@ -1167,6 +1187,13 @@ export async function handoff(
       );
     }
     const resumeRef = into ?? mtimeTip.ref;
+    // 这次零增量：目标会话已包含全部内容，结果里那条 resume 落在 `into` 自己身上。
+    // 它停在做了一半的一轮上时要说——与 `open` 的目标侧同一口径（`merged = 0`，两种形状都说）。
+    if (into) {
+      warnings.push(
+        ...describeResumeTargetUnfinished(destTurns, `目标会话 ${into.sessionId}（${target.displayName}）`, 0),
+      );
+    }
     // 目标 session 已包含全部最新内容，无需追加增量；但用户主动切回来时，
     // 仍应把链尾更新为目标 provider，否则桌面端状态会停留在旧 provider。
     // 此外，旧版本写出的 Kimi wire.jsonl 可能存在 stepUuid 不匹配等格式
@@ -1204,6 +1231,17 @@ export async function handoff(
   const newRef = await guardedWrite(dedupeCallEvents(outgoing), replace ? { replace: true } : undefined);
   if (replace) addFinding(findings, 'handoff.rewrite', 'degraded', destTurns.length);
   else addFinding(findings, 'handoff.append', 'exact', outgoing.length);
+  // 追加之后最后一条 turn 已是并入的内容，「最后停在用户消息上」不再成立（merged > 0 只报
+  // 工具调用没有结果这条 —— 它并入多少轮都不会闭合）。上面来源侧那条说的是另一条会话。
+  if (into) {
+    warnings.push(
+      ...describeResumeTargetUnfinished(
+        destTurns,
+        `目标会话 ${into.sessionId}（${target.displayName}）`,
+        outgoing.length,
+      ),
+    );
+  }
 
   if (store) {
     try {

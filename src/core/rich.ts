@@ -294,6 +294,39 @@ export function describeUnansweredTail(
   return `${label}最后停在用户消息上（「${preview}」），没有对应的助手回复：这一轮可能被中断或还在生成，${next}`;
 }
 
+/**
+ * **即将被 resume 的那条会话**自己没收尾时的披露（`open` 与 `switch` 共用一份措辞）。
+ *
+ * 与「来源会话没收尾」不是一回事：这里没有交接发生，用户复制的是 resume 命令，
+ * 接手的就是这一轮断掉的会话，结尾那句要按「即将 resume」说，不能写成「交接后」。
+ *
+ * 判定分两档，都不误报：
+ * - 工具调用没有结果：它在会话中途，**这次并入多少轮都不会闭合**，所以一直说；
+ * - 最后停在用户消息上：`merged > 0` 时最后一条 turn 已不是它，「最后停在用户消息上」
+ *   会变成假话，所以只在这轮**零增量**（也就是「直接打开」）时说。
+ */
+export function describeResumeTargetUnfinished(
+  turns: UnifiedTurn[],
+  label: string,
+  merged: number,
+): string[] {
+  const out: string[] = [];
+  const dangling = describeDanglingToolCalls(
+    turns,
+    label,
+    '即将 resume 的这条会话里那一轮仍是断的——先在原生 CLI 里确认或收尾再继续',
+  );
+  if (dangling) out.push(dangling);
+  if (merged > 0) return out;
+  const tail = describeUnansweredTail(
+    turns,
+    label,
+    '即将 resume 时接手的一侧同样会看到一句悬空的问题——先在原生 CLI 里确认或收尾再继续',
+  );
+  if (tail) out.push(tail);
+  return out;
+}
+
 export function ensureAssistant(turns: UnifiedTurn[], timestamp: string, provider: string): UnifiedTurn {  const last = turns.at(-1);
   if (last?.role === 'assistant') return last;
   const created: UnifiedTurn = { role: 'assistant', text: '', timestamp, provider, events: [] };

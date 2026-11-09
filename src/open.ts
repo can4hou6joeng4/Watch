@@ -1,7 +1,7 @@
 import { stat } from 'node:fs/promises';
 import { describeWriteFailureReason, type FileDigest } from './core/atomic.js';
 import { assertTargetUnchanged, blockedHint, diffTurns, HandoffBlockedError } from './core/handoff.js';
-import { describeDanglingToolCalls, describeUnansweredTail, dedupeCallEvents } from './core/rich.js';
+import { describeDanglingToolCalls, describeUnansweredTail, describeResumeTargetUnfinished, dedupeCallEvents } from './core/rich.js';
 import { Store, defaultDbPath, describeStoreErrorReason, describeStoreOpenFailure } from './core/store.js';
 import { IS_WIN, normalizePath, stripDevicePrefix } from './core/platform.js';
 import { trimUserKey } from './core/cli-input.js';
@@ -704,19 +704,7 @@ function warnResumeTargetUnfinished(
   merged: number,
   push: (msg: string) => void,
 ): void {
-  const dangling = describeDanglingToolCalls(
-    turns,
-    label,
-    '即将 resume 的这条会话里那一轮仍是断的——先在原生 CLI 里确认或收尾再继续',
-  );
-  if (dangling) push(dangling);
-  if (merged > 0) return;
-  const tail = describeUnansweredTail(
-    turns,
-    label,
-    '即将 resume 时接手的一侧同样会看到一句悬空的问题——先在原生 CLI 里确认或收尾再继续',
-  );
-  if (tail) push(tail);
+  for (const message of describeResumeTargetUnfinished(turns, label, merged)) push(message);
 }
 
 /**
