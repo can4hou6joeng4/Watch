@@ -11,7 +11,7 @@ import { cliDetectFailedBlock, cliMissingBlock, PreflightBlockedError, SessionLo
 import type { SessionLookupFailureKind } from './providers/adapter.js';
 import { getAdapter, listAdapters, unknownProviderMessage } from './providers/registry.js';
 import { countUnparsableJsonLines } from './core/jsonl.js';
-import { usageBadLinesReason } from './core/usage-integrity.js';
+import { usageBadLinesReason, usageSidecarProblem } from './core/usage-integrity.js';
 import {
   describePathReadFailureReason,
   describeReadFailureOrSelf,
@@ -483,6 +483,14 @@ export async function openSession(
           `来源会话 ${source.found.ref.sessionId}（${source.adapter.displayName}）`,
         );
         if (badUsage) warnings.push(badUsage);
+        // 用量来自旁路文件时，`usage === null` 还可能是「用量文件被截成 0 字节」：
+        // 与「原生没有用量记录」逐字相同，不说就会被当成这条会话真的没有用量
+        const sidecar = await usageSidecarProblem(
+          source.adapter,
+          source.found.ref,
+          `来源会话 ${source.found.ref.sessionId}（${source.adapter.displayName}）`,
+        );
+        if (sidecar) warnings.push(sidecar);
       }
       // 来源 / 目标解析各自捕获：它们都是「读」，让它们落进下面管写入的 catch 会被
       // 说成「并入新内容失败：无权写入」，把读失败讲成写失败、还指向错误的下一步
@@ -603,6 +611,12 @@ export async function openSession(
         `会话 ${target.found.ref.sessionId}（${target.adapter.displayName}）`,
       );
       if (badUsage) warnings.push(badUsage);
+      const sidecar = await usageSidecarProblem(
+        target.adapter,
+        target.found.ref,
+        `会话 ${target.found.ref.sessionId}（${target.adapter.displayName}）`,
+      );
+      if (sidecar) warnings.push(sidecar);
     }
     try {
       const turns = await target.adapter.parse(target.found.ref);
@@ -1156,6 +1170,12 @@ export async function openInProvider(
           `来源会话 ${sourceRef.sessionId}（${source.displayName}）`,
         );
         if (badUsage) warnings.push(badUsage);
+        const sidecar = await usageSidecarProblem(
+          source,
+          sourceRef,
+          `来源会话 ${sourceRef.sessionId}（${source.displayName}）`,
+        );
+        if (sidecar) warnings.push(sidecar);
       }
     }
     const newRef =

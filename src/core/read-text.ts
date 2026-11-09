@@ -125,8 +125,8 @@ export async function sessionFilePresence(filePath: string): Promise<SessionFile
  * 0 字节不是「这条会话还没有内容」：进程被杀 / 只写了一半 / 磁盘满都会留下这种文件，而合法的
  * 空会话（`new` 建出来的）每家都写了占位内容，不会是 0 字节（见 `src/providers/CLAUDE.md`）。
  */
-export function describeEmptySessionFile(filePath: string): string {
-  return `会话文件是空的（0 字节，进程被杀或只写了一半，内容已丢失）：${filePath}`;
+export function describeEmptySessionFile(filePath: string, subject = '会话文件'): string {
+  return `${subject}是空的（0 字节，进程被杀或只写了一半，内容已丢失）：${filePath}`;
 }
 
 /**
@@ -144,12 +144,16 @@ export function describeEmptySessionFile(filePath: string): string {
  *
  * 只按 `isFile() && size === 0` 判：目录 / 设备文件走 `sessionFilePresence()` 那一档，
  * 两处不重复下结论；`size` 缺省（调用方没拿到）时不判成空。
+ *
+ * `subject` 缺省是「会话文件」；用量来自旁路文件时改传「用量数据源」（`usageSidecarProblem()`），
+ * 免得同一句 0 字节文案在别处被复制出第二份（`isEmptySessionFileReason()` 仍只认前者）。
  */
 export function emptySessionFileReasonFromStat(
   info: { isFile(): boolean; size?: number },
   filePath: string,
+  subject = '会话文件',
 ): string | undefined {
-  return info.isFile() && info.size === 0 ? describeEmptySessionFile(filePath) : undefined;
+  return info.isFile() && info.size === 0 ? describeEmptySessionFile(filePath, subject) : undefined;
 }
 
 /**

@@ -7,7 +7,7 @@ import { describeWriteFailureReason, type FileDigest } from './atomic.js';
 import { addFinding, type Finding } from './findings.js';
 import { escapeControlChars } from './display.js';
 import { countUnparsableJsonLines } from './jsonl.js';
-import { usageBadLinesReason } from './usage-integrity.js';
+import { usageBadLinesReason, usageSidecarProblem } from './usage-integrity.js';
 import { cwdAliasHint, splitElsewhereByDirectory } from './cwd.js';
 import { describePathReadFailureReason, describeReadFailureOrSelf, emptySessionFileReasonFromStat, isEmptySessionFileReason, probeSessionReadable, sessionFilePresence } from './read-text.js';
 import { noSessionHint, unknownProviderMessage } from '../providers/registry.js';
@@ -608,6 +608,16 @@ export async function chainUsage(
     // null 在适配器里同时表示「这家原生没有 usage 字段」与「文件读不出」（各家的读失败被吞成 null）：
     // 再 stat 一次分开，否则 `usage` 的合计会把「链尾文件已经没了」讲成「这些会话没有用量数据」
     if (usage === null) {
+      // 用量来自旁路文件时（grok 的 `updates.jsonl`），`ref.filePath` 是另一份文件：
+      // 拿后者去判会把「用量文件被截成 0 字节」照常判成 present + 有内容，
+      // 于是整份报告说「1 个无 usage 数据的会话」——内容已丢失被讲成「这家没有用量数据」
+      const sidecar = await usageSidecarProblem(adapter, ref, `${adapter.id} 会话 ${ref.sessionId}`);
+      if (sidecar) {
+        warnings.push(`${adapter.id} 用量读取失败：${sidecar}`);
+        byProvider.push({ provider: adapter.id, sessionId: ref.sessionId, usage: null, error: sidecar });
+        totalExcluded += 1;
+        continue;
+      }
       const presence = await sessionFilePresence(ref.filePath);
       // 路径被同名目录 / 设备文件占住（present 但 isFile 为假）既不是「没有 usage 数据」，
       // 也不是可读文件：以前落进 totalMissingUsage，把「读不出内容」讲成「这家原生没有 usage」

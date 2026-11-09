@@ -1,5 +1,6 @@
 import type { ProviderAdapter } from '../providers/adapter.js';
 import { countUnparsableJsonLines } from './jsonl.js';
+import { emptySessionFileReasonFromStat, sessionFilePresence } from './read-text.js';
 import type { SessionRef } from './types.js';
 
 /**
@@ -28,5 +29,53 @@ export async function usageBadLinesReason(
   return (
     `${label}的用量数据源 ${filePath} 有 ${bad} 行无法解析（截断或损坏），这些行的用量没有计入：` +
     `合计可能偏少——先确认该文件是否被截断（可从备份恢复），再以原生 CLI 显示的用量为准`
+  );
+}
+
+/**
+ * 用量来自**旁路文件**时（`sessionUsagePath(ref) !== ref.filePath`），查一次那个文件本身。
+ * 没有旁路文件、或旁路文件就是 `ref.filePath`（绝大多数 provider）时返回 `null`。
+ *
+ * `sessionUsage` 返回 `null` 有两种含义：「这家原生没有用量记录」与「用量文件是空的」。
+ * 消费方（`chainUsage()` 与 `open` 的三处）在 `null` 时会 `stat` 一次 `ref.filePath` 分开，
+ * 但 grok 的用量在 `updates.jsonl` 而 `ref.filePath` 是 `chat_history.jsonl`——拿后者去判，
+ * 健康的历史文件会把「用量文件已被截成 0 字节」照常判成 present + 非 0 字节，
+ * 于是整份报告说「1 个无 usage 数据的会话」，把内容已丢失讲成「这家没有用量数据」
+ * （两者的下一步相反：没有数据没什么可做，空文件只能从备份恢复）。
+ *
+ * **旁路文件不存在是正常事实**（grok 的快照 / 更老会话只有 chat_history，没有 updates.jsonl），
+ * 这一档必须保持「没有用量记录」，不能冒「文件丢了」——所以只有 `unknown` / 非普通文件 /
+ * 0 字节三档返回原因。
+ */
+export async function usageSidecarProblem(
+  adapter: ProviderAdapter,
+  ref: SessionRef,
+  label: string,
+): Promise<string | null> {
+  const usagePath = adapter.sessionUsagePath?.(ref);
+  if (!usagePath || usagePath === ref.filePath) return null;
+  const presence = await sessionFilePresence(usagePath);
+  if (presence.state === 'missing') return null;
+  if (presence.state === 'unknown') {
+    return (
+      `${label}的用量数据源 ${usagePath} 状态无法确认：${presence.reason}；` +
+      `合计可能偏少——先确认该文件可读再重试`
+    );
+  }
+  if (!presence.isFile) {
+    return (
+      `${label}的用量数据源 ${usagePath} 现在不是普通文件（被同名目录或设备文件占住了）；` +
+      `合计可能偏少——先恢复该路径再重试`
+    );
+  }
+  const emptied = emptySessionFileReasonFromStat(
+    { isFile: () => presence.isFile, size: presence.size },
+    usagePath,
+    '用量数据源',
+  );
+  if (!emptied) return null;
+  return (
+    `${label}的${emptied}；合计已经少了它的用量——如果它本该有数据，` +
+    `先从备份恢复该文件再重试（Watch 不会替你重建用量）`
   );
 }
