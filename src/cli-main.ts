@@ -1720,13 +1720,25 @@ async function cmdNew(cwd: string, providerId: string, json: boolean, chain?: st
 
 const CHAIN_SUBCOMMANDS = 'list / new <名字> / rename <名字或 id> <新名字> / archive <名字或 id> / use <名字或 id>';
 
+/**
+ * 「这条链在当前 `--cwd` 里找不到」这一类失败，与 `cmdChain` 里其它失败（撞名 / 唯一活跃链 /
+ * 未知子命令）**下一步完全不同**，所以要用一个可识别的类型分开。
+ *
+ * 链按 `--cwd` 的**原字符串**分组，路径写错时会安静地「找不到链」——这一档把 `--cwd` 的原因
+ * 拼在前面是有用的，用户据此会去核对路径。而其余几档与会话列表毫无关系：2026-11-09 实测
+ * `watch chain lsit --cwd <不存在目录> --json` 的 error 第一句是「--cwd 目录不存在：…路径不对时
+ * 不会列出任何会话」，真正的问题是子命令拼错了；`chain archive <唯一活跃链>` 同理，它的下一步是
+ * 「先 chain new 建一条」，被前面那句一挤，用户会以为换个 `--cwd` 就能归档。
+ */
+class ChainLookupError extends Error {}
+
 async function cmdChain(cwd: string, json: boolean, action?: string, a?: string, b?: string): Promise<void> {
   const store = openStore();
   if (!store) fail(json, storeUnavailableError());
   // 链名 / cwd 都是精确匹配：路径写错时 rename / archive / use 只会说「找不到链」，
   // 跟 switch / adopt 一样先把路径原因带出来，否则会被当成「这条链不存在」
-  // 两种口径分开生成（与 `cmdNew` 同一分法）：`list` 与失败分支用查询类的「不会列出任何会话」，
-  // `new` 是写路径，见 `chainCwdWarning()`——它会把链真的建到那个路径下
+  // 两种口径分开生成（与 `cmdNew` 同一分法）：`list` 与「找不到链」这一档用查询类的
+  // 「不会列出任何会话」，`new` 是写路径，见 `chainCwdWarning()`——它会把链真的建到那个路径下
   const cwdProbe = await inspectCwd(cwd);
   const cwdIssue = describeCwdProblem(cwdProbe, cwd);
   const cwdWriteIssue = describeWriteCwd(cwdProbe, cwd);
@@ -1916,7 +1928,7 @@ async function cmdChain(cwd: string, json: boolean, action?: string, a?: string,
     if (action === 'rename') {
       if (!a || !b) throw new Error('chain rename 需要两个位置参数：<链名或 id> <新名字>；例：watch chain rename tui-chain 前端');
       const found = store.findActiveChain(cwd, a);
-      if (!found) throw new Error(store.missingChainMessage(cwd, a));
+      if (!found) throw new ChainLookupError(store.missingChainMessage(cwd, a));
       const wasArchived = found.status === 'archived';
       // 改成同一个名字时 UPDATE 写的是同一个值，什么都没变，但以前照样报「已重命名」，
       // 输出与真的改过名一模一样（脚本无法区分）。打这条命令的动机常常是「先把它改成我想要的名字」，
@@ -1953,7 +1965,7 @@ async function cmdChain(cwd: string, json: boolean, action?: string, a?: string,
     if (action === 'archive') {
       if (!a) throw new Error('chain archive 需要一个链名或 id；例：watch chain archive tui-chain');
       const found = store.findActiveChain(cwd, a);
-      if (!found) throw new Error(store.missingChainMessage(cwd, a));
+      if (!found) throw new ChainLookupError(store.missingChainMessage(cwd, a));
       // 已是归档状态时 `archiveChain()` 直接 return，什么都没做。
       // 照旧打「已归档」会让用户以为刚刚归档成功，看不出本次是空操作。
       if (found.status === 'archived') {
@@ -1999,7 +2011,7 @@ async function cmdChain(cwd: string, json: boolean, action?: string, a?: string,
     if (action === 'use') {
       if (!a) throw new Error('chain use 需要一个链名或 id；例：watch chain use tui-chain');
       const found = store.findActiveChain(cwd, a);
-      if (!found) throw new Error(store.missingChainMessage(cwd, a));
+      if (!found) throw new ChainLookupError(store.missingChainMessage(cwd, a));
       // 归档只是「不再是默认链」，链记录与历史都还在：以前这里直接报「链已归档」，
       // 却没有任何命令能把它恢复回来（rename / archive / use 三条路全堵死）
       if (found.status === 'archived') {
@@ -2060,7 +2072,10 @@ async function cmdChain(cwd: string, json: boolean, action?: string, a?: string,
     // 链库读写失败（缺列 / 表被改坏）时把原因翻成中文；业务结论（「链已归档」「找不到链」）
     // 原样带出，翻译只会破坏已经写好的下一步
     const message = describeCommandError(error);
-    fail(json, cwdIssue ? `${cwdIssue}；${message}` : message);
+    // `--cwd` 的说明只对「这条链在当前 cwd 找不到」有意义（链按 cwd 原字符串分组，路径写错就查不到）。
+    // 撞名 / 唯一活跃链 / 未知子命令这些失败与会话列表无关，把「路径不对时不会列出任何会话」拼在
+    // 前面会把真正的原因与下一步挤到后面（见 `ChainLookupError` 的注释，2026-11-09 实测）。
+    fail(json, error instanceof ChainLookupError && cwdIssue ? `${cwdIssue}；${message}` : message);
   }
 }
 
