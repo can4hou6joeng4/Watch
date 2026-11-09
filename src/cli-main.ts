@@ -14,7 +14,7 @@ import { runImportCodex } from './import-codex.js';
 import { ImportJobs } from './core/import-jobs.js';
 import { officialImportJournalRoot } from './providers/codex/official-import.js';
 import { doctorReport } from './core/doctor.js';
-import { cwdAliasHint, cwdProblem, describeCwdProblem, describeNewSessionCwd, inspectCwd, sameDirectorySync, splitElsewhereByDirectory } from './core/cwd.js';
+import { cwdAliasHint, cwdProblem, describeCwdProblem, describeWriteCwd, inspectCwd, sameDirectorySync, splitElsewhereByDirectory } from './core/cwd.js';
 import { escapeControlChars, hasControlChars } from './core/display.js';
 import { trimUserKey } from './core/cli-input.js';
 import { describeResumeTargetUnfinished } from './core/rich.js';
@@ -1546,6 +1546,26 @@ function newSessionCwdWarning(reason: string, filePath: string): string {
   );
 }
 
+/**
+ * `chain new` 在不可用目录上仍然成功时的警告。
+ *
+ * 与 `new` 同一处坑：这个分支复用了查询类的 `cwdProblem()`（「路径不对会全部显示 0」），可这条
+ * 命令没有任何列表参与，真正发生的是**一条绑定到这个路径的链记录已经写进本地库**。而且那个说法
+ * 在这个场景下并不成立：链按 `--cwd` 原字符串分组、不依赖目录是否存在，所以 `status` /
+ * `chain list` 带同一个 `--cwd` 仍然列得出来（2026-11-09 实测），只是那边永远扫不到会话——
+ * `switch` 会失败，`new` 建出的会话 resume 也会在进入目录那一步失败。
+ * 链的 cwd 在创建时定死、没有「改名 / 移动目录」的命令，所以下一步只能是修好目录或另建一条。
+ */
+function chainCwdWarning(reason: string, chainName: string): string {
+  return (
+    `${reason}；链「${escapeControlChars(chainName)}」已经按这个路径写进本地库（链记录不依赖目录存在），` +
+    '但那个目录里永远扫不到原生会话：之后带同一个 --cwd 的 status / chain list 能看到这条链、会话却是 0 条，' +
+    'switch 会失败，new 建出的会话 resume 也会在进入目录那一步失败。' +
+    '先创建 / 恢复该目录，或改用正确的 --cwd 另建一条（链记录的工作目录在创建时定死，没有改名 / 移动的办法；' +
+    '旧的那条可用 watch chain archive 归档）'
+  );
+}
+
 async function cmdNew(cwd: string, providerId: string, json: boolean, chain?: string): Promise<void> {
   const store = openStore();
   const warnings: string[] = [];
@@ -1564,7 +1584,7 @@ async function cmdNew(cwd: string, providerId: string, json: boolean, chain?: st
   // 成功路径用写入口径，并在会话真的建出来之后补上它的文件路径。
   const cwdProbe = await inspectCwd(cwd);
   const cwdIssue = describeCwdProblem(cwdProbe, cwd);
-  const cwdWriteIssue = describeNewSessionCwd(cwdProbe, cwd);
+  const cwdWriteIssue = describeWriteCwd(cwdProbe, cwd);
   if (!store) {
     // 会话本身能建出来，但没有 switch_events：后续 switch 不认这条绑定，必须说明。
     // 原因同样要走 `storeUnavailableWarning()`：只说「未写入链记录」时用户不知道该修权限、
@@ -1705,7 +1725,11 @@ async function cmdChain(cwd: string, json: boolean, action?: string, a?: string,
   if (!store) fail(json, storeUnavailableError());
   // 链名 / cwd 都是精确匹配：路径写错时 rename / archive / use 只会说「找不到链」，
   // 跟 switch / adopt 一样先把路径原因带出来，否则会被当成「这条链不存在」
-  const cwdIssue = await cwdProblem(cwd);
+  // 两种口径分开生成（与 `cmdNew` 同一分法）：`list` 与失败分支用查询类的「不会列出任何会话」，
+  // `new` 是写路径，见 `chainCwdWarning()`——它会把链真的建到那个路径下
+  const cwdProbe = await inspectCwd(cwd);
+  const cwdIssue = describeCwdProblem(cwdProbe, cwd);
+  const cwdWriteIssue = describeWriteCwd(cwdProbe, cwd);
   // `:memory:` 时每条命令都是一份全新的库：写进去的链记录随进程消失（见 `ephemeralStoreWarning`）。
   // 四个写分支（new / rename / archive / use）都要带这一句，`list` 的版本在下面单独给。
   const ephemeralWrite = ephemeralDb ? ephemeralStoreWarning('这次写入的链记录只在这份临时库里') : null;
@@ -1859,13 +1883,16 @@ async function cmdChain(cwd: string, json: boolean, action?: string, a?: string,
       // 本目录第一条活跃链时没有「被换下的链」，此时不出声（每次建链都弹提示就是假警）
       const switchedFrom = previous && previous.id !== chain.id ? previous : null;
       const switchNote = currentChainShiftNote(switchedFrom, switchedFrom ? chain : null);
-      // 与 watch new 同理：路径错了照样建出链，但绑定指向不存在的项目，必须说明
+      // 与 watch new 同理：路径错了照样建出链，但绑定指向不存在的项目，必须说明。
+      // **不能复用查询类的 `cwdIssue`**：那句讲的是「会话列表会是 0」，而这里已经写进了一条链记录，
+      // 且这条链之后用同一个 --cwd 照样列得出来——写入口径由 `chainCwdWarning()` 单独给。
       // （cwd 问题走降级警告通道；当前链变更走结果说明通道，见 `chain archive` 的同一分法）
       // `:memory:` 时这条链只活在本次进程内：命令本身成功，但下一次 chain list 就看不到它
       const ephemeralNote = ephemeralWrite;
+      const chainCwdIssue = cwdWriteIssue ? chainCwdWarning(cwdWriteIssue, chain.name) : null;
       if (json) {
         const warnings = [
-          ...(cwdIssue ? [cwdIssue] : []),
+          ...(chainCwdIssue ? [chainCwdIssue] : []),
           ...(switchNote ? [switchNote] : []),
           ...(ephemeralNote ? [ephemeralNote] : []),
         ];
@@ -1878,7 +1905,7 @@ async function cmdChain(cwd: string, json: boolean, action?: string, a?: string,
           }),
         );
       } else {
-        if (cwdIssue) console.error(`警告: ${cwdIssue}`);
+        if (chainCwdIssue) console.error(`警告: ${chainCwdIssue}`);
         if (ephemeralNote) console.error(`警告: ${ephemeralNote}`);
         console.log(`已创建链: ${escapeControlChars(chain.name)}  (${chain.id})`);
         // 与 `chain rename` / `chain archive` 的提示同一位置：跟在结果下一行，不是降级警告

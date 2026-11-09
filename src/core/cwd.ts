@@ -38,7 +38,10 @@ export async function inspectCwd(cwd: string): Promise<CwdInspection> {
  * 路径不对时各 provider 只会安静返回 0 条，所以要说清「下面的 0 不代表目录里真没有会话」。
  */
 export function describeCwdProblem(probe: CwdInspection, cwd: string): string | null {
-  const tail = '各 provider 按原生记录的路径字符串精确比较，路径不对会全部显示 0';
+  // 说「不会列出任何会话」而不是「会全部显示 0」：链按 `--cwd` 原字符串分组、不依赖目录是否存在，
+  // 于是 `chain new` 在不可用目录上建出的那条链，`status` / `chain list` 带同一个 `--cwd` 照样列得出来
+  // （2026-11-09 实测）。原来的说法不只是过头，用户还会在同一份输出里看到「全部显示 0」与一条链并存。
+  const tail = '各 provider 按原生记录的路径字符串精确比较，路径不对时不会列出任何会话';
   switch (probe.state) {
     case 'ok':
       return null;
@@ -54,12 +57,14 @@ export function describeCwdProblem(probe: CwdInspection, cwd: string): string | 
 }
 
 /**
- * 写入口径（`watch new`）：这里没有任何列表参与，后果不是「显示 0」，而是**真的在原生存储里
- * 建出一个绑定到这个目录的会话**，打印的 `resume` 命令随后会在进入目录时失败。所以不带上
- * 「全部显示 0」那句——复用它会让用户以为这只是一次「查不到」，而实际已经写进去了东西。
- * 只给出原因前半句，具体的会话文件路径由调用方补（它要等会话建出来才知道）。
+ * 写入口径（`watch new` / `watch chain new`）：这里没有任何列表参与，后果不是「显示 0」，而是
+ * **真的在原生存储 / 本地库里写入了绑定到这个目录的东西**（`new` 是一个会话文件，`chain new`
+ * 是一条链记录），随后打印的 `resume` 命令与后续查询都会撞上这个进不去的目录。所以不带上
+ * 「不会列出任何会话」那句——复用它会让用户以为这只是一次「查不到」，而实际已经写进去了东西。
+ * 只给出原因前半句，具体后果由调用方补（`new` 要等会话建出来才知道文件路径，`chain new` 要
+ * 等链记录建出来才知道链名）。
  */
-export function describeNewSessionCwd(probe: CwdInspection, cwd: string): string | null {
+export function describeWriteCwd(probe: CwdInspection, cwd: string): string | null {
   switch (probe.state) {
     case 'ok':
       return null;
