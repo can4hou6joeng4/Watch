@@ -1323,12 +1323,17 @@ async function cmdDoctor(cwd: string, json: boolean, strict: boolean): Promise<v
     if (report.storage.length) {
       console.log('会话存储:');
       for (const st of report.storage) {
+        // 「连归属都读不出来」的条目不属于任何目录，所以只能挂在全局计数旁边说；
+        // 不加这一句，用户看到的「0 个会话」就是结论，而那条会话可能只是被截断了
+        const unattributableText = st.unattributable
+          ? `（另有 ${st.unattributable} 个文件读不出目录归属，未计入）`
+          : '';
         const countText =
           st.count === null
-            ? `✗ 读取失败: ${st.error}`
+            ? `✗ 读取失败: ${st.error}${unattributableText}`
             : st.capped
-              ? `≥ ${st.count} 个会话（已达列表上限，实际可能更多${st.unreadable ? `，其中 ${st.unreadable} 条读不出来` : ''}）`
-              : `${st.count} 个会话${st.unreadable ? `（${st.unreadable} 条读不出来）` : ''}`;
+              ? `≥ ${st.count} 个会话（已达列表上限，实际可能更多${st.unreadable ? `，其中 ${st.unreadable} 条读不出来` : ''}）${unattributableText}`
+              : `${st.count} 个会话${st.unreadable ? `（${st.unreadable} 条读不出来）` : ''}${unattributableText}`;
         console.log(`  ${st.provider.padEnd(10)} ${countText}`);
       }
     }

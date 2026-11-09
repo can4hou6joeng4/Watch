@@ -152,6 +152,18 @@ export interface ProviderAdapter {
   listSessionsCap?: number;
 
   /**
+   * 可选：本家存储里「连一行都列不出来」的条目数。
+   *
+   * 与 `listSessions` 的 `previewError` 互补：那是「已经列出来了，只是内容读不出来」；这一档是
+   * 「会话归属的那部分元数据就读不出来」，因此**连属于哪个 cwd 都不知道**，`listSessions` /
+   * `findLatestSession` 只能跳过。跳过后 `sessions` / `recent` 少一条、`doctor` 的计数少一条，
+   * 而所有通道都不说话——用户会以为那条会话从来没存在过，可它可能只是被截断、还能从备份恢复。
+   * 目前只有 Codex 有这一档（rollout 的 cwd 写在 `session_meta` 首行里）。`watch doctor` 汇总披露；
+   * 不实现 = 本家没有这一档。
+   */
+  unattributable?(): Promise<{ count: number; samples: string[] }>;
+
+  /**
    * 可选：为目标会话取协作写锁（如 Codex 的原生 per-thread writer 锁）。
    * 写入期间持有它可把「探测 → 写入」之间的竞态窗口收窄为原子取锁。
    * 返回 undefined = 机制不可用（无 helper/平台不支持），调用方退回只探测；

@@ -261,6 +261,37 @@ export async function listCodexRollouts(
   );
 }
 
+/**
+ * `session_meta` 读不出来的 rollout 条数（空文件 / 首行不是合法 JSON / 首行不是 `session_meta` / 缺 cwd）。
+ *
+ * 这一档既不是「这个目录没有会话」，也不是「这家存储读不出来」：那个文件的 cwd **就写在读不出的
+ * 那一行里**，所以它无法归到任何目录，`listCodexRollouts` / `findLatestCodexRollout` 只能跳过。
+ * 跳过之后 `sessions` / `recent` 少一条、`doctor` 的计数少一条，且四条通道一个字都不说——用户会
+ * 以为那条会话从来没存在过，可它可能只是被截断、还能从备份恢复（`open <id>` 倒是会说「找到了，
+ * 但读不出来」，同一件事在单条反查与列表上两套说法）。
+ *
+ * 与 `previewError` 的分工：`previewError` 是「列出来了，只是内容读不出来」；这里是「连归属那一行
+ * 都没有」。所以走适配器的 `unattributable()`，由 `watch doctor` 汇总披露。
+ *
+ * 目录 / 文件**读不出来**（`EACCES` 等）不算这一档：`listCodexRollouts` 已经会因它抛「有位置读不出来」，
+ * 这里再统计一遍只会把同一个问题说两次。sessionsRoot 可注入供单测。
+ */
+export async function codexUnattributableRollouts(
+  sessionsRoot?: string,
+): Promise<{ count: number; samples: string[] }> {
+  const root = sessionsRoot ?? path.join(codexDir(), 'sessions');
+  const files = await collectRecentRolloutFiles(root);
+  const samples: string[] = [];
+  let count = 0;
+  for (const f of files) {
+    const { cwd: metaCwd, error, code } = await rolloutCwdDetail(f.filePath);
+    if (metaCwd || code) continue;
+    count += 1;
+    if (samples.length < 3) samples.push(`${f.filePath}（${error ?? '原因未知'}）`);
+  }
+  return { count, samples };
+}
+
 /** 按原生 session id（rollout 文件名尾部 uuid）全局反查 Codex 会话；sessionsRoot 可注入供单测 */
 export async function findCodexSessionById(
   sessionId: string,
@@ -588,6 +619,9 @@ export const codexAdapter: ProviderAdapter = {
   findLatestSession: findLatestCodexRollout,
   listSessions: (cwd) => listCodexRollouts(cwd),
   listSessionsCap: CODEX_LIST_LIMIT,
+  // rollout 的 cwd 写在 session_meta 首行里：首行读不出来时它连属于哪个目录都不知道，
+  // listSessions 只能跳过。跳过之后四条通道都不说话，所以交给 watch doctor 汇总披露。
+  unattributable: () => codexUnattributableRollouts(),
 
   /**
    * 写入 Codex 侧前的目标级保护。
