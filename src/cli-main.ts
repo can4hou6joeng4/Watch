@@ -1554,7 +1554,7 @@ async function cmdDoctor(cwd: string, json: boolean, strict: boolean): Promise<v
     console.log(`诊断 cwd: ${escapeControlChars(report.cwd)}`);
     console.log(`环境: watch ${env.watchVersion ?? '未知版本'} · node ${env.node} · ${env.platform}`);
     console.log(`本地库文件: ${escapeControlChars(env.dbPath)}`);
-    console.log(`导入日志目录: ${env.importsRoot ?? '（不可用）'}`);
+    console.log(`导入日志目录: ${env.importsRoot ? escapeControlChars(env.importsRoot) : '（不可用）'}`);
     console.log('Agent 检测:');
     for (const p of report.providers) {
       const state = p.available ? '✓ 已就绪' : p.error ? `✗ 检测失败: ${p.error}` : '✗ 未检测到';

@@ -216,7 +216,7 @@ export async function resolveById(
       } catch (error) {
         // 读不出来不能等同「没有这个会话」：记进 diagnostics，全扫也没找到时能说清原因
         diagnostics?.push(
-          `${a.id} 会话 ${sessionId} 的映射记录指向的文件状态读不出来（${filePath}）：${describeSessionReadFailureReason(error)}；已改为全盘扫描`,
+          `${a.id} 会话 ${sessionId} 的映射记录指向的文件状态读不出来（${escapeControlChars(filePath ?? '')}）：${describeSessionReadFailureReason(error)}；已改为全盘扫描`,
         );
         continue;
       }
@@ -242,7 +242,7 @@ export async function resolveById(
         // 与 `recent` / `sessions --chain` / `search` 索引清理同一档说法：路径被同名目录或
         // 设备文件占住既不是「会话没了」也不是可用文件，全扫也找不到时要能说清原因
         diagnostics?.push(
-          `${a.id} 会话 ${sessionId} 的映射记录指向的路径现在不是普通文件（被同名目录或设备文件占住了）：${loc.filePath}；已改为全盘扫描`,
+          `${a.id} 会话 ${sessionId} 的映射记录指向的路径现在不是普通文件（被同名目录或设备文件占住了）：${escapeControlChars(loc.filePath)}；已改为全盘扫描`,
         );
       }
     }

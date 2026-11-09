@@ -187,11 +187,11 @@ export async function runImportCodex(args: string[]): Promise<void> {
       if ('thread' in result.plan) console.log(`线程: ${result.plan.thread.sessionId}\n项目: ${result.plan.projectName} (${result.plan.projectId})\n目录: ${escapeControlChars(result.plan.thread.cwd)}`);
       else console.log(`来源: ${result.plan.source.sessionId}\n项目目录: ${escapeControlChars(result.plan.source.cwd)}`);
       if ('evidenceScope' in result && result.status === 'associated') console.log('这里只记录关联结果；status 不查询实时项目成员关系。');
-      console.log(`Codex 数据目录: ${result.plan.target?.path ?? result.plan.codexHome}`);
+      console.log(`Codex 数据目录: ${escapeControlChars(result.plan.target?.path ?? result.plan.codexHome)}`);
       if ('warnings' in result) for (const warning of result.warnings) console.error(`警告: ${warning}`);
       if (result.canConfirm) console.log(`审阅计划后，显式执行：watch import-codex ${action!.startsWith('project-') ? 'project-confirm' : 'confirm'} ${result.planId} --experimental`);
       if (result.outcome && 'target' in result.outcome && result.outcome.target) console.log(`目标: ${result.outcome.target.sessionId}`);
-      if (!ok) console.log(`导入可能已部分完成：不要重复执行，也不要删除执行日志或目标锁：${result.targetLockPath ?? 'unknown'}`);
+      if (!ok) console.log(`导入可能已部分完成：不要重复执行，也不要删除执行日志或目标锁：${result.targetLockPath ? escapeControlChars(result.targetLockPath) : 'unknown'}`);
     }
     if (!ok) process.exitCode = 2;
   } catch (error) {

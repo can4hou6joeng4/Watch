@@ -84,7 +84,7 @@ export async function reindexCwd(
       // 静默 `continue` 会让这一轮索引不生效且没人知道——与 `doctor` / `chain list` 的说法保持一致
       if (!st.isFile()) {
         occupied += 1;
-        firstOccupied ||= s.ref.filePath;
+        firstOccupied ||= escapeControlChars(s.ref.filePath);
         continue;
       }
       const cached = stats.get(s.ref.sessionId);
@@ -138,7 +138,7 @@ export async function reindexCwd(
         // 静默变少，而用户看到的只是「这个目录没聊过」。保留旧行并披露
         if (!st.isFile()) {
           keepOccupied += 1;
-          firstKeepOccupied ||= indexed.filePath;
+          firstKeepOccupied ||= escapeControlChars(indexed.filePath);
           continue;
         }
       } catch (error) {

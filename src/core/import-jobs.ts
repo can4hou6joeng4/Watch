@@ -71,17 +71,20 @@ export function importPlanId(plan: ImportJobPlan): string {
  * 既不说是哪一种情况，也不给下一步。这里按常见的 errno 翻成「哪里坏了 + 怎么办」。
  */
 function describeReadError(error: unknown, file: string): string {
+  // 日志根目录取自 HOME / `WATCH_DB`，两处都可能是用户手输或粘贴的路径；这几句只进终端
+  // （文本模式的错误行与 doctor 的「读取失败」行），不转义就等于把控制字符原样交出去
+  const shown = escapeControlChars(file);
   const code = (error as NodeJS.ErrnoException).code;
   if (code === 'ENOTDIR') {
-    return `日志路径上的某一级不是目录（被同名文件占住了？）：${file}；删掉占用它的文件后重试，或按下面的 id 手动核对`;
+    return `日志路径上的某一级不是目录（被同名文件占住了？）：${shown}；删掉占用它的文件后重试，或按下面的 id 手动核对`;
   }
   if (code === 'EACCES' || code === 'EPERM') {
-    return `没有权限读取执行日志（权限或归属变了？）：${file}`;
+    return `没有权限读取执行日志（权限或归属变了？）：${shown}`;
   }
   if (code === 'EISDIR') {
-    return `该路径是目录而不是日志文件：${file}`;
+    return `该路径是目录而不是日志文件：${shown}`;
   }
-  return `${error instanceof Error ? error.message : String(error)}：${file}`;
+  return `${error instanceof Error ? error.message : String(error)}：${shown}`;
 }
 
 /** An exclusive, persistent claim survives crashes. Never erase it to retry a write. */
@@ -112,7 +115,7 @@ export class ImportJobs {
     try {
       return JSON.parse(raw) as T;
     } catch {
-      throw new Error(`${what}无法解析（可能上次只写了一半，或被外部改动）：${file}；${hint}`);
+      throw new Error(`${what}无法解析（可能上次只写了一半，或被外部改动）：${escapeControlChars(file)}；${hint}`);
     }
   }
 
@@ -159,7 +162,7 @@ export class ImportJobs {
   async routePlan<T extends ImportJobPlan>(id: string, route: string, schema = 1): Promise<T> {
     const file = path.join(this.dir(id), 'plan.json');
     const raw = await this.readText(file);
-    if (raw === null) throw new Error(`找不到 ${route} 计划 ${id}：${file} 不存在`);
+    if (raw === null) throw new Error(`找不到 ${route} 计划 ${id}：${escapeControlChars(file)} 不存在`);
     const plan = this.parseJson<T>(raw, file, `导入计划 ${id} 的 plan.json `, '可删除该日志目录后重新 prepare（会得到新的计划 id）');
     if (importPlanId(plan) !== id || plan.schema !== schema || plan.route !== route) {
       throw new Error('导入计划与确认的路径不匹配');
@@ -182,7 +185,7 @@ export class ImportJobs {
     const file = path.join(this.dir(id), 'plan.json');
     const raw = await this.readText(file);
     if (raw === null) {
-      throw new Error(`找不到项目关联计划 ${id}：${file} 不存在（计划 id 来自 watch import-codex project-prepare 的输出）`);
+      throw new Error(`找不到项目关联计划 ${id}：${escapeControlChars(file)} 不存在（计划 id 来自 watch import-codex project-prepare 的输出）`);
     }
     const plan = this.parseJson<ProjectBindingPlan>(raw, file, `项目关联计划 ${id} 的 plan.json `, '可删除该日志目录后重新 prepare（会得到新的计划 id）');
     if (importPlanId(plan) !== id || plan.schema !== 1 || plan.route !== 'codex-project-association') {
@@ -206,7 +209,7 @@ export class ImportJobs {
     // 裸 ENOENT 只说「没有这个文件」，用户看不出下一句该干嘛
     const raw = await this.readText(file);
     if (raw === null) {
-      throw new Error(`找不到导入计划 ${id}：${file} 不存在（计划 id 来自 watch import-codex prepare 的输出）`);
+      throw new Error(`找不到导入计划 ${id}：${escapeControlChars(file)} 不存在（计划 id 来自 watch import-codex prepare 的输出）`);
     }
     const plan = this.parseJson<ImportPlan>(raw, file, `导入计划 ${id} 的 plan.json `, '可删除该日志目录后重新 prepare（会得到新的计划 id）');
     if (importPlanId(plan) !== id || plan.schema !== 1 || plan.route !== 'claude-code-to-codex-official') {
@@ -269,7 +272,7 @@ export class ImportJobs {
         const file = path.join(this.dir(id), 'plan.json');
         const raw = await this.readText(file);
         if (raw === null) {
-          skipped.push({ id, reason: `plan.json 不存在：${file}（日志目录不完整，可删除后重新 prepare）` });
+          skipped.push({ id, reason: `plan.json 不存在：${escapeControlChars(file)}（日志目录不完整，可删除后重新 prepare）` });
           continue;
         }
         const plan = this.parseJson<ImportJobPlan>(raw, file, '导入日志的 plan.json ', '可删除该日志目录后重新 prepare（会得到新的计划 id）');
