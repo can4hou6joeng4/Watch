@@ -17,7 +17,8 @@ import { doctorReport } from './core/doctor.js';
 import { cwdAliasHint, cwdProblem, describeCwdProblem, describeNewSessionCwd, inspectCwd, sameDirectorySync, splitElsewhereByDirectory } from './core/cwd.js';
 import { escapeControlChars, hasControlChars } from './core/display.js';
 import { trimUserKey } from './core/cli-input.js';
-import { describePathReadFailureReason, describeSessionReadFailureReason, probeSessionReadable, sessionFilePresence } from './core/read-text.js';
+import { describeResumeTargetUnfinished } from './core/rich.js';
+import { describePathReadFailureReason, describeReadFailureOrSelf, describeSessionReadFailureReason, probeSessionReadable, sessionFilePresence } from './core/read-text.js';
 import { describeWriteFailureReason } from './core/atomic.js';
 import { describeSpawnFailure } from './core/platform.js';
 
@@ -745,6 +746,28 @@ async function cmdAdopt(
             resumeCommand ? `resume 命令（${resumeCommand}）` : '打开这条会话'
           }一执行就会失败，先修好这个文件再打开，或用 watch adopt <provider> --session <会话 id> 换成另一条会话`,
       );
+    }
+    // 读得出来也不等于「收尾了」：这条会话可能停在做了一半的工具调用上，或最后一句是用户消息。
+    // `open <id>` / `switch` / `new <同一家>` 在同样情况下都会说（第 276–280 轮），只有 adopt
+    // 不看内容、还顺手打印 resume——用户照着复制，接手的就是那一轮断掉的地方。这里恒为零增量
+    // （adopt 不写任何会话内容），两种形状都要说。
+    // 文件本身读不出来已由上面那句说清（resume 一执行就失败），不再重复解析一遍。
+    if (!readProblem && adoptedAdapter) {
+      try {
+        for (const warning of describeResumeTargetUnfinished(
+          await adoptedAdapter.parse(result.adoptedRef),
+          `目标会话 ${result.adoptedRef.sessionId}（${adoptedAdapter.displayName}）`,
+          0,
+        )) {
+          result.warnings.push(warning);
+        }
+      } catch (error) {
+        // 解析不了不等于没问题：至少要说成「没能确认」，不能沉默
+        result.warnings.push(
+          `无法确认接进来的会话 ${result.adoptedRef.sessionId} 是否停在做了一半的一轮上：${describeReadFailureOrSelf(error)}；` +
+            `resume 之前先确认这个会话文件可读`,
+        );
+      }
     }
     result.warnings.push(...chainProbe);
     // 同 switch：显式 --chain 却把当前链换走了，必须在结果里说（空操作时链没被 touch，
