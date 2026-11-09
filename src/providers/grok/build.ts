@@ -6,7 +6,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { homedir } from 'node:os';
 import path from 'node:path';
 import { writeFileAtomic } from '../../core/atomic.js';
-import { describePathReadFailureReason, readTextOrEmpty } from '../../core/read-text.js';
+import { describePathReadFailureReason, emptySessionFileReasonFromStat, readTextOrEmpty } from '../../core/read-text.js';
 import { verifyWrittenTurns } from '../../core/verify.js';
 import { mergeConsecutiveAssistant } from '../../core/rich.js';
 import { parseGrokSession } from './parse.js';
@@ -250,7 +250,7 @@ export async function findLatestGrokSession(
 export async function listGrokSessions(
   cwd: string,
   sessionsRoot?: string,
-): Promise<{ ref: SessionRef; updatedAt: number; preview?: string }[]> {
+): Promise<{ ref: SessionRef; updatedAt: number; preview?: string; previewError?: string }[]> {
   const root = sessionsRoot ?? grokSessionsRoot();
   const dir = path.join(root, encodeGrokProjectDir(cwd));
   let entries: string[] = [];
@@ -268,9 +268,10 @@ export async function listGrokSessions(
     );
   }
 
-  const items: { ref: SessionRef; updatedAt: number; preview?: string }[] = [];
+  const items: { ref: SessionRef; updatedAt: number; preview?: string; previewError?: string }[] = [];
   for (const id of entries) {
     const summaryPath = path.join(dir, id, 'summary.json');
+    const chatPath = path.join(dir, id, 'chat_history.jsonl');
     const summary = await readSummary(summaryPath);
     const updatedAtRaw =
       summary?.updated_at ?? summary?.last_active_at ?? summary?.created_at;
@@ -280,6 +281,11 @@ export async function listGrokSessions(
     } else if (typeof updatedAtRaw === 'number') {
       updatedAt = updatedAtRaw;
     }
+    // 「列出来了，但会话内容读不出来 / 已经没了」要单独披露：grok 的预览取的是 summary.json 的标题、
+    // updatedAt 多半也来自 summary，**会话文件本身在这些分支里根本不会被读**，于是 0 字节的会话
+    // 一路「正常」——`open` 会说「会话文件是空的…内容已丢失」，sessions / recent / doctor 却把它
+    // 算成健康的一条、`warnings` 一个字都没有。判据与 pi 之流共用 `emptySessionFileReasonFromStat()`。
+    let previewError: string | undefined;
     if (!updatedAt) {
       // 旧版 Grok 会话目录没有 summary.json，用 chat_history.jsonl mtime 兜底，否则排序全 0 不稳定。
       // 但「读不出来」不能再写成 mtime=0：那会把一条会话变成「1970 年修改过」的事实——`sessions`
@@ -287,13 +293,13 @@ export async function listGrokSessions(
       // 也不会把它当最新来源，全程 `warnings: []`。只有文件真的不在（残留的会话目录）才算「没有会话」，
       // 其余按 errno 抛中文原因，交给 sessions / recent / doctor 记进 unavailable + warnings——
       // 与同文件 readdir 分支、kimi / codex 列表的口径一致。
-      const chatPath = path.join(dir, id, 'chat_history.jsonl');
       try {
         const st = await stat(chatPath);
         if (!st.isFile()) {
           throw Object.assign(new Error('不是普通文件'), { code: 'NOT_REGULAR_FILE' });
         }
         updatedAt = st.mtimeMs;
+        previewError = emptySessionFileReasonFromStat(st, chatPath);
       } catch (error) {
         const code = (error as NodeJS.ErrnoException).code;
         // 残留的会话目录（没有 chat_history.jsonl）不是会话，跳过即可
@@ -305,6 +311,21 @@ export async function listGrokSessions(
         }
         throw new Error(`无法读取 Grok 会话文件状态 ${chatPath}：${describePathReadFailureReason(error)}`);
       }
+    } else {
+      // summary 已经给了时间，这次 stat 只为披露：它不参与「是否列出」与 updatedAt 的判定。
+      try {
+        const st = await stat(chatPath);
+        previewError = st.isFile()
+          ? emptySessionFileReasonFromStat(st, chatPath)
+          : `会话文件路径现在不是普通文件（被同名目录或设备文件占住了）：${chatPath}；请先恢复该路径`;
+      } catch (error) {
+        const code = (error as NodeJS.ErrnoException).code;
+        // summary 说这条会话在、会话文件却没了：`open` / resume 读的正是这份，不能当成正常的一条
+        previewError =
+          code === 'ENOENT' || code === 'ENOTDIR'
+            ? `会话文件已不存在：${chatPath}`
+            : `无法读取 Grok 会话文件状态 ${chatPath}：${describePathReadFailureReason(error)}`;
+      }
     }
     const preview =
       typeof summary?.generated_title === 'string'
@@ -313,9 +334,10 @@ export async function listGrokSessions(
           ? summary.session_summary
           : undefined;
     items.push({
-      ref: { provider: 'grok', sessionId: id, filePath: path.join(dir, id, 'chat_history.jsonl'), cwd },
+      ref: { provider: 'grok', sessionId: id, filePath: chatPath, cwd },
       updatedAt,
       preview,
+      ...(previewError ? { previewError } : {}),
     });
   }
   items.sort((a, b) => b.updatedAt - a.updatedAt);

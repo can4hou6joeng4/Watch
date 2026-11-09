@@ -128,6 +128,25 @@ export function describeEmptySessionFile(filePath: string): string {
 }
 
 /**
+ * 列表路径用：这次 `stat` 拿到的会话文件是不是「空的」。
+ *
+ * claude / codex / kimi 的预览都要把会话文件读一遍，0 字节在那里顺手就能发现（`raw.length === 0`）。
+ * pi / grok 的预览不读会话内容——pi 干脆没有预览，grok 的标题来自 `summary.json`——于是
+ * **同一个状态在 `open` 与 `sessions` 上说法相反**：`open` 会说「会话文件是空的…内容已丢失」，
+ * 列表与 `doctor` 却把这条会话算成正常的一条、`warnings` 一个字都没有。判据放在这里，
+ * 两家的列表在已经拿到的 `stat` 上判一次即可，不必各写一句（措辞分叉正是本文件开头要避免的）。
+ *
+ * 只按 `isFile() && size === 0` 判：目录 / 设备文件走 `sessionFilePresence()` 那一档，
+ * 两处不重复下结论。
+ */
+export function emptySessionFileReasonFromStat(
+  info: { isFile(): boolean; size: number },
+  filePath: string,
+): string | undefined {
+  return info.isFile() && info.size === 0 ? describeEmptySessionFile(filePath) : undefined;
+}
+
+/**
  * 这条原因是不是「会话文件是空的」那一档。
  *
  * 0 字节与读不出来（权限、路径）都会进 `previewError` 与 doctor 的 unreadable 汇总，但下一步

@@ -10,6 +10,7 @@ import {
   describeEmptySessionFile,
   describePathReadFailureReason,
   describeSessionReadFailure,
+  emptySessionFileReasonFromStat,
   isMissingPathError,
 } from '../../core/read-text.js';
 import type { SessionRef, TokenUsage, UnifiedTurn } from '../../core/types.js';
@@ -31,7 +32,7 @@ export async function findLatestPiSession(
 export async function listPiSessions(
   cwd: string,
   sessionsRoot?: string,
-): Promise<{ ref: SessionRef; updatedAt: number; preview?: string }[]> {
+): Promise<{ ref: SessionRef; updatedAt: number; preview?: string; previewError?: string }[]> {
   const root = sessionsRoot ?? piSessionsRoot();
   const dir = path.join(root, encodePiProjectDir(cwd));
   let entries: string[];
@@ -46,7 +47,7 @@ export async function listPiSessions(
       `无法读取 Pi 会话目录 ${dir}：${describePathReadFailureReason(error)}`,
     );
   }
-  const items: { ref: SessionRef; updatedAt: number }[] = [];
+  const items: { ref: SessionRef; updatedAt: number; previewError?: string }[] = [];
   for (const entry of entries) {
     if (!entry.endsWith('.jsonl')) continue;
     const filePath = path.join(dir, entry);
@@ -54,9 +55,14 @@ export async function listPiSessions(
       const st = await stat(filePath);
       if (!st.isFile()) continue;
       const sessionId = sessionIdFromName(entry);
+      // Pi 的列表从不读会话内容（没有 preview），于是 0 字节会话在这里一路「正常」：
+      // `open` 会说「会话文件是空的…内容已丢失」，而 sessions / recent / doctor 把它算成
+      // 健康的一条、`warnings` 一个字都没有。`stat` 已经拿到大小，顺手判一次就能对齐口径。
+      const previewError = emptySessionFileReasonFromStat(st, filePath);
       items.push({
         ref: { provider: 'pi', sessionId, filePath, cwd },
         updatedAt: st.mtimeMs,
+        ...(previewError ? { previewError } : {}),
       });
     } catch (error) {
       const code = (error as NodeJS.ErrnoException).code;
