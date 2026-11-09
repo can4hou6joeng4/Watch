@@ -1,9 +1,10 @@
 import { execFile } from 'node:child_process';
-import { lstat, realpath, stat } from 'node:fs/promises';
+import { lstat, readdir, realpath, stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
 import { digestFile, type FileDigest } from '../../core/atomic.js';
+import { sameDirectorySync } from '../../core/cwd.js';
 import { ImportJobs, type ImportOutcome, type ImportPlan } from '../../core/import-jobs.js';
 import { resolveCli } from '../../core/platform.js';
 import { describePathReadFailureReason, isEmptySessionFileReason, isMissingPathError } from '../../core/read-text.js';
@@ -70,6 +71,126 @@ async function assertSource(plan: ImportPlan): Promise<void> {
   }
 }
 
+/**
+ * `prepare()` 反查失败时的补充诊断：这个 id 的会话到底在不在别处。
+ *
+ * 导入按 `encodeClaudeProjectDir(cwd)` 与会话记录里的 cwd 做**字符串**精确比较，于是
+ * `--cwd` 只是同一个目录的另一种写法（软链接、`/var` 与 `/private/var` 这类前缀、大小写）时
+ * 也一条都找不到，而旧文案只有一句「来源会话不属于指定的项目目录…或确认 --cwd 与当初开这个
+ * 会话的工作目录一致后重试」——用户会去核对 `watch sessions --cwd` 与那个字符串一致（它确实
+ * 一致），或怀疑自己抄错了会话 id。仓库其余命令（`chain list` / `status` / `adopt` / `switch`）
+ * 遇到同一件事都会说「同一个目录的另一种写法」并给出记录里的原字符串，这条写路径此前是唯一
+ * 静默的一处。
+ *
+ * 只做诊断、不改判定：别名这一档仍然失败，因为下方 `findSource` 拿到的 `cwd` 要写进计划并按
+ * 原字符串匹配，替用户改写成 realpath 会让计划与原生存储对不上（与 `chain` 一族同一条约定）。
+ */
+type ElsewhereSession =
+  | { kind: 'same-directory'; cwd: string; filePath: string }
+  | { kind: 'misplaced'; cwd: string; filePath: string; expectedPath: string }
+  | { kind: 'other-directory'; cwd: string; filePath: string }
+  | { kind: 'unreadable'; filePath: string; reason: string }
+  | { kind: 'none' };
+
+/**
+ * 在 `~/.claude/projects` 下逐个项目目录找这个 id 的会话文件。
+ *
+ * `home` 由调用方从 `deps.home` 传进来，**不要**在这里调 `claudeProjectsDir()`：注入假 deps 的
+ * 单测会因此扫到真实 HOME，违反「自动测试不得读取真实 Agent 历史」。
+ * 任何读不出来的地方都返回 `{ kind: 'none' }`——诊断读不到时只能沿用原句，不能反过来断言
+ * 「别处一定没有」。
+ */
+async function locateClaudeSessionElsewhere(
+  home: string,
+  sessionId: string,
+  cwd: string,
+): Promise<ElsewhereSession> {
+  const projectsRoot = path.join(home, '.claude', 'projects');
+  let projects: string[];
+  try {
+    projects = (await readdir(projectsRoot, { withFileTypes: true }))
+      .filter((entry) => entry.isDirectory())
+      .map((entry) => entry.name);
+  } catch {
+    return { kind: 'none' };
+  }
+  const hits: { filePath: string; cwd: string | null; error?: string }[] = [];
+  for (const project of projects) {
+    const filePath = path.join(projectsRoot, project, `${sessionId}.jsonl`);
+    try {
+      const info = await stat(filePath);
+      if (!info.isFile()) continue;
+    } catch {
+      continue; // 这个项目目录里没有这个 id（或读不出来）：不是本函数要下的结论
+    }
+    const detail = await claudeSessionCwdDetail(filePath);
+    hits.push({ filePath, cwd: detail.cwd, error: detail.error });
+  }
+  // 「记录里的 cwd 就是这次给的字符串」但文件躺在别的项目目录：CLI 只按编码路径找，所以同样找不到
+  const exact = hits.find((hit) => hit.cwd === cwd);
+  if (exact) {
+    return {
+      kind: 'misplaced',
+      cwd,
+      filePath: exact.filePath,
+      expectedPath: path.join(projectsRoot, encodeClaudeProjectDir(cwd), `${sessionId}.jsonl`),
+    };
+  }
+  const same = hits.find((hit) => hit.cwd !== null && sameDirectorySync(hit.cwd, cwd));
+  if (same) return { kind: 'same-directory', cwd: same.cwd!, filePath: same.filePath };
+  const other = hits.find((hit) => hit.cwd !== null);
+  if (other) return { kind: 'other-directory', cwd: other.cwd!, filePath: other.filePath };
+  const broken = hits[0];
+  if (!broken) return { kind: 'none' };
+  return {
+    kind: 'unreadable',
+    filePath: broken.filePath,
+    reason: broken.error ?? '读不出它的工作目录（原因未知）',
+  };
+}
+
+/**
+ * 反查失败时的用户面文案。
+ *
+ * `none` 逐字保留原句（`tests/cli-import-codex-path-errors.test.ts` 的「来源被删」一档依赖它）；
+ * 其余各档换成「到底在哪、下一步是什么」——别名这一档必须**替换**而不是追加，否则同一句里先说
+ * 「不属于这个项目」再说「就在同一个目录」，自相矛盾。
+ */
+function notInProjectMessage(sourceId: string, cwd: string, found: ElsewhereSession): string {
+  const what =
+    `来源会话不属于指定的项目目录：在 ${cwd} 下没有找到 id 为 ${sourceId} 的 Claude Code 会话` +
+    '（导入按目录定位，只在这个项目的会话目录里找）';
+  switch (found.kind) {
+    case 'same-directory':
+      return (
+        `来源会话就在同一个目录的另一种写法下（不是「不属于这个项目」）：这个 id 的会话记录的工作目录是 ` +
+        `${found.cwd}（${found.filePath}），而 --cwd 给的是 ${cwd}；导入按路径字符串精确匹配` +
+        '（符号链接、/var 与 /private/var 这类前缀、大小写都会一条都找不到）——' +
+        `把 --cwd 换成 ${found.cwd} 重跑同一条命令（其余参数照旧）——本次未写入任何内容`
+      );
+    case 'misplaced':
+      return (
+        `${what}；这个 id 的会话文件确实记录着工作目录 ${cwd}，只是它不在按这个路径编码出来的项目目录里：` +
+        `${found.filePath}（那里应该是 ${found.expectedPath}）——把它移回该位置再重试——本次未写入任何内容`
+      );
+    case 'other-directory':
+      return (
+        `${what}；这个 id 的会话记录的工作目录是 ${found.cwd}，不是这次的 ${cwd}（${found.filePath}）——` +
+        `要导入它请把 --cwd 换成 ${found.cwd} 重跑，或确认是不是抄错了会话 id——本次未写入任何内容`
+      );
+    case 'unreadable':
+      return (
+        `${what}；但按这个 id 在 ${found.filePath} 找到了会话文件，只是读不出它记录的工作目录：` +
+        `${found.reason}——无法判断它是否属于 ${cwd}，先确认这个文件可读再重试——本次未写入任何内容`
+      );
+    case 'none':
+      return (
+        `${what}；可用 watch sessions --cwd ${cwd} 核对会话 id，` +
+        '或确认 --cwd 与当初开这个会话的工作目录一致后重试——本次未写入任何内容'
+      );
+  }
+}
+
 function selectedSession(detected: unknown, plan: ImportPlan): Record<string, unknown> {
   const items = asRecord(detected).items;
   if (!Array.isArray(items)) throw new Error('Codex 没有返回可迁移项');
@@ -123,14 +244,13 @@ export class OfficialCodexImport {
     const version = await this.deps.version();
     if (version !== SUPPORTED_VERSION) throw new Error(`实验性导入路径目前只支持 ${SUPPORTED_VERSION}`);
     const source = await this.deps.findSource(sourceId, cwd);
-    // 这句只在「内容读得出来、但 cwd 不是这个」时才成立：findSource 已经把「读不出来」单独抛出，
-    // 所以到这里 source 为 null 就确实是「不属于这个目录」。补上核对办法与「未写入」，否则用户
-    // 只能看到一句结论，不知道是 id 抄错还是 --cwd 指错了项目。
+    // `findSource` 已经把「读不出来」单独抛出，所以到这里 source 为 null 是「这个项目目录里没有」；
+    // 但「没有」还有两种形状：会话真的在别的目录，以及 `--cwd` 只是同一个目录的另一种写法
+    // （软链 / 大小写 / `/var` 前缀）——后者下「不属于这个项目」是假话，交给 `locateClaudeSessionElsewhere()`
+    // 分档说清「它在哪、下一步抄什么」。
     if (!source || source.sessionId !== sourceId || source.cwd !== cwd) {
       throw new Error(
-        `来源会话不属于指定的项目目录：在 ${cwd} 下没有找到 id 为 ${sourceId} 的 Claude Code 会话` +
-          `（导入按目录定位，只在这个项目的会话目录里找）；可用 watch sessions --cwd ${cwd} 核对会话 id，` +
-          '或确认 --cwd 与当初开这个会话的工作目录一致后重试——本次未写入任何内容',
+        notInProjectMessage(sourceId, cwd, await locateClaudeSessionElsewhere(this.deps.home, sourceId, cwd)),
       );
     }
     const plan: ImportPlan = {

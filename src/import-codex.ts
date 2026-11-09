@@ -155,9 +155,15 @@ export async function runImportCodex(args: string[]): Promise<void> {
         `import-codex ${action} 不接受 --project（只有 project-prepare 接受）；要按项目导入请改用 watch import-codex project-prepare ${id} --project <UUID> --experimental，否则去掉 --project 重跑`,
       );
     }
+    // `--cwd` 的写法归一只发生在主 CLI 的 `parseArgs` 里；这条路径自己解析参数，以前把原串直接传给
+    // `prepare()`，而导入按 `encodeClaudeProjectDir(cwd)` 与会话记录里的 cwd 做**字符串**精确比较：
+    // 尾斜杠（`/proj/`）与 `.` 段（`/proj/.`）都被讲成「来源会话不属于指定的项目目录」，可那是同一个
+    // 目录。`path.resolve` 幂等、不动符号链接与大小写，与主 CLI 同一条约定。
+    // 软链 / `/var` 与 `/private/var` / 大小写这一档 `resolve` 抹不平，由 `prepare()` 给出别名说明。
+    const cwd = action === 'prepare' ? path.resolve(values.cwd!) : undefined;
     const service = createOfficialCodexImport();
     const result = action === 'prepare'
-      ? await service.prepare(id, values.cwd!, { desktopProject: values['desktop-project'] })
+      ? await service.prepare(id, cwd!, { desktopProject: values['desktop-project'] })
       : action === 'confirm' ? await service.confirm(id)
         : action === 'project-prepare' ? await service.projects.prepare(id, values.project!)
           : action === 'project-confirm' ? await service.projects.confirm(id)
