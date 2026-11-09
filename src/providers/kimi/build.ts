@@ -41,21 +41,24 @@ export function kimidir(): string {
 }
 
 /**
- * 磁盘上真实存在的 Kimi 会话目录数（数到 `agents/main/wire.jsonl` 为止）。
+ * 磁盘上真实存在的 Kimi 会话目录（数到 `agents/main/wire.jsonl` 为止）。
  *
- * 用来分辨两种「索引里一条会话都查不到」：真没用过 Kimi（目录也是空的），与索引被截断 / 损坏
+ * 用来分辨两种「索引里查不到会话」：真没用过 Kimi（目录也是空的），与索引被截断 / 损坏
  * （会话目录还在，只是没人记得它们属于哪个目录）。读不出来的目录**不计入**——查不出来就不能
  * 反过来断言「磁盘上确实还有会话」。
+ *
+ * `workspaceId` 是 `wd_<name>_<sha256(cwd) 前 12 位>`，**不可逆**：从目录名推不回 cwd。
+ * 所以这一档只能披露「有这些会话、但归属丢了」，不能替它们猜目录。
  */
-async function countKimiSessionDirs(): Promise<number> {
+async function scanKimiSessionDirs(): Promise<{ sessionId: string; wirePath: string }[]> {
   const root = kimiSessionsRoot();
   let workspaces: Dirent[];
   try {
     workspaces = await readdir(root, { withFileTypes: true });
   } catch {
-    return 0;
+    return [];
   }
-  let total = 0;
+  const found: { sessionId: string; wirePath: string }[] = [];
   for (const ws of workspaces) {
     if (!ws.isDirectory()) continue;
     let sessions: Dirent[];
@@ -66,15 +69,75 @@ async function countKimiSessionDirs(): Promise<number> {
     }
     for (const s of sessions) {
       if (!s.isDirectory()) continue;
+      const wirePath = path.join(root, ws.name, s.name, 'agents', 'main', 'wire.jsonl');
       try {
-        const st = await stat(path.join(root, ws.name, s.name, 'agents', 'main', 'wire.jsonl'));
-        if (st.isFile()) total += 1;
+        const st = await stat(wirePath);
+        if (st.isFile()) found.push({ sessionId: s.name, wirePath });
       } catch {
         // 没有 wire.jsonl 的目录不是会话；读不出来同样不计入
       }
     }
   }
-  return total;
+  return found;
+}
+
+async function countKimiSessionDirs(): Promise<number> {
+  return (await scanKimiSessionDirs()).length;
+}
+
+/** 磁盘上是否有这个 sessionId 的会话目录（索引坏了时用来区分「没这条」与「归属丢了」） */
+export async function findKimiSessionDirOnDisk(sessionId: string): Promise<string | null> {
+  const hit = (await scanKimiSessionDirs()).find((d) => d.sessionId === sessionId);
+  return hit ? hit.wirePath : null;
+}
+
+/**
+ * 「索引确实有无法解析的行、磁盘上还有没被登记成会话的目录」时的说明；`null` = 不是这一档。
+ *
+ * 索引被截断最常见的样子不是整份变空，而是**最后一行写了一半**：那一条会话的归属随坏行一起丢掉，
+ * 它从所有目录的列表里消失，而 `listSessions` 仍然返回一份看起来正常的列表、`doctor` 也报一个
+ * 看起来正常的条数。这一档与「索引整份没了」（`kimiIndexLoss()` 直接抛错）不同：列表还有内容，
+ * 属于降级而不是做不成，所以走 `ProviderAdapter.unattributable` 通道（与 Codex 归属行坏掉同构，
+ * `sessions` / `recent` / `status` / `doctor` / `search` 共用 `session-coverage.ts` 的文案）。
+ *
+ * **只在索引确实有坏行时才报**：`importTurnsToKimi()` 不写 `session_index.jsonl`，它转出的会话
+ * 目录本来就不在索引里；索引健康时把那些说成「因损坏丢失」是假警。
+ */
+export async function kimiUntrackedSessions(): Promise<{
+  count: number;
+  samples: string[];
+  summary?: string;
+}> {
+  const none = { count: 0, samples: [] as string[] };
+  const indexPath = path.join(kimidir(), 'session_index.jsonl');
+  let raw: string;
+  try {
+    raw = await readFile(indexPath, 'utf8');
+  } catch {
+    // 索引不存在 = 没用过 Kimi；读不出来已由 `listSessions` / `findById` 自己的通道说过
+    return none;
+  }
+  const indexed = new Set<string>();
+  let unparsable = 0;
+  for (const line of raw.split('\n')) {
+    if (!line.trim()) continue;
+    let rec: Record<string, unknown>;
+    try {
+      rec = JSON.parse(line);
+    } catch {
+      unparsable += 1;
+      continue;
+    }
+    if (typeof rec.sessionId === 'string') indexed.add(rec.sessionId);
+  }
+  if (unparsable === 0) return none;
+  const untracked = (await scanKimiSessionDirs()).filter((d) => !indexed.has(d.sessionId));
+  if (untracked.length === 0) return none;
+  return {
+    count: untracked.length,
+    samples: untracked.slice(0, 3).map((d) => d.wirePath),
+    summary: '会话索引里对应的记录',
+  };
 }
 
 /**

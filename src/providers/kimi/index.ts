@@ -12,10 +12,12 @@ import type { ProcessEvent, SessionRef, TokenUsage, UnifiedTurn } from '../../co
 import { parseKimiSession, usageFromRecord } from './parse.js';
 import {
   encodeKimiWorkspaceDir,
+  findKimiSessionDirOnDisk,
   importTurnsToKimi,
   kimidir,
   kimiIndexLoss,
   kimiSessionsRoot,
+  kimiUntrackedSessions,
   listKimiSessionsByCwd,
 } from './build.js';
 import { describeSessionReadFailure } from '../../core/read-text.js';
@@ -175,12 +177,14 @@ export async function findKimiSessionById(
   }
   const unreadable: string[] = [];
   let parseable = 0;
+  let unparsable = 0;
   for (const line of raw.split('\n')) {
     if (!line.trim()) continue;
     let rec: Record<string, unknown>;
     try {
       rec = JSON.parse(line);
     } catch {
+      unparsable += 1;
       continue;
     }
     parseable += 1;
@@ -217,6 +221,20 @@ export async function findKimiSessionById(
       'found-unreadable',
       `Kimi 索引里有会话 ${sessionId}，但读不出它的会话文件，无法确认它是否可用：${unreadable[0]}`,
     );
+  }
+  // 索引里有些行损坏时，这个 id 可能正是随着坏行一起丢掉的那一条：磁盘上有它的目录，
+  // 但它属于哪个目录已经不可知（workspaceId 里的 hash 不可逆）。这时同样不能返回 null——
+  // 那会让 `open` 说「未找到会话…请确认 id 正确」，而 id 恰恰是抄对的
+  if (unparsable > 0) {
+    const wirePath = await findKimiSessionDirOnDisk(sessionId);
+    if (wirePath) {
+      throw new SessionLookupFailureError(
+        'incomplete',
+        `Kimi 会话索引 ${idxFile} 里有 ${unparsable} 行无法解析，磁盘上存在会话 ${sessionId} 的目录（${wirePath}），` +
+          '但它在索引里的那条记录已经损坏，读不出它属于哪个工作目录，因此无法确认它是否可用；' +
+          '这不代表这个会话不存在——先确认索引文件能否从备份恢复（别直接删掉它）再重试',
+      );
+    }
   }
   // 索引里一条记录都解析不出来、磁盘上却还有会话目录：这不是「这家没有这个会话」，是查不了。
   // 返回 null 会让 `open` 说「未找到会话…请确认 id 正确」，而 id 恰恰是抄对的
@@ -334,6 +352,7 @@ export const kimiAdapter: ProviderAdapter = {
   findLatestSession: findLatestKimiSession,
   listSessions: listKimiSessions,
   listSessionsCap: KIMI_LIST_LIMIT,
+  unattributable: kimiUntrackedSessions,
 
   /** nezha 式启动：新建真实会话并截断，返回可直接 `kimi -r` 的 ref */
   async createEmptySession(cwd: string): Promise<SessionRef> {
