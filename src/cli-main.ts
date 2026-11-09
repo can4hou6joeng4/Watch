@@ -279,6 +279,35 @@ function pushPreviewErrorWarning(
   }
 }
 
+/**
+ * `--limit` 取值不合法时的说法：把取值**加引号并转义控制字符**，让空白看得见。
+ *
+ * 以前是一句话把原值直接拼进去：`--limit ' 3 '` 回「--limit 需要 1–50 之间的整数，收到:  3 」——
+ * 前后各多一个空格，终端上几乎看不出来，用户看到的仍是「3」，只会反复核对一个**完全正确**的数字
+ * （与 2026-11-09 那批 `trimUserKey()` 要修的是同一种「看不见的字符」，只是这里选择**拒绝并对齐
+ * 生态**而不是归一：`0x10` 与 ` 3` 一样都是「别猜用户的意思」，见下面 `--limit` 分支的注释）。
+ *
+ * 生态里同类工具都会让取值**在报错里可辨认**：
+ * `git rev-list --max-count ' 2 '` → `fatal: ' 2 ': not an integer`；
+ * `gh pr list --limit ' 1 '` → `invalid argument " 1 " for "-L, --limit" flag`；
+ * `rg -m ' 1 '` → `value is not a valid number: invalid digit found in string`（实测，2026-11-09）。
+ *
+ * 分档只为「下一步能照抄」：去掉空白就是合法条数时，唯一的问题就是那串空白，直接给出
+ * `--limit <n>` 的正确写法；其余（`3x` / `0x10` / 超范围）仍用原来那句，只把值加引号。
+ */
+function describeLimitValue(raw: string): string {
+  const echoed = `"${escapeControlChars(raw)}"`;
+  const trimmed = raw.trim();
+  const n = /^\d+$/.test(trimmed) ? Number(trimmed) : NaN;
+  if (trimmed !== raw && Number.isInteger(n) && n >= 1 && n <= 50) {
+    return (
+      `--limit 的取值前后有空白字符，收到: ${echoed}；数字两边不能有空格、制表符或换行——` +
+      `写成 --limit ${n} 重试`
+    );
+  }
+  return `--limit 需要 1–50 之间的整数，收到: ${echoed}`;
+}
+
 function parseArgs(argv: string[]): {
   cmd?: string;
   target?: string;
@@ -387,7 +416,7 @@ function parseArgs(argv: string[]): {
       // Number() 会接受 '0x10'（16）与 ' 3'（3）：用户只想给十进制条数，别猜他的意思
       const n = /^\d+$/.test(raw) ? Number(raw) : NaN;
       if (!Number.isInteger(n) || n < 1 || n > 50) {
-        usage(`--limit 需要 1–50 之间的整数，收到: ${raw}`);
+        usage(describeLimitValue(raw));
       }
       limit = n;
       continue;
