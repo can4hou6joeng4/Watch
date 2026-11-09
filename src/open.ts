@@ -11,6 +11,7 @@ import { cliDetectFailedBlock, cliMissingBlock, PreflightBlockedError, SessionLo
 import type { SessionLookupFailureKind } from './providers/adapter.js';
 import { getAdapter, listAdapters, unknownProviderMessage } from './providers/registry.js';
 import { countUnparsableJsonLines } from './core/jsonl.js';
+import { usageBadLinesReason } from './core/usage-integrity.js';
 import {
   describePathReadFailureReason,
   describeReadFailureOrSelf,
@@ -475,6 +476,13 @@ export async function openSession(
             `来源 ${source.adapter.displayName} 用量 in=${sourceUsage.inputTokens} out=${sourceUsage.outputTokens}（已在对账中携带）`,
           );
         }
+        // 合计里少算了坏行那一部分：不说明的话，这个数会被当成来源的真实用量
+        const badUsage = await usageBadLinesReason(
+          source.adapter,
+          source.found.ref,
+          `来源会话 ${source.found.ref.sessionId}（${source.adapter.displayName}）`,
+        );
+        if (badUsage) warnings.push(badUsage);
       }
       // 来源 / 目标解析各自捕获：它们都是「读」，让它们落进下面管写入的 catch 会被
       // 说成「并入新内容失败：无权写入」，把读失败讲成写失败、还指向错误的下一步
@@ -588,6 +596,13 @@ export async function openSession(
           );
           return null;
         })) ?? null;
+      // 摘要里的 usage 同样是合计：坏行被跳过时这一项会静默偏少
+      const badUsage = await usageBadLinesReason(
+        target.adapter,
+        target.found.ref,
+        `会话 ${target.found.ref.sessionId}（${target.adapter.displayName}）`,
+      );
+      if (badUsage) warnings.push(badUsage);
     }
     try {
       const turns = await target.adapter.parse(target.found.ref);
@@ -1132,6 +1147,15 @@ export async function openInProvider(
         notes.push(
           `来源 ${source.displayName} 用量 in=${sourceUsage.inputTokens} out=${sourceUsage.outputTokens}（已在对账中携带）`,
         );
+      }
+      // 坏行被跳过时这个合计数同样偏少：与 `--to` 的来源侧同一句
+      if (source) {
+        const badUsage = await usageBadLinesReason(
+          source,
+          sourceRef,
+          `来源会话 ${sourceRef.sessionId}（${source.displayName}）`,
+        );
+        if (badUsage) warnings.push(badUsage);
       }
     }
     const newRef =

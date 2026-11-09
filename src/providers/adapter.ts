@@ -181,4 +181,11 @@ export interface ProviderAdapter {
 
   /** 可选：扫描原生文件的 token 用量（不全量 parse 时间线） */
   sessionUsage?(ref: SessionRef): Promise<TokenUsage | null>;
+
+  /**
+   * 可选：`sessionUsage()` 实际读的那个文件；缺省是 `ref.filePath`。
+   * grok 的用量在**旁路文件** `updates.jsonl`（不是 `parse` 读的 `chat_history.jsonl`），
+   * 不声明它的话，调用方核对「这个文件里有没有无法解析的行」会看错对象。
+   */
+  sessionUsagePath?(ref: SessionRef): string;
 }

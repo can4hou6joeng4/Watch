@@ -7,6 +7,7 @@ import { describeWriteFailureReason, type FileDigest } from './atomic.js';
 import { addFinding, type Finding } from './findings.js';
 import { escapeControlChars } from './display.js';
 import { countUnparsableJsonLines } from './jsonl.js';
+import { usageBadLinesReason } from './usage-integrity.js';
 import { cwdAliasHint, splitElsewhereByDirectory } from './cwd.js';
 import { describePathReadFailureReason, describeReadFailureOrSelf, emptySessionFileReasonFromStat, isEmptySessionFileReason, probeSessionReadable, sessionFilePresence } from './read-text.js';
 import { noSessionHint, unknownProviderMessage } from '../providers/registry.js';
@@ -645,6 +646,11 @@ export async function chainUsage(
         continue;
       }
     }
+    // 用量数据源里有坏行时，`sessionUsage` 一律 `continue` 跳过：合计静默偏少，而这份报告
+    // 分不出「少算了」与「本来就这么多」。内容那一侧（`handoff()` / `open`）早已用
+    // `countUnparsableJsonLines()` 披露过，这里补的是同一条线上没接上的一半。
+    const badUsage = await usageBadLinesReason(adapter, ref, `${adapter.id} 会话 ${ref.sessionId}`);
+    if (badUsage) warnings.push(badUsage);
     byProvider.push({ provider: adapter.id, sessionId: ref.sessionId, usage });
     if (usage === null) totalMissingUsage += 1;
     if (usage) {

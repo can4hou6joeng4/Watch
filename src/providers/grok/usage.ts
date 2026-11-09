@@ -4,6 +4,16 @@ import type { SessionRef, TokenUsage } from '../../core/types.js';
 import { describeSessionReadFailure, isMissingPathError } from '../../core/read-text.js';
 
 /**
+ * 用量所在的旁路文件：与 `chat_history.jsonl` 同目录的 `updates.jsonl`。
+ *
+ * 适配器的 `sessionUsagePath()` 用它，供 `watch usage` / `open` 核对「这个文件里有没有
+ * 无法解析的行」——拿 `ref.filePath`（`chat_history.jsonl`）去数会看错对象。
+ */
+export function grokUpdatesPath(ref: SessionRef): string {
+  return join(dirname(ref.filePath), 'updates.jsonl');
+}
+
+/**
  * Grok 会话用量（信息层）：累加 `updates.jsonl` 里每条 ACP `turn_completed` 的 `usage`。
  *
  * 用量不在 `chat_history.jsonl`（那是发给模型的原始消息，`parse` 读的那份），而在同目录的
@@ -26,7 +36,7 @@ import { describeSessionReadFailure, isMissingPathError } from '../../core/read-
  * 表示「没有用量记录」；其余读不出来照常抛错，由 `chainUsage` 记成「读取失败」而不是「无数据」。
  */
 export async function grokSessionUsage(ref: SessionRef): Promise<TokenUsage | null> {
-  const usages = await grokUpdateTurnUsages(join(dirname(ref.filePath), 'updates.jsonl'));
+  const usages = await grokUpdateTurnUsages(grokUpdatesPath(ref));
   if (!usages || usages.length === 0) return null;
   let input = 0;
   let output = 0;

@@ -13,7 +13,7 @@ import {
   listGrokSessions,
 } from './build.js';
 import { parseGrokSession } from './parse.js';
-import { grokSessionUsage } from './usage.js';
+import { grokSessionUsage, grokUpdatesPath } from './usage.js';
 
 export { findGrokSessionById };
 
@@ -71,4 +71,7 @@ export const grokAdapter: ProviderAdapter = {
   },
 
   sessionUsage: grokSessionUsage,
+
+  /** 用量在旁路文件 `updates.jsonl`，不是 `parse` 读的 `chat_history.jsonl` */
+  sessionUsagePath: grokUpdatesPath,
 };
