@@ -2,6 +2,7 @@
 // 路径字符串精确比较，路径错了只会安静返回 0，看起来像「这个目录没有会话」。查询类命令与
 // `watch doctor` 统一用这里的说明做披露，避免同一个坑每处各写一份文案。
 import { realpath, stat } from 'node:fs/promises';
+import { normalizePath } from './platform.js';
 
 /**
  * 一个目录现在能不能用。分开说「不存在」与「读不出来」是因为两者下一步完全不同：
@@ -91,7 +92,7 @@ export async function cwdProblem(cwd: string): Promise<string | null> {
  * 文案不提「符号链接」这一个原因：`/var` 与 `/private/var` 这类**前缀**是软链、名字大小写不同则是
  * 文件系统语义，两者表现完全一样（会话一条都查不到），说错原因会把人引去 `ls -l` 一个本来正常的目录。
  */
-export async function cwdAliasHint(cwd: string): Promise<string | null> {
+export async function cwdAliasHint(cwd: string, knownSpelling?: string): Promise<string | null> {
   let real: string;
   try {
     const probe = await stat(cwd);
@@ -102,11 +103,53 @@ export async function cwdAliasHint(cwd: string): Promise<string | null> {
     return null;
   }
   if (real === cwd) return null;
+  // 调用方从本地库 / 搜索索引里已经知道「这个目录的另一种写法具体是什么字符串」时用那一份：
+  // 链与索引都是按那个字符串精确匹配的，realpath 未必查得到（records 里存的是当时的 cwd）
+  const target = knownSpelling ?? real;
+  const hedge = knownSpelling ? '' : '（若会话 / 链是在同一目录的另一个写法下建的，就用那个写法）';
   return (
     `--cwd 指向的目录还有另一种写法（realpath: ${real}），而本目录没扫到任何会话；` +
     '各 provider 按原生记录的路径字符串精确比较，同一个目录换个写法（符号链接、/var 与 /private/var 这类前缀、大小写）就会一条都查不到' +
-    `——把 --cwd 换成 ${real} 重试同一条命令（其余参数照旧）`
+    `——把 --cwd 换成 ${target} 重试同一条命令${hedge}；其余参数照旧`
   );
+}
+
+async function safeRealpath(target: string): Promise<string | null> {
+  try {
+    return normalizePath(await realpath(target));
+  } catch {
+    // 不存在 / 读不出来：不能据此断言「是同一个目录」，调用方退回原串比较
+    return null;
+  }
+}
+
+/**
+ * 把「本目录之外」的记录（本地库里的链、搜索索引里的命中）按**真实路径**分成两类。
+ *
+ * 「本目录没有链，但本地库里还有属于其它目录的链」这句话在 `--cwd` 只是同一个目录的另一种
+ * 写法（软链接、`/var` 与 `/private/var` 这类前缀）时是错的：链就在这个目录里，只是字符串
+ * 写法不同，用户照「其它目录」去理解会以为项目根本没有链，甚至在本目录再建一条重复的。
+ * 2026-11-09 实测（隔离 HOME，链建在 `<tmp>/real`、用 `<tmp>/link` 软链查询）：
+ * `watch chain list --cwd <link>` 回「本目录没有链，但本地库里还有属于其它目录的链…：<tmp>/real」，
+ * `watch usage --cwd <link>` 的 `notes` 同样是这一句——两处都在**断言事实**，而事实是同一个目录。
+ *
+ * 只比较 `realpath`，不改动任何查询结果：读不出来时退回原串比较（读不出来不能讲成「同一个目录」）。
+ * `realpath` 输出与建议里给出的目录都取**记录里的原写法**，因为链与索引都是按那个字符串精确匹配的。
+ */
+export async function splitElsewhereByDirectory<T extends { cwd: string }>(
+  rows: T[],
+  cwd: string,
+): Promise<{ sameDirectory: T[]; otherDirectories: T[] }> {
+  if (!rows.length) return { sameDirectory: [], otherDirectories: [] };
+  const real = await safeRealpath(cwd);
+  const sameDirectory: T[] = [];
+  const otherDirectories: T[] = [];
+  for (const row of rows) {
+    const rowReal = await safeRealpath(row.cwd);
+    const same = real && rowReal ? real === rowReal : normalizePath(row.cwd) === normalizePath(cwd);
+    (same ? sameDirectory : otherDirectories).push(row);
+  }
+  return { sameDirectory, otherDirectories };
 }
 
 /**

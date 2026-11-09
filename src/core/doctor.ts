@@ -8,7 +8,7 @@ import { defaultDbPath, describeStoreErrorReason } from './store.js';
 import { diffTurns, rebindHint } from './handoff.js';
 import type { SessionRef } from './types.js';
 import { readWatchVersion } from './watch-version.js';
-import { cwdProblem } from './cwd.js';
+import { cwdProblem, splitElsewhereByDirectory } from './cwd.js';
 import { escapeControlChars } from './display.js';
 import { countUnparsableJsonLines } from './jsonl.js';
 import { describeSessionReadFailureReason, isFileSystemErrorCode, probeSessionReadable } from './read-text.js';
@@ -415,7 +415,14 @@ export async function doctorReport(cwd: string, deps: DoctorDeps): Promise<Docto
       let chainsElsewhere: ChainsElsewhere[] = [];
       if (!chains.length && deps.store.chainsElsewhere) {
         try {
-          chainsElsewhere = deps.store.chainsElsewhere(cwd);
+          const rows = deps.store.chainsElsewhere(cwd);
+          // 链按 --cwd 精确分组：同一个目录的另一种写法（软链、/var 与 /private/var）在这里
+          // 也会落进「别处」。排障入口把那些说成「其它目录」会让人以为链丢了，标注出来
+          const split = await splitElsewhereByDirectory(rows, cwd);
+          chainsElsewhere = [
+            ...split.sameDirectory.map((r) => ({ ...r, sameDirectory: true })),
+            ...split.otherDirectories,
+          ];
         } catch {
           // 补充说明而已：库读不出来时正文照常给，真正的库故障已由 listChains 那条处理
         }

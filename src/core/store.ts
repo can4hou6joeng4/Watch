@@ -28,8 +28,14 @@ export function emptyChainBindHint(): string {
   );
 }
 
-/** 一个「链在别处」的目录 */
-export type ChainsElsewhere = { cwd: string; total: number; active: number; lastUsedAt: number };
+/** 一个「链在别处」的目录。`sameDirectory` 只在它其实是**同一个目录的另一种写法**时出现（见 `splitElsewhereByDirectory`）。 */
+export type ChainsElsewhere = {
+  cwd: string;
+  total: number;
+  active: number;
+  lastUsedAt: number;
+  sameDirectory?: boolean;
+};
 
 /**
  * 本目录没有链、本地库里却有别的目录的链时的下一步（`chain list` / `status` 共用）。
@@ -53,6 +59,25 @@ export function chainsElsewhereHint(rows: ChainsElsewhere[]): string {
   return (
     `本目录没有链，但本地库里还有属于其它目录的链（链按目录分组，--cwd 不同就一条都看不到）：${shown}${more}；` +
     '要查看用 watch chain list --cwd <那个目录>，或在本目录用 watch chain new <名字> 建一条'
+  );
+}
+
+/**
+ * 「别处的链」里其实有**同一个目录的另一种写法**（软链、`/var` 与 `/private/var` 这类前缀、大小写）。
+ *
+ * 这一档不能说成「属于其它目录」：链就在这个目录里，只是按原生记录的那个字符串才查得到。
+ * 下一步取记录里的**原写法**（不是 realpath）——链按 `--cwd` 精确匹配，换成 realpath 照样一条都看不到。
+ */
+export function chainsSameDirectoryHint(rows: ChainsElsewhere[]): string {
+  const shown = rows
+    .slice(0, 3)
+    .map((r) => `${r.cwd}（${r.total} 条${r.active ? `，${r.active} 条活跃` : ''}）`)
+    .join('、');
+  const more = rows.length > 3 ? ` 等 ${rows.length} 个写法` : '';
+  const target = rows[0]!.cwd;
+  return (
+    `本目录没有链，但本地库里同一个目录的另一种写法下有链（链按 --cwd 精确匹配，写法不同就一条都看不到）：${shown}${more}；` +
+    `把 --cwd 换成 ${target} 重跑同一条命令（其余参数照旧），或用 watch chain list --cwd ${target} 查看`
   );
 }
 
@@ -92,6 +117,25 @@ export function searchElsewhereHint(rows: SearchElsewhere[], cwd: string, query:
   return (
     `本地搜索索引里其它目录有匹配：${shown}${more}；` +
     `搜索按目录限定（--cwd ${cwd} 只查这一条），要看那个目录里的命中，用 watch search ${query} --cwd <那个目录>`
+  );
+}
+
+/**
+ * 零命中的那一份里其实有**同一个目录的另一种写法**（软链、`/var` 与 `/private/var` 这类前缀、大小写）。
+ *
+ * 与 `chainsSameDirectoryHint()` 同一档：说成「其它目录」是错的，而 `cwdAliasHint()` 给的 realpath
+ * 也未必是索引里记录的那个写法——这里用索引行自己的 `cwd` 作为下一步，能直接照抄。
+ */
+export function searchSameDirectoryHint(rows: SearchElsewhere[], cwd: string, query: string): string {
+  const shown = rows
+    .slice(0, 3)
+    .map((r) => `${r.cwd}（${r.hits} 条）`)
+    .join('、');
+  const more = rows.length > 3 ? ` 等 ${rows.length} 个写法` : '';
+  const target = rows[0]!.cwd;
+  return (
+    `本地搜索索引里，同一个目录的另一种写法下有匹配：${shown}${more}；` +
+    `搜索按 --cwd 精确匹配（${cwd} 一条都查不到），把 --cwd 换成 ${target} 重跑：watch search ${query} --cwd ${target}`
   );
 }
 
@@ -977,12 +1021,18 @@ export class Store {
    */
   chainsElsewhere(cwd: string): ChainsElsewhere[] {
     const normalized = this.normCwd(cwd);
+    // 不用 `as ChainsElsewhere[]`：`sameDirectory` 是调用方按真实路径判出来的（不是列），
+    // 带一个 boolean 字段后整个类型就不再是 SQLOutputValue 的取值集合，`as` 会被 TS 拒掉
     return this.db
       .prepare(
         `SELECT cwd, COUNT(*) AS total, SUM(CASE status WHEN 'active' THEN 1 ELSE 0 END) AS active, MAX(last_used_at) AS lastUsedAt
            FROM chains WHERE cwd<>? GROUP BY cwd ORDER BY lastUsedAt DESC`,
       )
-      .all(normalized) as ChainsElsewhere[];
+      .all(normalized)
+      .map((row) => {
+        const r = row as { cwd: string; total: number; active: number; lastUsedAt: number };
+        return { cwd: r.cwd, total: r.total, active: r.active, lastUsedAt: r.lastUsedAt };
+      });
   }
 
   createChain(cwd: string, name: string): Chain {

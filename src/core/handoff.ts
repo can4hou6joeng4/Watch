@@ -1,13 +1,13 @@
 import type { ImportTurnsOpts, ProviderAdapter } from '../providers/adapter.js';
 import type { SessionRef, TokenUsage, UnifiedTurn } from './types.js';
-import { chainsElsewhereHint, describeStoreErrorReason, emptyChainBindHint } from './store.js';
+import { chainsElsewhereHint, chainsSameDirectoryHint, describeStoreErrorReason, emptyChainBindHint } from './store.js';
 import type { Chain, ChainsElsewhere, Store, SwitchRecord } from './store.js';
 import { dedupeCallEvents, describeDanglingToolCalls, describeUnansweredTail, mergeTurns, shouldReplacePairedSession, unwrapUserQuery } from './rich.js';
 import { describeWriteFailureReason, type FileDigest } from './atomic.js';
 import { addFinding, type Finding } from './findings.js';
 import { escapeControlChars } from './display.js';
 import { countUnparsableJsonLines } from './jsonl.js';
-import { cwdAliasHint } from './cwd.js';
+import { cwdAliasHint, splitElsewhereByDirectory } from './cwd.js';
 import { describePathReadFailureReason, describeReadFailureOrSelf, probeSessionReadable, sessionFilePresence } from './read-text.js';
 import { noSessionHint, unknownProviderMessage } from '../providers/registry.js';
 
@@ -623,13 +623,18 @@ export async function chainUsage(
     } else {
       // 没有当前链有两种来源：还没建链，或现有链都已归档——别把后者说成「没有链」。
       // 还有第三种更容易被误读的：本目录没有链，链躺在别的目录里（链按 cwd 精确分组），
-      // 此时「还没建链」会被读成链丢了 / 从来没建成功，必须指出它在哪
+      // 此时「还没建链」会被读成链丢了 / 从来没建成功，必须指出它在哪。
+      // 「别的目录」要按 realpath 分辨：`--cwd` 只是同一个目录的另一种写法时，说「其它目录」是错的
       const elsewhere = chainsElsewhereOf(store, cwd);
-      notes.push(
-        elsewhere.length
-          ? `本目录没有可用的当前链，无用量可统计；${chainsElsewhereHint(elsewhere)}`
-          : '没有可用的当前链（还没建链，或现有链都已归档），无用量可统计；可先用 watch chain list 查看',
-      );
+      if (!elsewhere.length) {
+        notes.push('没有可用的当前链（还没建链，或现有链都已归档），无用量可统计；可先用 watch chain list 查看');
+      } else {
+        const split = await splitElsewhereByDirectory(elsewhere, cwd);
+        const parts: string[] = [];
+        if (split.sameDirectory.length) parts.push(chainsSameDirectoryHint(split.sameDirectory));
+        if (split.otherDirectories.length) parts.push(chainsElsewhereHint(split.otherDirectories));
+        notes.push(`本目录没有可用的当前链，无用量可统计；${parts.join('；')}`);
+      }
     }
   }
   return { chain, total, totalExcluded, totalMissingUsage, byProvider, unsupported, warnings, notes };

@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { stat } from 'node:fs/promises';
 import path from 'node:path';
-import { chainsElsewhereHint, isStoreError, SEARCH_MAX_HITS, searchElsewhereHint, Store, defaultDbPath, describeStoreErrorReason, describeStoreOpenFailure } from './core/store.js';
+import { chainsElsewhereHint, chainsSameDirectoryHint, isStoreError, SEARCH_MAX_HITS, searchElsewhereHint, searchSameDirectoryHint, Store, defaultDbPath, describeStoreErrorReason, describeStoreOpenFailure } from './core/store.js';
 import type { Chain, ChainsElsewhere, SearchElsewhere } from './core/store.js';
 import { describeFindings } from './core/findings.js';
 import { adoptIntoChain, blockedHint, chainStatus, chainUsage, collectTips, createChainSession, currentChainShiftNote, emptyChainBindHint, handoff, HandoffBlockedError, notCurrentChainWarning, rebindHint, storeUnavailableWarning } from './core/handoff.js';
@@ -14,7 +14,7 @@ import { runImportCodex } from './import-codex.js';
 import { ImportJobs } from './core/import-jobs.js';
 import { officialImportJournalRoot } from './providers/codex/official-import.js';
 import { doctorReport } from './core/doctor.js';
-import { cwdAliasHint, cwdProblem, describeCwdProblem, describeNewSessionCwd, inspectCwd } from './core/cwd.js';
+import { cwdAliasHint, cwdProblem, describeCwdProblem, describeNewSessionCwd, inspectCwd, splitElsewhereByDirectory } from './core/cwd.js';
 import { escapeControlChars, hasControlChars } from './core/display.js';
 import { trimUserKey } from './core/cli-input.js';
 import { describePathReadFailureReason, describeSessionReadFailureReason, probeSessionReadable, sessionFilePresence } from './core/read-text.js';
@@ -397,6 +397,24 @@ function chainsElsewhereOf(store: Store | null, cwd: string): ChainsElsewhere[] 
   }
 }
 
+/**
+ * 「别处的链」按真实路径分成「同一个目录的另一种写法」与「确实是别的目录」。
+ *
+ * 链按 `--cwd` 精确匹配，同一目录换个写法在库里就是两个 cwd，于是 `chainsElsewhere()`
+ * 会把它们一起返回；只说「属于其它目录」是错的，`--json` 里也要能分辨，因此给那一档
+ * 行加上 `sameDirectory: true`（其余行保持原样，不新增字段）。
+ */
+async function splitChainsElsewhere(
+  rows: ChainsElsewhere[],
+  cwd: string,
+): Promise<{ same: ChainsElsewhere[]; other: ChainsElsewhere[] }> {
+  const split = await splitElsewhereByDirectory(rows, cwd);
+  return {
+    same: split.sameDirectory.map((r) => ({ ...r, sameDirectory: true })),
+    other: split.otherDirectories,
+  };
+}
+
 async function cmdStatus(cwd: string, json: boolean, chain?: string): Promise<void> {
   const store = openStore();
   // 路径写错时各 provider 会安静返回空列表，先把原因放进同一条 warnings 通道
@@ -409,17 +427,21 @@ async function cmdStatus(cwd: string, json: boolean, chain?: string): Promise<vo
     failWithCwd(json, cwdIssue, describeCommandError(error));
   }
   if (cwdIssue) result.warnings.push(cwdIssue);
-  // 零会话 + `--cwd` 是同一个目录的另一种写法（软链 / 大小写）：正文那句「未发现会话」是结论，
-  // 而真正的原因是这个写法与原生记录不一致。只在零结果时补，健康目录不多嘴
-  if (!result.tips.length) {
-    const alias = await cwdAliasHint(cwd);
-    if (alias) result.warnings.push(alias);
-  }
   // 「这个目录没有链」与「一条链都没建过」原本长得一样：链按 cwd 精确分组，--cwd 指错地方
   // 时正文只有「切换链: （空）」，用户会以为链丢了。别处的链要说出来，并给出可照抄的 --cwd
   const elsewhere = result.chains.length ? [] : chainsElsewhereOf(store, cwd);
+  // 同一个目录的另一种写法单独算：说成「其它目录」会让人以为项目根本没有链
+  const splitElsewhere = await splitChainsElsewhere(elsewhere, cwd);
+  // 零会话 + `--cwd` 是同一个目录的另一种写法（软链 / 大小写）：正文那句「未发现会话」是结论，
+  // 而真正的原因是这个写法与原生记录不一致。只在零结果时补，健康目录不多嘴。
+  // 上面已经从库里知道这个目录的另一种写法是什么字符串，用它当下一步（realpath 未必匹配原生记录）
+  if (!result.tips.length) {
+    const alias = await cwdAliasHint(cwd, splitElsewhere.same[0]?.cwd);
+    if (alias) result.warnings.push(alias);
+  }
+  const elsewhereJson = [...splitElsewhere.same, ...splitElsewhere.other];
   if (json) {
-    console.log(JSON.stringify({ ok: true, ...result, ...(elsewhere.length ? { chainsElsewhere: elsewhere } : {}) }));
+    console.log(JSON.stringify({ ok: true, ...result, ...(elsewhereJson.length ? { chainsElsewhere: elsewhereJson } : {}) }));
     return;
   }
   const { tips, chainTip, chainTipUnusable, unreadable, history, chain: current, warnings } = result;
@@ -481,8 +503,10 @@ async function cmdStatus(cwd: string, json: boolean, chain?: string): Promise<vo
   } else if (store) {
     console.log('');
     console.log('切换链: （空）');
-    // 上一行是结论：本目录没有链。别处有链时必须接着指路，否则「（空）」会被当成链没了
-    if (elsewhere.length) console.log(chainsElsewhereHint(elsewhere));
+    // 上一行是结论：本目录没有链。别处有链时必须接着指路，否则「（空）」会被当成链没了。
+    // 「同一个目录的另一种写法」与「确实是别的目录」分开说，两句话的下一步不同
+    if (splitElsewhere.same.length) console.log(chainsSameDirectoryHint(splitElsewhere.same));
+    if (splitElsewhere.other.length) console.log(chainsElsewhereHint(splitElsewhere.other));
   }
 }
 
@@ -1257,9 +1281,13 @@ async function cmdDoctor(cwd: string, json: boolean, strict: boolean): Promise<v
       console.log(
         `本地库: 可用，本目录 ${report.store.chains} 条链（${report.store.activeChains} 条活跃${broken ? `，${broken} 条链尾缺失` : ''}${unreadable ? `，${unreadable} 条链尾读不出来` : ''}${unknown ? `，${unknown} 条链尾状态无法确认` : ''}${drifted ? `，${drifted} 条链尾内容落后于来源` : ''}）`,
       );
-      // 上一行是结论：本目录没有链。别处有链时必须接着指路，否则会被当成链丢了 / 没建成功
+      // 上一行是结论：本目录没有链。别处有链时必须接着指路，否则会被当成链丢了 / 没建成功。
+      // 「同一个目录的另一种写法」不是「别的目录」：两种说法分开，否则用户会以为链不在这个项目里
       if (!report.store.chains && report.store.chainsElsewhere.length) {
-        console.log(chainsElsewhereHint(report.store.chainsElsewhere));
+        const sameDir = report.store.chainsElsewhere.filter((r) => r.sameDirectory);
+        const otherDir = report.store.chainsElsewhere.filter((r) => !r.sameDirectory);
+        if (sameDir.length) console.log(chainsSameDirectoryHint(sameDir));
+        if (otherDir.length) console.log(chainsElsewhereHint(otherDir));
       }
       for (const d of report.store.driftedPairs) {
         console.log(
@@ -1493,7 +1521,10 @@ async function cmdChain(cwd: string, json: boolean, action?: string, a?: string,
       const chains = store.listChains(cwd);
       // 链按 cwd 精确分组：「本目录没有链」不等于「一条链都没建过」。指向错目录时正文只有
       // 一句「（无链）」，用户会以为链丢了或没建成功——别处的链要说出来
-      const elsewhere = chains.length ? [] : chainsElsewhereOf(store, cwd);
+      const rawElsewhere = chains.length ? [] : chainsElsewhereOf(store, cwd);
+      // `--cwd` 只是同一个目录的另一种写法时，那些链不属于「其它目录」：分开放，两句话的下一步不同
+      const splitElsewhere = await splitChainsElsewhere(rawElsewhere, cwd);
+      const elsewhere = [...splitElsewhere.same, ...splitElsewhere.other];
       const warnings = cwdIssue ? [cwdIssue] : [];
       // 写入守卫（`assertChainNameUsable()`）只拦得住新名字：库里可能留着它上线前建出的
       // 坏名字。文本输出一律转义（`escapeControlChars`），但用户看到 `\u001B` 时得知道
@@ -1591,7 +1622,8 @@ async function cmdChain(cwd: string, json: boolean, action?: string, a?: string,
       for (const warning of warnings) console.error(`警告: ${warning}`);
       if (!chains.length) {
         console.log('（无链）');
-        if (elsewhere.length) console.log(chainsElsewhereHint(elsewhere));
+        if (splitElsewhere.same.length) console.log(chainsSameDirectoryHint(splitElsewhere.same));
+        if (splitElsewhere.other.length) console.log(chainsElsewhereHint(splitElsewhere.other));
         return;
       }
       // 「当前」= 活跃链里 last_used_at 最新的一条（与 status / switch 的默认链同一判定）。
@@ -1997,11 +2029,28 @@ async function cmdSearch(cwd: string, json: boolean, query: string): Promise<voi
     await reindexCwd(cwd, listAdapters(), store, warnings, unavailable);
     // 三种上限各自独立：全局 40 条、单会话 3 条、session id 前缀 10 条；只说「truncated」会混淆是哪一种
     const { hits, truncated, perSessionCapped, idPrefixCapped } = store.searchMessagesWithMeta(query, cwd);
+    // 零命中时先把「本目录之外的命中」查出来：它决定下一步给什么，也决定要不要再问 cwdAliasHint。
+    // 同一个目录的另一种写法（软链、/var 与 /private/var 这类前缀）在索引里是另一个 cwd 字符串，
+    // `searchElsewhere()` 会把它一起返回——那不能说成「其它目录」，而索引行自己的 cwd 就是可直接照抄的
+    // 下一步（比 realpath 可靠：索引按那个字符串记，换成 realpath 未必查得到）。
+    let sameDirectoryElsewhere: SearchElsewhere[] = [];
+    let otherDirectoriesElsewhere: SearchElsewhere[] = [];
+    if (!hits.length && !cwdIssue) {
+      try {
+        const split = await splitElsewhereByDirectory(store.searchElsewhere(query, cwd), cwd);
+        sameDirectoryElsewhere = split.sameDirectory;
+        otherDirectoriesElsewhere = split.otherDirectories;
+      } catch {
+        // 补充说明而已：查询失败时正文照常给，真正的库故障已由 openStore / 搜索本身报出
+      }
+    }
     // 零命中与 status / sessions / recent 同一口径：`--cwd` 可能只是同一个目录的另一种写法，
     // 只留一句「本目录没有匹配」会把「会话在另一个写法下面」讲成「这里没聊过」。
     // 走 `warnings`（不是 notes）：同一件事实在四条命令上必须落在同一个通道。
+    // 索引里已经知道这个目录的另一种写法是什么字符串时用它当下一步，与 notes 里那条保持一致
+    // （realpath 未必查得到：索引按记录里的原字符串存）
     if (!hits.length && !cwdIssue) {
-      const alias = await cwdAliasHint(cwd);
+      const alias = await cwdAliasHint(cwd, sameDirectoryElsewhere[0]?.cwd);
       if (alias) warnings.push(alias);
     }
     pushEscapedContentWarning(
@@ -2015,15 +2064,9 @@ async function cmdSearch(cwd: string, json: boolean, query: string): Promise<voi
     // 与「会话属于另一个目录」在输出里一模一样（README 的用法里 search 从不带 --cwd 时才是全局）
     const notes: string[] = [];
     if (!hits.length) {
-      let elsewhere: SearchElsewhere[] = [];
-      if (!cwdIssue) {
-        try {
-          elsewhere = store.searchElsewhere(query, cwd);
-        } catch {
-          // 补充说明而已：查询失败时正文照常给，真正的库故障已由 openStore / 搜索本身报出
-        }
-      }
-      if (elsewhere.length) notes.push(searchElsewhereHint(elsewhere, cwd, query));
+      // 「同一个目录的另一种写法」与「确实是别的目录」分开说：两句话的下一步不同
+      if (sameDirectoryElsewhere.length) notes.push(searchSameDirectoryHint(sameDirectoryElsewhere, cwd, query));
+      if (otherDirectoriesElsewhere.length) notes.push(searchElsewhereHint(otherDirectoriesElsewhere, cwd, query));
       if (unavailable.length) {
         notes.push(
           `本次没有命中，但 ${unavailable.join(' / ')} 的会话列表没能读取（原因见上方警告），搜索没有覆盖到它们——不代表这些 Agent 里没有匹配；先修好这些存储（权限、路径或库状态）再重试`,
