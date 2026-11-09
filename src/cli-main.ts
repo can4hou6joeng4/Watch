@@ -187,6 +187,23 @@ function ephemeralStoreWarning(subject: string): string {
   );
 }
 
+/**
+ * `--cwd` 本身不可用时，列表正文那句「没发现」是**假结论**。
+ *
+ * 各 provider 都按原生记录的 cwd 字符串精确比较，`--cwd` 只做 `path.resolve()`：路径不存在 / 不是目录
+ * 时必然全 0。而 `status` / `sessions` / `recent` / `search` 的空结果分支只看得到「零条」，
+ * 于是一边警告「路径不对会全部显示 0」，一边在正文里断言「这个目录没会话」并让人「先开聊」——
+ * `--cwd` 指向一个不存在的目录时这一步根本做不到，指向一个普通文件时更荒谬（那句警告自己都写着
+ * 「结果不代表任何真实项目」）。原因（按 errno 分档）已由 `cwdProblem()` 那条警告说清，
+ * 这里只负责把结论改对、给出真正能解决的下一步。
+ */
+function cwdUnusableConclusion(subject: string, consequence: string): string {
+  return (
+    `${subject}；但 --cwd 指向的目录不可用（原因见上方警告），${consequence}——` +
+    '先确认并修正 --cwd（换成可用的项目目录，或修好它的访问权限）再重试'
+  );
+}
+
 function fmtTime(ms: number): string {
   return new Date(ms).toISOString();
 }
@@ -519,11 +536,18 @@ async function cmdStatus(cwd: string, json: boolean, chain?: string): Promise<vo
     // 目录里没有可列出的原生会话，但链上明明绑着一个（链尾）：文件被删、被同名目录占住或读不出来。
     // 以前这里照样说「请先在任一受支持的 Agent 里开聊」，上一行警告刚说链尾文件取不到、
     // 下一行就让人去开新会话，用户会照做，原链于是白白断掉。
-    // 具体原因已由警告给出（三档措辞不同），这里只指认链尾并给下一步
+    // 具体原因已由警告给出（三档措辞不同），这里只指认链尾并给下一步。
+    // 排在 `--cwd` 不可用之前：项目目录被删掉、链尾会话文件却还在 ~/.claude 下是最常见的一种，
+    // 这时「链尾记录的是谁、该修哪个文件」比「--cwd 写错了」更对症（两句警告都会打出来）
     console.log(
       `未发现可列出的原生会话；链尾记录的是 ${chainTip.provider} 会话 ${chainTip.ref.sessionId}，` +
         `其文件当前不可用（原因见上方警告）——可先恢复该文件，或 ${rebindHint(chainTip.provider)}`,
     );
+  } else if (!tips.length && cwdIssue) {
+    // 路径本身不可用（不存在 / 不是目录 / 无权访问）：零结果与「这个目录里有没有会话」无关。
+    // 以前这里照样说「请先在任一受支持的 Agent 里开聊」，而那个目录根本不存在——
+    // 上一行警告刚说「路径不对会全部显示 0」，下一行就让人去开新会话，方向完全错了
+    console.log(cwdUnusableConclusion('未发现可列出的原生会话', '本次结果不能说明这个目录里有没有会话'));
   } else if (!tips.length && unreadable.length) {
     // 有几家的原生存储根本没读成：此时「未发现会话」只是「没列出来」，不是「这个目录没聊过」。
     // 上一行警告刚说「无法确认是否存在」，下一行却让人去开新会话，用户会以为旧会话已经没了
@@ -1161,14 +1185,18 @@ async function cmdSessions(cwd: string, json: boolean, chain?: string): Promise<
     }
     for (const warning of warnings) console.error(`警告: ${warning}`);
     if (!result.length) {
-      // 有 provider 没读成时，「未发现会话」只是「没列出来」：下面那行 stderr 的「未读取」
-      // 太容易在长输出里被漏掉，而 stdout 那句结论会留下来被当成事实
-      console.log(
-        unavailable.length
-          ? `未发现会话；但 ${unavailable.join(' / ')} 没能读取（原因见上方警告），无法确认这个目录里是否还有它们的会话——先修好这些存储再重试`
-          : // 归属读不出来的那些同样不在任何目录的列表里：空列表不是「这个目录没聊过」的证据
-            (unattributableEmptyNote(unattributableStats) ?? `未发现会话（${noSessionHint()}）`),
-      );
+      // `--cwd` 本身不可用时，零结果是路径造成的，不是「这个目录没聊过」：与 status 同一口径，
+      // 且排在「哪几家没读成」之前——路径全错时「修好这些存储」不是能解决问题的下一步
+      if (cwdIssue) {
+        console.log(cwdUnusableConclusion('未发现可列出的原生会话', '本次结果不能说明这个目录里有没有会话'));
+      } else if (unavailable.length) {
+        console.log(
+          `未发现会话；但 ${unavailable.join(' / ')} 没能读取（原因见上方警告），无法确认这个目录里是否还有它们的会话——先修好这些存储再重试`,
+        );
+      } else {
+        // 归属读不出来的那些同样不在任何目录的列表里：空列表不是「这个目录没聊过」的证据
+        console.log(unattributableEmptyNote(unattributableStats) ?? `未发现会话（${noSessionHint()}）`);
+      }
       if (unavailable.length) console.error(`未读取: ${unavailable.join('、')}（原生存储读取失败）`);
       return;
     }
@@ -1334,12 +1362,17 @@ async function cmdRecent(cwd: string, json: boolean, limit: number = 8, cwdGiven
     console.error(`提示: 只显示最近 ${final.length} 条，另有 ${results.length - final.length} 条更早的会话未列出（--limit 可调，最大 50）`);
   }
   if (!final.length) {
-    // 与 sessions / status 同一口径：有来源没读成时说「暂无记录」会被当成「这个目录真的没聊过」
-    console.log(
-      unavailable.length
-        ? `暂无最近会话记录；但 ${unavailable.join(' / ')} 没能读取（原因见上方警告），无法确认近期是否有它们的会话——先修好这些存储再重试`
-        : (unattributableEmptyNote(unattributableStats) ?? '暂无最近会话记录'),
-    );
+    // 与 sessions / status 同一口径：`--cwd` 本身不可用时零结果与「近期有没有会话」无关，
+    // 先改结论；有来源没读成时才说「暂无记录」会被当成「这个目录真的没聊过」
+    if (cwdIssue) {
+      console.log(cwdUnusableConclusion('暂无最近会话记录', '本次结果不能说明这个目录近期有没有会话'));
+    } else if (unavailable.length) {
+      console.log(
+        `暂无最近会话记录；但 ${unavailable.join(' / ')} 没能读取（原因见上方警告），无法确认近期是否有它们的会话——先修好这些存储再重试`,
+      );
+    } else {
+      console.log(unattributableEmptyNote(unattributableStats) ?? '暂无最近会话记录');
+    }
     return;
   }
   for (const s of final) {
@@ -2316,8 +2349,14 @@ async function cmdSearch(cwd: string, json: boolean, query: string): Promise<voi
     for (const warning of warnings) console.error(`警告: ${warning}`);
     if (!hits.length) {
       // 正文先说清范围（搜索只覆盖这一个目录），再说有没有别处线索——
-      // 单打一句「无结果」会被当成「这台机器上没有」
-      console.log(`无结果：本目录没有匹配（搜索按目录限定，只查了 ${cwd}）`);
+      // 单打一句「无结果」会被当成「这台机器上没有」。
+      // `--cwd` 本身不可用时连「这个目录」都不存在：改成说清这次搜索没覆盖到东西，
+      // 否则「本目录没有匹配」会被当成「那句话没聊过」（原因已在 warnings 里）
+      console.log(
+        cwdIssue
+          ? cwdUnusableConclusion('无结果', '本次搜索不能说明这个目录里有没有匹配')
+          : `无结果：本目录没有匹配（搜索按目录限定，只查了 ${cwd}）`,
+      );
       for (const note of notes) console.log(note);
       return;
     }
