@@ -853,13 +853,13 @@ async function cmdAdopt(
         }
         if (sameDirAs) {
           throw new Error(
-            `会话 ${sessionId} 在同一个目录的另一种写法下: ${sameDirAs}；adopt 按 cwd 绑定、按字符串精确匹配，` +
+            `会话 ${escapeControlChars(sessionId)} 在同一个目录的另一种写法下: ${escapeControlChars(sameDirAs)}；adopt 按 cwd 绑定、按字符串精确匹配，` +
               `把 --cwd 换成 ${sameDirAs} 重跑同一条命令（其余参数照旧）。本次未写入任何内容`,
           );
         }
         if (elsewhere) {
           throw new Error(
-            `会话 ${sessionId} 属于另一个目录: ${elsewhere}；adopt 按 cwd 绑定，请用 --cwd ${elsewhere}。本次未写入任何内容`,
+            `会话 ${escapeControlChars(sessionId)} 属于另一个目录: ${escapeControlChars(elsewhere)}；adopt 按 cwd 绑定，请用 --cwd ${elsewhere}。本次未写入任何内容`,
           );
         }
         // id 属于另一家 provider 时，「在当前目录找不到」会被读成 id 写错：adopt <provider>
@@ -883,7 +883,7 @@ async function cmdAdopt(
           }
           if (found) {
             throw new Error(
-              `会话 ${sessionId} 属于 ${other.id}，不是 ${providerId}；请改用 watch adopt ${other.id} --session ${sessionId}${
+              `会话 ${escapeControlChars(sessionId)} 属于 ${other.id}，不是 ${providerId}；请改用 watch adopt ${other.id} --session ${escapeControlChars(sessionId)}${
                 found.ref.cwd === cwd
                   ? ''
                   : sameDirectorySync(cwd, found.ref.cwd)
@@ -918,8 +918,8 @@ async function cmdAdopt(
         throw new Error(
           (chainUse ? `${chainUse}；` : '') +
             (capped
-              ? `在当前目录最近 ${all.length} 个会话里找不到: ${sessionId}（${adapter.id} 列表上限 ${cap}，更早的会话不在其中）`
-              : `在当前目录找不到会话: ${sessionId}`) +
+              ? `在当前目录最近 ${all.length} 个会话里找不到: ${escapeControlChars(sessionId)}（${adapter.id} 列表上限 ${cap}，更早的会话不在其中）`
+              : `在当前目录找不到会话: ${escapeControlChars(sessionId)}`) +
             `；${LOOKUP_NEXT_STEP}。本次未写入任何内容` +
             lookupNote +
             othersNote +

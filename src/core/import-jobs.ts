@@ -92,7 +92,7 @@ export class ImportJobs {
     // 直接跑 CLI 时 id 是人眼从 prepare 输出里复制的：格式不对与「计划不存在」要分开说，
     // 否则用户会去翻日志找一份根本不存在的计划
     if (!/^[a-f0-9]{64}$/.test(id)) {
-      throw new Error(`导入计划 id 需要 64 位小写十六进制（sha256），收到: ${id}`);
+      throw new Error(`导入计划 id 需要 64 位小写十六进制（sha256），收到: ${escapeControlChars(id)}`);
     }
     return path.join(this.root, id);
   }

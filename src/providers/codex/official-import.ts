@@ -159,7 +159,7 @@ async function locateClaudeSessionElsewhere(
  */
 function notInProjectMessage(sourceId: string, cwd: string, found: ElsewhereSession): string {
   const what =
-    `来源会话不属于指定的项目目录：在 ${escapeControlChars(cwd)} 下没有找到 id 为 ${sourceId} 的 Claude Code 会话` +
+    `来源会话不属于指定的项目目录：在 ${escapeControlChars(cwd)} 下没有找到 id 为 ${escapeControlChars(sourceId)} 的 Claude Code 会话` +
     '（导入按目录定位，只在这个项目的会话目录里找）';
   switch (found.kind) {
     case 'same-directory':
@@ -240,7 +240,7 @@ export class OfficialCodexImport {
   async prepare(sourceId: string, cwd: string, options: { desktopProject?: boolean } = {}) {
     // 两件事分开说：--cwd 是否绝对路径这条在 runImportCodex 里已先拦过，到这里多半是来源 id 写错，
     // 合成一句「需要 Claude 会话 UUID 与绝对路径 --cwd」会把人引去核对一个本来没问题的路径。
-    if (!UUID.test(sourceId)) throw new Error(`来源会话 id 需要 Claude 会话 UUID（8-4-4-4-12 位十六进制），收到: ${sourceId}；可用 watch sessions --cwd <目录> 核对`);
+    if (!UUID.test(sourceId)) throw new Error(`来源会话 id 需要 Claude 会话 UUID（8-4-4-4-12 位十六进制），收到: ${escapeControlChars(sourceId)}；可用 watch sessions --cwd <目录> 核对`);
     if (!path.isAbsolute(cwd)) throw new Error(`--cwd 需要绝对路径，收到: ${escapeControlChars(cwd)}`);
     const version = await this.deps.version();
     if (version !== SUPPORTED_VERSION) throw new Error(`实验性导入路径目前只支持 ${SUPPORTED_VERSION}`);

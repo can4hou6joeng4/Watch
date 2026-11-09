@@ -1,3 +1,4 @@
+import { escapeControlChars } from '../core/display.js';
 import type { ProviderAdapter } from './adapter.js';
 import type { ProviderInfo } from '../core/types.js';
 import { claudeAdapter } from './claude/index.js';
@@ -32,7 +33,8 @@ export function listAdapters(): ProviderAdapter[] {
  */
 export function unknownProviderMessage(id: string, adapters: ProviderAdapter[] = listAdapters()): string {
   const known = adapters.map((a) => a.id).join(' / ');
-  return `未知 provider: ${id}${known ? `；可用: ${known}` : ''}`;
+  // 这个 id 是手输 / 粘贴的：控制字符原样进终端能改颜色、改窗口标题、清屏（见 `src/core/display.ts`）
+  return `未知 provider: ${escapeControlChars(id)}${known ? `；可用: ${known}` : ''}`;
 }
 
 /**

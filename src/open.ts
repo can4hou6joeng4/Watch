@@ -398,8 +398,8 @@ export async function openSession(
       return {
         ok: false,
         error:
-          `会话 ${targetId} 属于 ${elsewhere.owner}，不是 ${provider}；` +
-          `请用 watch open ${targetId} --provider ${elsewhere.owner}，或去掉 --provider 按 id 全局反查${detail}`,
+          `会话 ${escapeControlChars(targetId)} 属于 ${elsewhere.owner}，不是 ${provider}；` +
+          `请用 watch open ${escapeControlChars(targetId)} --provider ${elsewhere.owner}，或去掉 --provider 按 id 全局反查${detail}`,
       };
     }
     const unchecked = elsewhere.unreadable.length
@@ -418,7 +418,7 @@ export async function openSession(
     }
     return {
       ok: false,
-      error: `${chainUse ? `${chainUse}；` : ''}未找到会话: ${targetId}${provider ? `（provider=${provider}）` : ''}。请确认 id 正确且对应 CLI 已安装登录。${LOOKUP_NEXT_STEP}${unchecked ? `。${unchecked}` : ''}${detail}`,
+      error: `${chainUse ? `${chainUse}；` : ''}未找到会话: ${escapeControlChars(targetId)}${provider ? `（provider=${provider}）` : ''}。请确认 id 正确且对应 CLI 已安装登录。${LOOKUP_NEXT_STEP}${unchecked ? `。${unchecked}` : ''}${detail}`,
     };
   }
   const notes: string[] = [];
@@ -431,7 +431,7 @@ export async function openSession(
   // 来源与目标是同一个会话：diffTurns 必然为空，旧实现会报「已全部包含在自身中，无需并入」，
   // 看着像成功、实际什么都没做。这是参数错误，直接说清楚。
   if (from && from === targetId) {
-    return { ok: false, error: `--from 与 <session-id> 是同一个会话: ${targetId}；请把来源换成另一侧的会话` };
+    return { ok: false, error: `--from 与 <session-id> 是同一个会话: ${escapeControlChars(targetId)}；请把来源换成另一侧的会话` };
   }
 
   if (from) {
@@ -458,8 +458,8 @@ export async function openSession(
       return {
         ok: false,
         error: chainUse
-          ? `未找到来源会话: ${from}；${chainUse}${detail}`
-          : `未找到来源会话: ${from}。请确认 id 正确，且该会话属于已安装登录的 CLI；${LOOKUP_NEXT_STEP}${detail}`,
+          ? `未找到来源会话: ${escapeControlChars(from)}；${chainUse}${detail}`
+          : `未找到来源会话: ${escapeControlChars(from)}。请确认 id 正确，且该会话属于已安装登录的 CLI；${LOOKUP_NEXT_STEP}${detail}`,
       };
     }
     try {
@@ -528,12 +528,12 @@ export async function openSession(
       if (sourceZeroByte) {
         warnings.push(
           `来源会话 ${source.found.ref.sessionId}（${source.adapter.displayName}）的${sourceZeroByte}；` +
-            `这次没有任何可并入的内容，目标会话 ${targetId} 未被改动——如果这条会话本该有内容，先从备份恢复该文件再重试（Watch 不会替你重建历史）`,
+            `这次没有任何可并入的内容，目标会话 ${escapeControlChars(targetId)} 未被改动——如果这条会话本该有内容，先从备份恢复该文件再重试（Watch 不会替你重建历史）`,
         );
       }
       if (targetZeroByte) {
         warnings.push(
-          `目标会话 ${targetId}（${target.adapter.displayName}）的${targetZeroByte}；` +
+          `目标会话 ${escapeControlChars(targetId)}（${target.adapter.displayName}）的${targetZeroByte}；` +
             `它原有的历史已经没了，本次并入的只有来源的内容——如果目标会话本该有内容，先从备份恢复该文件再重试（Watch 不会替你重建历史）`,
         );
       }
@@ -552,14 +552,14 @@ export async function openSession(
       const dstDigest = (await target.adapter.contentFingerprint?.(target.found.ref)) ?? null;
       const outgoing = diffTurns(srcTurns, dstTurns);
       // 目标就是这条即将 resume 的会话：它自己没收尾要说，与来源那一侧各说各的
-      warnResumeTargetUnfinished(dstTurns, `目标会话 ${targetId}（${target.adapter.displayName}）`, outgoing.length, (msg) =>
+      warnResumeTargetUnfinished(dstTurns, `目标会话 ${escapeControlChars(targetId)}（${target.adapter.displayName}）`, outgoing.length, (msg) =>
         warnings.push(msg),
       );
       if (outgoing.length === 0) {
         notes.push(
           sourceZeroByte
-            ? `${from} 的会话文件是空的（内容已丢失），没有可并入的内容`
-            : `${from} 的内容已全部包含在 ${targetId} 中，无需并入`,
+            ? `${escapeControlChars(from)} 的会话文件是空的（内容已丢失），没有可并入的内容`
+            : `${escapeControlChars(from)} 的内容已全部包含在 ${escapeControlChars(targetId)} 中，无需并入`,
         );
       } else {
         const dedup = dedupeCallEvents(outgoing);
@@ -572,13 +572,13 @@ export async function openSession(
           await assertTargetUnchanged(target.adapter, target.found.ref, dstDigest, '并入');
           const newRef = await target.adapter.importTurns(dedup, target.found.ref.cwd, target.found.ref);
           merged = dedup.length;
-          notes.push(`已把 ${from} 的 ${merged} 轮新内容并入 ${target.adapter.displayName} 会话 ${newRef.sessionId}`);
+          notes.push(`已把 ${escapeControlChars(from)} 的 ${merged} 轮新内容并入 ${target.adapter.displayName} 会话 ${newRef.sessionId}`);
           // 两个会话记录的工作目录不同：内容来自另一个项目，却写进了这一侧的会话。
           // 项目目录被移动 / 改名时这是对的（旧记录里的 cwd 已失效），但更常见的成因是 id 抄错。
           // 以前这里零披露——`--json` 连 warnings 都没有，用户不会发现自己刚把别处的项目并了进来。
           if (normalizePath(sourceCwd) !== normalizePath(targetCwd)) {
             warnings.push(
-              `来源会话 ${from}（${source.adapter.displayName}）记录的工作目录是 ${sourceCwd}，与目标会话 ${targetId} 的 ${targetCwd} 不同：这 ${merged} 轮内容现在在目标那一侧，resume 后会在 ${targetCwd} 里继续` +
+              `来源会话 ${escapeControlChars(from)}（${source.adapter.displayName}）记录的工作目录是 ${escapeControlChars(sourceCwd)}，与目标会话 ${escapeControlChars(targetId)} 的 ${escapeControlChars(targetCwd)} 不同：这 ${merged} 轮内容现在在目标那一侧，resume 后会在 ${escapeControlChars(targetCwd)} 里继续` +
                 `；若只是抄错了会话 id，先核对来源会话是否本来就该并进来——要把某个会话带到它自己那个目录继续，用 watch open <会话 id> --to <provider>（目标会在来源目录里新建）`,
             );
           }
@@ -838,7 +838,7 @@ async function planOpenInProvider(
     // 更看不出这次有没有已经往目标写进去（决策顺序里来源先解析，所以确实什么都没写）
     return {
       ok: false,
-      error: `${chainUse ? `${chainUse}；` : ''}未找到来源会话: ${sourceId}${detail}。请确认 id 正确且该会话属于已安装登录的 CLI；${LOOKUP_NEXT_STEP}。本次未写入任何内容`,
+      error: `${chainUse ? `${chainUse}；` : ''}未找到来源会话: ${escapeControlChars(sourceId)}${detail}。请确认 id 正确且该会话属于已安装登录的 CLI；${LOOKUP_NEXT_STEP}。本次未写入任何内容`,
     };
   }
   const cwd = source.found.ref.cwd;
@@ -888,21 +888,21 @@ async function planOpenInProvider(
     // 解析不了来源就没有可转入的内容；按错误返回，别让异常穿透到 openInProvider 的调用方
     return {
       ok: false,
-      error: `来源会话 ${sourceId} 读取失败：${describeReadFailureOrSelf(error)}；本次未写入任何内容`,
+      error: `来源会话 ${escapeControlChars(sourceId)} 读取失败：${describeReadFailureOrSelf(error)}；本次未写入任何内容`,
     };
   }
   // parse 跳过坏行不会报错，round-trip 也比的是解析结果：不扫一遍就会把「少了几轮」当完整转入
   const badSourceLines = await countUnparsableJsonLines(sourceRef.filePath);
   if (badSourceLines > 0) {
     diagnostics?.push(
-      `来源会话 ${sourceId} 有 ${badSourceLines} 行无法解析（截断或损坏），已跳过；转入内容可能不完整`,
+      `来源会话 ${escapeControlChars(sourceId)} 有 ${badSourceLines} 行无法解析（截断或损坏），已跳过；转入内容可能不完整`,
     );
   }
   const outgoing = dedupeCallEvents(turns);
   // 来源停在做了一半的工具调用上：转入后目标会话在那一轮同样不完整，预检与写入都要说
   warnUnfinishedTurns(
     turns,
-    `来源会话 ${sourceId}（${source.adapter.displayName}）`,
+    `来源会话 ${escapeControlChars(sourceId)}（${source.adapter.displayName}）`,
     (msg) => diagnostics?.push(msg),
   );
   if (outgoing.length === 0) {
@@ -911,9 +911,9 @@ async function planOpenInProvider(
     // 状态从 284 轮起已经会说「0 字节，内容已丢失」+ 两条可照抄的路径。
     const empty = await zeroByteSessionReason(sourceRef);
     const lead = empty
-      ? `来源会话 ${sourceId}（${source.adapter.displayName}）的${empty}；没有可转入的内容（0 轮）。` +
+      ? `来源会话 ${escapeControlChars(sourceId)}（${source.adapter.displayName}）的${empty}；没有可转入的内容（0 轮）。` +
         `本次未写入任何内容——如果这条会话本该有内容，先从备份恢复该文件（Watch 不会替你重建历史）再重试`
-      : `来源会话 ${sourceId} 没有可转入的内容（0 轮）；本次未写入任何内容`;
+      : `来源会话 ${escapeControlChars(sourceId)} 没有可转入的内容（0 轮）；本次未写入任何内容`;
     return {
       ok: false,
       error:

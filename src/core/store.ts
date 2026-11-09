@@ -119,7 +119,7 @@ export function searchElsewhereHint(rows: SearchElsewhere[], cwd: string, query:
   const more = rows.length > 3 ? ` 等 ${rows.length} 个目录` : '';
   return (
     `本地搜索索引里其它目录有匹配：${shown}${more}；` +
-    `搜索按目录限定（--cwd ${escapeControlChars(cwd)} 只查这一条），要看那个目录里的命中，用 watch search ${query} --cwd <那个目录>`
+    `搜索按目录限定（--cwd ${escapeControlChars(cwd)} 只查这一条），要看那个目录里的命中，用 watch search ${escapeControlChars(query)} --cwd <那个目录>`
   );
 }
 
@@ -139,7 +139,7 @@ export function searchSameDirectoryHint(rows: SearchElsewhere[], cwd: string, qu
   const typed = escapeControlChars(target);
   return (
     `本地搜索索引里，同一个目录的另一种写法下有匹配：${shown}${more}；` +
-    `搜索按 --cwd 精确匹配（${escapeControlChars(cwd)} 一条都查不到），把 --cwd 换成 ${typed} 重跑：watch search ${query} --cwd ${typed}` +
+    `搜索按 --cwd 精确匹配（${escapeControlChars(cwd)} 一条都查不到），把 --cwd 换成 ${typed} 重跑：watch search ${escapeControlChars(query)} --cwd ${typed}` +
     cwdControlCharsNote(target)
   );
 }

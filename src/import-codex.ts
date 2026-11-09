@@ -138,15 +138,15 @@ export async function runImportCodex(args: string[]): Promise<void> {
       }
       if (missing.length) {
         const example = action === 'prepare'
-          ? `watch import-codex prepare ${id} --cwd /绝对路径 --experimental`
-          : `watch import-codex project-prepare ${id} --project <uuid> --experimental`;
+          ? `watch import-codex prepare ${escapeControlChars(id)} --cwd /绝对路径 --experimental`
+          : `watch import-codex project-prepare ${escapeControlChars(id)} --project <uuid> --experimental`;
         throw new Error(`${action} 缺少必需的参数：${missing.join('、')}；例：${example}`);
       }
     } else if (!values.experimental && action !== 'status' && action !== 'project-status') {
       // 只剩 confirm / project-confirm 走到这里：只缺 --experimental 一项，谈不上「改两轮」，
       // 但仍要给一句可以直接照着敲的写法——「请先阅读 docs/import-codex.md」等于没说下一步
       throw new Error(
-        `${action} 需要 --experimental（写操作必须显式确认）；例：watch import-codex ${action} ${id} --experimental`,
+        `${action} 需要 --experimental（写操作必须显式确认）；例：watch import-codex ${action} ${escapeControlChars(id)} --experimental`,
       );
     }
     // 参数用错子命令时说「参数用错」，不能说计划状态：`status` 是只读的，连计划都还没找到，
@@ -154,17 +154,17 @@ export async function runImportCodex(args: string[]): Promise<void> {
     // 每条都指名「哪个子命令不接受哪个参数」并给出可照抄的下一步。
     if (action !== 'prepare' && values.cwd) {
       throw new Error(
-        `import-codex ${action} 不接受 --cwd（只有 prepare 用它绑定工作目录，其他子命令的计划在 prepare 时就已确定目录）；去掉 --cwd 重跑：watch import-codex ${action} ${id}`,
+        `import-codex ${action} 不接受 --cwd（只有 prepare 用它绑定工作目录，其他子命令的计划在 prepare 时就已确定目录）；去掉 --cwd 重跑：watch import-codex ${action} ${escapeControlChars(id)}`,
       );
     }
     if (action !== 'prepare' && values['desktop-project']) {
       throw new Error(
-        `import-codex ${action} 不接受 --desktop-project（只有 prepare 接受）；去掉它重跑：watch import-codex ${action} ${id}`,
+        `import-codex ${action} 不接受 --desktop-project（只有 prepare 接受）；去掉它重跑：watch import-codex ${action} ${escapeControlChars(id)}`,
       );
     }
     if (action !== 'project-prepare' && project) {
       throw new Error(
-        `import-codex ${action} 不接受 --project（只有 project-prepare 接受）；要按项目导入请改用 watch import-codex project-prepare ${id} --project <UUID> --experimental，否则去掉 --project 重跑`,
+        `import-codex ${action} 不接受 --project（只有 project-prepare 接受）；要按项目导入请改用 watch import-codex project-prepare ${escapeControlChars(id)} --project <UUID> --experimental，否则去掉 --project 重跑`,
       );
     }
     // `--cwd` 的写法归一只发生在主 CLI 的 `parseArgs` 里；这条路径自己解析参数，以前把原串直接传给
