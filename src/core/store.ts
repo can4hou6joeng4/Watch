@@ -559,6 +559,27 @@ export class Store {
     return rows.map(rowToSessionLocation);
   }
 
+  /**
+   * 按 id 前缀在本地映射里找候选：反查失败时回答「是不是只抄了前半截」。
+   *
+   * 只查 `session_locations`（Watch 反查过的会话），所以「没有候选」**不代表**这台机器上没有——
+   * 文案必须带上这句，否则又是一句把「没记过」讲成「不存在」的假结论。
+   * 长度 < 4 或带路径分隔符的输入直接返回空：那不是前缀，是一次写错。
+   */
+  findSessionIdsByPrefix(prefix: string, limit = 3): { provider: string; sessionId: string; cwd: string }[] {
+    const p = prefix.trim();
+    if (p.length < 4 || !/^[0-9A-Za-z_][0-9A-Za-z_-]*$/.test(p)) return [];
+    // `_` 是 LIKE 的单字符通配符，而 OpenCode 的 id 正以 `ses_` 开头：不转义就会把
+    // `ses_abc` 匹配成 `ses1abc…` 这类无关 id，给出错误的「完整 id」
+    const like = `${p.replace(/[\\%_]/g, (c) => `\\${c}`)}%`;
+    const rows = this.db
+      .prepare(
+        `SELECT provider, session_id, cwd FROM session_locations WHERE session_id LIKE ? ESCAPE '\\' ORDER BY last_seen_at DESC LIMIT ?`,
+      )
+      .all(like, limit) as { provider: string; session_id: string; cwd: string }[];
+    return rows.map((row) => ({ provider: row.provider, sessionId: row.session_id, cwd: row.cwd }));
+  }
+
   reindexSession(opts: {
     cwd: string;
     sessionId: string;

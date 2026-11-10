@@ -327,6 +327,38 @@ function fileReadReason(error: unknown): string {
  * 或干脆什么都不说，而 `sessions` / `status` / `switch` 从 275–284 轮起都会说「0 字节，内容已丢失」。
  * 判据仍只有一处（`probeSessionReadable()` + `isEmptySessionFileReason()`）。
  */
+/**
+ * 「未找到会话」时能直接照着改的下一步：路径当成了 id、或者只抄了 id 的前半截。
+ *
+ * 这两种都是抄写问题，不是「会话没了」：给一句「确认 id 正确」等于让用户对着同一串东西
+ * 再看一遍。前缀命中只能查本地映射（Watch 反查过的会话），所以文案必须说明它不完整，
+ * 不能把「没记过」讲成「只有这些」。
+ */
+function idTypoHint(mapping: Store | null, raw: string): string | null {
+  if (raw.includes('/') || raw.includes('\\')) {
+    return (
+      '你给的是路径，不是 session id：watch open 只认各家 CLI 生成的会话 id' +
+      '（Claude Code / Codex 是 uuid，OpenCode 以 ses_ 开头），先按 watch sessions 里那一行 id 来开'
+    );
+  }
+  if (!mapping) return null;
+  let hits: { provider: string; sessionId: string; cwd: string }[];
+  try {
+    hits = mapping.findSessionIdsByPrefix(raw, 3);
+  } catch {
+    // 映射读不出来不改变「未找到」这个结论，正文已有的库提示足够
+    return null;
+  }
+  if (!hits.length) return null;
+  const list = hits
+    .map((h) => `${h.sessionId}（${h.provider}，${escapeControlChars(h.cwd)}）`)
+    .join('；');
+  return (
+    `你给的更像前缀：本地映射里有 ${hits.length} 个会话 id 以它开头——${list}；` +
+    'watch open 要完整 id，可直接照抄上面这个。映射只记 Watch 反查过的会话，可能还有别的'
+  );
+}
+
 async function zeroByteSessionReason(ref: SessionRef): Promise<string | null> {
   const reason = await probeSessionReadable(ref.filePath);
   return reason && isEmptySessionFileReason(reason) ? reason : null;
@@ -416,9 +448,12 @@ export async function openSession(
         error: `${chainUse ? `${chainUse}；` : ''}${headline}${unchecked ? `。${unchecked}` : ''}${extra}`,
       };
     }
+    // 抄写问题（拿路径当 id、只抄了前缀）单独给下一步：这一档 id 确实不存在，
+    // 但「确认 id 正确」帮不上忙——用户需要的是去哪儿把那串完整 id 找回来
+    const typo = idTypoHint(mapping, targetId);
     return {
       ok: false,
-      error: `${chainUse ? `${chainUse}；` : ''}未找到会话: ${escapeControlChars(targetId)}${provider ? `（provider=${provider}）` : ''}。请确认 id 正确且对应 CLI 已安装登录。${LOOKUP_NEXT_STEP}${unchecked ? `。${unchecked}` : ''}${detail}`,
+      error: `${chainUse ? `${chainUse}；` : ''}未找到会话: ${escapeControlChars(targetId)}${provider ? `（provider=${provider}）` : ''}。${typo ? `${typo}。` : ''}请确认 id 正确且对应 CLI 已安装登录。${LOOKUP_NEXT_STEP}${unchecked ? `。${unchecked}` : ''}${detail}`,
     };
   }
   const notes: string[] = [];
@@ -455,11 +490,13 @@ export async function openSession(
           error: `${chainUse ? `${chainUse}；` : ''}${headline}${extra}；本次未写入任何内容`,
         };
       }
+      // 与目标侧同一套抄写提示：来源侧同样会拿到路径或半截 id
+      const typo = idTypoHint(mapping, from);
       return {
         ok: false,
         error: chainUse
-          ? `未找到来源会话: ${escapeControlChars(from)}；${chainUse}${detail}`
-          : `未找到来源会话: ${escapeControlChars(from)}。请确认 id 正确，且该会话属于已安装登录的 CLI；${LOOKUP_NEXT_STEP}${detail}`,
+          ? `未找到来源会话: ${escapeControlChars(from)}；${chainUse}${typo ? `；${typo}` : ''}${detail}`
+          : `未找到来源会话: ${escapeControlChars(from)}。${typo ? `${typo}。` : ''}请确认 id 正确，且该会话属于已安装登录的 CLI；${LOOKUP_NEXT_STEP}${detail}`,
       };
     }
     // 来源快照：parse 之前取、写完之后再比（下面那个 catch 会提前返回，所以声明在它外面）
@@ -852,9 +889,10 @@ async function planOpenInProvider(
     }
     // 这是**来源**那一侧：命令还给了 --to <provider>，只说「未找到会话」看不出是哪一侧没找到，
     // 更看不出这次有没有已经往目标写进去（决策顺序里来源先解析，所以确实什么都没写）
+    const typo = idTypoHint(mapping, sourceId);
     return {
       ok: false,
-      error: `${chainUse ? `${chainUse}；` : ''}未找到来源会话: ${escapeControlChars(sourceId)}${detail}。请确认 id 正确且该会话属于已安装登录的 CLI；${LOOKUP_NEXT_STEP}。本次未写入任何内容`,
+      error: `${chainUse ? `${chainUse}；` : ''}未找到来源会话: ${escapeControlChars(sourceId)}${detail}。${typo ? `${typo}。` : ''}请确认 id 正确且该会话属于已安装登录的 CLI；${LOOKUP_NEXT_STEP}。本次未写入任何内容`,
     };
   }
   const cwd = source.found.ref.cwd;
