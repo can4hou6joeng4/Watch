@@ -40,7 +40,10 @@ export class CodexImportRpc implements ImportRpc {
       resolve();
     }));
     child.once('error', () => this.fail(new Error('无法启动 Codex app-server')));
-    child.stdin.on('error', () => this.fail(new Error('Codex 输入通道已关闭')));
+    // 两条通道的失败都要点名 app-server：这条错误会原样进 `import-codex confirm` 的
+    // `{ ok:false, error }` 与桌面卡片，只说「输入通道已关闭」用户看不出是本机 codex
+    // 进程提前退出（版本不对 / 包装脚本直接 exit 1），也分不清该修哪一边。
+    child.stdin.on('error', () => this.fail(new Error('Codex app-server 的输入通道已关闭（写入时进程已退出）')));
     // Drain diagnostics without exposing native configuration or session text.
     child.stderr.resume();
     this.lines = createInterface({ input: child.stdout });
@@ -107,7 +110,7 @@ export class CodexImportRpc implements ImportRpc {
       try {
         this.child.stdin.write(JSON.stringify({ id, method, params }) + '\n');
       } catch {
-        this.fail(new Error('无法向 Codex 发送请求'));
+        this.fail(new Error('无法向 Codex app-server 发送请求'));
       }
     });
   }
