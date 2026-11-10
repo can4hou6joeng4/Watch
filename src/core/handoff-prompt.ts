@@ -149,7 +149,7 @@ function formatUsage(usage: TokenUsage | null | undefined): string | null {
   return `in=${usage.inputTokens} out=${usage.outputTokens}`;
 }
 
-type TimeRange = { text: string; startUnusable: boolean };
+type TimeRange = { text: string; startUnusable: boolean; note?: string };
 
 /**
  * 时间范围：只有一端可读时写那一端，两端都没有就不写这一行（不编造时间）。
@@ -159,16 +159,27 @@ type TimeRange = { text: string; startUnusable: boolean };
  * `created_at` 做锚点、缺失时回退 `now()`；文件早已写完时这个「起点」必然晚于文件 mtime，
  * 直接印出来就是一行 `2026-11-10T04:06:59Z → 2026-11-10T04:06:59Z` 倒挂的假范围。
  * 端点顺序是可验证的事实，倒挂说明起点是占位值——此时只保留终点并让调用方披露。
+ *
+ * **两端来源不同，必须写明**：起点来自第一条记录的时间戳，终点来自会话的「更新时间」
+ * （多数适配器取文件 mtime；grok 可能取 `summary.json` 的 `updated_at`）。文档会被复制走，
+ * 「时间范围」会被读成「这条会话活跃到那时」——文件被 `cp`、备份同步或 watchdog 触碰过时
+ * 终点会明显晚于最后一条记录（2026-11-10 dogfood：会话最后一条记录 06:00:05，范围终点是
+ * 06:07:51 的文件 mtime）。两端都是真实时间戳也不改变这一点，所以照实说来源。
  */
 function formatTimeRange(startedAt?: number, updatedAt?: number): TimeRange | null {
   const start = startedAt !== undefined && Number.isFinite(startedAt) ? new Date(startedAt).toISOString() : null;
   const end = updatedAt !== undefined && Number.isFinite(updatedAt) ? new Date(updatedAt).toISOString() : null;
-  if (start && end && start !== end) {
+  if (start && end) {
     if (Date.parse(start) > Date.parse(end)) return { text: end, startUnusable: true };
-    return { text: `${start} → ${end}`, startUnusable: false };
+    if (start === end) return { text: start, startUnusable: false, note: '起点与终点相同，短会话或时间戳精度只到秒' };
+    return {
+      text: `${start} → ${end}`,
+      startUnusable: false,
+      note: '起点取首条记录的时间戳，终点取来源的更新时间，可能是文件修改时间而不是最后一条记录',
+    };
   }
-  const only = start ?? end;
-  return only ? { text: only, startUnusable: false } : null;
+  if (start) return { text: start, startUnusable: false, note: '只读到首条记录的时间戳' };
+  return end ? { text: end, startUnusable: false, note: '没有读到记录里的时间戳，这里取来源的更新时间' } : null;
 }
 
 /**
@@ -334,7 +345,7 @@ export function buildHandoffPrompt(
     lines.push(
       range.startUnusable
         ? `- 时间范围：… → ${range.text}（起始时间不可用：来源记录里的时间晚于文件更新时间，可能是占位值）`
-        : `- 时间范围：${range.text}`,
+        : `- 时间范围：${range.text}${range.note ? `（${range.note}）` : ''}`,
     );
   }
   lines.push(`- 轮次：${stats.turns} 轮（用户 ${stats.userTurns} / 助手 ${stats.assistantTurns}）`);
