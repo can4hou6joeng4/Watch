@@ -85,7 +85,7 @@ export function chainsSameDirectoryHint(rows: ChainsElsewhere[]): string {
 }
 
 
-const SCHEMA_VERSION = 6;
+const SCHEMA_VERSION = 7;
 const REQUIRED_TABLES = ['sessions', 'turns', 'switch_events', 'turn_events', 'chains', 'messages_fts', 'search_index'] as const;
 const FTS_TEXT_LIMIT = 8192;
 /** 搜索返回的命中上限；单个会话最多占 MAX_PER_SESSION 条，避免一场对话淹没其它会话 */
@@ -372,6 +372,7 @@ export class Store {
       3: () => this.migrateV4(),
       4: () => this.migrateV5(),
       5: () => this.migrateV6(),
+      6: () => this.migrateV7(),
     };
     while (version < SCHEMA_VERSION) {
       const step = steps[version];
@@ -496,6 +497,16 @@ export class Store {
     `);
   }
 
+  private migrateV7(): void {
+    // v7: 记录每个已索引会话里有几行无法解析。搜索索引只会收进 `parse()` 能解出的轮次，
+    // 被截断的半行从此搜不到；只在本轮重新解析时数一遍，下一条命令就说不出来了（文件没变就跳过），
+    // 用户看到的只是「无结果」。落在游标行上，未变化的会话也能照常披露。
+    const cols = this.db.prepare('PRAGMA table_info(search_index)').all() as { name: string }[];
+    if (!cols.some((c) => c.name === 'bad_lines')) {
+      this.db.exec('ALTER TABLE search_index ADD COLUMN bad_lines INTEGER NOT NULL DEFAULT 0');
+    }
+  }
+
   private migrateV3(): void {
     const ddl = (tokenizer: string) => `
       CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(
@@ -557,6 +568,8 @@ export class Store {
     /** 提供时记录增量游标：下次 `mtimeMs + size` 未变即跳过重新 parse */
     mtimeMs?: number;
     size?: number;
+    /** 原生文件里有几行无法解析（这些行的内容不在索引里）；只在写游标时记录 */
+    badLines?: number;
   }): void {
     opts = { ...opts, cwd: normalizePath(opts.cwd) };
     this.db.prepare('DELETE FROM messages_fts WHERE session_id=? AND cwd=?').run(opts.sessionId, opts.cwd);
@@ -569,7 +582,15 @@ export class Store {
       ins.run(text, opts.sessionId, opts.provider, opts.cwd, opts.filePath);
     }
     if (typeof opts.mtimeMs === 'number' && typeof opts.size === 'number') {
-      this.recordIndexedSession(opts.cwd, opts.provider, opts.sessionId, opts.filePath, opts.mtimeMs, opts.size);
+      this.recordIndexedSession(
+        opts.cwd,
+        opts.provider,
+        opts.sessionId,
+        opts.filePath,
+        opts.mtimeMs,
+        opts.size,
+        opts.badLines ?? 0,
+      );
     }
   }
 
@@ -581,31 +602,40 @@ export class Store {
     filePath: string,
     mtimeMs: number,
     size: number,
+    badLines = 0,
   ): void {
     this.db
       .prepare(
-        `INSERT INTO search_index (cwd, provider, session_id, file_path, mtime_ms, size)
-         VALUES (?,?,?,?,?,?)
+        `INSERT INTO search_index (cwd, provider, session_id, file_path, mtime_ms, size, bad_lines)
+         VALUES (?,?,?,?,?,?,?)
          ON CONFLICT(cwd, provider, session_id) DO UPDATE SET
            file_path = excluded.file_path,
            mtime_ms = excluded.mtime_ms,
-           size = excluded.size`,
+           size = excluded.size,
+           bad_lines = excluded.bad_lines`,
       )
-      .run(this.normCwd(cwd), provider, sessionId, filePath, mtimeMs, size);
+      .run(this.normCwd(cwd), provider, sessionId, filePath, mtimeMs, size, badLines);
   }
 
   /** 某 provider/cwd 的索引游标，按 session id 索引 */
-  indexedStats(cwd: string, provider: string): Map<string, { filePath: string; mtimeMs: number; size: number }> {
+  indexedStats(
+    cwd: string,
+    provider: string,
+  ): Map<string, { filePath: string; mtimeMs: number; size: number; badLines: number }> {
     const rows = this.db
-      .prepare('SELECT session_id, file_path, mtime_ms, size FROM search_index WHERE cwd=? AND provider=?')
+      .prepare('SELECT session_id, file_path, mtime_ms, size, bad_lines FROM search_index WHERE cwd=? AND provider=?')
       .all(this.normCwd(cwd), provider) as {
         session_id: string;
         file_path: string;
         mtime_ms: number;
         size: number;
+        bad_lines: number;
       }[];
     return new Map(
-      rows.map((row) => [row.session_id, { filePath: row.file_path, mtimeMs: row.mtime_ms, size: row.size }]),
+      rows.map((row) => [
+        row.session_id,
+        { filePath: row.file_path, mtimeMs: row.mtime_ms, size: row.size, badLines: row.bad_lines },
+      ]),
     );
   }
 

@@ -3,6 +3,7 @@ import type { Store } from './store.js';
 import type { ProviderAdapter } from '../providers/adapter.js';
 import type { EmptiedSession } from './session-coverage.js';
 import { escapeControlChars } from './display.js';
+import { countUnparsableJsonLines } from './jsonl.js';
 import {
   describePathReadFailureReason,
   describeSessionReadFailureReason,
@@ -57,6 +58,12 @@ export async function reindexCwd(
     }
     let failed = 0;
     let firstError = '';
+    // 文件读得出来、`parse` 也没抛错，但里面有半行 / 坏行时，这些行的内容**不会进索引**：
+    // 用户搜不到只能得到「无结果」，而那句话可能正躺在那半行里。与 `prompt` / `usage` 同一判据，
+    // 只在本轮真正重新索引的会话上数（缓存的会话文件没变，重读一遍只为数行数是纯浪费）
+    let badLineSessions = 0;
+    let badLines = 0;
+    let firstBadLines = '';
     let unreadable = 0;
     let firstUnreadable = '';
     let occupied = 0;
@@ -89,10 +96,20 @@ export async function reindexCwd(
       }
       const cached = stats.get(s.ref.sessionId);
       if (cached && cached.filePath === s.ref.filePath && cached.mtimeMs === st.mtimeMs && cached.size === st.size) {
-        continue; // 文件没变，复用既有索引
+        // 文件没变，复用既有索引；坏行数也一起复用（v7 起记在游标行上）——不这么做的话，
+        // 披露只会在「恰好触发重建索引」的那一条命令里出现一次，之后又变回静默的「无结果」
+        if (cached.badLines > 0) {
+          badLineSessions += 1;
+          badLines += cached.badLines;
+          firstBadLines ||= escapeControlChars(s.ref.filePath);
+        }
+        continue;
       }
       try {
         const turns = await adapter.parse(s.ref);
+        // `parse` 成功不代表内容齐全：半行 / 坏行被逐行跳过，这些轮次不进索引，搜不到。
+        // 判据与 `prompt` / `usage` 同源（`countUnparsableJsonLines()`；opencode 是 SQLite，返回 0）
+        const bad = await countUnparsableJsonLines(s.ref.filePath);
         store.reindexSession({
           cwd,
           sessionId: s.ref.sessionId,
@@ -101,8 +118,14 @@ export async function reindexCwd(
           texts: turns.map((t) => t.text),
           mtimeMs: st.mtimeMs,
           size: st.size,
+          badLines: bad,
         });
         n += 1;
+        if (bad > 0) {
+          badLineSessions += 1;
+          badLines += bad;
+          firstBadLines ||= escapeControlChars(s.ref.filePath);
+        }
       } catch (error) {
         /* 单文件失败不阻断；不记录游标，下轮重试 */
         failed += 1;
@@ -117,6 +140,13 @@ export async function reindexCwd(
     }
     if (failed > 0) {
       warnings?.push(`${adapter.id} 有 ${failed} 个会话解析失败，索引未更新（首个错误：${firstError}）`);
+    }
+    if (badLineSessions > 0) {
+      warnings?.push(
+        `${adapter.id} 有 ${badLineSessions} 个会话的文件里有 ${badLines} 行无法解析（截断或损坏），` +
+          `这些行的内容没有进索引，搜不到（首个：${firstBadLines}）——先确认该文件是否被截断，` +
+          `可从备份恢复后重新 search`,
+      );
     }
     if (unreadable > 0) {
       warnings?.push(`${adapter.id} 有 ${unreadable} 个会话读不出文件状态，索引未更新（首个：${firstUnreadable}）`);
