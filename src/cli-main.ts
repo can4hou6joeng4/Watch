@@ -1546,6 +1546,16 @@ async function cmdProviders(json: boolean): Promise<void> {
 }
 
 /**
+ * 时间戳只在真能解析时返回毫秒。解析不出来时返回 undefined，让调用方省略那一行——
+ * 拿 `NaN` 或 0 顶替，会在文档里写出一句看着像事实的假时间（1970）。
+ */
+function toMillis(iso: string | undefined): number | undefined {
+  if (!iso) return undefined;
+  const ms = Date.parse(iso);
+  return Number.isFinite(ms) ? ms : undefined;
+}
+
+/**
  * `watch prompt <session-id>`：摘要交接（降级方案）。
  *
  * 只读：不写任何会话文件、不启动任何 CLI、不碰本地库的会话映射。用途有两条：
@@ -1614,7 +1624,10 @@ async function cmdPrompt(
       providerId: adapter.id,
       providerName: adapter.displayName,
       sessionId: found.ref.sessionId,
+      sourcePath: found.ref.filePath,
       cwd: found.ref.cwd,
+      // 首条记录的时间当起点：文档里要给出时间范围，但只在真读到时间戳时写
+      startedAt: toMillis(turns[0]?.timestamp),
       updatedAt: found.updatedAt,
       usage: sessionUsage,
     },
