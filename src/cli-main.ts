@@ -59,7 +59,7 @@ function usage(reason?: string): never {
   watch recent [--json] [--cwd <path>] [--limit <n>]
   watch providers [--json]
   watch capabilities [--json]                       各 Agent 的读写能力矩阵（代码事实，不探测本机 CLI）
-  watch prompt [<session-id>] [--provider <name>] [--profile minimal|standard|verbose|full] [--last <n>] [--json]
+  watch prompt [<session-id>] [--provider <name>] [--profile minimal|standard|verbose|full] [--last <n>] [--since-compact] [--json]
                                                     摘要交接：把会话渲染成可粘贴给任意 Agent 的 Markdown（降级方案，不写任何文件）
                                                     省略会话 id 时自动挑本目录按修改时间最新的可读会话，并在文档头标明
   watch doctor [--json] [--strict] [--cwd <path>]   只读环境诊断：Agent 检测、本地库、导入日志（不写盘）
@@ -357,6 +357,7 @@ function parseArgs(argv: string[]): {
   to?: string;
   profile?: string;
   last?: number;
+  sinceCompact: boolean;
   check: boolean;
   strict: boolean;
   limit?: number;
@@ -378,6 +379,7 @@ function parseArgs(argv: string[]): {
   let to: string | undefined;
   let profile: string | undefined;
   let last: number | undefined;
+  let sinceCompact = false;
   let check = false;
   let strict = false;
   let limit: number | undefined;
@@ -464,6 +466,10 @@ function parseArgs(argv: string[]): {
       last = n;
       continue;
     }
+    if (a === '--since-compact') {
+      sinceCompact = true;
+      continue;
+    }
     if (a === '--limit') {
       const raw = takeValue('--limit');
       // Number() 会接受 '0x10'（16）与 ' 3'（3）：用户只想给十进制条数，别猜他的意思
@@ -498,6 +504,7 @@ function parseArgs(argv: string[]): {
     ...(to ? ['to'] : []),
     ...(profile ? ['profile'] : []),
     ...(last !== undefined ? ['last'] : []),
+    ...(sinceCompact ? ['since-compact'] : []),
     ...(limit !== undefined ? ['limit'] : []),
   ];
   return {
@@ -516,6 +523,7 @@ function parseArgs(argv: string[]): {
     to,
     profile,
     last,
+    sinceCompact,
     check,
     strict,
     limit,
@@ -1679,6 +1687,7 @@ async function cmdPrompt(
   provider: string | undefined,
   profileRaw: string | undefined,
   lastUserTurns: number | undefined,
+  sinceCompact: boolean,
 ): Promise<void> {
   const profile = profileRaw === undefined ? DEFAULT_PROMPT_PROFILE : parsePromptProfile(profileRaw);
   if (!profile) {
@@ -1825,7 +1834,7 @@ async function cmdPrompt(
       ...(sourceDrift ? { sourceDriftNote: sourceDrift } : {}),
     },
     profile,
-    { ...(lastUserTurns !== undefined ? { lastUserTurns } : {}) },
+    { ...(lastUserTurns !== undefined ? { lastUserTurns } : {}), ...(sinceCompact ? { sinceCompact: true } : {}) },
   );
 
   if (json) {
@@ -1836,6 +1845,7 @@ async function cmdPrompt(
       cwd: foundRef.cwd,
       profile: result.profile,
       ...(lastUserTurns !== undefined ? { lastUserTurns } : {}),
+      ...(sinceCompact ? { sinceCompact: true } : {}),
       // 脚本要能区分「按 id 查到的」与「替你猜的」：两者的可信度不一样
       ...(autoPicked ? { autoPicked: true } : {}),
       markdown: result.markdown,
@@ -2597,7 +2607,7 @@ const FLAGS_BY_COMMAND: Record<string, string[]> = {
   recent: ['limit'],
   providers: [],
   capabilities: [],
-  prompt: ['provider', 'profile', 'last'],
+  prompt: ['provider', 'profile', 'last', 'since-compact'],
   doctor: ['strict'],
   new: ['chain'],
   chain: [],
@@ -2678,7 +2688,7 @@ async function main(): Promise<void> {
     await runImportCodex(process.argv.slice(3));
     return;
   }
-  const { cmd, target, extra, rest, json, cwd, session, chain, from, provider, to, profile, last, check, strict, limit, usedFlags, cwdGiven, positional } = parseArgs(process.argv);
+  const { cmd, target, extra, rest, json, cwd, session, chain, from, provider, to, profile, last, sinceCompact, check, strict, limit, usedFlags, cwdGiven, positional } = parseArgs(process.argv);
   if (cmd) {
     rejectUnusedFlags(cmd, usedFlags, json);
     rejectExtraPositionals(cmd, positional, json);
@@ -2716,7 +2726,7 @@ async function main(): Promise<void> {
   if (cmd === 'prompt') {
     // 会话 id 可省略：只输入 `watch prompt` 时按本目录最新可读会话自动挑选（与 catchup 的
     // 「不指定就用最近一条」对齐）。自动挑选是替用户做选择，所以文档头会写明这一点。
-    await cmdPrompt(cwd, json, target, provider, profile, last);
+    await cmdPrompt(cwd, json, target, provider, profile, last, sinceCompact);
     return;
   }
   if (cmd === 'doctor') {

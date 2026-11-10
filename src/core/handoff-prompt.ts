@@ -1,5 +1,6 @@
 import type { Finding } from './findings.js';
 import { addFinding } from './findings.js';
+import { CLAUDE_COMPACT_SUMMARY_PREFIX } from './rich.js';
 import type { ProcessEvent, TokenUsage, UnifiedTurn } from './types.js';
 
 /**
@@ -53,6 +54,15 @@ export type PromptOptions = {
    * 首条任务描述可能已被切掉，否则读者会以为这就是全部背景。
    */
   lastUserTurns?: number;
+  /**
+   * 只从**最近一次**压缩摘要开始渲染（`--since-compact`），省略其之前的轮次。
+   *
+   * 压缩摘要本身已经概括了更早的内容，再把它之前的原始轮次全带上，读者会同时看到
+   * 「摘要」与「摘要已经概括过的原文」，既占篇幅又容易把两份并存的叙述当成两件事。
+   * 只认 Claude Code 的 `CLAUDE_COMPACT_SUMMARY_PREFIX`：别的来源没有这个痕迹时
+   * **不裁剪**，并在正文里说明「未裁剪」，不能假装生效。
+   */
+  sinceCompact?: boolean;
 };
 
 const PROFILE_LIMITS: Record<PromptProfile, ProfileLimits> = {
@@ -291,6 +301,20 @@ function renderEvent(event: ProcessEvent, detailLimit: number | null, stats: Pro
 }
 
 /**
+ * 最近一条压缩摘要所在的下标；没有返回 -1。
+ *
+ * 只认正文前缀（`parse` 在 `isCompactSummary` 的轮次上写的那一条），不猜时间或文本形状：
+ * 前缀是唯一能区分「Claude Code 生成的摘要」与「用户真的粘贴了一篇总结」的痕迹。
+ */
+function lastCompactSummaryIndex(turns: UnifiedTurn[]): number {
+  for (let i = turns.length - 1; i >= 0; i--) {
+    const t = turns[i]!;
+    if (t.role === 'user' && t.text.startsWith(CLAUDE_COMPACT_SUMMARY_PREFIX)) return i;
+  }
+  return -1;
+}
+
+/**
  * 生成交接文档。纯函数：不读盘、不 spawn、不依赖时间，同一输入永远同一输出（便于断言）。
  *
  * 头部必须自带「这是降级方案」的声明：文档一旦被复制走就脱离了 Watch 的任何提示，
@@ -318,14 +342,24 @@ export function buildHandoffPrompt(
     escapedBodies: 0,
   };
 
+  // `--since-compact` 先把窗口切到最近一次压缩摘要（含摘要本身），再套用 `--last` / 档位。
+  // 找不到摘要时**不裁剪**：宁可按原样给全，也不能让人以为「从摘要开始」而其实丢了更早的背景。
+  const compactAt = options.sinceCompact ? lastCompactSummaryIndex(turns) : -1;
+  const compactOmitted = compactAt > 0 ? compactAt : 0;
+  const scoped = compactAt >= 0 ? turns.slice(compactAt) : turns;
+
   // 显式 `--last N` 优先于档位的轮次上限：用户点名了窗口，就不该再被档位偷偷缩一次
   const selection = options.lastUserTurns !== undefined
-    ? takeLastUserTurns(turns, options.lastUserTurns)
-    : selectTurns(turns, limits.maxTurns);
+    ? takeLastUserTurns(scoped, options.lastUserTurns)
+    : selectTurns(scoped, limits.maxTurns);
   const { kept, omitted } = selection;
   stats.includedTurns = kept.length;
-  stats.omittedTurns = omitted;
+  stats.omittedTurns = omitted + compactOmitted;
   if (omitted > 0) addFinding(findings, 'prompt_turns_omitted', 'skipped', omitted);
+  if (compactOmitted > 0) addFinding(findings, 'prompt_since_compact_applied', 'skipped', compactOmitted);
+  if (options.sinceCompact && compactAt < 0) {
+    addFinding(findings, 'prompt_since_compact_unavailable', 'skipped', 1);
+  }
 
   const body: string[] = [];
   for (const turn of kept) {
@@ -418,11 +452,27 @@ export function buildHandoffPrompt(
   lines.push(`- 档位：${profile}（正文 ${limits.textLimit === null ? '不截断' : `每条 ≤ ${limits.textLimit} 字符`}，过程记录 ${limits.eventsPerTurn === null ? '全部展开' : limits.eventsPerTurn === 0 ? '不展开' : `每轮 ≤ ${limits.eventsPerTurn} 条`}${lastHint}${fullHint}）`);
   if (stats.omittedTurns > 0) {
     const keptUserTurns = kept.filter((t) => t.role === 'user').length;
+    if (compactOmitted > 0) {
+      lines.push(
+        `- 按 --since-compact 从最近一次压缩摘要开始，省略其之前的 ${compactOmitted} 轮（摘要由 Claude Code 生成，不是用户原话）` +
+          (omitted > 0 ? `；档位 / --last 另省略 ${omitted} 轮` : ''),
+      );
+    } else {
+      lines.push(
+        options.lastUserTurns !== undefined
+          ? `- 按 --last ${options.lastUserTurns} 保留了最近 ${keptUserTurns} 个用户轮，省略 ${stats.omittedTurns} 轮（**首条任务描述未保留**，需要背景请去掉 --last 重新生成）`
+          : `- 本档位保留了 ${stats.includedTurns} 轮，省略 ${stats.omittedTurns} 轮（原始任务描述已强制保留）`,
+      );
+    }
+  }
+  // 指定了 --since-compact 却没有可裁剪的摘要：必须在正文里说清「未生效」，
+  // 否则读者会以为窗口是从摘要开始的，而实际上面这份文档包含的轮次更多。
+  if (options.sinceCompact && compactAt < 0) {
     lines.push(
-      options.lastUserTurns !== undefined
-        ? `- 按 --last ${options.lastUserTurns} 保留了最近 ${keptUserTurns} 个用户轮，省略 ${stats.omittedTurns} 轮（**首条任务描述未保留**，需要背景请去掉 --last 重新生成）`
-        : `- 本档位保留了 ${stats.includedTurns} 轮，省略 ${stats.omittedTurns} 轮（原始任务描述已强制保留）`,
+      '- 指定了 --since-compact，但这条会话里没有 Claude Code 压缩摘要（或来源不是 Claude Code），本次未裁剪，正文包含全部轮次',
     );
+  } else if (options.sinceCompact && compactOmitted === 0) {
+    lines.push('- 按 --since-compact 从最近一次压缩摘要开始（摘要之前没有可省略的轮次；摘要由 Claude Code 生成，不是用户原话）');
   }
   // 具体数字必须写在文档里：这份 Markdown 一旦被复制走，stderr 上的 findings 就不再跟着它，
   // 目标助手与用户看到的只剩正文。只写「可能被裁剪」不足以让人判断还能不能接着干。
