@@ -198,6 +198,8 @@ Session conversion mostly handles local records, but it is **not an entirely off
 
 Paths that invoke a native agent require it to be properly authenticated. Validate with a dedicated test session first, and never commit real credentials, chat content or agent databases to the repository.
 
+**Search builds a local index.** `watch search` writes the turn text of agent sessions in the current directory into a full-text index (`messages_fts`) inside `~/.watch/watch.db`, so later searches do not re-parse the files. The index stays on this machine: on Unix the database directory is 0700 and the file is 0600, and Watch does not upload either. `WATCH_DB` relocates the database; deleting the file (with its `-wal` / `-shm`) removes that text, at the cost of losing chains and switch history with it. Sessions you never searched are not indexed.
+
 ## Where session files live
 
 | Agent | On disk | Resume |

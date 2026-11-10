@@ -198,6 +198,8 @@ npm run watch -- import-codex status <plan-id> --json
 
 调用原生 Agent 的路径需要其正常认证。请先用专用测试会话验证，不要把真实凭据、聊天记录或 Agent 数据库提交到仓库。
 
+**搜索会在本机建索引**：`watch search` 把当前目录下各 Agent 会话的轮次正文写进 `~/.watch/watch.db` 的全文索引（`messages_fts`），下次搜索不必重新解析文件。索引只留在本机：Unix 上库目录为 0700、库文件为 0600，Watch 不会上传；`WATCH_DB` 可以换位置，删掉库文件（连同 `-wal` / `-shm`）就清除了这些正文，代价是链与切换记录一并丢失。没跑过 `search` 的会话不会进库。
+
 ## 会话文件在哪
 
 | Agent | 本机位置 | 恢复 |
