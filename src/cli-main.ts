@@ -1801,6 +1801,8 @@ async function cmdPrompt(
       // 首条记录的时间当起点：文档里要给出时间范围，但只在真读到时间戳时写
       startedAt: toMillis(turns[0]?.timestamp),
       updatedAt,
+      // 逐轮时间戳是推定值时要说清来路：grok 的行内没有时间，读到的那个数字是锚点
+      ...(adapter.timingNote ? { timeRangeNote: adapter.timingNote } : {}),
       ...(badSourceLines > 0 ? { sourceBadLines: badSourceLines } : {}),
       ...(emptySourceNote ? { emptySourceNote } : {}),
       usage: sessionUsage,

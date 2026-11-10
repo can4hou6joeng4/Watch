@@ -85,6 +85,15 @@ export type PromptSessionMeta = {
   emptySourceNote?: string;
   /** 本地记录的最后更新时间（毫秒）；缺省时头部不写这一行 */
   updatedAt?: number;
+  /**
+   * 时间范围这一行要说的**另一种事实**：这家记录里的逐轮时间戳不是真实时间，而是推定出来的
+   * （如 grok 用 `summary.json.created_at`，缺摘要时用文件 mtime，按行递增）。
+   *
+   * 默认那句括注只在「怎么取的」层面成立（起点＝首条记录、终点＝来源更新时间），对推定时间
+   * 就变成了误导：读者会以为 2026-10-01T02:03:04Z 是这条会话真实发生的时间。有这一项时整段
+   * 括注换成它——它必须自带完整来路，不能只说「不精确」。
+   */
+  timeRangeNote?: string;
   /** 来源会话的 token 用量；null = 这家没有用量记录 */
   usage?: TokenUsage | null;
   /**
@@ -198,7 +207,9 @@ function formatTimeRange(startedAt?: number, updatedAt?: number): TimeRange | nu
   const end = updatedAt !== undefined && Number.isFinite(updatedAt) ? new Date(updatedAt).toISOString() : null;
   if (start && end) {
     if (Date.parse(start) > Date.parse(end)) return { text: end, startUnusable: true };
-    if (start === end) return { text: start, startUnusable: false, note: '起点与终点相同，短会话或时间戳精度只到秒' };
+    // 两端相同时**只说事实**：「短会话或精度只到秒」是猜的——两端也可能都取自同一个兜底锚点
+    // （grok 无 summary.json 时起点与终点都是文件 mtime），那时这句话会替一个不存在的理由背书。
+    if (start === end) return { text: start, startUnusable: false, note: '只取到同一个时间点：首条记录与来源更新时间相同' };
     return {
       text: `${start} → ${end}`,
       startUnusable: false,
@@ -375,10 +386,13 @@ export function buildHandoffPrompt(
   const range = formatTimeRange(meta.startedAt, meta.updatedAt);
   if (range) {
     if (range.startUnusable) addFinding(findings, 'prompt_time_range_start_unusable', 'degraded', 1);
+    // 推定时间优先：`timeRangeNote` 自带完整来路，默认那句括注只解释「哪一端取什么」，
+    // 用在推定值上会让读者把锚点当成真实时间。
+    const rangeNote = meta.timeRangeNote ?? range.note;
     lines.push(
       range.startUnusable
         ? `- 时间范围：… → ${range.text}（起始时间不可用：来源记录里的时间晚于文件更新时间，可能是占位值）`
-        : `- 时间范围：${range.text}${range.note ? `（${range.note}）` : ''}`,
+        : `- 时间范围：${range.text}${rangeNote ? `（${rangeNote}）` : ''}`,
     );
   }
   lines.push(`- 轮次：${stats.turns} 轮（用户 ${stats.userTurns} / 助手 ${stats.assistantTurns}）`);

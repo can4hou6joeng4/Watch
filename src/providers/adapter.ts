@@ -188,4 +188,12 @@ export interface ProviderAdapter {
    * 不声明它的话，调用方核对「这个文件里有没有无法解析的行」会看错对象。
    */
   sessionUsagePath?(ref: SessionRef): string;
+
+  /**
+   * 可选：这家原生记录里的逐轮时间戳**不是真实时间**时，用一句中文说清它是怎么来的。
+   *
+   * `watch prompt` 会在「时间范围」那一行把它当括注印出来。没有这一项的适配器表示
+   * `UnifiedTurn.timestamp` 来自记录本身，调用方照旧只说明两端各取什么。
+   */
+  readonly timingNote?: string;
 }

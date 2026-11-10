@@ -74,4 +74,10 @@ export const grokAdapter: ProviderAdapter = {
 
   /** 用量在旁路文件 `updates.jsonl`，不是 `parse` 读的 `chat_history.jsonl` */
   sessionUsagePath: grokUpdatesPath,
+  // `chat_history.jsonl` 行内没有逐轮时间戳（见 parse.ts 的 `grokAnchorMs()`）：逐轮时间由
+  // summary.json 的 created_at 按行 +1ms 推定，缺摘要时锚定会话文件的 mtime。
+  // 不说的话，`watch prompt` 的「时间范围」会被读成这段对话的真实起止。
+  timingNote:
+    'Grok 的记录行内没有逐轮时间戳：这里的时间由 summary.json 的创建时间按顺序推定，' +
+    '缺这份摘要时取会话文件的修改时间，不是逐轮的真实时间',
 };

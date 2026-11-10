@@ -70,8 +70,9 @@ export async function parseGrokSession(ref: SessionRef): Promise<UnifiedTurn[]> 
   // chat_history.jsonl 行内无时间戳；用同目录 summary.json 的真实 created_at 做会话锚点，
   // 行程内单调 +1ms 递增，避免历史消息被打上 `now()` 造成的重放漂移。
   const anchor = await grokAnchorMs(ref.filePath);
-  let lineIndex = 0;
-
+  // 先把可解析的行收齐：锚点若来自文件 mtime，它代表「文件最后一次被写」——
+  // 也就是**最后一条记录**的位置，必须知道行数才能把时间铺在它之前（见 grokAnchorMs）
+  const records: Record<string, unknown>[] = [];
   for (const line of raw.split('\n')) {
     if (!line.trim()) continue;
     let record: unknown;
@@ -81,10 +82,14 @@ export async function parseGrokSession(ref: SessionRef): Promise<UnifiedTurn[]> 
       continue;
     }
     const r = asRecord(record);
-    if (!r) continue;
+    if (r) records.push(r);
+  }
+  const base = anchor === null ? null : anchor.fromMtime ? anchor.ms - (records.length - 1) : anchor.ms;
+
+  for (let lineIndex = 0; lineIndex < records.length; lineIndex += 1) {
+    const r = records[lineIndex];
     const type = typeof r.type === 'string' ? r.type : '';
-    const timestamp = grokTimestamp(anchor, lineIndex);
-    lineIndex += 1;
+    const timestamp = grokTimestamp(base, lineIndex);
 
     if (type === 'user') {
       const text = normalizeUserText(extractUserText(r.content));
@@ -228,18 +233,21 @@ async function readGrokCreatedAt(filePath: string): Promise<string | null> {
  * 退回 mtime 而不是 `now()`（2026-11-10）：行内没有逐轮时间戳，`now()` 会让**同一条会话每次解析
  * 都得到不同的时间**——`watch prompt` 的「时间范围」于是声称这段对话发生在你执行命令的那一刻，
  * `open --to` / `switch` 写进目标会话的也是那一刻；重复执行两次，目标时间戳还会跟着漂移。
- * mtime 是真实的磁盘事实（`listGrokSessions()` 给 `updatedAt` 的兜底同样是它），稳定、可复现，
- * 但它只代表「文件最后一次被写」，不是逐轮的真实时间——所以仍然只当锚点、按行 +1ms 递增，
- * 调用方（`prompt` 的时间范围说明）也照旧把它当「来源的更新时间」对待。
+ * mtime 是真实的磁盘事实（`listGrokSessions()` 给 `updatedAt` 的兜底同样是它），稳定、可复现。
+ *
+ * 两种锚点的**方向相反**，调用方必须区分：`created_at` 是会话**开始**的时间，逐行 +1ms 往后铺；
+ * mtime 是文件**最后一次被写**的时间（≈最后一条记录），往前铺 `- (行数-1)`。否则首条记录
+ * 比 updatedAt 还晚 1ms，`watch prompt` 会把这一小段倒挂报成「起始时间不可用，可能是占位值」——
+ * 又是一个没验证过的原因。
  */
-async function grokAnchorMs(filePath: string): Promise<number | null> {
+async function grokAnchorMs(filePath: string): Promise<{ ms: number; fromMtime: boolean } | null> {
   const created = await readGrokCreatedAt(filePath);
   if (created) {
     const t = Date.parse(created);
-    if (!Number.isNaN(t)) return t;
+    if (!Number.isNaN(t)) return { ms: t, fromMtime: false };
   }
   try {
-    return (await stat(filePath)).mtimeMs;
+    return { ms: (await stat(filePath)).mtimeMs, fromMtime: true };
   } catch {
     // 文件都 stat 不到时 `readFile` 早已抛错，这里只是兜底
     return null;
