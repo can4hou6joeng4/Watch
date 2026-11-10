@@ -6,6 +6,7 @@ import { SessionLookupFailureError } from '../adapter.js';
 import type { ProcessEvent, SessionRef, TokenUsage, UnifiedTurn } from '../../core/types.js';
 import { escapeControlChars } from '../../core/display.js';
 import {
+  assertReadableOpencodeDb,
   assertUsableOpencodeDb,
   ensureOpencodeDbDir,
   opencodeDbPath,
@@ -59,6 +60,7 @@ export async function listOpencodeSessions(
   // 库不存在 = 这台机器没用过 opencode，空列表是事实；
   // 库在却打不开是「读不出来」，必须抛出交给调用方披露，不能返回空列表冒充「这个目录没聊过」
   if ((await probeOpencodeDbFile(dbPath)) === 'missing') return [];
+  assertReadableOpencodeDb(dbPath);
   let db: DatabaseSync | undefined;
   try {
     db = new DatabaseSync(dbPath, { readOnly: true });
@@ -89,6 +91,12 @@ export async function findOpencodeSessionById(
   // 库文件不存在 = 从没用过 opencode，是干净的「没有这个会话」；
   // 文件在却打不开（权限 / 锁 / 被占）或查不了，是「读不出来」，不能返回 null 冒充不存在
   if ((await probeOpencodeDbFile(dbPath)) === 'missing') return null;
+  // 2.x 布局是「没查成」，不是「没有这个会话」：返回 null 会让反查方以为 id 不存在
+  try {
+    assertReadableOpencodeDb(dbPath);
+  } catch (error) {
+    throw new SessionLookupFailureError('incomplete', error instanceof Error ? error.message : String(error));
+  }
   let db: DatabaseSync | undefined;
   try {
     db = new DatabaseSync(dbPath, { readOnly: true });

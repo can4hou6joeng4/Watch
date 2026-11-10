@@ -1,7 +1,7 @@
 import { DatabaseSync } from 'node:sqlite';
 import { normalizeUserText } from '../../core/rich.js';
 import type { ProcessEvent, SessionRef, TokenUsage, UnifiedTurn } from '../../core/types.js';
-import { opencodeDbPath, opencodeDbSqliteError, probeOpencodeDbFile } from './paths.js';
+import { assertReadableOpencodeDb, opencodeDbPath, opencodeDbSqliteError, probeOpencodeDbFile } from './paths.js';
 
 type MessageRow = {
   id: string;
@@ -256,6 +256,7 @@ export async function parseOpencodeSession(ref: SessionRef): Promise<UnifiedTurn
   // 库文件不存在 = 还没有内容（库被清 / 会话刚建）；但路径被占住、库打不开、查不了
   // 都不是「这个会话是空的」——返回 [] 会让 diffTurns 把目标当成空会话，把来源整段再追加一遍
   if ((await probeOpencodeDbFile(dbPath)) === 'missing') return [];
+  assertReadableOpencodeDb(dbPath);
   let db: DatabaseSync;
   try {
     db = new DatabaseSync(dbPath, { readOnly: true });

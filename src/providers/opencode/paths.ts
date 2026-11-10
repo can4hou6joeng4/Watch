@@ -84,6 +84,43 @@ export function opencodeDbSqliteError(dbPath: string, action: '打开' | '查询
 const OPENCODE_KNOWN_TABLES = ['project', 'session', 'message', 'part'];
 
 /**
+ * OpenCode 2.x 的库布局：`session_v2` + `session_message`（事件日志表）。
+ *
+ * 依据是第三方会话转换器 cross_agent_session_resumer 的实测记录：它按 sqlite_master
+ * 分三档识别，并明确 2.x 的 `session_v2` / `session_message` 是 opencode 自己事件日志的
+ * 投影，转换器只读不写。1.x → 2.x 迁移过的库会**同时留着**旧的 session / message / part
+ * 表，那些是过时副本，opencode 自己不再读。
+ *
+ * Watch 的读写在 1.x 布局（session / message / part）上验证过，所以：
+ * - 写路径看到 2.x 标记必须拒绝——否则要么把表建进一个 2.x 库（污染），要么写进旧的 1.x
+ *   副本（opencode 读不到，却报「转入成功」）；
+ * - 读路径看到 2.x 标记必须说「没验证过这种布局」，不能把 `no such table` 讲成「没有会话」。
+ */
+const OPENCODE_V2_TABLES = ['session_v2', 'session_message'];
+
+function opencodeV2Marker(tables: string[]): string | null {
+  const hit = tables.filter((t) => OPENCODE_V2_TABLES.includes(t));
+  return hit.length ? hit.join(' / ') : null;
+}
+
+/**
+ * 读路径（列表 / 反查 / 解析）的事前检查：只拦「是 opencode 的库、但不是 Watch 认识的布局」。
+ * 打不开 / 表结构读不出来一律放过，交给调用方原有的 `opencodeDbSqliteError` 去说，
+ * 避免同一个库在两条错误路径上给出两种说法。
+ */
+export function assertReadableOpencodeDb(dbPath: string): void {
+  const probe = probeSqliteTables(dbPath);
+  if ('error' in probe) return;
+  const v2 = opencodeV2Marker(probe.tables);
+  if (!v2) return;
+  throw new Error(
+    `无法读取 OpenCode 会话：${escapeControlChars(dbPath)} 是 2.x 结构（表: ${v2}），Watch 还没验证过这种布局；` +
+      `这不代表没有会话内容，先不要据此判断。也不要删除或挪走这个库——可以等 Watch 支持 2.x 后再试，` +
+      `或把 WATCH_OPENCODE_DB 指向一个 1.x 布局的库`,
+  );
+}
+
+/**
  * 写入前准备数据目录：不存在就建，存在就确认可写。
  *
  * `~/.local/share/opencode/` 在从没跑过 opencode 的机器上根本不存在，而 SQLite 只会报
@@ -154,6 +191,17 @@ export function assertUsableOpencodeDb(dbPath: string): void {
     );
   }
   if (probe.tables.length === 0) return;
+  // 2.x 先判：「迁移过的库同时还留着旧表」时，旧表能通过下面的已知表检查，写进去 opencode
+  // 却读不到——那会变成一次静默失败的交接。所以只要出现 2.x 标记就拒绝，不管旧表在不在。
+  const v2 = opencodeV2Marker(probe.tables);
+  if (v2) {
+    throw new Error(
+      `OpenCode 数据库是 2.x 结构（表: ${v2}）：${escapeControlChars(dbPath)}；` +
+        `Watch 的写入只在 1.x 布局（session / message / part）上验证过，本次未写入任何内容。` +
+        `迁移过来的库可能还留着旧的 1.x 表，那是过时副本，写进去 opencode 也不会读到——` +
+        `不要删除或挪走这个库；可以把 WATCH_OPENCODE_DB 指向一个 1.x 布局的库，或等 Watch 支持 2.x 后再试`,
+    );
+  }
   if (probe.tables.some((t) => OPENCODE_KNOWN_TABLES.includes(t))) return;
 
   throw new Error(

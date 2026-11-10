@@ -25,7 +25,7 @@
 | Claude Code → Watch 转换 → Codex 桌面端 | 现有 Codex 构建器 + S2 候选入口 | 原生读回/resume 可用，但工具结果未出现在查询历史中；严格验收失败，不开放桌面入口，保留写入守卫 |
 | Codex 桌面会话 → 其他 Agent | Watch 扫描 Codex rollout，可能覆盖兼容的本地记录 | 来源版本、路径和内容覆盖待测；不推导远程会话支持 |
 | Claude Code CLI → Claude Desktop Code | S4 明确历史分离；S13 确认交互式 `/desktop` 的本地 handoff 顺序 | 官方有依据 / 待验收；仅 macOS、x64 Windows及订阅登录。直接 deep link 不会保存/flush 当前 transcript，不能作为 Watch 自动迁移入口；最终复核时本机 CLI 与 Desktop 均不存在 |
-| OpenCode CLI ↔ OpenCode Web/TUI | 基础适配器提供 SQLite 转入和 `opencode -s` 恢复；S5/S9/S12 覆盖官方多客户端增强 | 现有 OpenCode CLI 卡片继续沿用基础基线。Darwin arm64 / 1.18.29 的官方 import/export、server API、Web、独立 local TUI 与 attached TUI 历史可见已通过；单次无工具继续请求因 provider 429 未生成回复，因此只是不接入新的官方多客户端入口；当前官方索引未提供独立 Desktop 客户端契约 |
+| OpenCode CLI ↔ OpenCode Web/TUI | 基础适配器提供 SQLite 转入和 `opencode -s` 恢复；S5/S9/S12 覆盖官方多客户端增强 | 现有 OpenCode CLI 卡片继续沿用基础基线。Darwin arm64 / 1.18.29 的官方 import/export、server API、Web、独立 local TUI 与 attached TUI 历史可见已通过；单次无工具继续请求因 provider 429 未生成回复，因此只是不接入新的官方多客户端入口；当前官方索引未提供独立 Desktop 客户端契约。Watch 的 SQLite 适配器只在 1.x 布局（`session` / `message` / `part`）上验证；2.x 布局（`session_v2` / `session_message`，迁移库可能同时留着旧表）尚无实现，读写入口都会明确拒绝并披露，不宣称兼容 |
 | OpenCode IDE 扩展 | S9 扩展在 IDE 集成终端启动或聚焦 OpenCode | 不是独立会话存储；不能由扩展安装推导外部历史已导入 |
 | Antigravity 2.0 → Antigravity CLI | S10 `/resume` 的 Antigravity 页签可确认后克隆 history、context 与 tool trajectories；S14 本机 CLI/官方文档复核 | 官方有依据 / 待验收；这是同产品交互式单向导入，不是其他 Agent → Antigravity 接口。本机有 `agy 1.1.26`，无 2.0/IDE 应用；未打开 picker |
 | Antigravity ↔ 其他 Agent | 当前 registry 无适配器；S11 SDK 是独立 Agent runtime | 未支持；未发现外部会话导入/导出契约，不生成目标入口 |
