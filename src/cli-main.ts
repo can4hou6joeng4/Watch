@@ -4,7 +4,7 @@ import path from 'node:path';
 import { chainsElsewhereHint, chainsSameDirectoryHint, isStoreError, SEARCH_MAX_HITS, searchElsewhereHint, searchSameDirectoryHint, Store, defaultDbPath, describeStoreErrorReason, describeStoreOpenFailure } from './core/store.js';
 import type { Chain, ChainsElsewhere, SearchElsewhere } from './core/store.js';
 import { describeFindings } from './core/findings.js';
-import { adoptIntoChain, blockedHint, chainStatus, chainUsage, collectTips, createChainSession, currentChainShiftNote, emptyChainBindHint, handoff, HandoffBlockedError, notCurrentChainWarning, rebindHint, storeUnavailableWarning } from './core/handoff.js';
+import { adoptIntoChain, blockedHint, chainStatus, chainUsage, collectTips, createChainSession, currentChainShiftNote, emptyChainBindHint, handoff, HandoffBlockedError, notCurrentChainWarning, pickLatestTip, rebindHint, storeUnavailableWarning } from './core/handoff.js';
 import { reindexCwd } from './core/search.js';
 import type { SessionRef } from './core/types.js';
 import type { TokenUsage } from './core/types.js';
@@ -18,6 +18,7 @@ import { getAdapter, listAdapters, listProviders, noSessionHint, unknownProvider
 import { checkOpenInProvider, LOOKUP_NEXT_STEP, lookupMissHeadline, openInProvider, openSession, resolveById } from './open.js';
 import type { LookupMiss } from './open.js';
 import { PreflightBlockedError } from './providers/adapter.js';
+import type { ProviderAdapter } from './providers/adapter.js';
 import { runImportCodex } from './import-codex.js';
 import { ImportJobs } from './core/import-jobs.js';
 import { officialImportJournalRoot } from './providers/codex/official-import.js';
@@ -28,7 +29,7 @@ import { trimUserKey } from './core/cli-input.js';
 import { describeResumeTargetUnfinished } from './core/rich.js';
 import { describePathReadFailureReason, describeReadFailureOrSelf, describeSessionReadFailureReason, isEmptySessionFileReason, probeSessionReadable, sessionFilePresence } from './core/read-text.js';
 import { describeWriteFailureReason } from './core/atomic.js';
-import { collectUnattributable, emptiedJson, emptiedSearchNote, emptiedSessionsWarning, unattributableEmptyNote, unattributableJson, unattributableSearchNote, unattributableWarning } from './core/session-coverage.js';
+import { collectUnattributable, emptiedJson, emptiedSearchNote, emptiedSessionsWarning, unattributableEmptyNote, unattributableJson, unattributableNoPickMessage, unattributablePickWarning, unattributableSearchNote, unattributableWarning } from './core/session-coverage.js';
 import type { EmptiedSession } from './core/session-coverage.js';
 import { describeSpawnFailure } from './core/platform.js';
 import { readWatchVersion } from './core/watch-version.js';
@@ -56,8 +57,9 @@ function usage(reason?: string): never {
   watch recent [--json] [--cwd <path>] [--limit <n>]
   watch providers [--json]
   watch capabilities [--json]                       各 Agent 的读写能力矩阵（代码事实，不探测本机 CLI）
-  watch prompt <session-id> [--provider <name>] [--profile minimal|standard|verbose|full] [--last <n>] [--json]
+  watch prompt [<session-id>] [--provider <name>] [--profile minimal|standard|verbose|full] [--last <n>] [--json]
                                                     摘要交接：把会话渲染成可粘贴给任意 Agent 的 Markdown（降级方案，不写任何文件）
+                                                    省略会话 id 时自动挑本目录按修改时间最新的可读会话，并在文档头标明
   watch doctor [--json] [--strict] [--cwd <path>]   只读环境诊断：Agent 检测、本地库、导入日志（不写盘）
   watch new <provider> [--json] [--cwd <path>] [--chain <id|name>]
   watch chain list|new <name>|rename <id|name> <new>|archive <id|name>|use <id|name> [--json] [--cwd]
@@ -1587,17 +1589,91 @@ function toMillis(iso: string | undefined): number | undefined {
 }
 
 /**
- * `watch prompt <session-id>`：摘要交接（降级方案）。
+ * `watch prompt [<session-id>]`：摘要交接（降级方案）。
  *
  * 只读：不写任何会话文件、不启动任何 CLI、不碰本地库的会话映射。用途有两条：
  * ① 目标工具根本没有适配器（Antigravity / Cursor / Claude Desktop），写不回原生格式；
  * ② 那家的格式刚漂移，写回去有风险。这时把会话渲染成一份可粘贴的 Markdown，
  * 比「不支持」更有用，但**必须**说清这是降级——文档一旦被复制走就脱离 Watch，
  * 所以降级声明写在正文里，而不是只打在 stderr。
+ *
+ * 省略会话 id 时按修改时间在本目录里自动挑一条（`--provider` 可把范围收到一家）。
+ * 这条挑选与 `status` / `switch` 的「最新会话」同源（`collectTips` + `pickLatestTip`），
+ * 并沿用同一套披露：挑不到时不能把「读不出来」讲成「这个目录没会话」；挑到了但
+ * 有会话因归属行损坏被跳过时，要说明挑的是「能读出的那些里最新的」。
  */
+
+/** 自动挑选的结果：要么给出会话，要么给出一条能直接拿去 `fail()` 的完整原因。 */
+type PromptAutoPick =
+  | { adapter: ProviderAdapter; ref: SessionRef; updatedAt: number }
+  | { message: string };
+
+async function autoPickPromptSession(
+  cwd: string,
+  provider: string | undefined,
+  warnings: string[],
+): Promise<PromptAutoPick> {
+  const cwdIssue = await cwdProblem(cwd);
+  const adapters = provider ? listAdapters().filter((a) => a.id === provider) : listAdapters();
+  if (provider && !adapters[0]?.findLatestSession) {
+    // 没有这个方法的适配器只是「不能替人挑」，会话本身可能就在那儿：
+    // 说成「没找到会话」会让人白开一条新的
+    return { message: `${provider} 不支持自动挑选会话，请显式指定会话 id：watch prompt <session-id> --provider ${provider}` };
+  }
+  const unreadable: string[] = [];
+  const unreadableReasons: { provider: string; reason: string }[] = [];
+  const tips = await collectTips(cwd, adapters, warnings, unreadable, unreadableReasons);
+  const tip = pickLatestTip(tips);
+  // 归属那一行坏了的文件不属于任何目录，`findLatestSession` 只能跳过：零结果与
+  // 「挑到的是能读出的那些里最新的」两种情况都要用到这一份统计
+  const hidden = await collectUnattributable(adapters);
+  const prefix = cwdIssue ? `${cwdIssue}；` : '';
+
+  if (!tip) {
+    if (unreadable.length) {
+      const detail = unreadableReasons.map((u) => `${u.provider}（${escapeControlChars(u.reason)}）`).join('；');
+      return {
+        message:
+          prefix +
+          `无法确认这个目录里有没有可交接的会话：${detail}——这不代表这里没有会话，` +
+          '先修好这些会话存储（权限、路径或库状态）再重试，或用 watch prompt <session-id> 显式指定',
+      };
+    }
+    const hiddenNote = unattributableNoPickMessage(hidden);
+    if (hiddenNote) {
+      return { message: prefix + `${hiddenNote}；改用 watch prompt <session-id> 显式指定会话 id 可以跳过这种挑选` };
+    }
+    // `--cwd`（或当前目录）可能只是同一个目录的另一种写法：只留「先开一次会话」
+    // 会把人引去开新会话，而原来的会话一直躺在另一个写法下面
+    const alias = await cwdAliasHint(cwd, undefined, unreadable);
+    const scope = provider ? `（provider=${provider}）` : '';
+    return {
+      message:
+        prefix +
+        `没有在 ${escapeControlChars(cwd)} 找到可读取的原生会话${scope}` +
+        (alias ? `；${alias}` : '') +
+        '；若确实是新目录，请先在该目录下开一次会话，或用 watch prompt <session-id> 显式指定',
+    };
+  }
+
+  if (cwdIssue) warnings.push(cwdIssue);
+  // 「按修改时间最新」这句话只在所有会话都读得出归属时成立；否则挑的是子集里的最新，
+  // 用户要的可能正是被跳过的那一条
+  const pickWarning = unattributablePickWarning(
+    hidden,
+    '自动挑的会话',
+    '你要的可能正是被跳过的那一条（用 watch prompt <session-id> 显式指定会话 id 可以避开这种挑选）',
+  );
+  if (pickWarning) warnings.push(pickWarning);
+  const adapter = getAdapter(tip.provider);
+  if (!adapter) return { message: unknownProviderMessage(tip.provider) };
+  return { adapter, ref: tip.ref, updatedAt: tip.updatedAt };
+}
+
 async function cmdPrompt(
+  cwd: string,
   json: boolean,
-  sessionId: string,
+  sessionId: string | undefined,
   provider: string | undefined,
   profileRaw: string | undefined,
   lastUserTurns: number | undefined,
@@ -1611,24 +1687,47 @@ async function cmdPrompt(
   if (provider && !getAdapter(provider)) fail(json, unknownProviderMessage(provider));
 
   const diagnostics: string[] = [];
-  const misses: LookupMiss[] = [];
-  const resolved = await resolveById(sessionId, provider, null, listAdapters(), diagnostics, misses);
-  if (!resolved) {
-    const headline = lookupMissHeadline('会话', sessionId, misses, provider);
-    fail(
-      json,
-      headline ??
-        `未找到会话: ${escapeControlChars(sessionId)}${provider ? `（provider=${provider}）` : ''}。` +
-          `请确认 id 正确且对应 CLI 已安装登录。${LOOKUP_NEXT_STEP}`,
+  let adapter: ProviderAdapter;
+  let foundRef: SessionRef;
+  let updatedAt: number;
+  let autoPicked = false;
+  if (sessionId === undefined || sessionId === '') {
+    // 空串也按「没给」处理：`watch prompt ""` 现在会去猜会话 id，而猜出来的东西
+    // 与显式给的 id 不是一回事，必须让用户看见（下面的 autoPicked）
+    autoPicked = true;
+    const pick = await autoPickPromptSession(cwd, provider, diagnostics);
+    if ('message' in pick) fail(json, pick.message);
+    adapter = pick.adapter;
+    foundRef = pick.ref;
+    updatedAt = pick.updatedAt;
+  } else {
+    const misses: LookupMiss[] = [];
+    const resolved = await resolveById(sessionId, provider, null, listAdapters(), diagnostics, misses);
+    if (!resolved) {
+      const headline = lookupMissHeadline('会话', sessionId, misses, provider);
+      fail(
+        json,
+        headline ??
+          `未找到会话: ${escapeControlChars(sessionId)}${provider ? `（provider=${provider}）` : ''}。` +
+            `请确认 id 正确且对应 CLI 已安装登录。${LOOKUP_NEXT_STEP}`,
+      );
+    }
+    adapter = resolved.adapter;
+    foundRef = resolved.found.ref;
+    updatedAt = resolved.found.updatedAt;
+  }
+  const warnings = [...diagnostics];
+  const id = escapeControlChars(foundRef.sessionId);
+  if (autoPicked) {
+    warnings.push(
+      `没有指定会话 id，已按修改时间挑选本目录最新的可读会话（${adapter.id} ${id}）；` +
+        '要换别的会话就用 watch prompt <session-id> 显式指定——这次挑的是哪条，文档头也写着',
     );
   }
-  const { adapter, found } = resolved;
-  const warnings = [...diagnostics];
-  const id = escapeControlChars(found.ref.sessionId);
 
   let turns;
   try {
-    turns = await adapter.parse(found.ref);
+    turns = await adapter.parse(foundRef);
   } catch (error) {
     // 读不出来就不能装作「这条会话是空的」：文档正文会因此变成「没有可展示的内容」，
     // 与「会话确实没聊过」长得一模一样。
@@ -1637,14 +1736,14 @@ async function cmdPrompt(
 
   // 0 轮有两种完全不同的原因，`probeSessionReadable()` 是判据的唯一入口（与 open / switch 共用）。
   if (turns.length === 0) {
-    const emptyReason = await probeSessionReadable(found.ref.filePath);
+    const emptyReason = await probeSessionReadable(foundRef.filePath);
     if (emptyReason) warnings.push(`会话 ${id} 没有可交接的内容：${emptyReason}`);
   }
 
   let sessionUsage: TokenUsage | null = null;
   if (adapter.sessionUsage) {
     try {
-      sessionUsage = await adapter.sessionUsage(found.ref);
+      sessionUsage = await adapter.sessionUsage(foundRef);
     } catch (error) {
       warnings.push(`用量读取失败（${describeReadFailureOrSelf(error)}）；文档里的用量写成「没有可读的用量记录」`);
     }
@@ -1655,13 +1754,15 @@ async function cmdPrompt(
     {
       providerId: adapter.id,
       providerName: adapter.displayName,
-      sessionId: found.ref.sessionId,
-      sourcePath: found.ref.filePath,
-      cwd: found.ref.cwd,
+      sessionId: foundRef.sessionId,
+      sourcePath: foundRef.filePath,
+      cwd: foundRef.cwd,
       // 首条记录的时间当起点：文档里要给出时间范围，但只在真读到时间戳时写
       startedAt: toMillis(turns[0]?.timestamp),
-      updatedAt: found.updatedAt,
+      updatedAt,
       usage: sessionUsage,
+      // 文档会被复制走：这一条必须写在正文里，stderr 的警告不会跟着文档
+      ...(autoPicked ? { autoPicked: true } : {}),
     },
     profile,
     { ...(lastUserTurns !== undefined ? { lastUserTurns } : {}) },
@@ -1670,11 +1771,13 @@ async function cmdPrompt(
   if (json) {
     console.log(JSON.stringify({
       ok: true,
-      sessionId: found.ref.sessionId,
+      sessionId: foundRef.sessionId,
       provider: adapter.id,
-      cwd: found.ref.cwd,
+      cwd: foundRef.cwd,
       profile: result.profile,
       ...(lastUserTurns !== undefined ? { lastUserTurns } : {}),
+      // 脚本要能区分「按 id 查到的」与「替你猜的」：两者的可信度不一样
+      ...(autoPicked ? { autoPicked: true } : {}),
       markdown: result.markdown,
       stats: result.stats,
       findings: result.findings,
@@ -2475,6 +2578,7 @@ const POSITIONAL_BY_COMMAND: Record<string, { max: number; hint: string }> = {
   chain: { max: Infinity, hint: '<list|new|rename|archive|use> [名字或 id] [新名字]' },
   usage: { max: 0, hint: '无位置参数' },
   open: { max: 1, hint: '<session-id>' },
+  prompt: { max: 1, hint: '[<session-id>]（省略时自动挑本目录最新的可读会话）' },
 };
 
 /** `chain` 各子命令吃的位置参数个数；未知子命令交给 cmdChain 自己报错，这里不拦 */
@@ -2550,8 +2654,9 @@ async function main(): Promise<void> {
     return;
   }
   if (cmd === 'prompt') {
-    if (!target) usage('prompt 需要指定会话 id；例：watch prompt <session-id> --profile standard');
-    await cmdPrompt(json, target, provider, profile, last);
+    // 会话 id 可省略：只输入 `watch prompt` 时按本目录最新可读会话自动挑选（与 catchup 的
+    // 「不指定就用最近一条」对齐）。自动挑选是替用户做选择，所以文档头会写明这一点。
+    await cmdPrompt(cwd, json, target, provider, profile, last);
     return;
   }
   if (cmd === 'doctor') {

@@ -75,6 +75,11 @@ export type PromptSessionMeta = {
   updatedAt?: number;
   /** 来源会话的 token 用量；null = 这家没有用量记录 */
   usage?: TokenUsage | null;
+  /**
+   * 会话是按修改时间自动挑的（命令没有显式给出 id）。
+   * 文档头部的会话 ID 一行要写明这件事——文档会被复制走，「这条是谁挑的」属于读者需要的事实。
+   */
+  autoPicked?: boolean;
 };
 
 export type PromptStats = {
@@ -318,7 +323,9 @@ export function buildHandoffPrompt(
   lines.push('## 元信息');
   lines.push('');
   lines.push(`- 来源助手：${sanitizeBody(meta.providerName).text}（${sanitizeBody(meta.providerId).text}）`);
-  lines.push(`- 会话 ID：${sanitizeBody(meta.sessionId).text}`);
+  lines.push(
+    `- 会话 ID：${sanitizeBody(meta.sessionId).text}${meta.autoPicked ? '（自动挑选：本目录按修改时间最新的可读会话，可能不是你想要的另一条）' : ''}`,
+  );
   if (meta.sourcePath) lines.push(`- 源文件：${sanitizeBody(meta.sourcePath).text}`);
   lines.push(`- 工作目录：${sanitizeBody(meta.cwd).text}`);
   const range = formatTimeRange(meta.startedAt, meta.updatedAt);

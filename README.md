@@ -106,6 +106,7 @@ npm run watch -- new pi                         # 在链上新建另一侧会话
 npm run watch -- open <session-id> --json       # 反查 cwd 并输出可粘贴的打开命令
 npm run watch -- open <session-id> --to codex   # 直接把该会话内容转入 Codex 新会话
 npm run watch -- prompt <session-id> > seed.md  # 目标工具没有适配器时，导出「摘要交接」文档
+npm run watch -- prompt > seed.md               # 省略 id：取本目录按修改时间最新的可读会话
 ```
 
 <details>
@@ -126,13 +127,13 @@ providers                                                   各 Agent 的本机�
 capabilities                                                各 Agent 的读写能力矩阵（代码事实，不探测本机 CLI）
 doctor   [--cwd <path>] [--strict]                          只读环境诊断（Agent 检测 / 本地库 / 导入日志）；发现硬失败时退出码 1，--strict 让警告也算失败
 open     <session-id> [--from <id>] [--provider <name>] [--to <provider>] [--check]
-prompt   <session-id> [--provider <name>] [--profile minimal|standard|verbose|full] [--last <n>]   摘要交接：把会话渲染成可粘贴的 Markdown（降级方案，不写任何文件）
+prompt   [<session-id>] [--provider <name>] [--profile minimal|standard|verbose|full] [--last <n>]   摘要交接：把会话渲染成可粘贴的 Markdown（降级方案，不写任何文件）
 import-codex  prepare|confirm|status|project-prepare|project-confirm|project-status
 ```
 
 `--check` 只与 `open ... --to <provider>` 同用：只读预检目标会话是否可写，不写入任何内容。
 
-目标工具还没有适配器（或那家的格式刚漂移、写回有风险）时用 `prompt`：它只读，把会话渲染成一份 Markdown，正文开头就写明「这是摘要交接、不是目标助手的原生会话」；`--profile` 控制保留多少内容，`--last <n>` 则只保留最近 n 个用户轮（显式窗口，此时不再强制保留首轮，文档里会写明）；任何被裁剪的部分都会进 `--json` 的 `findings` 并在 stderr 说明。
+目标工具还没有适配器（或那家的格式刚漂移、写回有风险）时用 `prompt`：它只读，把会话渲染成一份 Markdown，正文开头就写明「这是摘要交接、不是目标助手的原生会话」；`--profile` 控制保留多少内容，`--last <n>` 则只保留最近 n 个用户轮（显式窗口，此时不再强制保留首轮，文档里会写明）；任何被裁剪的部分都会进 `--json` 的 `findings` 并在 stderr 说明。省略会话 id 时，它在 `--cwd`（默认当前目录）里按修改时间挑最新的一条可读会话，`--provider` 可把范围收窄到一家；文档头部会标明「自动挑选」，`--json` 也会带 `autoPicked: true`——挑不到时不会输出半份文档，读不出来与确实没有会话分开说明。
 
 </details>
 

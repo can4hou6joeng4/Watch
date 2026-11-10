@@ -805,7 +805,8 @@ export async function collectTips(
   return tips;
 }
 
-function pickChainTip(tips: ProviderTip[]): ProviderTip | null {
+/** 按 mtime 挑最新的一条；`watch prompt` 不带会话 id 时的自动挑选也走这里，避免两处各写一份比较 */
+export function pickLatestTip(tips: ProviderTip[]): ProviderTip | null {
   if (!tips.length) return null;
   return tips.reduce((a, b) => (b.updatedAt > a.updatedAt ? b : a));
 }
@@ -999,7 +1000,7 @@ export async function handoff(
   const unreadableTips: string[] = [];
   const unreadableReasons: { provider: string; reason: string }[] = [];
   const tips = await collectTips(cwd, adapters, warnings, unreadableTips, unreadableReasons);
-  const mtimeTip = pickChainTip(tips);
+  const mtimeTip = pickLatestTip(tips);
   if (!mtimeTip) {
     const chainTipRef = history.at(-1)?.toRef ?? null;
     if (chainTipRef) {
