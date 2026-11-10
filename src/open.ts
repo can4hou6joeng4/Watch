@@ -933,8 +933,11 @@ async function planOpenInProvider(
     return {
       ok: false,
       error:
-        `${lead}。要从零在 ${target.displayName} 侧开新会话，请先另起一条链：watch chain new <新名字> 之后 watch new ${providerId}` +
-        `；若 ${target.displayName} 侧已有会话，可用 watch adopt ${providerId} --session <会话 id> 接进来`,
+        // 「请先另起一条链」在还没有链、或链尾不是这条 0 轮会话时都是错的下一步：
+        // `watch new` 自己会建默认链，只有链尾正卡在这条 0 轮会话时才会撞上同一句拒绝（实测）
+        `${lead}。要从零在 ${target.displayName} 侧开新会话，直接 watch new ${providerId} 即可（本目录还没有链时会先建一条）；` +
+        `若当前链的链尾正是这条 0 轮会话，先 watch chain new <新名字> 再 watch new ${providerId}；` +
+        `若 ${target.displayName} 侧已有会话，可用 watch adopt ${providerId} --session <会话 id> 接进来`,
     };
   }
 
