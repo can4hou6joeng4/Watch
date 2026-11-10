@@ -1193,6 +1193,9 @@ async function cmdSessions(cwd: string, json: boolean, chain?: string): Promise<
   }
   try {
     const unavailable: string[] = [];
+    // 扫描是并发的，但 `unavailable` 是 `--json` 契约里的一项：顺序必须稳定（按适配器注册序），
+    // 否则同一份输入两次运行能给出两种数组顺序，调用方与用例都没法断言。先记集合，`Promise.all` 之后再摊平。
+    const failedProviders = new Set<string>();
     // 「归属那一行坏了」的条目不属于任何目录，列表里根本不会出现：放在这里披露，
     // 否则「这个目录就这些会话」是一句假结论（doctor 会说明，但用户看的是列表）
     const unattributableStats = await collectUnattributable(adapters);
@@ -1206,7 +1209,7 @@ async function cmdSessions(cwd: string, json: boolean, chain?: string): Promise<
           try {
             sessions = await a.listSessions!(cwd);
           } catch (error) {
-            unavailable.push(a.id);
+            failedProviders.add(a.id);
             // 只报 provider id，用户看不出是权限、库损坏还是路径问题，也就无从修
             warnings.push(`${a.id} 会话列表读取失败：${error instanceof Error ? error.message : String(error)}`);
             return { provider: a.id, sessions: [] };
@@ -1265,6 +1268,7 @@ async function cmdSessions(cwd: string, json: boolean, chain?: string): Promise<
           };
         }),
     );
+    for (const a of adapters) if (a.listSessions && failedProviders.has(a.id)) unavailable.push(a.id);
     const result = groups.filter((g) => g.sessions.length > 0);
     // 零会话 + `--cwd` 只是同一个目录的另一种写法：正文的「未发现会话」会被当成「真的没聊过」，
     // 而会话可能全记在 realpath 那种写法下（软链 / 大小写），先给可照抄的路径
