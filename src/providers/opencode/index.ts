@@ -2,7 +2,9 @@ import { spawn } from 'node:child_process';
 import { describeDetectFailure, isCommandMissing, resolveCli } from '../../core/platform.js';
 import type { ProviderAdapter } from '../adapter.js';
 import type { ProcessEvent, SessionRef, TokenUsage, UnifiedTurn } from '../../core/types.js';
+import { escapeControlChars } from '../../core/display.js';
 import { parseOpencodeSession } from './parse.js';
+import { detectOpencodeLayout } from './paths.js';
 import {
   createEmptyOpencodeSession,
   findLatestOpencodeSession,
@@ -101,6 +103,16 @@ export {
  * 与读取失败。
  */
 async function opencodeSessionUsage(ref: SessionRef): Promise<TokenUsage | null> {
+  const dbPath = ref.filePath || opencodeDbPath();
+  // 2.x（2026-11-11 起只读支持）的用量记在 session_v2 的累计列里，本机没有原生样本验证
+  // 「累计列与逐条消息是否同一口径」。返回 null 会被讲成「这条会话没有用量数据」，所以抛错，
+  // 由 chainUsage / open 记成「读取失败」并给警告——宁可说没查成，也不说成 0。
+  if (detectOpencodeLayout(dbPath) === 'v2') {
+    throw new Error(
+      `OpenCode 2.x 布局的 token 口径 Watch 还没验证（2.x 把用量记在 session_v2 的累计列里，` +
+        `与逐条消息是否一致未知）：${escapeControlChars(dbPath)}；这条会话不计入合计——不代表它没有用过 token`,
+    );
+  }
   const turns = await parseOpencodeSession(ref);
   let inputTokens = 0;
   let outputTokens = 0;

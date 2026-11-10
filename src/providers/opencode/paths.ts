@@ -91,10 +91,14 @@ const OPENCODE_KNOWN_TABLES = ['project', 'session', 'message', 'part'];
  * 投影，转换器只读不写。1.x → 2.x 迁移过的库会**同时留着**旧的 session / message / part
  * 表，那些是过时副本，opencode 自己不再读。
  *
- * Watch 的读写在 1.x 布局（session / message / part）上验证过，所以：
- * - 写路径看到 2.x 标记必须拒绝——否则要么把表建进一个 2.x 库（污染），要么写进旧的 1.x
- *   副本（opencode 读不到，却报「转入成功」）；
- * - 读路径看到 2.x 标记必须说「没验证过这种布局」，不能把 `no such table` 讲成「没有会话」。
+ * Watch 的写在 1.x 布局（session / message / part）上验证过，所以写路径看到 2.x 标记必须拒绝
+ * ——否则要么把表建进一个 2.x 库（污染），要么写进旧的 1.x 副本（opencode 读不到，却报「转入成功」）。
+ *
+ * 读路径从 2026-11-11 起支持 2.x，依据仍是该转换器的实测 schema（`session_v2` 带
+ * slug / directory / title / time_created / time_updated，`session_message` 带
+ * type / seq / time_created / data）。它是第三方记录的 beta 布局、本机没有原生样本，
+ * 所以解析只认转换器 fixture 里出现过的 `type`，其余类型原样跳过并把条数写进内容，
+ * 不猜含义——见 `parse.ts` 的 `parseOpencodeV2Turns()`。
  */
 const OPENCODE_V2_TABLES = ['session_v2', 'session_message'];
 
@@ -104,20 +108,21 @@ function opencodeV2Marker(tables: string[]): string | null {
 }
 
 /**
- * 读路径（列表 / 反查 / 解析）的事前检查：只拦「是 opencode 的库、但不是 Watch 认识的布局」。
- * 打不开 / 表结构读不出来一律放过，交给调用方原有的 `opencodeDbSqliteError` 去说，
- * 避免同一个库在两条错误路径上给出两种说法。
+ * 读路径（列表 / 反查 / 解析）先判库布局：`v2` 走 `session_v2` + `session_message`，
+ * 其余按 1.x 的 `session` / `message` / `part` 处理。
+ *
+ * 打不开 / 表结构读不出来时一律返回 `v1`：不在这里抢答，交给调用方原有的
+ * `opencodeDbSqliteError` 说清（同一个库不该在两条错误路径上给出两种说法）。
+ *
+ * 迁移过的库同时留着旧 1.x 表，但那是 opencode 自己不再读的过时副本——只要出现 2.x
+ * 标记就必须读新表，否则会读到一份「看起来有、实际已经不再更新」的历史。
  */
-export function assertReadableOpencodeDb(dbPath: string): void {
+export type OpencodeLayout = 'v1' | 'v2';
+
+export function detectOpencodeLayout(dbPath: string): OpencodeLayout {
   const probe = probeSqliteTables(dbPath);
-  if ('error' in probe) return;
-  const v2 = opencodeV2Marker(probe.tables);
-  if (!v2) return;
-  throw new Error(
-    `无法读取 OpenCode 会话：${escapeControlChars(dbPath)} 是 2.x 结构（表: ${v2}），Watch 还没验证过这种布局；` +
-      `这不代表没有会话内容，先不要据此判断。也不要删除或挪走这个库——可以等 Watch 支持 2.x 后再试，` +
-      `或把 WATCH_OPENCODE_DB 指向一个 1.x 布局的库`,
-  );
+  if ('error' in probe) return 'v1';
+  return opencodeV2Marker(probe.tables) ? 'v2' : 'v1';
 }
 
 /**

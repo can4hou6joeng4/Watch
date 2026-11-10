@@ -1,7 +1,7 @@
 import { DatabaseSync } from 'node:sqlite';
 import { normalizeUserText } from '../../core/rich.js';
 import type { ProcessEvent, SessionRef, TokenUsage, UnifiedTurn } from '../../core/types.js';
-import { assertReadableOpencodeDb, opencodeDbPath, opencodeDbSqliteError, probeOpencodeDbFile } from './paths.js';
+import { detectOpencodeLayout, opencodeDbPath, opencodeDbSqliteError, probeOpencodeDbFile } from './paths.js';
 
 type MessageRow = {
   id: string;
@@ -250,13 +250,295 @@ function messageToTurn(
   return turn;
 }
 
+/* ─────────────────────────── OpenCode 2.x（只读） ─────────────────────────── */
+
+/**
+ * 2.x 的 `session_message` 是事件日志：一行一个 `type`，内容整段放在 `data` JSON 里。
+ *
+ * 类型集合来自第三方转换器 cross_agent_session_resumer 的 2.x 测试样本
+ * （`tests/opencode_v2_test.rs`，session_v2 / session_message 列定义与插入语句它都记了）：
+ * user / assistant 是对话，assistant 的 `content` 数组里是 text / reasoning / tool；
+ * shell / synthetic / system / compaction / model-switched 是事件。本机没有原生 2.x 样本，
+ * 所以只映射这些见过形状的类型，其余原样跳过并把条数写进内容（不猜含义）。
+ */
+type V2MessageRow = { id: string; type: string; seq: number; time_created: number; data: string };
+
+type V2ToolState = {
+  status?: string;
+  input?: Record<string, unknown>;
+  output?: unknown;
+  content?: unknown;
+  error?: { message?: string };
+};
+
+/** content 数组的一项：按 `type` 分支读字段；未知类型只用到 `type` */
+type V2ContentItem = {
+  type: string;
+  text?: string;
+  id?: string;
+  name?: string;
+  executed?: boolean;
+  state?: V2ToolState;
+  time?: { created?: number; completed?: number };
+};
+
+type V2MessageData = {
+  text?: string;
+  time?: { created?: number; completed?: number };
+  content?: V2ContentItem[] | string;
+  command?: string;
+  shellID?: string;
+  status?: string;
+  exit?: number;
+  output?: { output?: string } | string;
+  summary?: string;
+  recent?: string;
+  reason?: string;
+  model?: { providerID?: string; id?: string; modelID?: string };
+};
+
+function bumpCount(map: Map<string, number>, key: string): void {
+  const k = key.trim() || '（空类型）';
+  map.set(k, (map.get(k) ?? 0) + 1);
+}
+
+function describeCounts(map: Map<string, number>): string {
+  return [...map.entries()]
+    .sort((a, b) => b[1] - a[1])
+    .map(([k, n]) => `${k} × ${n}`)
+    .join('、');
+}
+
+function v2ToolResultText(state: V2ToolState | undefined): string | undefined {
+  if (state?.error?.message) return state.error.message;
+  const content = state?.content;
+  if (typeof content === 'string') return content;
+  if (Array.isArray(content)) {
+    const texts = content
+      .map((c) =>
+        c && typeof c === 'object' && typeof (c as { text?: unknown }).text === 'string'
+          ? (c as { text: string }).text
+          : '',
+      )
+      .filter((t) => t.length > 0);
+    if (texts.length) return texts.join('\n');
+  }
+  if (typeof state?.output === 'string') return state.output;
+  if (state?.output !== undefined) return JSON.stringify(state.output);
+  return undefined;
+}
+
+function v2UserTurn(row: V2MessageRow, data: V2MessageData): UnifiedTurn | null {
+  const raw = typeof data.text === 'string' ? data.text : typeof data.content === 'string' ? data.content : '';
+  const normalized = normalizeUserText(raw);
+  if (!normalized) return null;
+  const time = typeof data.time?.created === 'number' ? data.time.created : row.time_created;
+  return { role: 'user', text: normalized, timestamp: new Date(time).toISOString(), provider: 'opencode' };
+}
+
+function v2AssistantTurn(
+  row: V2MessageRow,
+  data: V2MessageData,
+  unknown: Map<string, number>,
+): UnifiedTurn | null {
+  const time = typeof data.time?.created === 'number' ? data.time.created : row.time_created;
+  const timestamp = new Date(time).toISOString();
+  const items: V2ContentItem[] =
+    typeof data.content === 'string' ? [{ type: 'text', text: data.content }] : Array.isArray(data.content) ? data.content : [];
+  const texts: string[] = [];
+  const events: ProcessEvent[] = [];
+
+  for (const item of items) {
+    if (!item || typeof item !== 'object') {
+      bumpCount(unknown, 'content:（非对象）');
+      continue;
+    }
+    if (item.type === 'text') {
+      if (typeof item.text === 'string' && item.text) texts.push(item.text);
+    } else if (item.type === 'reasoning') {
+      const text = typeof item.text === 'string' ? item.text : '';
+      if (text) {
+        events.push({ kind: 'thinking', timestamp, detail: text, summary: text, provider: 'opencode' });
+      }
+    } else if (item.type === 'tool') {
+      const callId = item.id ?? `oc-${crypto.randomUUID()}`;
+      const input = item.state?.input ?? {};
+      events.push({
+        kind: 'tool_call',
+        timestamp,
+        name: item.name ?? 'tool',
+        callId,
+        input,
+        summary: `${item.name ?? 'tool'} ${JSON.stringify(input).slice(0, 200)}`,
+        provider: 'opencode',
+      });
+      const output = v2ToolResultText(item.state);
+      if (output !== undefined) {
+        events.push({ kind: 'tool_result', timestamp, callId, detail: output, summary: output.slice(0, 200), provider: 'opencode' });
+      }
+    } else {
+      bumpCount(unknown, `content:${item.type ?? '（空类型）'}`);
+    }
+  }
+
+  const text = texts.join('\n\n');
+  if (!text.trim() && events.length === 0) return null;
+  const turn: UnifiedTurn = { role: 'assistant', text, timestamp, provider: 'opencode' };
+  if (events.length > 0) turn.events = events;
+  return turn;
+}
+
+/** 非对话事件 → ProcessEvent[]；返回 null 表示这个 type 不在已记录的样本里 */
+function v2AuxEvents(type: string, data: V2MessageData, time: number): ProcessEvent[] | null {
+  const timestamp = new Date(time).toISOString();
+  switch (type) {
+    case 'shell': {
+      const command = typeof data.command === 'string' ? data.command : '';
+      const callId =
+        typeof data.shellID === 'string' && data.shellID ? `oc-shell-${data.shellID}` : `oc-shell-${crypto.randomUUID()}`;
+      const events: ProcessEvent[] = [
+        {
+          kind: 'tool_call',
+          timestamp,
+          name: 'shell',
+          callId,
+          input: { command },
+          summary: `shell ${command}`.trim(),
+          provider: 'opencode',
+        },
+      ];
+      const out = typeof data.output === 'string' ? data.output : data.output?.output;
+      if (typeof out === 'string' && out) {
+        events.push({ kind: 'tool_result', timestamp, callId, detail: out, summary: out.slice(0, 200), provider: 'opencode' });
+      }
+      return events;
+    }
+    case 'compaction': {
+      const summary = typeof data.summary === 'string' ? data.summary : '';
+      const recent = typeof data.recent === 'string' ? data.recent : '';
+      return [
+        {
+          kind: 'text',
+          timestamp,
+          summary: '[压缩摘要（由 OpenCode 生成，不是用户原话）]',
+          detail: [summary, recent ? `（最近对话：${recent}）` : ''].filter(Boolean).join('\n'),
+          provider: 'opencode',
+        },
+      ];
+    }
+    case 'system':
+    case 'synthetic': {
+      const text = typeof data.text === 'string' ? data.text : '';
+      const label = type === 'system' ? '系统事件' : '系统生成事件';
+      return [{ kind: 'text', timestamp, summary: `[${label}] ${text.slice(0, 160)}`.trim(), detail: text, provider: 'opencode' }];
+    }
+    case 'model-switched': {
+      const label = [data.model?.providerID, data.model?.id ?? data.model?.modelID].filter(Boolean).join('/');
+      return [{ kind: 'text', timestamp, summary: `[模型切换]${label ? ` ${label}` : ''}`, detail: label, provider: 'opencode' }];
+    }
+    default:
+      return null;
+  }
+}
+
+function parseOpencodeV2Turns(db: DatabaseSync, sessionId: string): UnifiedTurn[] {
+  const rows = db
+    .prepare(
+      'SELECT id, type, seq, time_created, data FROM session_message WHERE session_id = ? ORDER BY seq, time_created, id',
+    )
+    .all(sessionId) as V2MessageRow[];
+  if (rows.length === 0) return [];
+
+  const turns: UnifiedTurn[] = [];
+  // 非对话事件先挂到上一条 turn；上一条还没有时暂存，等下一轮对话出现再挂（不单独造 turn）
+  const pending: ProcessEvent[] = [];
+  const unknown = new Map<string, number>();
+  let lastTime = 0;
+
+  // 事件属于「模型处理这一轮的过程」，优先挂到它之后的 assistant turn；
+  // 上一条还是 user（或还没有 turn）时先暂存，别把工具过程挂到用户提问上。
+  const attach = (events: ProcessEvent[]): void => {
+    if (events.length === 0) return;
+    const last = turns.at(-1);
+    if (last?.role === 'assistant') last.events = [...(last.events ?? []), ...events];
+    else pending.push(...events);
+  };
+
+  for (const row of rows) {
+    const data = parseJson<V2MessageData>(row.data);
+    const time = typeof data?.time?.created === 'number' ? data.time.created : row.time_created;
+    if (time > lastTime) lastTime = time;
+    if (!data) {
+      bumpCount(unknown, `${row.type || '（空类型）'}（data 无法解析）`);
+      continue;
+    }
+
+    if (row.type === 'user') {
+      const turn = v2UserTurn(row, data);
+      if (!turn) {
+        bumpCount(unknown, 'user（无文本）');
+        continue;
+      }
+      turns.push(turn);
+      continue;
+    }
+
+    if (row.type === 'assistant') {
+      const turn = v2AssistantTurn(row, data, unknown);
+      if (!turn) continue;
+      // 与 1.x 相同的一档合并：纯文本的助手消息接在带工具调用的上一条之后，归回同一个 turn
+      const prev = turns.at(-1) ?? null;
+      const prevHasTool = (prev?.events ?? []).some((e) => e.kind === 'tool_call');
+      if (!turn.events && turn.text.trim() && prev?.role === 'assistant' && prevHasTool) {
+        prev.text = prev.text ? `${prev.text}\n\n${turn.text}` : turn.text;
+        continue;
+      }
+      if (pending.length > 0) {
+        turn.events = [...pending, ...(turn.events ?? [])];
+        pending.length = 0;
+      }
+      turns.push(turn);
+      continue;
+    }
+
+    const aux = v2AuxEvents(row.type, data, time);
+    if (aux === null) bumpCount(unknown, row.type || '（空类型）');
+    else attach(aux);
+  }
+
+  // 会话以非对话事件收尾时（后面没有 assistant 了），挂到最后一条 turn 上，别让它们消失
+  if (pending.length > 0 && turns.length > 0) {
+    const last = turns.at(-1)!;
+    last.events = [...(last.events ?? []), ...pending];
+    pending.length = 0;
+  }
+
+  // 未识别的事件类型不能静默消失：把条数与类型写进最后一条 turn 的事件里。
+  // 没有任何对话 turn 时无处承载（见边界说明），只能返回 []——这一档等同于「没有可搬运的对话」。
+  if (unknown.size > 0 && turns.length > 0) {
+    const total = [...unknown.values()].reduce((a, b) => a + b, 0);
+    const last = turns.at(-1)!;
+    last.events = [
+      ...(last.events ?? []),
+      {
+        kind: 'text',
+        timestamp: new Date(lastTime || Date.now()).toISOString(),
+        summary: `[OpenCode 2.x 有 ${total} 条未识别事件，未并入对话]`,
+        detail: `${describeCounts(unknown)}；Watch 只按第三方记录的 2.x 测试样本识别 user / assistant / shell / system / synthetic / compaction / model-switched，其余原样跳过，不猜含义`,
+        provider: 'opencode',
+      },
+    ];
+  }
+  return turns;
+}
+
 /** 读 SQLite 把 OpenCode session 解析为 UnifiedTurn[] */
 export async function parseOpencodeSession(ref: SessionRef): Promise<UnifiedTurn[]> {
   const dbPath = ref.filePath || opencodeDbPath();
   // 库文件不存在 = 还没有内容（库被清 / 会话刚建）；但路径被占住、库打不开、查不了
   // 都不是「这个会话是空的」——返回 [] 会让 diffTurns 把目标当成空会话，把来源整段再追加一遍
   if ((await probeOpencodeDbFile(dbPath)) === 'missing') return [];
-  assertReadableOpencodeDb(dbPath);
+  const v2 = detectOpencodeLayout(dbPath) === 'v2';
   let db: DatabaseSync;
   try {
     db = new DatabaseSync(dbPath, { readOnly: true });
@@ -265,6 +547,7 @@ export async function parseOpencodeSession(ref: SessionRef): Promise<UnifiedTurn
   }
 
   try {
+    if (v2) return parseOpencodeV2Turns(db, ref.sessionId);
     const messages = db
       .prepare('SELECT id, time_created, data FROM message WHERE session_id = ? ORDER BY time_created, id')
       .all(ref.sessionId) as MessageRow[];

@@ -6,8 +6,8 @@ import { SessionLookupFailureError } from '../adapter.js';
 import type { ProcessEvent, SessionRef, TokenUsage, UnifiedTurn } from '../../core/types.js';
 import { escapeControlChars } from '../../core/display.js';
 import {
-  assertReadableOpencodeDb,
   assertUsableOpencodeDb,
+  detectOpencodeLayout,
   ensureOpencodeDbDir,
   opencodeDbPath,
   opencodeDbSqliteError,
@@ -60,7 +60,7 @@ export async function listOpencodeSessions(
   // 库不存在 = 这台机器没用过 opencode，空列表是事实；
   // 库在却打不开是「读不出来」，必须抛出交给调用方披露，不能返回空列表冒充「这个目录没聊过」
   if ((await probeOpencodeDbFile(dbPath)) === 'missing') return [];
-  assertReadableOpencodeDb(dbPath);
+  const v2 = detectOpencodeLayout(dbPath) === 'v2';
   let db: DatabaseSync | undefined;
   try {
     db = new DatabaseSync(dbPath, { readOnly: true });
@@ -69,7 +69,11 @@ export async function listOpencodeSessions(
   }
   try {
     const rows = db
-      .prepare('SELECT id, directory, title, time_updated FROM session WHERE directory = ? ORDER BY time_updated DESC')
+      .prepare(
+        v2
+          ? 'SELECT id, directory, title, time_updated FROM session_v2 WHERE directory = ? ORDER BY time_updated DESC'
+          : 'SELECT id, directory, title, time_updated FROM session WHERE directory = ? ORDER BY time_updated DESC',
+      )
       .all(cwd) as { id: string; directory: string; title: string; time_updated: number }[];
     return rows.map((r) => ({
       ref: { provider: 'opencode', sessionId: r.id, filePath: dbPath, cwd: r.directory },
@@ -91,12 +95,8 @@ export async function findOpencodeSessionById(
   // 库文件不存在 = 从没用过 opencode，是干净的「没有这个会话」；
   // 文件在却打不开（权限 / 锁 / 被占）或查不了，是「读不出来」，不能返回 null 冒充不存在
   if ((await probeOpencodeDbFile(dbPath)) === 'missing') return null;
-  // 2.x 布局是「没查成」，不是「没有这个会话」：返回 null 会让反查方以为 id 不存在
-  try {
-    assertReadableOpencodeDb(dbPath);
-  } catch (error) {
-    throw new SessionLookupFailureError('incomplete', error instanceof Error ? error.message : String(error));
-  }
+  // 2.x 从 2026-11-11 起只读支持：查 session_v2，不再报「没验证过布局」
+  const v2 = detectOpencodeLayout(dbPath) === 'v2';
   let db: DatabaseSync | undefined;
   try {
     db = new DatabaseSync(dbPath, { readOnly: true });
@@ -106,7 +106,11 @@ export async function findOpencodeSessionById(
   }
   try {
     const row = db
-      .prepare('SELECT directory, time_updated FROM session WHERE id = ?')
+      .prepare(
+        v2
+          ? 'SELECT directory, time_updated FROM session_v2 WHERE id = ?'
+          : 'SELECT directory, time_updated FROM session WHERE id = ?',
+      )
       .get(sessionId) as { directory: string; time_updated: number } | undefined;
     if (!row) return null;
     return {
