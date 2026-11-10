@@ -32,6 +32,7 @@ import { describeWriteFailureReason } from './core/atomic.js';
 import { collectUnattributable, emptiedJson, emptiedSearchNote, emptiedSessionsWarning, unattributableEmptyNote, unattributableJson, unattributableNoPickMessage, unattributablePickWarning, unattributableSearchNote, unattributableWarning } from './core/session-coverage.js';
 import type { EmptiedSession } from './core/session-coverage.js';
 import { describeSpawnFailure } from './core/platform.js';
+import { usageBadLinesReason, usageSidecarProblem } from './core/usage-integrity.js';
 import { readWatchVersion } from './core/watch-version.js';
 import { CAPABILITY_VERIFICATION_NOTE, describeCapabilities, formatCapabilities } from './core/capabilities.js';
 
@@ -1741,11 +1742,24 @@ async function cmdPrompt(
   }
 
   let sessionUsage: TokenUsage | null = null;
+  // 用量这一行在「没有数字」之外还有两种来路，都必须写进文档：读不出来（`sessionUsage` 抛错），
+  // 或用量数据源本身是空的（grok 的 `updates.jsonl` 被截成 0 字节，`sessionUsage` 安静返回 null）。
+  // 只打在 stderr 不够——文档会被复制进别家助手，那里的读者会把「读不出来」当成「这家没有用量」。
+  let usageNote: string | undefined;
   if (adapter.sessionUsage) {
     try {
       sessionUsage = await adapter.sessionUsage(foundRef);
     } catch (error) {
-      warnings.push(`用量读取失败（${describeReadFailureOrSelf(error)}）；文档里的用量写成「没有可读的用量记录」`);
+      const reason = describeReadFailureOrSelf(error);
+      usageNote = `用量读取失败（${reason}），这里没有可用数字——这不代表来源会话没有用量`;
+      warnings.push(`用量读取失败（${reason}）；文档的用量行已写明这一点`);
+    }
+    if (sessionUsage === null && !usageNote) {
+      const sidecar = await usageSidecarProblem(adapter, foundRef, '来源会话');
+      if (sidecar) {
+        usageNote = `用量不可用：${sidecar}`;
+        warnings.push(sidecar);
+      }
     }
   }
 
@@ -1761,6 +1775,7 @@ async function cmdPrompt(
       startedAt: toMillis(turns[0]?.timestamp),
       updatedAt,
       usage: sessionUsage,
+      ...(usageNote ? { usageNote } : {}),
       // 文档会被复制走：这一条必须写在正文里，stderr 的警告不会跟着文档
       ...(autoPicked ? { autoPicked: true } : {}),
     },

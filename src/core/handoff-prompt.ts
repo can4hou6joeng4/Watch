@@ -76,6 +76,15 @@ export type PromptSessionMeta = {
   /** 来源会话的 token 用量；null = 这家没有用量记录 */
   usage?: TokenUsage | null;
   /**
+   * 用量**这一行**要说清的另一种事实：读不出来、或用量数据源已空。
+   *
+   * `usage` 为 `null` 有两种完全不同的来路——「这家原生没有用量记录」与「有记录但没读成」
+   * （`sessionUsage` 抛错、grok 的 `updates.jsonl` 被截成 0 字节）。默认那句「没有可读的
+   * 用量记录」两种都说得通，于是文档被复制走之后，读者会把「读不出来」当成「这家没有」。
+   * 有这一项时整行换成它（已经是一句完整说明，真原因在前）。
+   */
+  usageNote?: string;
+  /**
    * 会话是按修改时间自动挑的（命令没有显式给出 id）。
    * 文档头部的会话 ID 一行要写明这件事——文档会被复制走，「这条是谁挑的」属于读者需要的事实。
    */
@@ -349,7 +358,11 @@ export function buildHandoffPrompt(
     );
   }
   lines.push(`- 轮次：${stats.turns} 轮（用户 ${stats.userTurns} / 助手 ${stats.assistantTurns}）`);
-  lines.push(`- 用量：${formatUsage(meta.usage) ?? '来源会话没有可读的用量记录'}`);
+  lines.push(
+    meta.usageNote
+      ? `- 用量：${sanitizeBody(meta.usageNote).text}`
+      : `- 用量：${formatUsage(meta.usage) ?? '来源会话没有可读的用量记录'}`,
+  );
   const fullHint = profile === 'full' ? '' : '；要更完整的内容，用 --profile full 重新生成';
   const lastHint = options.lastUserTurns !== undefined ? `，最近 ${options.lastUserTurns} 个用户轮（--last）` : '';
   lines.push(`- 档位：${profile}（正文 ${limits.textLimit === null ? '不截断' : `每条 ≤ ${limits.textLimit} 字符`}，过程记录 ${limits.eventsPerTurn === null ? '全部展开' : limits.eventsPerTurn === 0 ? '不展开' : `每轮 ≤ ${limits.eventsPerTurn} 条`}${lastHint}${fullHint}）`);
