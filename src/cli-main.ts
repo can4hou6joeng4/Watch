@@ -1737,9 +1737,18 @@ async function cmdPrompt(
   }
 
   // 0 轮有两种完全不同的原因，`probeSessionReadable()` 是判据的唯一入口（与 open / switch 共用）。
+  // 文档里那句结论必须说清是哪一种：0 字节要从备份恢复，可读但 0 轮则要看是不是格式没认出来。
+  let emptySourceNote: string | undefined;
   if (turns.length === 0) {
     const emptyReason = await probeSessionReadable(foundRef.filePath);
-    if (emptyReason) warnings.push(`会话 ${id} 没有可交接的内容：${emptyReason}`);
+    if (emptyReason) {
+      warnings.push(`会话 ${id} 没有可交接的内容：${emptyReason}`);
+      emptySourceNote = `${emptyReason}；需要完整内容请先恢复来源文件`;
+    } else {
+      const note = '来源文件可读，但解析出 0 轮可交接内容（可能只有系统事件 / 元数据，或这一家的记录格式还没被识别）';
+      warnings.push(`会话 ${id}：${note}`);
+      emptySourceNote = note;
+    }
   }
 
   let sessionUsage: TokenUsage | null = null;
@@ -1793,6 +1802,7 @@ async function cmdPrompt(
       startedAt: toMillis(turns[0]?.timestamp),
       updatedAt,
       ...(badSourceLines > 0 ? { sourceBadLines: badSourceLines } : {}),
+      ...(emptySourceNote ? { emptySourceNote } : {}),
       usage: sessionUsage,
       ...(usageNote ? { usageNote } : {}),
       ...(usageBadLines > 0 ? { usageBadLines } : {}),

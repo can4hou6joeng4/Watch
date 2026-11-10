@@ -77,6 +77,12 @@ export type PromptSessionMeta = {
    * 0 或缺省时不写这一行。opencode（SQLite）、kimi 这类非 JSONL 来源由判据自己返回 0。
    */
   sourceBadLines?: number;
+  /**
+   * `stats.turns === 0` 时正文那句结论要说清是哪一种「没有」：0 字节（内容已丢失），
+   * 还是文件可读但解析出 0 轮（只有系统事件 / 元数据，或这一家的格式还没被识别）。
+   * 缺省时退回三选一的兜底句——那时调用方没查过，不能替它断言是哪一种。
+   */
+  emptySourceNote?: string;
   /** 本地记录的最后更新时间（毫秒）；缺省时头部不写这一行 */
   updatedAt?: number;
   /** 来源会话的 token 用量；null = 这家没有用量记录 */
@@ -408,7 +414,7 @@ export function buildHandoffPrompt(
   lines.push('## 会话记录');
   lines.push('');
   if (!body.length) {
-    lines.push('（这条会话没有可展示的正文：可能是 0 字节文件、内容已丢失，或所有轮次都被裁掉。）');
+    lines.push(meta.emptySourceNote ?? '（这条会话没有可展示的正文：可能是 0 字节文件、内容已丢失，或所有轮次都被裁掉。）');
     lines.push('');
   } else {
     lines.push(...body);
