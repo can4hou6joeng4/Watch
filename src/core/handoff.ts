@@ -36,7 +36,7 @@ export function blockedHint(code: string): string {
     return '目标会话文件读不出来（多为权限或路径问题），本次未写入任何内容；先确认文件状态再重试。';
   }
   if (code === 'target_changed') return '请确认目标会话已停止写入后重试；本次未写入任何内容。';
-  if (code === 'cli_missing') return '未写入任何内容；新建该会话需要本机已安装并登录对应 CLI。';
+  if (code === 'cli_missing') return '未写入任何内容；新建该会话需要本机已安装并登录对应 CLI：装好后先运行一次它，确认能正常启动并完成登录，再重试同一条命令。';
   // 检测本身失败不是「没装」，别让人去重装
   if (code === 'cli_detect_failed') {
     return '未写入任何内容；无法确认目标 CLI 是否可用（检测本身失败），先修好 PATH、权限或客户端配置再重试。';

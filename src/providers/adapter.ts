@@ -32,7 +32,9 @@ export function cliMissingBlock(providerId: string, displayName: string): Prefli
   return {
     code: 'cli_missing',
     message: `${displayName} 未检测到：新建 ${providerId} 会话需要本机已安装并登录 ${providerId} CLI`,
-    hint: `未写入任何内容；新建 ${displayName} 会话需要本机已安装并登录 ${providerId} CLI。`,
+    // 「已安装并登录」不是用户能直接执行的动作：补一步可照做的确认（先跑一次看它能不能起来、要不要登录），
+    // 否则用户装完就重试，仍然只看到同一句「未检测到」。
+    hint: `未写入任何内容；新建 ${displayName} 会话需要本机已安装并登录 ${providerId} CLI：装好后先运行一次 ${providerId}，确认它能正常启动并完成登录，再重试同一条命令。`,
   };
 }
 
