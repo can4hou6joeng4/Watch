@@ -9,6 +9,19 @@ export const ENCRYPTED_THINKING = '思考中…（加密）';
  */
 export const CLAUDE_THINKING_PREFIX = '[思考] ';
 
+/**
+ * Claude Code 在压缩上下文时，会把压缩摘要写成一条 `type: "user"` + `isCompactSummary: true`
+ * 的记录（实测 SSE 版本的字段也一致）。它在时间线上长得和用户消息一模一样：`role` 是 user、
+ * 内容是一大段叙述。不标出来时，这段由模型 / 客户端生成的摘要会在 `watch prompt` 文档与转入
+ * 目标会话的记录里都变成「用户说过的话」——目标助手据此把机器总结当成用户指令，而原文作者
+ * 根本没写过这段。
+ *
+ * 标在**正文里**而不是元信息里：prompt 文档会被复制走，转入目标会话的也是这段文本本身，
+ * 只有跟着文本走才到得了读者眼前。措辞不写「原始记录已删除」——Claude Code 的会话文件仍保留
+ * 压缩前的轮次，这里只声明这段文字的来源。
+ */
+export const CLAUDE_COMPACT_SUMMARY_PREFIX = '[Claude Code 上下文压缩摘要：由 Claude Code 生成，不是用户原话]';
+
 export function turnHasContent(t: UnifiedTurn): boolean {
   return t.text.trim() !== '' || (t.events?.length ?? 0) > 0;
 }

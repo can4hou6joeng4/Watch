@@ -1,5 +1,6 @@
 import { readFile } from 'node:fs/promises';
 import {
+  CLAUDE_COMPACT_SUMMARY_PREFIX,
   CLAUDE_THINKING_PREFIX,
   ENCRYPTED_THINKING,
   ensureAssistant,
@@ -18,6 +19,7 @@ import type { ProcessEvent, SessionRef, TokenUsage, UnifiedTurn } from '../../co
  * - 仅含 tool_result 的 user 记录不当作用户消息
  * - 同一 user turn 内多条 assistant 合并：过程事件累积，文本留最后一条非空
  * - assistant 的 `[思考] …` 记录（build 的 thinking 降级形态）还原成 thinking 事件
+ * - `isCompactSummary` 的 user 记录在正文前加来源前缀（它由 Claude Code 生成，不是用户原话）
  * - 丢弃首条 user 之前的记录
  */
 export async function parseClaudeSession(ref: SessionRef): Promise<UnifiedTurn[]> {
@@ -54,7 +56,14 @@ export async function parseClaudeSession(ref: SessionRef): Promise<UnifiedTurn[]
         continue;
       }
       sawUser = true;
-      const userTurn: UnifiedTurn = { role: 'user', text: unwrapUserQuery(text), timestamp };
+      // 压缩摘要不是用户说的话，但它在记录里就是一条 role=user 的行。前缀必须跟着文本走：
+      // prompt 文档会被复制走、转入目标会话的也是这段文本，元信息到不了读者那里。
+      const userText = unwrapUserQuery(text);
+      const userTurn: UnifiedTurn = {
+        role: 'user',
+        text: r.isCompactSummary === true ? `${CLAUDE_COMPACT_SUMMARY_PREFIX}\n${userText}` : userText,
+        timestamp,
+      };
       if (events.length) userTurn.events = events;
       turns.push(userTurn);
     } else {
