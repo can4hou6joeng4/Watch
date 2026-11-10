@@ -105,6 +105,7 @@ npm run watch -- adopt claude                   # attach an existing Claude sess
 npm run watch -- new pi                         # create the other side of the chain (starts a session on an empty chain)
 npm run watch -- open <session-id> --json       # resolve the cwd and print a paste-ready command
 npm run watch -- open <session-id> --to codex   # transfer that session into a new Codex session
+npm run watch -- prompt <session-id> > seed.md  # export a "summary handoff" doc when the target has no adapter
 ```
 
 <details>
@@ -125,10 +126,13 @@ providers                                                    local install detec
 capabilities                                                 read/write capability matrix per agent (code facts, no local CLI probing)
 doctor   [--cwd <path>] [--strict]                           read-only environment diagnostics; exits 1 on hard failures, --strict also fails on warnings
 open     <session-id> [--from <id>] [--provider <name>] [--to <provider>] [--check]
+prompt   <session-id> [--provider <name>] [--profile minimal|standard|verbose|full]   summary handoff: render the session as paste-ready Markdown (degraded path, writes nothing)
 import-codex  prepare|confirm|status|project-prepare|project-confirm|project-status
 ```
 
 `--check` is only used with `open ... --to <provider>`: a read-only precheck of whether the target is writable. Nothing is written.
+
+When the target has no adapter yet (or that agent's format just drifted and writing back is risky), use `prompt`: it is read-only and renders the session as Markdown whose opening states "this is a summary handoff, not the target agent's native session". `--profile` controls how much is kept, and anything trimmed is counted in the `--json` `findings` and explained on stderr.
 
 </details>
 

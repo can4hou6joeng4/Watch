@@ -7,8 +7,16 @@ import { describeFindings } from './core/findings.js';
 import { adoptIntoChain, blockedHint, chainStatus, chainUsage, collectTips, createChainSession, currentChainShiftNote, emptyChainBindHint, handoff, HandoffBlockedError, notCurrentChainWarning, rebindHint, storeUnavailableWarning } from './core/handoff.js';
 import { reindexCwd } from './core/search.js';
 import type { SessionRef } from './core/types.js';
+import type { TokenUsage } from './core/types.js';
+import {
+  buildHandoffPrompt,
+  DEFAULT_PROMPT_PROFILE,
+  parsePromptProfile,
+  PROMPT_PROFILES,
+} from './core/handoff-prompt.js';
 import { getAdapter, listAdapters, listProviders, noSessionHint, unknownProviderMessage } from './providers/registry.js';
-import { checkOpenInProvider, LOOKUP_NEXT_STEP, openInProvider, openSession } from './open.js';
+import { checkOpenInProvider, LOOKUP_NEXT_STEP, lookupMissHeadline, openInProvider, openSession, resolveById } from './open.js';
+import type { LookupMiss } from './open.js';
 import { PreflightBlockedError } from './providers/adapter.js';
 import { runImportCodex } from './import-codex.js';
 import { ImportJobs } from './core/import-jobs.js';
@@ -48,6 +56,8 @@ function usage(reason?: string): never {
   watch recent [--json] [--cwd <path>] [--limit <n>]
   watch providers [--json]
   watch capabilities [--json]                       各 Agent 的读写能力矩阵（代码事实，不探测本机 CLI）
+  watch prompt <session-id> [--provider <name>] [--profile minimal|standard|verbose|full] [--json]
+                                                    摘要交接：把会话渲染成可粘贴给任意 Agent 的 Markdown（降级方案，不写任何文件）
   watch doctor [--json] [--strict] [--cwd <path>]   只读环境诊断：Agent 检测、本地库、导入日志（不写盘）
   watch new <provider> [--json] [--cwd <path>] [--chain <id|name>]
   watch chain list|new <name>|rename <id|name> <new>|archive <id|name>|use <id|name> [--json] [--cwd]
@@ -324,6 +334,7 @@ function parseArgs(argv: string[]): {
   from?: string;
   provider?: string;
   to?: string;
+  profile?: string;
   check: boolean;
   strict: boolean;
   limit?: number;
@@ -343,6 +354,7 @@ function parseArgs(argv: string[]): {
   let from: string | undefined;
   let provider: string | undefined;
   let to: string | undefined;
+  let profile: string | undefined;
   let check = false;
   let strict = false;
   let limit: number | undefined;
@@ -415,6 +427,10 @@ function parseArgs(argv: string[]): {
       to = takeValue('--to');
       continue;
     }
+    if (a === '--profile') {
+      profile = takeValue('--profile');
+      continue;
+    }
     if (a === '--limit') {
       const raw = takeValue('--limit');
       // Number() 会接受 '0x10'（16）与 ' 3'（3）：用户只想给十进制条数，别猜他的意思
@@ -447,6 +463,7 @@ function parseArgs(argv: string[]): {
     ...(from ? ['from'] : []),
     ...(provider ? ['provider'] : []),
     ...(to ? ['to'] : []),
+    ...(profile ? ['profile'] : []),
     ...(limit !== undefined ? ['limit'] : []),
   ];
   return {
@@ -463,6 +480,7 @@ function parseArgs(argv: string[]): {
     from,
     provider,
     to,
+    profile,
     check,
     strict,
     limit,
@@ -1528,6 +1546,109 @@ async function cmdProviders(json: boolean): Promise<void> {
 }
 
 /**
+ * `watch prompt <session-id>`：摘要交接（降级方案）。
+ *
+ * 只读：不写任何会话文件、不启动任何 CLI、不碰本地库的会话映射。用途有两条：
+ * ① 目标工具根本没有适配器（Antigravity / Cursor / Claude Desktop），写不回原生格式；
+ * ② 那家的格式刚漂移，写回去有风险。这时把会话渲染成一份可粘贴的 Markdown，
+ * 比「不支持」更有用，但**必须**说清这是降级——文档一旦被复制走就脱离 Watch，
+ * 所以降级声明写在正文里，而不是只打在 stderr。
+ */
+async function cmdPrompt(
+  json: boolean,
+  sessionId: string,
+  provider: string | undefined,
+  profileRaw: string | undefined,
+): Promise<void> {
+  const profile = profileRaw === undefined ? DEFAULT_PROMPT_PROFILE : parsePromptProfile(profileRaw);
+  if (!profile) {
+    // 档位是封闭枚举（四个词），写错时把可选值一起给出。
+    // 取值已做 trim + 小写归一（`--profile " FULL "` 可用），所以这里只剩真正拼错的情况。
+    usage(`--profile 只接受 ${PROMPT_PROFILES.join(' / ')}，收到: ${escapeControlChars(profileRaw ?? '')}`);
+  }
+  if (provider && !getAdapter(provider)) fail(json, unknownProviderMessage(provider));
+
+  const diagnostics: string[] = [];
+  const misses: LookupMiss[] = [];
+  const resolved = await resolveById(sessionId, provider, null, listAdapters(), diagnostics, misses);
+  if (!resolved) {
+    const headline = lookupMissHeadline('会话', sessionId, misses, provider);
+    fail(
+      json,
+      headline ??
+        `未找到会话: ${escapeControlChars(sessionId)}${provider ? `（provider=${provider}）` : ''}。` +
+          `请确认 id 正确且对应 CLI 已安装登录。${LOOKUP_NEXT_STEP}`,
+    );
+  }
+  const { adapter, found } = resolved;
+  const warnings = [...diagnostics];
+  const id = escapeControlChars(found.ref.sessionId);
+
+  let turns;
+  try {
+    turns = await adapter.parse(found.ref);
+  } catch (error) {
+    // 读不出来就不能装作「这条会话是空的」：文档正文会因此变成「没有可展示的内容」，
+    // 与「会话确实没聊过」长得一模一样。
+    fail(json, `会话 ${id} 读取失败：${describeReadFailureOrSelf(error)}；未生成任何内容`);
+  }
+
+  // 0 轮有两种完全不同的原因，`probeSessionReadable()` 是判据的唯一入口（与 open / switch 共用）。
+  if (turns.length === 0) {
+    const emptyReason = await probeSessionReadable(found.ref.filePath);
+    if (emptyReason) warnings.push(`会话 ${id} 没有可交接的内容：${emptyReason}`);
+  }
+
+  let sessionUsage: TokenUsage | null = null;
+  if (adapter.sessionUsage) {
+    try {
+      sessionUsage = await adapter.sessionUsage(found.ref);
+    } catch (error) {
+      warnings.push(`用量读取失败（${describeReadFailureOrSelf(error)}）；文档里的用量写成「没有可读的用量记录」`);
+    }
+  }
+
+  const result = buildHandoffPrompt(
+    turns,
+    {
+      providerId: adapter.id,
+      providerName: adapter.displayName,
+      sessionId: found.ref.sessionId,
+      cwd: found.ref.cwd,
+      updatedAt: found.updatedAt,
+      usage: sessionUsage,
+    },
+    profile,
+  );
+
+  if (json) {
+    console.log(JSON.stringify({
+      ok: true,
+      sessionId: found.ref.sessionId,
+      provider: adapter.id,
+      cwd: found.ref.cwd,
+      profile: result.profile,
+      markdown: result.markdown,
+      stats: result.stats,
+      findings: result.findings,
+      ...(warnings.length ? { warnings } : {}),
+    }));
+    return;
+  }
+  // stdout 只放文档本身：它正是要被 `> seed.md` 或管道拿走的产物。
+  // 诊断一律走 stderr，否则重定向后的文件里会混进「警告: …」。
+  for (const warning of warnings) console.error(`警告: ${warning}`);
+  for (const line of describeFindings(result.findings)) console.error(`说明: ${line}`);
+  if (result.stats.omittedTurns > 0 || result.stats.omittedEvents > 0) {
+    console.error(
+      `提示: 当前档位（${result.profile}）省略了 ${result.stats.omittedTurns} 轮 / ${result.stats.omittedEvents} 条过程记录；` +
+        '要保留更多，用 --profile verbose 或 --profile full 重新生成',
+    );
+  }
+  console.log(result.markdown);
+}
+
+/**
  * `watch capabilities`：各适配器在**代码层面**实现了哪些读写能力。
  *
  * 刻意不调 `detect()`：这张表是纯元数据，一条命令内即可返回；「本机装没装 / 能不能起来」
@@ -2266,6 +2387,7 @@ const FLAGS_BY_COMMAND: Record<string, string[]> = {
   recent: ['limit'],
   providers: [],
   capabilities: [],
+  prompt: ['provider', 'profile'],
   doctor: ['strict'],
   new: ['chain'],
   chain: [],
@@ -2345,7 +2467,7 @@ async function main(): Promise<void> {
     await runImportCodex(process.argv.slice(3));
     return;
   }
-  const { cmd, target, extra, rest, json, cwd, session, chain, from, provider, to, check, strict, limit, usedFlags, cwdGiven, positional } = parseArgs(process.argv);
+  const { cmd, target, extra, rest, json, cwd, session, chain, from, provider, to, profile, check, strict, limit, usedFlags, cwdGiven, positional } = parseArgs(process.argv);
   if (cmd) {
     rejectUnusedFlags(cmd, usedFlags, json);
     rejectExtraPositionals(cmd, positional, json);
@@ -2378,6 +2500,11 @@ async function main(): Promise<void> {
   }
   if (cmd === 'capabilities') {
     cmdCapabilities(json);
+    return;
+  }
+  if (cmd === 'prompt') {
+    if (!target) usage('prompt 需要指定会话 id；例：watch prompt <session-id> --profile standard');
+    await cmdPrompt(json, target, provider, profile);
     return;
   }
   if (cmd === 'doctor') {
