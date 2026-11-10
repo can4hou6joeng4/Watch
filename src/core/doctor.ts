@@ -52,6 +52,28 @@ export type DriftedPair = {
   sourceTurns: number;
 };
 
+/**
+ * Watch 自己占用的磁盘：库文件（含 `-wal` / `-shm`）与搜索索引规模。
+ *
+ * 各家原生会话体积不归 Watch 管，这里只回答「这个工具自己吃了多少」。索引里的内容
+ * 全部可由会话文件重建，所以体积是可回收的——但回收动作会连链记录一起丢，文案里必须说清。
+ * 读不出来的项一律给 `null`，不拿 0 冒充「空库」。
+ */
+export type StoreFootprint = {
+  /** `WATCH_DB=:memory:`：不落盘，下面的字节数与计数全部为 null */
+  ephemeral: boolean;
+  /** 尚未建库（ENOENT）时报 0：这是「还没写过」，不是「读不到」 */
+  dbBytes: number | null;
+  walBytes: number | null;
+  shmBytes: number | null;
+  /** 搜索索引：文本段数 / 覆盖会话数 / 覆盖目录数 */
+  indexRows: number | null;
+  indexSessions: number | null;
+  indexDirectories: number | null;
+  /** 体积或计数读不出来时的原因；此时对应字段为 null */
+  error?: string;
+};
+
 /** 每家 Agent 的原生会话列表可读性：`count` 为 null 表示读取失败 */
 export type StorageProbe = {
   provider: string;
@@ -81,6 +103,8 @@ export type DoctorReport = {
   environment: DoctorEnvironment;
   providers: ProviderInfo[];
   storage: StorageProbe[];
+  /** 本地库自身的磁盘占用与索引规模 */
+  storeFootprint: StoreFootprint;
   store:
     | {
         available: true;
@@ -139,6 +163,8 @@ export type DoctorStore = {
     fromRef?: SessionRef | null;
     toRef?: SessionRef | null;
   }[];
+  /** 搜索索引规模（可选：注入的假 Store 可以不给，报告里就是 null） */
+  indexFootprint?(): { rows: number; sessions: number; directories: number };
 };
 
 export type DoctorDeps = {
@@ -194,8 +220,57 @@ async function pathPresence(filePath: string): Promise<PathPresence> {
   }
 }
 
-function resolveEnvironment(importsRoot: string | null): DoctorEnvironment {
+/**
+ * 量一下 Watch 自己占了多大：库文件三个（db / wal / shm）各自 stat，索引规模问 Store。
+ * 两项独立降级——`stat` 不到不该连带索引计数一起变成「未知」，反过来也一样。
+ */
+async function probeStoreFootprint(dbPath: string, store: DoctorStore | null): Promise<StoreFootprint> {
+  if (dbPath === ':memory:') {
+    return {
+      ephemeral: true,
+      dbBytes: null,
+      walBytes: null,
+      shmBytes: null,
+      indexRows: null,
+      indexSessions: null,
+      indexDirectories: null,
+    };
+  }
+  let statError: string | undefined;
+  // ENOENT 报 0：这是「还没建过库」，与「读不出来」下一步相反，不能混成一档
+  const bytes = async (path: string): Promise<number | null> => {
+    try {
+      return (await stat(path)).size;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return 0;
+      statError ||= `${escapeControlChars(path)}：${describeStoreErrorReason(error)}`;
+      return null;
+    }
+  };
+  const dbBytes = await bytes(dbPath);
+  const walBytes = await bytes(`${dbPath}-wal`);
+  const shmBytes = await bytes(`${dbPath}-shm`);
+  let counts: { rows: number; sessions: number; directories: number } | null = null;
+  let countError: string | undefined;
+  try {
+    counts = store?.indexFootprint?.() ?? null;
+  } catch (error) {
+    countError = describeStoreErrorReason(error);
+  }
+  const error = [statError, countError].filter(Boolean).join('；');
   return {
+    ephemeral: false,
+    dbBytes,
+    walBytes,
+    shmBytes,
+    indexRows: counts?.rows ?? null,
+    indexSessions: counts?.sessions ?? null,
+    indexDirectories: counts?.directories ?? null,
+    ...(error ? { error } : {}),
+  };
+}
+
+function resolveEnvironment(importsRoot: string | null): DoctorEnvironment {  return {
     watchVersion: readWatchVersion(),
     node: process.versions.node,
     platform: `${process.platform}-${process.arch}`,
@@ -547,10 +622,14 @@ export async function doctorReport(cwd: string, deps: DoctorDeps): Promise<Docto
     }
   }
 
+  // 体积读不出来同样是降级：静默给 null 等于「本地库这一栏什么都没有」，用户会以为没这项检查
+  const storeFootprint = await probeStoreFootprint(environment.dbPath, deps.store);
+  if (storeFootprint.error) warnings.push(`本地库体积读不全：${storeFootprint.error}`);
+
   const summary: DoctorSummary = {
     status: failures.length ? 'fail' : warnings.length ? 'warn' : 'ok',
     failures,
     warnings: warnings.length,
   };
-  return { cwd, environment, providers, storage, store, imports, warnings, summary };
+  return { cwd, environment, providers, storage, store, imports, storeFootprint, warnings, summary };
 }

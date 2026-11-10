@@ -23,6 +23,7 @@ import { runImportCodex } from './import-codex.js';
 import { ImportJobs } from './core/import-jobs.js';
 import { officialImportJournalRoot } from './providers/codex/official-import.js';
 import { doctorReport } from './core/doctor.js';
+import type { StoreFootprint } from './core/doctor.js';
 import { cwdAliasHint, cwdControlCharsNote, cwdProblem, describeCwdProblem, describeWriteCwd, inspectCwd, sameDirectorySync, splitElsewhereByDirectory } from './core/cwd.js';
 import { escapeControlChars, hasControlChars } from './core/display.js';
 import { trimUserKey } from './core/cli-input.js';
@@ -1894,6 +1895,43 @@ function cmdCapabilities(json: boolean): void {
   }));
 }
 
+function formatBytes(n: number): string {
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KiB`;
+  if (n < 1024 * 1024 * 1024) return `${(n / 1024 / 1024).toFixed(1)} MiB`;
+  return `${(n / 1024 / 1024 / 1024).toFixed(2)} GiB`;
+}
+
+/**
+ * 「本地库体积」一栏。三个数各自可能读不出来，逐项说清，不拿 0 冒充空库；
+ * 有索引内容时必须点明「可由会话文件重建、但链记录只在库里」——否则最自然的
+ * 省空间动作（删库）会把链一起删掉，而这条命令正是用户来查体积的地方。
+ */
+function describeStoreFootprint(f: StoreFootprint): string {
+  if (f.ephemeral) return '临时库（WATCH_DB=:memory:），不落盘：链与索引都随命令结束消失';
+  const parts: string[] = [];
+  if (f.dbBytes === null) {
+    parts.push('读不出来（原因见警告）');
+  } else if (f.dbBytes === 0) {
+    parts.push('尚未创建（还没有成功写入过本地库）');
+  } else {
+    // SHM 只是进程共享的临时映射（通常 32 KiB、随连接消失），不算进「占了多少盘」，
+    // 否则每次都会有个跟内容无关的固定尾巴；它仍保留在 --json 里供排障
+    const side = f.walBytes ? ` · WAL ${formatBytes(f.walBytes)}` : '';
+    const total = f.dbBytes + (f.walBytes ?? 0);
+    parts.push(`合计 ${formatBytes(total)}（watch.db ${formatBytes(f.dbBytes)}${side}）`);
+  }
+  if (f.indexSessions === null) {
+    parts.push('搜索索引规模未知');
+  } else if (f.indexSessions === 0) {
+    parts.push('搜索索引为空（本机还没跑过会建索引的 watch search）');
+  } else {
+    parts.push(`搜索索引 ${f.indexRows} 段 / ${f.indexSessions} 个会话 / ${f.indexDirectories} 个目录`);
+    parts.push('索引内容可由会话文件重建，但链记录只存在这个库里，删库会一并丢失');
+  }
+  return parts.join('；');
+}
+
 async function cmdDoctor(cwd: string, json: boolean, strict: boolean): Promise<void> {
   try {
     const store = openStore();
@@ -1929,6 +1967,7 @@ async function cmdDoctor(cwd: string, json: boolean, strict: boolean): Promise<v
     console.log(`诊断 cwd: ${escapeControlChars(report.cwd)}`);
     console.log(`环境: watch ${env.watchVersion ?? '未知版本'} · node ${env.node} · ${env.platform}`);
     console.log(`本地库文件: ${escapeControlChars(env.dbPath)}`);
+    console.log(`本地库体积: ${describeStoreFootprint(report.storeFootprint)}`);
     console.log(`导入日志目录: ${env.importsRoot ? escapeControlChars(env.importsRoot) : '（不可用）'}`);
     console.log('Agent 检测:');
     for (const p of report.providers) {
