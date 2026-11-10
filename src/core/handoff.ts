@@ -859,6 +859,53 @@ export type ProviderTip = {
   unreadable?: boolean;
 };
 
+/**
+ * 「这次什么都没写」之后，链尾现在停在哪——三种事实必须分开说：
+ * 链上有绑定（说清是谁）/ 这条链还没有绑定（没有链尾需要保留）/ 链历史读不出来（无从判断）。
+ * 以前一律写成「链尾仍在 <来源 provider>」：来源是按 mtime 兜底挑的时候，它根本不是链尾；
+ * 空链与库故障时这句话更是编的（`alreadyAtTarget` 分支早就按 chainTipState 分了三档）。
+ */
+/**
+ * 「来源 0 轮」时下一步也分三种事实：链上已有链尾（同链 new 仍会撞这次空交接，只能另起一条）、
+ * 链还是空的（直接 new 就是它的第一条绑定，另起一条纯属多余）、库不可用（链记录写不进去，
+ * 只能说明后果）。以前三档都用「请先另起一条链」——空链上照着做的人会凭空多出一条链。
+ */
+function zeroTurnNextStep(args: {
+  target: ProviderAdapter;
+  targetId: string;
+  store?: Store | null;
+  history: SwitchRecord[];
+  historyFailed: boolean;
+}): string {
+  const { target, targetId, store, history, historyFailed } = args;
+  const adoptHint = `若 ${target.displayName} 侧已有会话，可用 watch adopt ${targetId} --session <会话 id> 接进来`;
+  if (!store || historyFailed) {
+    return `要在 ${target.displayName} 侧从零开新会话：watch new ${targetId}（本地库不可用时这次交接写不进链记录，原因见上方警告）；${adoptHint}`;
+  }
+  if (!history.at(-1)?.toRef) {
+    return `要在 ${target.displayName} 侧从零开新会话，直接 watch new ${targetId} 即可（新会话就是这条链的第一条绑定）；${adoptHint}`;
+  }
+  return (
+    `要在 ${target.displayName} 侧从零开新会话，请先另起一条链：watch chain new <新名字> 之后 watch new ${targetId}` +
+    `（同一条链上直接 new ${targetId} 仍会走这次空交接）；${adoptHint}`
+  );
+}
+
+function chainTipAfterNoWrite(args: {
+  history: SwitchRecord[];
+  historyFailed: boolean;
+  store?: Store | null;
+  adapters: ProviderAdapter[];
+}): string {
+  const { history, historyFailed, store, adapters } = args;
+  if (!store) return '本次未写入任何内容（本地库不可用，无法确认链尾状态）';
+  if (historyFailed) return '本次未写入任何内容（链历史读取失败，无法确认链尾状态）';
+  const tip = history.at(-1)?.toRef ?? null;
+  if (!tip) return '本次未写入任何内容（这条链还没有绑定任何会话，没有链尾需要保留）';
+  const name = adapters.find((a) => a.id === tip.provider)?.displayName ?? tip.provider;
+  return `本次未写入任何内容，链尾未变（仍是 ${name} 会话 ${tip.sessionId}）`;
+}
+
 export type HandoffResult = {
   newRef: SessionRef;
   resumeCommand: string;
@@ -1418,17 +1465,16 @@ export async function handoff(
       // 以前两种形状共用同一句「没有任何可交接的内容（0 轮）」，而 sessions / recent / doctor /
       // status / chain list 从 283 轮起都已经会说「0 字节，内容已丢失」——只有真正要 resume 的
       // 这条路径把「内容丢了」讲成「本来就没有」。
+      const tipAfter = chainTipAfterNoWrite({ history, historyFailed, store, adapters });
       const lead = emptiedSourceFile
         ? `来源会话 ${sourceTip.ref.sessionId}（${source.displayName}）的${emptiedSourceFile}；` +
-          `没有任何可交接的内容（0 轮），本次未写入任何内容，链尾仍在 ${source.displayName}。` +
+          `没有任何可交接的内容（0 轮），${tipAfter}。` +
           `如果这条会话本该有内容，先从备份恢复该文件（Watch 不会替你重建历史）再重试；`
         : `来源会话 ${sourceTip.ref.sessionId}（${source.displayName}）没有任何可交接的内容（0 轮）：` +
-          `本次未写入任何内容，链尾仍在 ${source.displayName}。`;
+          `${tipAfter}。`;
       throw new Error(
         lead +
-          `要在 ${target.displayName} 侧从零开新会话，请先另起一条链：watch chain new <新名字> 之后 watch new ${targetId}` +
-          `（同一条链上直接 new ${targetId} 仍会走这次空交接）；` +
-          `若 ${target.displayName} 侧已有会话，可用 watch adopt ${targetId} --session <会话 id> 接进来`,
+          zeroTurnNextStep({ target, targetId, store, history, historyFailed }),
       );
     }
     const resumeRef = into ?? mtimeTip.ref;
