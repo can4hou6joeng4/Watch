@@ -32,7 +32,7 @@ import { describeWriteFailureReason } from './core/atomic.js';
 import { collectUnattributable, emptiedJson, emptiedSearchNote, emptiedSessionsWarning, unattributableEmptyNote, unattributableJson, unattributableNoPickMessage, unattributablePickWarning, unattributableSearchNote, unattributableWarning } from './core/session-coverage.js';
 import type { EmptiedSession } from './core/session-coverage.js';
 import { describeSpawnFailure } from './core/platform.js';
-import { usageBadLinesReason, usageSidecarProblem } from './core/usage-integrity.js';
+import { usageBadLinesDetail, usageSidecarProblem } from './core/usage-integrity.js';
 import { readWatchVersion } from './core/watch-version.js';
 import { CAPABILITY_VERIFICATION_NOTE, describeCapabilities, formatCapabilities } from './core/capabilities.js';
 
@@ -1746,6 +1746,7 @@ async function cmdPrompt(
   // 或用量数据源本身是空的（grok 的 `updates.jsonl` 被截成 0 字节，`sessionUsage` 安静返回 null）。
   // 只打在 stderr 不够——文档会被复制进别家助手，那里的读者会把「读不出来」当成「这家没有用量」。
   let usageNote: string | undefined;
+  let usageBadLines = 0;
   if (adapter.sessionUsage) {
     try {
       sessionUsage = await adapter.sessionUsage(foundRef);
@@ -1760,6 +1761,13 @@ async function cmdPrompt(
         usageNote = `用量不可用：${sidecar}`;
         warnings.push(sidecar);
       }
+    }
+    // 坏行让合计**静默偏少**：数字照印，但文档里要括注这是下界。判据与 `watch usage` / `open`
+    // 共用 `usageBadLinesDetail()`（同一份扫描同时给出行数与完整警告，不扫第二遍文件）。
+    const badUsage = await usageBadLinesDetail(adapter, foundRef, '来源会话');
+    if (badUsage) {
+      usageBadLines = badUsage.count;
+      warnings.push(badUsage.reason);
     }
   }
 
@@ -1776,6 +1784,7 @@ async function cmdPrompt(
       updatedAt,
       usage: sessionUsage,
       ...(usageNote ? { usageNote } : {}),
+      ...(usageBadLines > 0 ? { usageBadLines } : {}),
       // 文档会被复制走：这一条必须写在正文里，stderr 的警告不会跟着文档
       ...(autoPicked ? { autoPicked: true } : {}),
     },

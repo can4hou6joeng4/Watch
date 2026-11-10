@@ -24,13 +24,30 @@ export async function usageBadLinesReason(
   ref: SessionRef,
   label: string,
 ): Promise<string | null> {
+  return (await usageBadLinesDetail(adapter, ref, label))?.reason ?? null;
+}
+
+/**
+ * `usageBadLinesReason()` 的结构化版本：调用方既要那句完整说明，也要**行数**。
+ *
+ * `watch prompt` 把用量数字写进会被复制走的文档，披露句要短（括注在数字后面），而 stderr 上的
+ * 警告要完整（带路径与下一步）——同一份扫描喂两个形状，不能为了短句再扫一遍文件。
+ * 判据仍只有 `countUnparsableJsonLines()` 一处。
+ */
+export async function usageBadLinesDetail(
+  adapter: ProviderAdapter,
+  ref: SessionRef,
+  label: string,
+): Promise<{ count: number; reason: string } | null> {
   const filePath = adapter.sessionUsagePath?.(ref) ?? ref.filePath;
   const bad = await countUnparsableJsonLines(filePath);
   if (bad === 0) return null;
-  return (
-    `${label}的用量数据源 ${escapeControlChars(filePath)} 有 ${bad} 行无法解析（截断或损坏），这些行的用量没有计入：` +
-    `合计可能偏少——先确认该文件是否被截断（可从备份恢复），再以原生 CLI 显示的用量为准`
-  );
+  return {
+    count: bad,
+    reason:
+      `${label}的用量数据源 ${escapeControlChars(filePath)} 有 ${bad} 行无法解析（截断或损坏），这些行的用量没有计入：` +
+      `合计可能偏少——先确认该文件是否被截断（可从备份恢复），再以原生 CLI 显示的用量为准`,
+  };
 }
 
 /**

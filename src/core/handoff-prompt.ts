@@ -85,6 +85,12 @@ export type PromptSessionMeta = {
    */
   usageNote?: string;
   /**
+   * 用量数据源里有多少行无法解析（截断 / 损坏）。这些行的用量没有被计入，所以印出来的数字
+   * 是**下界**——文档被复制走之后，读者会拿它当这条会话的真实用量。
+   * 由 `usageBadLinesDetail()` 同一判据给出；0 或缺省时不加任何括注。
+   */
+  usageBadLines?: number;
+  /**
    * 会话是按修改时间自动挑的（命令没有显式给出 id）。
    * 文档头部的会话 ID 一行要写明这件事——文档会被复制走，「这条是谁挑的」属于读者需要的事实。
    */
@@ -358,10 +364,13 @@ export function buildHandoffPrompt(
     );
   }
   lines.push(`- 轮次：${stats.turns} 轮（用户 ${stats.userTurns} / 助手 ${stats.assistantTurns}）`);
+  const usageBadLines = meta.usageBadLines ?? 0;
+  if (usageBadLines > 0) addFinding(findings, 'prompt_usage_bad_lines', 'degraded', usageBadLines);
   lines.push(
-    meta.usageNote
-      ? `- 用量：${sanitizeBody(meta.usageNote).text}`
-      : `- 用量：${formatUsage(meta.usage) ?? '来源会话没有可读的用量记录'}`,
+    `- 用量：${meta.usageNote
+      ? sanitizeBody(meta.usageNote).text
+      : formatUsage(meta.usage) ?? '来源会话没有可读的用量记录'}` +
+      (usageBadLines > 0 ? `（用量数据源有 ${usageBadLines} 行无法解析，这些行的用量没有计入，合计可能偏少）` : ''),
   );
   const fullHint = profile === 'full' ? '' : '；要更完整的内容，用 --profile full 重新生成';
   const lastHint = options.lastUserTurns !== undefined ? `，最近 ${options.lastUserTurns} 个用户轮（--last）` : '';
