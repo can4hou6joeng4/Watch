@@ -1,6 +1,6 @@
 import { spawn } from 'node:child_process';
 import { describeDetectFailure, isCommandMissing, resolveCli } from '../../core/platform.js';
-import type { ProviderAdapter } from '../adapter.js';
+import { PreflightBlockedError, type PreflightContext, type ProviderAdapter } from '../adapter.js';
 import type { ProcessEvent, SessionRef, TokenUsage, UnifiedTurn } from '../../core/types.js';
 import { escapeControlChars } from '../../core/display.js';
 import { parseOpencodeSession } from './parse.js';
@@ -126,9 +126,35 @@ async function opencodeSessionUsage(ref: SessionRef): Promise<TokenUsage | null>
   return saw ? { inputTokens, outputTokens } : null;
 }
 
+/**
+ * 写入前的布局检查：2.x 库只读（读路径 2026-11-11 起支持，写路径还没验证）。
+ *
+ * 不在这里拦的话，`open --to opencode --check` 会先报 `writable: true`，到真正写入时
+ * 才由 `assertUsableOpencodeDb()` 抛错——预检说的和实际做的相反。`open` / `switch` /
+ * `handoff` 三条写路径都会先调 preflight，所以这里给出的是同一句结构化 `blocked`。
+ * 判的是 `opencodeDbPath()`：写路径（`createEmptyOpencodeSession` / `importTurnsToOpencode`）
+ * 都写这个库，而不是 `ctx.ref.filePath`。
+ */
+async function opencodePreflight(_ctx?: PreflightContext): Promise<void> {
+  const dbPath = opencodeDbPath();
+  if (detectOpencodeLayout(dbPath) !== 'v2') return;
+  throw new PreflightBlockedError({
+    code: 'opencode_v2_readonly',
+    message:
+      `OpenCode 数据库是 2.x 布局（表: session_v2 / session_message）：${escapeControlChars(dbPath)}；` +
+      `Watch 能读取这种布局，但写入只在 1.x（session / message / part）上验证过`,
+    hint:
+      `未写入任何内容。可以用 watch open <会话 id> 在原生的 OpenCode 2.x 里继续；` +
+      `或把 WATCH_OPENCODE_DB 指向一个 1.x 布局的库再转入；` +
+      `不要删除或挪走这个库——那是 OpenCode 正在使用的数据`,
+  });
+}
+
 export const opencodeAdapter: ProviderAdapter = {
   id: 'opencode',
   displayName: 'OpenCode',
+
+  preflight: opencodePreflight,
 
   async detect(): Promise<boolean> {
     return new Promise((resolve, reject) => {
