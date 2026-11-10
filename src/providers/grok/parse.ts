@@ -1,4 +1,4 @@
-import { readFile } from 'node:fs/promises';
+import { readFile, stat } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { ensureAssistant, normalizeUserText, pushEvent, stripEmptyEvents, summarize } from '../../core/rich.js';
 import type { ProcessEvent, SessionRef, TokenUsage, UnifiedTurn } from '../../core/types.js';
@@ -68,8 +68,8 @@ export async function parseGrokSession(ref: SessionRef): Promise<UnifiedTurn[]> 
   const seenCallIds = new Set<string>();
   const seenResultIds = new Set<string>();
   // chat_history.jsonl 行内无时间戳；用同目录 summary.json 的真实 created_at 做会话锚点，
-  // 行程内单调 +1ms 递增，避免历史消息被打上 `now()` 造成的重放漂移（summary 缺失时回退旧行为）。
-  const anchor = await readGrokCreatedAt(ref.filePath);
+  // 行程内单调 +1ms 递增，避免历史消息被打上 `now()` 造成的重放漂移。
+  const anchor = await grokAnchorMs(ref.filePath);
   let lineIndex = 0;
 
   for (const line of raw.split('\n')) {
@@ -222,11 +222,33 @@ async function readGrokCreatedAt(filePath: string): Promise<string | null> {
   }
 }
 
-function grokTimestamp(anchor: string | null, index: number): string {
-  if (!anchor) return isoTimestamp();
-  const t = Date.parse(anchor);
-  if (Number.isNaN(t)) return isoTimestamp();
-  return new Date(t + index).toISOString();
+/**
+ * 会话锚点（毫秒）：优先 `summary.json` 的 `created_at`，缺失 / 解析不了时退回会话文件的修改时间。
+ *
+ * 退回 mtime 而不是 `now()`（2026-11-10）：行内没有逐轮时间戳，`now()` 会让**同一条会话每次解析
+ * 都得到不同的时间**——`watch prompt` 的「时间范围」于是声称这段对话发生在你执行命令的那一刻，
+ * `open --to` / `switch` 写进目标会话的也是那一刻；重复执行两次，目标时间戳还会跟着漂移。
+ * mtime 是真实的磁盘事实（`listGrokSessions()` 给 `updatedAt` 的兜底同样是它），稳定、可复现，
+ * 但它只代表「文件最后一次被写」，不是逐轮的真实时间——所以仍然只当锚点、按行 +1ms 递增，
+ * 调用方（`prompt` 的时间范围说明）也照旧把它当「来源的更新时间」对待。
+ */
+async function grokAnchorMs(filePath: string): Promise<number | null> {
+  const created = await readGrokCreatedAt(filePath);
+  if (created) {
+    const t = Date.parse(created);
+    if (!Number.isNaN(t)) return t;
+  }
+  try {
+    return (await stat(filePath)).mtimeMs;
+  } catch {
+    // 文件都 stat 不到时 `readFile` 早已抛错，这里只是兜底
+    return null;
+  }
+}
+
+function grokTimestamp(anchor: number | null, index: number): string {
+  if (anchor === null) return isoTimestamp();
+  return new Date(anchor + index).toISOString();
 }
 
 function isoTimestamp(): string {
