@@ -66,8 +66,23 @@ export class CodexProjectBinding {
     const imported = await this.deps.jobs.outcome(importId);
     if (imported?.status !== 'imported' || !imported.target || !importedPlan.target) throw new Error('需要一份已完成的导入');
     const version = await this.deps.version();
-    if (version !== 'codex-cli 0.153.4' || version !== importedPlan.cliVersion ||
-      this.deps.codexHome !== importedPlan.codexHome) throw new Error('Codex 数据目录或 CLI 版本与那次完成的导入不一致');
+    // 三个原因以前合成一句「Codex 数据目录或 CLI 版本与那次完成的导入不一致」：修法完全不同
+    // （换版本 / 换回当时那次导入的版本 / 换回当时的 CODEX_HOME），用户无从判断该动哪一个。
+    if (version !== 'codex-cli 0.153.4') {
+      throw new Error(`后置项目关联只支持 codex-cli 0.153.4，本机检测到 ${version || '（空输出）'}；本次未写入任何内容`);
+    }
+    if (version !== importedPlan.cliVersion) {
+      throw new Error(
+        `本机 Codex CLI 版本与那次完成的导入不一致：导入时是 ${importedPlan.cliVersion}，现在是 ${version}；` +
+          '先换回该版本的 codex 再重试（本次未写入任何内容）',
+      );
+    }
+    if (this.deps.codexHome !== importedPlan.codexHome) {
+      throw new Error(
+        `CODEX_HOME 与那次完成的导入不一致：导入时是 ${importedPlan.codexHome}，现在是 ${this.deps.codexHome}；` +
+          '用同一个 CODEX_HOME 再重试（本次未写入任何内容）',
+      );
+    }
     const target = await inspectImportTarget(this.deps.codexHome);
     for (const key of ['path', 'device', 'inode'] as const) {
       if (target[key] !== importedPlan.target[key]) throw new Error('导入时的数据目录已被替换');

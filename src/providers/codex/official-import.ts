@@ -242,8 +242,23 @@ export class OfficialCodexImport {
     // 合成一句「需要 Claude 会话 UUID 与绝对路径 --cwd」会把人引去核对一个本来没问题的路径。
     if (!UUID.test(sourceId)) throw new Error(`来源会话 id 需要 Claude 会话 UUID（8-4-4-4-12 位十六进制），收到: ${escapeControlChars(sourceId)}；可用 watch sessions --cwd <目录> 核对`);
     if (!path.isAbsolute(cwd)) throw new Error(`--cwd 需要绝对路径，收到: ${escapeControlChars(cwd)}`);
-    const version = await this.deps.version();
-    if (version !== SUPPORTED_VERSION) throw new Error(`实验性导入路径目前只支持 ${SUPPORTED_VERSION}`);
+    // 版本门禁有两种失败，以前合成一句「只支持 codex-cli 0.153.4」：
+    // ① 版本读不出来（codex 没装 / 装坏了）——那句话会把人引去装一个特定版本，而真正要做的是先让 codex --version 能用；
+    // ② 版本不匹配——不点名本机是什么版本，用户没法判断是升级还是降级。
+    // 这两条都在 findSource / jobs.prepare 之前，所以「未写入任何内容」是真话。
+    let version: string;
+    try {
+      version = await this.deps.version();
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error);
+      throw new Error(`${reason}；这条导入路径要先核对 Codex 版本，先确认 PATH 上的 codex 能正常执行 codex --version（没装就先安装）再重新预览——本次未写入任何内容`);
+    }
+    if (version !== SUPPORTED_VERSION) {
+      throw new Error(
+        `实验性导入路径只支持 ${SUPPORTED_VERSION}，本机检测到 ${escapeControlChars(version) || '（空输出）'}；` +
+          `这条路径只在 ${SUPPORTED_VERSION} 上验证过，请换用该版本的 codex 再重新预览——本次未写入任何内容`,
+      );
+    }
     const source = await this.deps.findSource(sourceId, cwd);
     // `findSource` 已经把「读不出来」单独抛出，所以到这里 source 为 null 是「这个项目目录里没有」；
     // 但「没有」还有两种形状：会话真的在别的目录，以及 `--cwd` 只是同一个目录的另一种写法
