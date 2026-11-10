@@ -120,7 +120,7 @@ switch   <provider> [--cwd <path>] [--chain <id|name>]      链尾内容交接�
 adopt    <provider> [--session <id>] [--cwd <path>] [--chain <id|name>]   把已有原生会话接入链
 new      <provider> [--cwd <path>] [--chain <id|name>]      在链上新建另一侧会话
 chain    list|new|rename|archive|use [--cwd <path>]         链的增删改与切换
-search   <query> [--cwd <path>]                             本地全文检索（FTS5）
+search   <query> [--cwd <path>] [--reset-index]             本地全文检索（FTS5）；--reset-index 只清索引并压缩库文件（链与切换记录不动）
 usage    [--cwd <path>] [--chain <id|name>]                 链上各会话的 token 用量
 recent   [--cwd <path>] [--limit <n>]                       近期会话反查记录（默认 8 条，最多 50）
 providers                                                   各 Agent 的本机安装检测

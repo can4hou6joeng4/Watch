@@ -120,7 +120,7 @@ switch   <provider> [--cwd <path>] [--chain <id|name>]       hand the chain tip 
 adopt    <provider> [--session <id>] [--cwd <path>] [--chain <id|name>]   attach an existing native session
 new      <provider> [--cwd <path>] [--chain <id|name>]       create the other side of the chain
 chain    list|new|rename|archive|use [--cwd <path>]          manage and select chains
-search   <query> [--cwd <path>]                              local full-text search (FTS5)
+search   <query> [--cwd <path>] [--reset-index]              local full-text search (FTS5); --reset-index clears only the index and vacuums the store (chains untouched)
 usage    [--cwd <path>] [--chain <id|name>]                  token usage per session on the chain
 recent   [--cwd <path>] [--limit <n>]                        recently resolved sessions (default 8, max 50)
 providers                                                    local install detection per agent

@@ -70,6 +70,11 @@ export type StoreFootprint = {
   indexRows: number | null;
   indexSessions: number | null;
   indexDirectories: number | null;
+  /**
+   * 文件里已归还但未释放的页（`PRAGMA freelist_count × page_size`）：只有 `VACUUM` 才真正缩小文件。
+   * 只报文件大小会被读成「删了索引就省空间」，而 SQLite 删除行从不缩文件。
+   */
+  reclaimableBytes: number | null;
   /** 体积或计数读不出来时的原因；此时对应字段为 null */
   error?: string;
 };
@@ -165,6 +170,8 @@ export type DoctorStore = {
   }[];
   /** 搜索索引规模（可选：注入的假 Store 可以不给，报告里就是 null） */
   indexFootprint?(): { rows: number; sessions: number; directories: number };
+  /** 可被 VACUUM 回收的字节数（可选，同上） */
+  reclaimableBytes?(): number | null;
 };
 
 export type DoctorDeps = {
@@ -234,6 +241,7 @@ async function probeStoreFootprint(dbPath: string, store: DoctorStore | null): P
       indexRows: null,
       indexSessions: null,
       indexDirectories: null,
+      reclaimableBytes: null,
     };
   }
   let statError: string | undefined;
@@ -251,11 +259,17 @@ async function probeStoreFootprint(dbPath: string, store: DoctorStore | null): P
   const walBytes = await bytes(`${dbPath}-wal`);
   const shmBytes = await bytes(`${dbPath}-shm`);
   let counts: { rows: number; sessions: number; directories: number } | null = null;
+  let reclaimable: number | null = null;
   let countError: string | undefined;
   try {
     counts = store?.indexFootprint?.() ?? null;
   } catch (error) {
     countError = describeStoreErrorReason(error);
+  }
+  try {
+    reclaimable = store?.reclaimableBytes?.() ?? null;
+  } catch (error) {
+    countError ||= describeStoreErrorReason(error);
   }
   const error = [statError, countError].filter(Boolean).join('；');
   return {
@@ -266,6 +280,7 @@ async function probeStoreFootprint(dbPath: string, store: DoctorStore | null): P
     indexRows: counts?.rows ?? null,
     indexSessions: counts?.sessions ?? null,
     indexDirectories: counts?.directories ?? null,
+    reclaimableBytes: reclaimable,
     ...(error ? { error } : {}),
   };
 }
