@@ -24,6 +24,7 @@ import { collectUnattributable, emptiedJson, emptiedSearchNote, emptiedSessionsW
 import type { EmptiedSession } from './core/session-coverage.js';
 import { describeSpawnFailure } from './core/platform.js';
 import { readWatchVersion } from './core/watch-version.js';
+import { CAPABILITY_VERIFICATION_NOTE, describeCapabilities, formatCapabilities } from './core/capabilities.js';
 
 /**
  * 参数还没解析完就要报用法错误（缺值 / 越界 / 未知 flag）：此时 `--json` 已经能从 argv 看出来。
@@ -46,6 +47,7 @@ function usage(reason?: string): never {
   watch sessions [--json] [--cwd <path>] [--chain <id|name>]
   watch recent [--json] [--cwd <path>] [--limit <n>]
   watch providers [--json]
+  watch capabilities [--json]                       各 Agent 的读写能力矩阵（代码事实，不探测本机 CLI）
   watch doctor [--json] [--strict] [--cwd <path>]   只读环境诊断：Agent 检测、本地库、导入日志（不写盘）
   watch new <provider> [--json] [--cwd <path>] [--chain <id|name>]
   watch chain list|new <name>|rename <id|name> <new>|archive <id|name>|use <id|name> [--json] [--cwd]
@@ -1521,6 +1523,32 @@ async function cmdProviders(json: boolean): Promise<void> {
   }
 }
 
+/**
+ * `watch capabilities`：各适配器在**代码层面**实现了哪些读写能力。
+ *
+ * 刻意不调 `detect()`：这张表是纯元数据，一条命令内即可返回；「本机装没装 / 能不能起来」
+ * 是 `watch providers` 的职责（那一步会 spawn 六次 CLI）。把两件事混在一起，脚本想拿
+ * 能力矩阵就得先等六次进程探测，某家 CLI 挂起时还会拖住整张表。
+ */
+function cmdCapabilities(json: boolean): void {
+  const providers = describeCapabilities(listAdapters());
+  if (!json) {
+    console.log(formatCapabilities(providers));
+    return;
+  }
+  console.log(JSON.stringify({
+    ok: true,
+    watch: {
+      version: readWatchVersion(),
+      node: process.versions.node,
+      platform: process.platform,
+      arch: process.arch,
+    },
+    providers,
+    notes: [CAPABILITY_VERIFICATION_NOTE],
+  }));
+}
+
 async function cmdDoctor(cwd: string, json: boolean, strict: boolean): Promise<void> {
   try {
     const store = openStore();
@@ -2233,6 +2261,7 @@ const FLAGS_BY_COMMAND: Record<string, string[]> = {
   sessions: ['chain'],
   recent: ['limit'],
   providers: [],
+  capabilities: [],
   doctor: ['strict'],
   new: ['chain'],
   chain: [],
@@ -2341,6 +2370,10 @@ async function main(): Promise<void> {
   }
   if (cmd === 'providers') {
     await cmdProviders(json);
+    return;
+  }
+  if (cmd === 'capabilities') {
+    cmdCapabilities(json);
     return;
   }
   if (cmd === 'doctor') {

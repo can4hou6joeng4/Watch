@@ -122,6 +122,7 @@ search   <query> [--cwd <path>]                             本地全文检索�
 usage    [--cwd <path>] [--chain <id|name>]                 链上各会话的 token 用量
 recent   [--cwd <path>] [--limit <n>]                       近期会话反查记录（默认 8 条，最多 50）
 providers                                                   各 Agent 的本机安装检测
+capabilities                                                各 Agent 的读写能力矩阵（代码事实，不探测本机 CLI）
 doctor   [--cwd <path>] [--strict]                          只读环境诊断（Agent 检测 / 本地库 / 导入日志）；发现硬失败时退出码 1，--strict 让警告也算失败
 open     <session-id> [--from <id>] [--provider <name>] [--to <provider>] [--check]
 import-codex  prepare|confirm|status|project-prepare|project-confirm|project-status
