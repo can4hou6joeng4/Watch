@@ -144,13 +144,26 @@ function formatUsage(usage: TokenUsage | null | undefined): string | null {
   return `in=${usage.inputTokens} out=${usage.outputTokens}`;
 }
 
-/** 时间范围：只有一端可读时写那一端，两端都没有就不写这一行（不编造时间） */
-function formatTimeRange(startedAt?: number, updatedAt?: number): string | null {
+type TimeRange = { text: string; startUnusable: boolean };
+
+/**
+ * 时间范围：只有一端可读时写那一端，两端都没有就不写这一行（不编造时间）。
+ *
+ * **起点晚于终点时起点不可信**：`UnifiedTurn.timestamp` 并不总是原生记录里的真实时间。
+ * grok 的 `chat_history.jsonl` 行内没有时间戳，`parse` 用同目录 `summary.json` 的
+ * `created_at` 做锚点、缺失时回退 `now()`；文件早已写完时这个「起点」必然晚于文件 mtime，
+ * 直接印出来就是一行 `2026-11-10T04:06:59Z → 2026-11-10T04:06:59Z` 倒挂的假范围。
+ * 端点顺序是可验证的事实，倒挂说明起点是占位值——此时只保留终点并让调用方披露。
+ */
+function formatTimeRange(startedAt?: number, updatedAt?: number): TimeRange | null {
   const start = startedAt !== undefined && Number.isFinite(startedAt) ? new Date(startedAt).toISOString() : null;
   const end = updatedAt !== undefined && Number.isFinite(updatedAt) ? new Date(updatedAt).toISOString() : null;
-  if (start && end && start !== end) return `${start} → ${end}`;
-  if (start ?? end) return start ?? end;
-  return null;
+  if (start && end && start !== end) {
+    if (Date.parse(start) > Date.parse(end)) return { text: end, startUnusable: true };
+    return { text: `${start} → ${end}`, startUnusable: false };
+  }
+  const only = start ?? end;
+  return only ? { text: only, startUnusable: false } : null;
 }
 
 /**
@@ -309,7 +322,14 @@ export function buildHandoffPrompt(
   if (meta.sourcePath) lines.push(`- 源文件：${sanitizeBody(meta.sourcePath).text}`);
   lines.push(`- 工作目录：${sanitizeBody(meta.cwd).text}`);
   const range = formatTimeRange(meta.startedAt, meta.updatedAt);
-  if (range) lines.push(`- 时间范围：${range}`);
+  if (range) {
+    if (range.startUnusable) addFinding(findings, 'prompt_time_range_start_unusable', 'degraded', 1);
+    lines.push(
+      range.startUnusable
+        ? `- 时间范围：… → ${range.text}（起始时间不可用：来源记录里的时间晚于文件更新时间，可能是占位值）`
+        : `- 时间范围：${range.text}`,
+    );
+  }
   lines.push(`- 轮次：${stats.turns} 轮（用户 ${stats.userTurns} / 助手 ${stats.assistantTurns}）`);
   lines.push(`- 用量：${formatUsage(meta.usage) ?? '来源会话没有可读的用量记录'}`);
   const fullHint = profile === 'full' ? '' : '；要更完整的内容，用 --profile full 重新生成';
