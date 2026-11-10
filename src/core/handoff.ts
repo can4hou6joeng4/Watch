@@ -246,28 +246,66 @@ export async function snapshotSourceState(filePath: string): Promise<SourceState
   }
 }
 
+/** 来源文件在读取前后有没有变；变了就给出方向与字节差，没变返回 null */
+async function sourceChangeSince(
+  filePath: string,
+  before: SourceStateSnapshot | null,
+): Promise<{ from: number; to: number; growth: boolean } | null> {
+  if (!before) return null;
+  const after = await snapshotSourceState(filePath);
+  if (!after) return null;
+  if (after.size === before.size && after.mtimeMs === before.mtimeMs) return null;
+  return { from: before.size, to: after.size, growth: after.size > before.size };
+}
+
 export async function describeSourceChangedDuringHandoff(
   filePath: string,
   before: SourceStateSnapshot | null,
   label: string,
   action = '交接',
 ): Promise<string | null> {
-  if (!before) return null;
-  const after = await snapshotSourceState(filePath);
-  if (!after) return null;
-  if (after.size === before.size && after.mtimeMs === before.mtimeMs) return null;
+  const change = await sourceChangeSince(filePath, before);
+  if (!change) return null;
+  const { from, to, growth } = change;
   // 增长与改写/截断的下一步不一样：前者再执行一次就能补齐；后者要先确认文件本身没坏
   // （内容变了的那部分不会被 diff 当成增量，重跑也补不回来）
-  if (after.size > before.size) {
+  if (growth) {
     return (
-      `来源会话 ${label} 在这次${action}期间被写入过（${before.size} → ${after.size} 字节，新增约 ${after.size - before.size} 字节）：` +
+      `来源会话 ${label} 在这次${action}期间被写入过（${from} → ${to} 字节，新增约 ${to - from} 字节）：` +
       `转过去的是开始读取时的内容，之后新增的记录没有带上——再执行一次同一条命令会把新增部分作为增量补齐`
     );
   }
-  const detail = after.size < before.size ? `少了约 ${before.size - after.size} 字节` : '内容被改写（大小不变）';
+  const detail = to < from ? `少了约 ${from - to} 字节` : '内容被改写（大小不变）';
   return (
-    `来源会话 ${label} 在这次${action}期间被写入过（${before.size} → ${after.size} 字节，${detail}）：` +
+    `来源会话 ${label} 在这次${action}期间被写入过（${from} → ${to} 字节，${detail}）：` +
     `转过去的是读取时看到的内容；先确认来源文件没有被损坏，再重新执行同一条命令（被改写的那部分不会被当成增量补齐）`
+  );
+}
+
+/**
+ * `watch prompt` 的对应说法：这条路径**不写**任何文件，所以没有「增量补齐」这一步——
+ * 重跑只是按更新后的记录重渲染一份新文档，已经复制走的那份不会被修正。
+ * 文档会被复制进别家助手，那里没有 stderr，所以这句话必须进正文。
+ */
+export async function describeSourceChangedDuringPrompt(
+  filePath: string,
+  before: SourceStateSnapshot | null,
+  label: string,
+): Promise<string | null> {
+  const change = await sourceChangeSince(filePath, before);
+  if (!change) return null;
+  const { from, to, growth } = change;
+  if (growth) {
+    return (
+      `来源会话 ${label} 在生成这份文档期间被写入过（${from} → ${to} 字节，新增约 ${to - from} 字节）：` +
+      `正文是开始读取时的内容，之后新增的记录没有写进来——重新执行一次 watch prompt 会按更新后的记录重渲染；` +
+      `这份文档本身不会跟着更新`
+    );
+  }
+  const detail = to < from ? `少了约 ${from - to} 字节` : '内容被改写（大小不变）';
+  return (
+    `来源会话 ${label} 在生成这份文档期间被写入过（${from} → ${to} 字节，${detail}）：` +
+    `正文是开始读取时的内容；先确认来源文件没有被损坏，再用 watch prompt 重新生成（重渲染不会把被改写掉的旧内容拼回来）`
   );
 }
 

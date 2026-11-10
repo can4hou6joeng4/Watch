@@ -116,6 +116,15 @@ export type PromptSessionMeta = {
    * 文档头部的会话 ID 一行要写明这件事——文档会被复制走，「这条是谁挑的」属于读者需要的事实。
    */
   autoPicked?: boolean;
+  /**
+   * 来源文件在渲染期间被追加 / 改写 / 截断过（`describeSourceChangedDuringPrompt()` 的结论）。
+   *
+   * 这条路径只读一次来源：正文里的轮次、时间范围、用量都是**开始读取那一刻**的事实。
+   * 不写进正文的话，文档被复制到别家助手后，读者会把「正文这么多」当成「会话就这么多」——
+   * 而来源其实还在长。`watch prompt` 不写任何文件，所以这句不承诺「重跑会增量补齐」，
+   * 它只说重跑会重渲染一份新的。
+   */
+  sourceDriftNote?: string;
 };
 
 export type PromptStats = {
@@ -424,6 +433,12 @@ export function buildHandoffPrompt(
   if (stats.truncatedTexts > 0) omittedParts.push(`${stats.truncatedTexts} 处正文被截断`);
   if (stats.escapedBodies > 0) omittedParts.push(`${stats.escapedBodies} 处控制字符已转义`);
   if (omittedParts.length) lines.push(`- 本次省略：${omittedParts.join('、')}`);
+  // 来源在渲染期间变化过：上面这几行（轮次 / 时间范围 / 用量）都是读取那一刻的数字，
+  // 这句话必须跟在后面，否则文档被复制走之后没人知道它只代表那一瞬间
+  if (meta.sourceDriftNote) {
+    addFinding(findings, 'prompt_source_changed_during_render', 'degraded', 1);
+    lines.push(`- 生成期间有变化：${sanitizeBody(meta.sourceDriftNote).text}`);
+  }
   lines.push('');
   lines.push('## 会话记录');
   lines.push('');

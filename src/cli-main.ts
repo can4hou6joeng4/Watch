@@ -4,7 +4,7 @@ import path from 'node:path';
 import { chainsElsewhereHint, chainsSameDirectoryHint, isStoreError, SEARCH_MAX_HITS, searchElsewhereHint, searchSameDirectoryHint, Store, defaultDbPath, describeStoreErrorReason, describeStoreOpenFailure } from './core/store.js';
 import type { Chain, ChainsElsewhere, SearchElsewhere } from './core/store.js';
 import { describeFindings } from './core/findings.js';
-import { adoptIntoChain, blockedHint, chainStatus, chainUsage, collectTips, createChainSession, currentChainShiftNote, emptyChainBindHint, handoff, HandoffBlockedError, notCurrentChainWarning, pickLatestTip, rebindHint, storeUnavailableWarning } from './core/handoff.js';
+import { adoptIntoChain, blockedHint, chainStatus, chainUsage, collectTips, createChainSession, currentChainShiftNote, describeSourceChangedDuringPrompt, emptyChainBindHint, handoff, HandoffBlockedError, notCurrentChainWarning, pickLatestTip, rebindHint, snapshotSourceState, storeUnavailableWarning } from './core/handoff.js';
 import { reindexCwd } from './core/search.js';
 import type { SessionRef } from './core/types.js';
 import type { TokenUsage } from './core/types.js';
@@ -1727,6 +1727,8 @@ async function cmdPrompt(
     );
   }
 
+  // 只读一次来源：解析前后各量一次，用来判断正文代表的是哪一刻（见 describeSourceChangedDuringPrompt）
+  const sourceSnapshot = await snapshotSourceState(foundRef.filePath);
   let turns;
   try {
     turns = await adapter.parse(foundRef);
@@ -1790,6 +1792,15 @@ async function cmdPrompt(
     }
   }
 
+  // 解析完再比一次：来源若在这期间被追加，正文里的轮次 / 时间范围 / 用量都只代表开始那一刻。
+  // 这条路径不写任何文件，所以下一步是「重跑会重渲染一份新的」，不是「重跑会增量补齐」。
+  const sourceDrift = await describeSourceChangedDuringPrompt(
+    foundRef.filePath,
+    sourceSnapshot,
+    `${foundRef.sessionId}（${adapter.displayName}）`,
+  );
+  if (sourceDrift) warnings.push(sourceDrift);
+
   const result = buildHandoffPrompt(
     turns,
     {
@@ -1810,6 +1821,8 @@ async function cmdPrompt(
       ...(usageBadLines > 0 ? { usageBadLines } : {}),
       // 文档会被复制走：这一条必须写在正文里，stderr 的警告不会跟着文档
       ...(autoPicked ? { autoPicked: true } : {}),
+      // 文档会被复制走：这条也必须进正文，不能只留在 stderr
+      ...(sourceDrift ? { sourceDriftNote: sourceDrift } : {}),
     },
     profile,
     { ...(lastUserTurns !== undefined ? { lastUserTurns } : {}) },
