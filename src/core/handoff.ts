@@ -7,7 +7,7 @@ import { describeWriteFailureReason, type FileDigest } from './atomic.js';
 import { addFinding, type Finding } from './findings.js';
 import { escapeControlChars } from './display.js';
 import { countUnparsableJsonLines } from './jsonl.js';
-import { usageBadLinesReason, usageSidecarProblem } from './usage-integrity.js';
+import { usageBadLinesDetail, usageSidecarProblem } from './usage-integrity.js';
 import { cwdAliasHint, splitElsewhereByDirectory } from './cwd.js';
 import { describePathReadFailureReason, describeReadFailureOrSelf, emptySessionFileReasonFromStat, isEmptySessionFileReason, probeSessionReadable, sessionFilePresence } from './read-text.js';
 import { noSessionHint, unknownProviderMessage } from '../providers/registry.js';
@@ -568,7 +568,20 @@ export async function chainUsage(
   totalExcluded: number;
   /** 没有 usage 数据（原生无该字段 / 文件读不出，`sessionUsage` 返回 null）、同样没计入 total 的会话数：不说明会被当成「用量就是这么多」 */
   totalMissingUsage: number;
-  byProvider: { provider: string; sessionId: string; usage: TokenUsage | null; error?: string }[];
+  byProvider: {
+    provider: string;
+    sessionId: string;
+    usage: TokenUsage | null;
+    error?: string;
+    /**
+     * 该会话的用量数据源里有几行无法解析（这些行的用量没计入，印出来的数字是**下界**）。
+     *
+     * 以前只有一条链级警告，读者要在几百行警告里自己把「偏少」对回具体的会话行；
+     * 而按会话那几行照旧印 `in=… out=…`，看起来与完整读数一模一样。只在 `usage !== null`
+     * 时带这项：用量本来就是 `null` 的会话，数字都不存在，谈不上「偏少」。
+     */
+    usageBadLines?: number;
+  }[];
   /** 链上有绑定、但适配器根本不给用量（未实现 `sessionUsage`；当前六家都已实现，留给将来新增的适配器）：不列出来会被当成「这一家没有用量」 */
   unsupported: string[];
   /** 用量读不出来的会话：null 可能是「原生没有 usage」，这里单独说明是真失败 */
@@ -610,7 +623,13 @@ export async function chainUsage(
     if (notCurrent) warnings.push(notCurrent);
   }
   const history = chain ? store.listSwitchEvents(chain.id) : [];
-  const byProvider: { provider: string; sessionId: string; usage: TokenUsage | null; error?: string }[] = [];
+  const byProvider: {
+    provider: string;
+    sessionId: string;
+    usage: TokenUsage | null;
+    error?: string;
+    usageBadLines?: number;
+  }[] = [];
   let total = { ...empty };
   let totalExcluded = 0;
   let totalMissingUsage = 0;
@@ -690,9 +709,16 @@ export async function chainUsage(
     // 用量数据源里有坏行时，`sessionUsage` 一律 `continue` 跳过：合计静默偏少，而这份报告
     // 分不出「少算了」与「本来就这么多」。内容那一侧（`handoff()` / `open`）早已用
     // `countUnparsableJsonLines()` 披露过，这里补的是同一条线上没接上的一半。
-    const badUsage = await usageBadLinesReason(adapter, ref, `${adapter.id} 会话 ${ref.sessionId}`);
-    if (badUsage) warnings.push(badUsage);
-    byProvider.push({ provider: adapter.id, sessionId: ref.sessionId, usage });
+    const badUsage = await usageBadLinesDetail(adapter, ref, `${adapter.id} 会话 ${ref.sessionId}`);
+    if (badUsage) warnings.push(badUsage.reason);
+    byProvider.push({
+      provider: adapter.id,
+      sessionId: ref.sessionId,
+      usage,
+      // 只有数字存在时才说得上「这个数字偏少」：`usage` 为 null 的会话已经由上面几条
+      // 警告说清来源是读不出来还是原生没有用量，这里再挂一个行数只会提示一个不存在的数
+      ...(badUsage && usage ? { usageBadLines: badUsage.count } : {}),
+    });
     if (usage === null) totalMissingUsage += 1;
     if (usage) {
       total = {

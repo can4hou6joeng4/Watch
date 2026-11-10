@@ -2787,15 +2787,24 @@ async function cmdUsage(cwd: string, json: boolean, chain?: string): Promise<voi
     console.log(
       `合计${missing.length ? `（未含 ${missing.join('、')}）` : ''}: in=${result.total.inputTokens}  out=${result.total.outputTokens}`,
     );
+    // 合计已把坏行跳过的份额少算了：不说这一句，「未含」那两个计数只覆盖整条读不出的会话，
+    // 这个人会把合计量当成完整读数（每行的数字仍印出来，但少了哪几行没人知道）
+    const badLineSessions = result.byProvider.filter((item) => item.usageBadLines).length;
+    if (badLineSessions) {
+      console.log(`  注：${badLineSessions} 个会话的用量数据源有无法解析的行，这些行的用量没计入，合计是下界`);
+    }
     console.log('');
     console.log('按会话:');
     for (const item of result.byProvider) {
       const u = item.usage ?? { inputTokens: 0, outputTokens: 0 };
-      const note = item.error
-        ? `（读取失败: ${item.error}）`
-        : item.usage === null
-          ? '（无 usage 字段）'
-          : '';
+      // 用「；」拼接而不是嵌套括注：`（读取失败: …（…））` 读起来分不清哪层在解释哪层
+      const notes: string[] = [];
+      if (item.error) notes.push(`读取失败: ${item.error}`);
+      else if (item.usage === null) notes.push('无 usage 字段');
+      if (item.usageBadLines) {
+        notes.push(`用量数据源另有 ${item.usageBadLines} 行无法解析，这些行没计入，这个数是下界`);
+      }
+      const note = notes.length ? `（${notes.join('；')}）` : '';
       console.log(
         // 打全 id：截成 8 位再省略号就复制不了，接不上 watch adopt --session / 原生 resume
         `  ${item.provider.padEnd(8)} ${item.sessionId}  in=${u.inputTokens}  out=${u.outputTokens}${note}`,
