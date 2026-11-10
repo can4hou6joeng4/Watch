@@ -38,7 +38,7 @@ Watch 不提供模型、不绕过配额、不代替原生 Agent 聊天，也不�
 | Codex 桌面项目归属 | `--desktop-project` 在导入前绑定已存在的唯一项目，导入后验证官方成员关系和 Desktop 私有排除状态 | 项目先建的真实合成样本已通过项目列表人工验收；限定当前客户端版本与样本 |
 | Claude Desktop Code | 官方 `/desktop` 是当前 CLI 会话内的保存、flush 与 deep-link handoff | 已调研 / 待原生验收；不能用独立 deep link 替代，也尚未接入 Watch |
 | OpenCode Web/TUI/IDE | 官方 JSON import/export 可供验收；Web 与 attached TUI 可共享 server，IDE 扩展复用集成终端 | Darwin arm64 / 1.18.29 的真实 import/export、server API、Web、独立 local TUI 与 attached TUI 历史及目标模型有效性已通过；单次模型继续请求因 provider 429 未生成回复，暂不接入官方多客户端增强。现有 CLI 路径不受此门禁影响；不存在已确认的独立 Desktop 契约 |
-| 摘要交接（`watch prompt`） | CLI 把任意已支持来源的会话渲染成可粘贴的 Markdown，`--profile minimal/standard/verbose/full` 控制保留量，头部正文声明「不是目标助手的原生会话」，每处裁剪进 `findings` 并在 stderr 说明 | 已实现（只读，不写会话文件、不启动 CLI）；是降级方案，目标端不继承原生恢复能力 |
+| 摘要交接（`watch prompt`） | CLI 把任意已支持来源的会话渲染成可粘贴的 Markdown，`--profile minimal/standard/verbose/full` 控制保留量，`--last <n>` 限定最近用户轮，省略会话 id 时按修改时间挑本目录最新的可读会话（`--provider` 可收窄），头部正文声明「不是目标助手的原生会话」与是否自动挑选，每处裁剪进 `findings` 并在 stderr 说明 | 已实现（只读，不写会话文件、不启动 CLI）；是降级方案，目标端不继承原生恢复能力 |
 | Antigravity 2.0 → CLI | 官方 `/resume` picker 可确认后克隆同产品会话；registry 无 Antigravity 适配器 | 已调研 / 待原生验收；无外部会话导入协议，不注册跨 Agent 入口 |
 
 详细来源、方向和验收状态统一维护在 [COMPATIBILITY.md](COMPATIBILITY.md)。
