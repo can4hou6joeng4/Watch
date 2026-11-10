@@ -605,6 +605,65 @@ export class Store {
   }
 
   /**
+   * 库文件里可被 `VACUUM` 回收的字节数（freelist × page_size）。
+   *
+   * 只报文件大小会骗人：SQLite 删除行时**不缩文件**，只把页还给 freelist。
+   * `watch search` 清掉已删除会话的索引后，体积往往一点没变，用户会以为清理没生效。
+   * 读不出来返回 null（不拿 0 冒充「没有可回收空间」）。
+   */
+  reclaimableBytes(): number | null {
+    try {
+      const pageSize = (this.db.prepare('PRAGMA page_size').get() as { page_size: number }).page_size;
+      const free = (this.db.prepare('PRAGMA freelist_count').get() as { freelist_count: number }).freelist_count;
+      return pageSize * free;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * 清空搜索索引（`messages_fts` + `search_index`），再 `VACUUM` 把空间还给文件系统。
+   *
+   * 只动索引：链、切换记录、会话映射都不碰——索引的每一行都能由原生会话文件重建，
+   * 所以这是唯一一条不丢东西的省空间路径（删库会连链一起丢）。`VACUUM` 单独兜底：
+   * 它需要约等于库大小的临时空间，磁盘满时正是最可能失败的一步，此时索引已经清空，
+   * 只披露「空间要等后续写入复用」而不是把整次操作报成失败。
+   */
+  resetSearchIndex(): {
+    rows: number;
+    sessions: number;
+    directories: number;
+    vacuumed: boolean;
+    vacuumError?: string;
+  } {
+    const before = this.indexFootprint();
+    this.db.exec('BEGIN');
+    try {
+      this.db.exec('DELETE FROM messages_fts');
+      this.db.exec('DELETE FROM search_index');
+      this.db.exec('COMMIT');
+    } catch (error) {
+      this.db.exec('ROLLBACK');
+      throw error;
+    }
+    let vacuumed = false;
+    let vacuumError: string | undefined;
+    try {
+      this.db.exec('VACUUM');
+      vacuumed = true;
+    } catch (error) {
+      vacuumError = describeStoreErrorReason(error);
+    }
+    // WAL 里的旧页不 checkpoint 就还在文件里：VACUUM 之后不截断，体积照样不降
+    try {
+      this.db.exec('PRAGMA wal_checkpoint(TRUNCATE)');
+    } catch {
+      /* 非 WAL 模式或连接不可用；是否真的变小由 doctor 的体积一栏对照 */
+    }
+    return { ...before, vacuumed, ...(vacuumError ? { vacuumError } : {}) };
+  }
+
+  /**
    * 本地库自己的数据规模：搜索索引的文本段数与覆盖范围。
    *
    * `watch doctor` 拿它配 `stat` 出来的文件体积回答「这个工具自己占了多大地方」——

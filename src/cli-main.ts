@@ -66,7 +66,7 @@ function usage(reason?: string): never {
   watch doctor [--json] [--strict] [--cwd <path>]   只读环境诊断：Agent 检测、本地库、导入日志（不写盘）
   watch new <provider> [--json] [--cwd <path>] [--chain <id|name>]
   watch chain list|new <name>|rename <id|name> <new>|archive <id|name>|use <id|name> [--json] [--cwd]
-  watch search <query> [--json] [--cwd <path>]
+  watch search <query> [--json] [--cwd <path>] [--reset-index]
   watch usage [--json] [--cwd <path>] [--chain <id|name>]
   watch import-codex prepare|confirm|status <id> [--cwd <path>] [--desktop-project] [--experimental] [--json]
   watch import-codex project-prepare|project-confirm|project-status <plan-id> [--project <project-id>] [--experimental] [--json]
@@ -359,6 +359,7 @@ function parseArgs(argv: string[]): {
   profile?: string;
   last?: number;
   sinceCompact: boolean;
+  resetIndex: boolean;
   check: boolean;
   strict: boolean;
   limit?: number;
@@ -381,6 +382,7 @@ function parseArgs(argv: string[]): {
   let profile: string | undefined;
   let last: number | undefined;
   let sinceCompact = false;
+  let resetIndex = false;
   let check = false;
   let strict = false;
   let limit: number | undefined;
@@ -471,6 +473,10 @@ function parseArgs(argv: string[]): {
       sinceCompact = true;
       continue;
     }
+    if (a === '--reset-index') {
+      resetIndex = true;
+      continue;
+    }
     if (a === '--limit') {
       const raw = takeValue('--limit');
       // Number() 会接受 '0x10'（16）与 ' 3'（3）：用户只想给十进制条数，别猜他的意思
@@ -506,6 +512,7 @@ function parseArgs(argv: string[]): {
     ...(profile ? ['profile'] : []),
     ...(last !== undefined ? ['last'] : []),
     ...(sinceCompact ? ['since-compact'] : []),
+    ...(resetIndex ? ['reset-index'] : []),
     ...(limit !== undefined ? ['limit'] : []),
   ];
   return {
@@ -525,6 +532,7 @@ function parseArgs(argv: string[]): {
     profile,
     last,
     sinceCompact,
+    resetIndex,
     check,
     strict,
     limit,
@@ -1924,10 +1932,16 @@ function describeStoreFootprint(f: StoreFootprint): string {
   if (f.indexSessions === null) {
     parts.push('搜索索引规模未知');
   } else if (f.indexSessions === 0) {
-    parts.push('搜索索引为空（本机还没跑过会建索引的 watch search）');
+    parts.push('搜索索引为空（没跑过 search，或刚被 --reset-index 清空；下次 search 会重建当前目录）');
   } else {
     parts.push(`搜索索引 ${f.indexRows} 段 / ${f.indexSessions} 个会话 / ${f.indexDirectories} 个目录`);
-    parts.push('索引内容可由会话文件重建，但链记录只存在这个库里，删库会一并丢失');
+    // 回收动作必须写在能直接照着敲的地方：doctor 是用户来查体积的入口
+    parts.push(
+      f.reclaimableBytes
+        ? `其中 ${formatBytes(f.reclaimableBytes)} 是删除后未释放的页，可回收（watch search <词> --reset-index 只清索引）`
+        : '索引内容可由会话文件重建（watch search <词> --reset-index 只清索引）',
+    );
+    parts.push('链记录只存在这个库里，删库会一并丢失');
   }
   return parts.join('；');
 }
@@ -2650,7 +2664,7 @@ const FLAGS_BY_COMMAND: Record<string, string[]> = {
   doctor: ['strict'],
   new: ['chain'],
   chain: [],
-  search: [],
+  search: ['reset-index'],
   usage: ['chain'],
   open: ['from', 'provider', 'to', 'check'],
 };
@@ -2727,7 +2741,7 @@ async function main(): Promise<void> {
     await runImportCodex(process.argv.slice(3));
     return;
   }
-  const { cmd, target, extra, rest, json, cwd, session, chain, from, provider, to, profile, last, sinceCompact, check, strict, limit, usedFlags, cwdGiven, positional } = parseArgs(process.argv);
+  const { cmd, target, extra, rest, json, cwd, session, chain, from, provider, to, profile, last, sinceCompact, resetIndex, check, strict, limit, usedFlags, cwdGiven, positional } = parseArgs(process.argv);
   if (cmd) {
     rejectUnusedFlags(cmd, usedFlags, json);
     rejectExtraPositionals(cmd, positional, json);
@@ -2786,7 +2800,7 @@ async function main(): Promise<void> {
     // 文本模式于是打「无结果」、--json 带 ok:true——看着像「搜过了没有」，其实一次都没查
     const q = [target, ...rest].filter(Boolean).join(' ').trim();
     if (!q) usage('search 需要查询词；例：watch search 迁移');
-    await cmdSearch(cwd, json, q);
+    await cmdSearch(cwd, json, q, resetIndex);
     return;
   }
   if (cmd === 'usage') {
@@ -2880,13 +2894,51 @@ async function cmdUsage(cwd: string, json: boolean, chain?: string): Promise<voi
   }
 }
 
-async function cmdSearch(cwd: string, json: boolean, query: string): Promise<void> {
+/**
+ * `--reset-index` 的确认行。
+ *
+ * 必须说清「清了什么、没动什么、其它目录需要各自重建」：只回一句「已清空」会让人以为
+ * 搜索要从零重建全部目录的索引，或者反过来以为链也被清掉了。
+ */
+function describeIndexReset(info: { rows: number; sessions: number; directories: number; vacuumed: boolean }): string {
+  const vacuumText = info.vacuumed ? '库文件已压缩' : '库文件未能压缩（原因见警告）';
+  if (info.sessions === 0) {
+    return `本地搜索索引本来就是空的（0 段），链与切换记录未受影响；${vacuumText}`;
+  }
+  return (
+    `已清空本地搜索索引：${info.rows} 段 / ${info.sessions} 个会话 / ${info.directories} 个目录（链与切换记录未受影响）；` +
+    `本轮重新索引当前目录，其它目录的索引会在各自 search 时重建；${vacuumText}`
+  );
+}
+
+async function cmdSearch(cwd: string, json: boolean, query: string, resetIndex = false): Promise<void> {
   const store = openStore();
   if (!store) fail(json, storeUnavailableError());
   try {
     const warnings: string[] = [];
     const unavailable: string[] = [];
     const emptied: EmptiedSession[] = [];
+    // `--reset-index`：只清搜索索引（全部目录），链与切换记录不动。索引每行都能由会话文件
+    // 重建，所以这是唯一一条不丢东西的省空间路径；删库会连链一起丢，doctor 的体积一栏才要把
+    // 这两条岔开说。失败时不能半途继续搜索——用户会以为「清过了还搜不到」是索引没建起来。
+    let resetInfo: ReturnType<Store['resetSearchIndex']> | null = null;
+    if (resetIndex) {
+      try {
+        resetInfo = store.resetSearchIndex();
+      } catch (error) {
+        fail(
+          json,
+          `清空搜索索引失败：${describeStoreErrorReason(error)}；本次未改动链与切换记录，索引按事务回滚，可原样重试`,
+        );
+      }
+      if (!json) console.log(describeIndexReset(resetInfo));
+      if (!resetInfo.vacuumed) {
+        warnings.push(
+          `搜索索引已清空，但库文件没能压缩（${resetInfo.vacuumError}）：VACUUM 需要约等于库大小的临时空间，` +
+            `腾出空间后可重跑 watch search <词> --reset-index，否则这些页要等后续写入才被复用`,
+        );
+      }
+    }
     const cwdIssue = await cwdProblem(cwd);
     if (cwdIssue) warnings.push(cwdIssue);
     // `:memory:` 时索引只活在本次进程内：每次 search 都得从头全量建一遍，
@@ -2970,6 +3022,7 @@ async function cmdSearch(cwd: string, json: boolean, query: string): Promise<voi
         ...(unavailable.length ? { unavailable } : {}),
         ...(unattributableStats.length ? { unattributable: unattributableJson(unattributableStats) } : {}),
         ...(emptied.length ? { emptied: emptiedJson(emptied) } : {}),
+        ...(resetInfo ? { resetIndex: { ...resetInfo } } : {}),
         ...(notes.length ? { notes } : {}),
         ...(warnings.length ? { warnings } : {}),
       }));
