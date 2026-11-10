@@ -1,5 +1,6 @@
 import { stat } from 'node:fs/promises';
 import type { Store } from './store.js';
+import { describeStoreErrorReason } from './store.js';
 import type { UnifiedTurn } from './types.js';
 import type { ProviderAdapter } from '../providers/adapter.js';
 import type { EmptiedSession } from './session-coverage.js';
@@ -88,6 +89,8 @@ export async function reindexCwd(
     let firstUnreadable = '';
     let occupied = 0;
     let firstOccupied = '';
+    let writeFailed = 0;
+    let firstWriteError = '';
     for (const s of list) {
       // 0 字节的会话在列表里是「正常的一条」（各家按 `previewError` 说明它空了），索引里却
       // 一行内容都没有：搜索永远命中不了它。放在 `cached` 跳过之前——文件被截断后 size 变了
@@ -130,16 +133,24 @@ export async function reindexCwd(
         // `parse` 成功不代表内容齐全：半行 / 坏行被逐行跳过，这些轮次不进索引，搜不到。
         // 判据与 `prompt` / `usage` 同源（`countUnparsableJsonLines()`；opencode 是 SQLite，返回 0）
         const bad = await countUnparsableJsonLines(s.ref.filePath);
-        store.reindexSession({
-          cwd,
-          sessionId: s.ref.sessionId,
-          provider: adapter.id,
-          filePath: s.ref.filePath,
-          texts: indexTexts(turns),
-          mtimeMs: st.mtimeMs,
-          size: st.size,
-          badLines: bad,
-        });
+        // 写索引与解析分开计：磁盘满 / 库只读时 `reindexSession` 会抛错，把它算进
+        // 「解析失败」会让人去查会话文件，而会话文件一行都没坏——真问题在本地库这一侧
+        try {
+          store.reindexSession({
+            cwd,
+            sessionId: s.ref.sessionId,
+            provider: adapter.id,
+            filePath: s.ref.filePath,
+            texts: indexTexts(turns),
+            mtimeMs: st.mtimeMs,
+            size: st.size,
+            badLines: bad,
+          });
+        } catch (error) {
+          writeFailed += 1;
+          firstWriteError ||= describeStoreErrorReason(error);
+          continue;
+        }
         n += 1;
         if (bad > 0) {
           badLineSessions += 1;
@@ -160,6 +171,14 @@ export async function reindexCwd(
     }
     if (failed > 0) {
       warnings?.push(`${adapter.id} 有 ${failed} 个会话解析失败，索引未更新（首个错误：${firstError}）`);
+    }
+    if (writeFailed > 0) {
+      // 会话文件没坏，坏的是本地库：说成「解析失败」会把人引去查一堆完好的 .jsonl
+      warnings?.push(
+        `${adapter.id} 有 ${writeFailed} 个会话解析成功、但写入本地搜索索引失败，这部分内容本轮搜不到` +
+          `（首个错误：${firstWriteError}）——会话文件本身没有改动，问题在本地库这一侧（磁盘空间、权限或库被占用）；` +
+          `旧索引已保留，腾出空间或修好权限后重跑 search 即可`,
+      );
     }
     if (badLineSessions > 0) {
       warnings?.push(

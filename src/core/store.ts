@@ -572,26 +572,51 @@ export class Store {
     badLines?: number;
   }): void {
     opts = { ...opts, cwd: normalizePath(opts.cwd) };
-    this.db.prepare('DELETE FROM messages_fts WHERE session_id=? AND cwd=?').run(opts.sessionId, opts.cwd);
-    const ins = this.db.prepare(
-      'INSERT INTO messages_fts (text, session_id, provider, cwd, file_path) VALUES (?,?,?,?,?)',
-    );
-    for (const raw of opts.texts) {
-      const text = raw.replace(/\s+/g, ' ').trim().slice(0, FTS_TEXT_LIMIT);
-      if (text.length < 2) continue;
-      ins.run(text, opts.sessionId, opts.provider, opts.cwd, opts.filePath);
-    }
-    if (typeof opts.mtimeMs === 'number' && typeof opts.size === 'number') {
-      this.recordIndexedSession(
-        opts.cwd,
-        opts.provider,
-        opts.sessionId,
-        opts.filePath,
-        opts.mtimeMs,
-        opts.size,
-        opts.badLines ?? 0,
+    // 先删后插：磁盘满 / 库只读时插到一半失败，旧索引已被删掉、游标也没更新，
+    // 这一轮 search 就会少掉整整一条会话，而用户看到的只是「无结果」。
+    // 整段放进事务，失败时旧索引原样保留——最该保住旧内容的时刻正是写不进去的时刻。
+    this.db.exec('BEGIN');
+    try {
+      this.db.prepare('DELETE FROM messages_fts WHERE session_id=? AND cwd=?').run(opts.sessionId, opts.cwd);
+      const ins = this.db.prepare(
+        'INSERT INTO messages_fts (text, session_id, provider, cwd, file_path) VALUES (?,?,?,?,?)',
       );
+      for (const raw of opts.texts) {
+        const text = raw.replace(/\s+/g, ' ').trim().slice(0, FTS_TEXT_LIMIT);
+        if (text.length < 2) continue;
+        ins.run(text, opts.sessionId, opts.provider, opts.cwd, opts.filePath);
+      }
+      if (typeof opts.mtimeMs === 'number' && typeof opts.size === 'number') {
+        this.recordIndexedSession(
+          opts.cwd,
+          opts.provider,
+          opts.sessionId,
+          opts.filePath,
+          opts.mtimeMs,
+          opts.size,
+          opts.badLines ?? 0,
+        );
+      }
+      this.db.exec('COMMIT');
+    } catch (error) {
+      this.db.exec('ROLLBACK');
+      throw error;
     }
+  }
+
+  /**
+   * 本地库自己的数据规模：搜索索引的文本段数与覆盖范围。
+   *
+   * `watch doctor` 拿它配 `stat` 出来的文件体积回答「这个工具自己占了多大地方」——
+   * v22 起索引里还有工具调用与返回记录，增长比过去快，而此前唯一可能的答案是用户自己去 `ls`。
+   * 只是观察值，不做阈值判断：多少算大取决于用户自己的磁盘。
+   */
+  indexFootprint(): { rows: number; sessions: number; directories: number } {
+    const rows = this.db.prepare('SELECT COUNT(*) AS n FROM messages_fts').get() as { n: number };
+    const sessions = this.db
+      .prepare('SELECT COUNT(*) AS n, COUNT(DISTINCT cwd) AS d FROM search_index')
+      .get() as { n: number; d: number };
+    return { rows: rows.n, sessions: sessions.n, directories: sessions.d };
   }
 
   /** 记录某会话已索引到哪个文件版本（mtime + size），供下一轮跳过未变化的文件 */
