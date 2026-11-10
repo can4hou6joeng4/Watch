@@ -71,6 +71,12 @@ export type PromptSessionMeta = {
   cwd: string;
   /** 源会话首条记录的时间（毫秒）；缺省时头部不写时间范围 */
   startedAt?: number;
+  /**
+   * 源会话文件里有多少行无法解析（截断 / 损坏）。各家 `parse` 对坏行一律跳过继续，
+   * 于是文档正文**静静缺少**这些记录——读者会把「正文就是这样」当成「会话就是这样」。
+   * 0 或缺省时不写这一行。opencode（SQLite）、kimi 这类非 JSONL 来源由判据自己返回 0。
+   */
+  sourceBadLines?: number;
   /** 本地记录的最后更新时间（毫秒）；缺省时头部不写这一行 */
   updatedAt?: number;
   /** 来源会话的 token 用量；null = 这家没有用量记录 */
@@ -353,6 +359,12 @@ export function buildHandoffPrompt(
     `- 会话 ID：${sanitizeBody(meta.sessionId).text}${meta.autoPicked ? '（自动挑选：本目录按修改时间最新的可读会话，可能不是你想要的另一条）' : ''}`,
   );
   if (meta.sourcePath) lines.push(`- 源文件：${sanitizeBody(meta.sourcePath).text}`);
+  if (meta.sourceBadLines && meta.sourceBadLines > 0) {
+    addFinding(findings, 'prompt_source_bad_lines', 'degraded', meta.sourceBadLines);
+    lines.push(
+      `- 源文件另有 ${meta.sourceBadLines} 行无法解析（截断或损坏），正文可能缺少这些记录——需要完整内容请先恢复来源文件`,
+    );
+  }
   lines.push(`- 工作目录：${sanitizeBody(meta.cwd).text}`);
   const range = formatTimeRange(meta.startedAt, meta.updatedAt);
   if (range) {

@@ -33,6 +33,7 @@ import { collectUnattributable, emptiedJson, emptiedSearchNote, emptiedSessionsW
 import type { EmptiedSession } from './core/session-coverage.js';
 import { describeSpawnFailure } from './core/platform.js';
 import { usageBadLinesDetail, usageSidecarProblem } from './core/usage-integrity.js';
+import { countUnparsableJsonLines } from './core/jsonl.js';
 import { readWatchVersion } from './core/watch-version.js';
 import { CAPABILITY_VERIFICATION_NOTE, describeCapabilities, formatCapabilities } from './core/capabilities.js';
 
@@ -1742,6 +1743,15 @@ async function cmdPrompt(
   }
 
   let sessionUsage: TokenUsage | null = null;
+  // 坏行被 `parse` 静默跳过：正文里的记录会缺一段，而读者看不出「少了」。文档要被复制走，
+  // 所以这一档既进 warnings（终端里立刻能看到）也进正文（`sourceBadLines`）。
+  const badSourceLines = await countUnparsableJsonLines(foundRef.filePath);
+  if (badSourceLines > 0) {
+    warnings.push(
+      `来源会话 ${foundRef.sessionId} 有 ${badSourceLines} 行无法解析（截断或损坏），已跳过；文档正文可能缺少这些记录`,
+    );
+  }
+
   // 用量这一行在「没有数字」之外还有两种来路，都必须写进文档：读不出来（`sessionUsage` 抛错），
   // 或用量数据源本身是空的（grok 的 `updates.jsonl` 被截成 0 字节，`sessionUsage` 安静返回 null）。
   // 只打在 stderr 不够——文档会被复制进别家助手，那里的读者会把「读不出来」当成「这家没有用量」。
@@ -1782,6 +1792,7 @@ async function cmdPrompt(
       // 首条记录的时间当起点：文档里要给出时间范围，但只在真读到时间戳时写
       startedAt: toMillis(turns[0]?.timestamp),
       updatedAt,
+      ...(badSourceLines > 0 ? { sourceBadLines: badSourceLines } : {}),
       usage: sessionUsage,
       ...(usageNote ? { usageNote } : {}),
       ...(usageBadLines > 0 ? { usageBadLines } : {}),
