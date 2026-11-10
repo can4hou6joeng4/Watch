@@ -56,7 +56,7 @@ function usage(reason?: string): never {
   watch recent [--json] [--cwd <path>] [--limit <n>]
   watch providers [--json]
   watch capabilities [--json]                       各 Agent 的读写能力矩阵（代码事实，不探测本机 CLI）
-  watch prompt <session-id> [--provider <name>] [--profile minimal|standard|verbose|full] [--json]
+  watch prompt <session-id> [--provider <name>] [--profile minimal|standard|verbose|full] [--last <n>] [--json]
                                                     摘要交接：把会话渲染成可粘贴给任意 Agent 的 Markdown（降级方案，不写任何文件）
   watch doctor [--json] [--strict] [--cwd <path>]   只读环境诊断：Agent 检测、本地库、导入日志（不写盘）
   watch new <provider> [--json] [--cwd <path>] [--chain <id|name>]
@@ -322,6 +322,23 @@ function describeLimitValue(raw: string): string {
   return `--limit 需要 1–50 之间的整数，收到: ${echoed}`;
 }
 
+/**
+ * `--last <n>` 的错误文案。与 `--limit` 同一口径：接受范围写清楚，带空白时直接给出可照抄的写法，
+ * 不给「检查一下参数」这种要用户自己猜的话。
+ */
+function describeLastValue(raw: string): string {
+  const echoed = `"${escapeControlChars(raw)}"`;
+  const trimmed = raw.trim();
+  const n = /^\d+$/.test(trimmed) ? Number(trimmed) : NaN;
+  if (trimmed !== raw && Number.isInteger(n) && n >= 1 && n <= 200) {
+    return (
+      `--last 的取值前后有空白字符，收到: ${echoed}；数字两边不能有空格、制表符或换行——` +
+      `写成 --last ${n} 重试`
+    );
+  }
+  return `--last 需要 1–200 之间的整数（保留最近多少个用户轮），收到: ${echoed}`;
+}
+
 function parseArgs(argv: string[]): {
   cmd?: string;
   target?: string;
@@ -335,6 +352,7 @@ function parseArgs(argv: string[]): {
   provider?: string;
   to?: string;
   profile?: string;
+  last?: number;
   check: boolean;
   strict: boolean;
   limit?: number;
@@ -355,6 +373,7 @@ function parseArgs(argv: string[]): {
   let provider: string | undefined;
   let to: string | undefined;
   let profile: string | undefined;
+  let last: number | undefined;
   let check = false;
   let strict = false;
   let limit: number | undefined;
@@ -431,6 +450,16 @@ function parseArgs(argv: string[]): {
       profile = takeValue('--profile');
       continue;
     }
+    if (a === '--last') {
+      const raw = takeValue('--last');
+      // 与 --limit 同一口径：只认十进制整数，前后带空白就明说怎么改，不替用户 trim
+      const n = /^\d+$/.test(raw) ? Number(raw) : NaN;
+      if (!Number.isInteger(n) || n < 1 || n > 200) {
+        usage(describeLastValue(raw));
+      }
+      last = n;
+      continue;
+    }
     if (a === '--limit') {
       const raw = takeValue('--limit');
       // Number() 会接受 '0x10'（16）与 ' 3'（3）：用户只想给十进制条数，别猜他的意思
@@ -464,6 +493,7 @@ function parseArgs(argv: string[]): {
     ...(provider ? ['provider'] : []),
     ...(to ? ['to'] : []),
     ...(profile ? ['profile'] : []),
+    ...(last !== undefined ? ['last'] : []),
     ...(limit !== undefined ? ['limit'] : []),
   ];
   return {
@@ -481,6 +511,7 @@ function parseArgs(argv: string[]): {
     provider,
     to,
     profile,
+    last,
     check,
     strict,
     limit,
@@ -1569,6 +1600,7 @@ async function cmdPrompt(
   sessionId: string,
   provider: string | undefined,
   profileRaw: string | undefined,
+  lastUserTurns: number | undefined,
 ): Promise<void> {
   const profile = profileRaw === undefined ? DEFAULT_PROMPT_PROFILE : parsePromptProfile(profileRaw);
   if (!profile) {
@@ -1632,6 +1664,7 @@ async function cmdPrompt(
       usage: sessionUsage,
     },
     profile,
+    { ...(lastUserTurns !== undefined ? { lastUserTurns } : {}) },
   );
 
   if (json) {
@@ -1641,6 +1674,7 @@ async function cmdPrompt(
       provider: adapter.id,
       cwd: found.ref.cwd,
       profile: result.profile,
+      ...(lastUserTurns !== undefined ? { lastUserTurns } : {}),
       markdown: result.markdown,
       stats: result.stats,
       findings: result.findings,
@@ -2400,7 +2434,7 @@ const FLAGS_BY_COMMAND: Record<string, string[]> = {
   recent: ['limit'],
   providers: [],
   capabilities: [],
-  prompt: ['provider', 'profile'],
+  prompt: ['provider', 'profile', 'last'],
   doctor: ['strict'],
   new: ['chain'],
   chain: [],
@@ -2480,7 +2514,7 @@ async function main(): Promise<void> {
     await runImportCodex(process.argv.slice(3));
     return;
   }
-  const { cmd, target, extra, rest, json, cwd, session, chain, from, provider, to, profile, check, strict, limit, usedFlags, cwdGiven, positional } = parseArgs(process.argv);
+  const { cmd, target, extra, rest, json, cwd, session, chain, from, provider, to, profile, last, check, strict, limit, usedFlags, cwdGiven, positional } = parseArgs(process.argv);
   if (cmd) {
     rejectUnusedFlags(cmd, usedFlags, json);
     rejectExtraPositionals(cmd, positional, json);
@@ -2517,7 +2551,7 @@ async function main(): Promise<void> {
   }
   if (cmd === 'prompt') {
     if (!target) usage('prompt 需要指定会话 id；例：watch prompt <session-id> --profile standard');
-    await cmdPrompt(json, target, provider, profile);
+    await cmdPrompt(json, target, provider, profile, last);
     return;
   }
   if (cmd === 'doctor') {

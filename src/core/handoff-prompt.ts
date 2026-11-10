@@ -44,6 +44,17 @@ type ProfileLimits = {
   detailLimit: number | null;
 };
 
+export type PromptOptions = {
+  /**
+   * 只保留最近 N 个 **user 轮**（含其后的 assistant 回复）。对应 catchup 的 `--last`。
+   *
+   * 这是用户显式点名的窗口，语义与档位不同：档位是「大致多大」，`--last` 是「就是这几轮」。
+   * 因此它**不再强制保留首轮**——用户说要最近 3 轮，就只给 3 轮——但必须在文档里写明
+   * 首条任务描述可能已被切掉，否则读者会以为这就是全部背景。
+   */
+  lastUserTurns?: number;
+};
+
 const PROFILE_LIMITS: Record<PromptProfile, ProfileLimits> = {
   minimal: { maxTurns: 3, eventsPerTurn: 0, textLimit: 1200, detailLimit: 0 },
   standard: { maxTurns: 10, eventsPerTurn: 0, textLimit: null, detailLimit: 0 },
@@ -161,6 +172,20 @@ function selectTurns(turns: UnifiedTurn[], maxTurns: number | null): { kept: Uni
   return { kept, omitted: turns.length - kept.length };
 }
 
+/**
+ * 取最近 N 个 user 轮：从倒数第 N 条 user 消息起整段截到末尾。
+ * 不足 N 轮时原样返回，`omitted` 为 0——「要的比有的多」不该被报成一次裁剪。
+ */
+function takeLastUserTurns(turns: UnifiedTurn[], n: number): { kept: UnifiedTurn[]; omitted: number } {
+  let seen = 0;
+  for (let i = turns.length - 1; i >= 0; i--) {
+    if (turns[i]!.role !== 'user') continue;
+    seen += 1;
+    if (seen === n) return { kept: turns.slice(i), omitted: i };
+  }
+  return { kept: turns, omitted: 0 };
+}
+
 /** 单行摘要的硬上限：摘要本身就该短，超了只标省略，不追加「已截断」说明 */
 function clipInline(text: string, limit: number): { text: string; truncated: boolean } {
   const chars = Array.from(text);
@@ -199,6 +224,7 @@ export function buildHandoffPrompt(
   turns: UnifiedTurn[],
   meta: PromptSessionMeta,
   profile: PromptProfile = DEFAULT_PROMPT_PROFILE,
+  options: PromptOptions = {},
 ): HandoffPrompt {
   const limits = PROFILE_LIMITS[profile];
   const findings: Finding[] = [];
@@ -216,7 +242,11 @@ export function buildHandoffPrompt(
     escapedBodies: 0,
   };
 
-  const { kept, omitted } = selectTurns(turns, limits.maxTurns);
+  // 显式 `--last N` 优先于档位的轮次上限：用户点名了窗口，就不该再被档位偷偷缩一次
+  const selection = options.lastUserTurns !== undefined
+    ? takeLastUserTurns(turns, options.lastUserTurns)
+    : selectTurns(turns, limits.maxTurns);
+  const { kept, omitted } = selection;
   stats.includedTurns = kept.length;
   stats.omittedTurns = omitted;
   if (omitted > 0) addFinding(findings, 'prompt_turns_omitted', 'skipped', omitted);
@@ -283,9 +313,15 @@ export function buildHandoffPrompt(
   lines.push(`- 轮次：${stats.turns} 轮（用户 ${stats.userTurns} / 助手 ${stats.assistantTurns}）`);
   lines.push(`- 用量：${formatUsage(meta.usage) ?? '来源会话没有可读的用量记录'}`);
   const fullHint = profile === 'full' ? '' : '；要更完整的内容，用 --profile full 重新生成';
-  lines.push(`- 档位：${profile}（正文 ${limits.textLimit === null ? '不截断' : `每条 ≤ ${limits.textLimit} 字符`}，过程记录 ${limits.eventsPerTurn === null ? '全部展开' : limits.eventsPerTurn === 0 ? '不展开' : `每轮 ≤ ${limits.eventsPerTurn} 条`}${fullHint}）`);
+  const lastHint = options.lastUserTurns !== undefined ? `，最近 ${options.lastUserTurns} 个用户轮（--last）` : '';
+  lines.push(`- 档位：${profile}（正文 ${limits.textLimit === null ? '不截断' : `每条 ≤ ${limits.textLimit} 字符`}，过程记录 ${limits.eventsPerTurn === null ? '全部展开' : limits.eventsPerTurn === 0 ? '不展开' : `每轮 ≤ ${limits.eventsPerTurn} 条`}${lastHint}${fullHint}）`);
   if (stats.omittedTurns > 0) {
-    lines.push(`- 本档位保留了 ${stats.includedTurns} 轮，省略 ${stats.omittedTurns} 轮（原始任务描述已强制保留）`);
+    const keptUserTurns = kept.filter((t) => t.role === 'user').length;
+    lines.push(
+      options.lastUserTurns !== undefined
+        ? `- 按 --last ${options.lastUserTurns} 保留了最近 ${keptUserTurns} 个用户轮，省略 ${stats.omittedTurns} 轮（**首条任务描述未保留**，需要背景请去掉 --last 重新生成）`
+        : `- 本档位保留了 ${stats.includedTurns} 轮，省略 ${stats.omittedTurns} 轮（原始任务描述已强制保留）`,
+    );
   }
   // 具体数字必须写在文档里：这份 Markdown 一旦被复制走，stderr 上的 findings 就不再跟着它，
   // 目标助手与用户看到的只剩正文。只写「可能被裁剪」不足以让人判断还能不能接着干。

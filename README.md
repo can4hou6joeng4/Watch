@@ -126,13 +126,13 @@ providers                                                   各 Agent 的本机�
 capabilities                                                各 Agent 的读写能力矩阵（代码事实，不探测本机 CLI）
 doctor   [--cwd <path>] [--strict]                          只读环境诊断（Agent 检测 / 本地库 / 导入日志）；发现硬失败时退出码 1，--strict 让警告也算失败
 open     <session-id> [--from <id>] [--provider <name>] [--to <provider>] [--check]
-prompt   <session-id> [--provider <name>] [--profile minimal|standard|verbose|full]   摘要交接：把会话渲染成可粘贴的 Markdown（降级方案，不写任何文件）
+prompt   <session-id> [--provider <name>] [--profile minimal|standard|verbose|full] [--last <n>]   摘要交接：把会话渲染成可粘贴的 Markdown（降级方案，不写任何文件）
 import-codex  prepare|confirm|status|project-prepare|project-confirm|project-status
 ```
 
 `--check` 只与 `open ... --to <provider>` 同用：只读预检目标会话是否可写，不写入任何内容。
 
-目标工具还没有适配器（或那家的格式刚漂移、写回有风险）时用 `prompt`：它只读，把会话渲染成一份 Markdown，正文开头就写明「这是摘要交接、不是目标助手的原生会话」；`--profile` 控制保留多少内容，任何被裁剪的部分都会进 `--json` 的 `findings` 并在 stderr 说明。
+目标工具还没有适配器（或那家的格式刚漂移、写回有风险）时用 `prompt`：它只读，把会话渲染成一份 Markdown，正文开头就写明「这是摘要交接、不是目标助手的原生会话」；`--profile` 控制保留多少内容，`--last <n>` 则只保留最近 n 个用户轮（显式窗口，此时不再强制保留首轮，文档里会写明）；任何被裁剪的部分都会进 `--json` 的 `findings` 并在 stderr 说明。
 
 </details>
 
