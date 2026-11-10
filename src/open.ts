@@ -1,6 +1,6 @@
 import { stat } from 'node:fs/promises';
 import { describeWriteFailureReason, type FileDigest } from './core/atomic.js';
-import { assertTargetUnchanged, blockedHint, diffTurns, HandoffBlockedError } from './core/handoff.js';
+import { assertTargetUnchanged, blockedHint, describeSourceChangedDuringHandoff, diffTurns, HandoffBlockedError, snapshotSourceState, type SourceStateSnapshot } from './core/handoff.js';
 import { describeDanglingToolCalls, describeUnansweredTail, describeResumeTargetUnfinished, dedupeCallEvents } from './core/rich.js';
 import { Store, defaultDbPath, describeStoreErrorReason, describeStoreOpenFailure } from './core/store.js';
 import { IS_WIN, normalizePath, stripDevicePrefix } from './core/platform.js';
@@ -462,6 +462,8 @@ export async function openSession(
           : `未找到来源会话: ${escapeControlChars(from)}。请确认 id 正确，且该会话属于已安装登录的 CLI；${LOOKUP_NEXT_STEP}${detail}`,
       };
     }
+    // 来源快照：parse 之前取、写完之后再比（下面那个 catch 会提前返回，所以声明在它外面）
+    let srcSnapshot: SourceStateSnapshot | null = null;
     try {
       // 来源 usage 聚合携带：source 支持 sessionUsage 时读出，跨侧对账展示（写回各 build 仍为零占位）
       if (typeof source.adapter.sessionUsage === 'function') {
@@ -496,6 +498,9 @@ export async function openSession(
       }
       // 来源 / 目标解析各自捕获：它们都是「读」，让它们落进下面管写入的 catch 会被
       // 说成「并入新内容失败：无权写入」，把读失败讲成写失败、还指向错误的下一步
+      // 快照要在 parse 之前取：来源侧没有 TOCTOU 守卫，用户在原生 CLI 里继续说话、
+      // 或另一条命令正在追加时，读到的是这一刻的内容，而结果只说「已并入 N 轮」
+      srcSnapshot = await snapshotSourceState(source.found.ref.filePath);
       let srcTurns: UnifiedTurn[];
       try {
         srcTurns = await source.adapter.parse(source.found.ref);
@@ -592,6 +597,17 @@ export async function openSession(
       const raw = error instanceof Error ? error.message : String(error);
       // 写入被阻断走结构化 blocked（文案已是中文）；其余多半是写盘失败，原文只有英文 errno
       return blocked ? { ok: false, error: raw, blocked } : { ok: false, error: `并入新内容失败: ${describeWriteFailureReason(error) ?? raw}` };
+    }
+    // 写完了再比一次来源：期间被追加的话，并进去的只是开始那一刻的内容。
+    // 只在真的并入了内容时说——一句都没并时这句「并进去的是…」会自相矛盾。
+    if (merged > 0) {
+      const drift = await describeSourceChangedDuringHandoff(
+        source.found.ref.filePath,
+        srcSnapshot,
+        `${source.found.ref.sessionId}（${source.adapter.displayName}）`,
+        '并入',
+      );
+      if (drift) warnings.push(drift);
     }
   }
   let usage: TokenUsage | null = null;
@@ -1127,6 +1143,9 @@ export async function openInProvider(
   const planned = await planOpenInProvider(sourceId, providerId, mapping, diagnostics);
   if (!planned.ok) return { ok: false, error: attachDiagnostics(planned.error, diagnostics) };
   const { adapter: target, sourceRef, sourceProvider, cwd, plan } = planned;
+  // 来源快照基线：`plan` 里已经读过来源会话，这里是「写完之后再比一次」的参照。
+  // 来源侧没有 TOCTOU 守卫，期间被追加的话，转过去的只是规划那一刻的内容
+  const srcSnapshot = await snapshotSourceState(sourceRef.filePath);
 
   const cliBlock = await newSessionCliBlock(target, plan);
   if (cliBlock) {
@@ -1193,6 +1212,16 @@ export async function openInProvider(
       plan.turns.length > 0 ? await guardedImport(target, plan.targetRef, plan.snapshot, plan.turns, cwd) : plan.targetRef;
     if (!newRef) return { ok: false, error: '转入目标会话失败: 未获得可用的目标会话引用' };
     if (plan.note) notes.push(plan.note);
+    // 真的转入了内容才谈得上「转过去的是哪一刻的」：resume 快路径在上面已经返回
+    if (plan.turns.length > 0) {
+      const drift = await describeSourceChangedDuringHandoff(
+        sourceRef.filePath,
+        srcSnapshot,
+        `${sourceRef.sessionId}（${source?.displayName ?? sourceProvider}）`,
+        '转入',
+      );
+      if (drift) warnings.push(drift);
+    }
     if (mapping) {
       try {
         mapping.rememberSessionLocation(providerId, newRef, Date.now());

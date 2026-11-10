@@ -1,4 +1,5 @@
 import type { ImportTurnsOpts, ProviderAdapter } from '../providers/adapter.js';
+import { stat } from 'node:fs/promises';
 import type { SessionRef, TokenUsage, UnifiedTurn } from './types.js';
 import { chainsElsewhereHint, chainsSameDirectoryHint, describeStoreErrorReason, emptyChainBindHint } from './store.js';
 import type { Chain, ChainsElsewhere, Store, SwitchRecord } from './store.js';
@@ -219,6 +220,55 @@ export async function assertTargetUnchanged(
     );
   }
   throw new HandoffBlockedError('target_changed', `目标会话正在被外部写入，已中止本次${action}，请稍后重试`);
+}
+
+/**
+ * 来源侧快照：交接开始时记下文件大小与修改时间，写完之后再比一次。
+ *
+ * 目标侧有 TOCTOU 守卫（`assertTargetUnchanged`），来源侧一直只是「读一次」。用户在原生 CLI 里
+ * 继续对话、或另一条命令正往这条会话追加时，读到的是开始那一刻的内容，而结果只说「已从 X 交接
+ * → Y（N 轮）」——读者会当成整条会话都搬过去了。这里**不拦截**（内容已经写进去、不该回滚），
+ * 只把「差了一段」说出来，并给出能落地的一步：再执行一次同一条命令，`diffTurns` 会把新增部分
+ * 当增量补上。
+ *
+ * 用 stat 而不是内容指纹：这里只需要「有没有变」，不必证明内容一定不同，省一次全文件读取。
+ * 代价是同一时间戳精度内等长改写会漏报——漏报只是少一句提示，不会说出错的结论。
+ */
+export type SourceStateSnapshot = { size: number; mtimeMs: number };
+
+export async function snapshotSourceState(filePath: string): Promise<SourceStateSnapshot | null> {
+  try {
+    const st = await stat(filePath);
+    return { size: st.size, mtimeMs: st.mtimeMs };
+  } catch {
+    // 读的时候还在、备份时又不在了：这一档由各命令自己的读取失败分支处理，这里不另起结论
+    return null;
+  }
+}
+
+export async function describeSourceChangedDuringHandoff(
+  filePath: string,
+  before: SourceStateSnapshot | null,
+  label: string,
+  action = '交接',
+): Promise<string | null> {
+  if (!before) return null;
+  const after = await snapshotSourceState(filePath);
+  if (!after) return null;
+  if (after.size === before.size && after.mtimeMs === before.mtimeMs) return null;
+  // 增长与改写/截断的下一步不一样：前者再执行一次就能补齐；后者要先确认文件本身没坏
+  // （内容变了的那部分不会被 diff 当成增量，重跑也补不回来）
+  if (after.size > before.size) {
+    return (
+      `来源会话 ${label} 在这次${action}期间被写入过（${before.size} → ${after.size} 字节，新增约 ${after.size - before.size} 字节）：` +
+      `转过去的是开始读取时的内容，之后新增的记录没有带上——再执行一次同一条命令会把新增部分作为增量补齐`
+    );
+  }
+  const detail = after.size < before.size ? `少了约 ${before.size - after.size} 字节` : '内容被改写（大小不变）';
+  return (
+    `来源会话 ${label} 在这次${action}期间被写入过（${before.size} → ${after.size} 字节，${detail}）：` +
+    `转过去的是读取时看到的内容；先确认来源文件没有被损坏，再重新执行同一条命令（被改写的那部分不会被当成增量补齐）`
+  );
 }
 
 /** 从 source 里去掉 dest 已有的前缀子序列，只留下待追加增量 */
@@ -1230,6 +1280,9 @@ export async function handoff(
   const source = resolve(sourceTip.provider);
   if (!source) throw new Error(`链尾 provider 未注册: ${sourceTip.provider}`);
 
+  // 来源侧没有守卫（目标侧才是 TOCTOU 保护的对象）：快照取在 parse 之前，
+  // 写完之后再比一次，期间被追加的那一段要披露，不能被讲成「整条会话都交接了」
+  const srcSnapshot = await snapshotSourceState(sourceTip.ref.filePath);
   let turns: UnifiedTurn[];
   try {
     turns = await source.parse(sourceTip.ref);
@@ -1403,6 +1456,16 @@ export async function handoff(
     emptiedTargetFile && isEmptySessionFileReason(emptiedTargetFile) ? emptiedTargetFile : null;
 
   const newRef = await guardedWrite(dedupeCallEvents(outgoing), replace ? { replace: true } : undefined);
+  // 期间来源被追加：交接的内容只到读取那一刻。只在真的写入了内容时说（`outgoing` 为空时
+  // 这句「交接的是…」会与「已全部包含」自相矛盾）
+  if (outgoing.length > 0) {
+    const drift = await describeSourceChangedDuringHandoff(
+      sourceTip.ref.filePath,
+      srcSnapshot,
+      `${sourceTip.ref.sessionId}（${source.displayName}）`,
+    );
+    if (drift) warnings.push(drift);
+  }
   if (emptiedTarget && into) {
     warnings.push(
       `目标会话 ${into.sessionId}（${target.displayName}）的${emptiedTarget}；` +
