@@ -23,6 +23,7 @@ import { describeWriteFailureReason } from './core/atomic.js';
 import { collectUnattributable, emptiedJson, emptiedSearchNote, emptiedSessionsWarning, unattributableEmptyNote, unattributableJson, unattributableSearchNote, unattributableWarning } from './core/session-coverage.js';
 import type { EmptiedSession } from './core/session-coverage.js';
 import { describeSpawnFailure } from './core/platform.js';
+import { readWatchVersion } from './core/watch-version.js';
 
 /**
  * 参数还没解析完就要报用法错误（缺值 / 越界 / 未知 flag）：此时 `--json` 已经能从 argv 看出来。
@@ -38,6 +39,7 @@ const JSON_REQUESTED = process.argv.includes('--json');
 function usage(reason?: string): never {
   if (reason) console.error(`[watch] ${reason}`);
   console.error(`用法:
+  watch --version [--json]                          打印版本号（读 package.json；读不出来给 null）
   watch status [--json] [--cwd <path>] [--chain <id|name>]
   watch switch <provider> [--json] [--cwd <path>] [--chain <id|name>]
   watch adopt <provider> [--json] [--cwd <path>] [--chain <id|name>] [--session <id>]
@@ -2292,6 +2294,20 @@ function rejectExtraPositionals(cmd: string, positional: string[], json: boolean
 }
 
 async function main(): Promise<void> {
+  // `--version` 与 `--help` 同属全局开关：放在 parseArgs 与 import-codex 分派之前，
+  // 才能让 `watch --version` / `watch status --version` / `watch import-codex --version`
+  // 三条位置给出同一个结论。以前它只会落进「未知参数: --version」——用户想确认装的是哪一版，
+  // 而唯一带版本号的地方是 `watch doctor` 的「环境: watch x.y.z · node …」（还要能跑通诊断）。
+  // 读不出版本时不编一个数：文本说「未知版本」，`--json` 给 `version: null`。
+  if (process.argv.slice(2).includes('--version')) {
+    const version = readWatchVersion();
+    if (process.argv.includes('--json')) {
+      console.log(JSON.stringify({ ok: true, version }));
+    } else {
+      console.log(`watch ${version ?? '未知版本'}`);
+    }
+    return;
+  }
   if (process.argv[2] === 'import-codex') {
     await runImportCodex(process.argv.slice(3));
     return;
