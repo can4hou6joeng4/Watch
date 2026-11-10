@@ -1,5 +1,6 @@
 import { stat } from 'node:fs/promises';
 import type { Store } from './store.js';
+import type { UnifiedTurn } from './types.js';
 import type { ProviderAdapter } from '../providers/adapter.js';
 import type { EmptiedSession } from './session-coverage.js';
 import { escapeControlChars } from './display.js';
@@ -25,6 +26,25 @@ import {
  * 判定用列表已经给出的 `previewError`（各家列会话时判过，判据与 `describeEmptySessionFile()` 同源），
  * 不在这里再 `stat` 一次，也不把「读不出来」（权限）混进这一档——两者下一步相反。
  */
+/**
+ * 进索引的文本：轮次正文 + 每条过程记录的摘要与正文。
+ *
+ * 用户在 `watch search` 里找的常常是**工具输出里的线索**——报错原文、跑过的命令、文件路径。
+ * 只索引 `turn.text` 时这些查询会回「无结果」，而记录其实就在会话里：与「读不出来却讲成没有」
+ * 是同一类静默缺口。每条记录单独成行，各自受 `FTS_TEXT_LIMIT` 约束，不会因为拼接
+ * 把同一轮的正文挤出上限；短记录（思考摘要、工具名）也可能命中，所以 summary 也带上。
+ */
+export function indexTexts(turns: UnifiedTurn[]): string[] {
+  const out: string[] = [];
+  for (const t of turns) {
+    out.push(t.text);
+    for (const e of t.events ?? []) {
+      out.push(e.detail ? `${e.summary}\n${e.detail}` : e.summary);
+    }
+  }
+  return out;
+}
+
 export async function reindexCwd(
   cwd: string,
   adapters: ProviderAdapter[],
@@ -115,7 +135,7 @@ export async function reindexCwd(
           sessionId: s.ref.sessionId,
           provider: adapter.id,
           filePath: s.ref.filePath,
-          texts: turns.map((t) => t.text),
+          texts: indexTexts(turns),
           mtimeMs: st.mtimeMs,
           size: st.size,
           badLines: bad,
