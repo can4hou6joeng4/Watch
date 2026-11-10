@@ -20,6 +20,13 @@ src/providers/codex/CLAUDE.md
 desktop/CLAUDE.md
 desktop/src-tauri/CLAUDE.md
 docs/MODULE-MAP.md
+docs/store.md
+docs/degradation.md
+docs/entrypoints.md
+docs/write-safety.md
+docs/import-codex-internals.md
+docs/provider-adapter.md
+docs/rust-bridge.md
 
 # 内部策略与研究稿，不随仓库分发
 GEO-AUDIT-REPORT.md
