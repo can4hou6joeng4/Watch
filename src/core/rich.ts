@@ -56,15 +56,21 @@ export const PI_BRANCH_SUMMARY_PREFIX = '[Pi 分支摘要：由 Pi 生成，不�
  */
 export const WATCH_CONTEXT_DISCLOSURE_PREFIX = '[Watch 交接披露：';
 
-/** 从解析结果里找上下文完整性披露事件（目前由 Pi / Codex 解析器写入）。 */
+/** 汇总各轮独立的上下文披露；转存的旧声明不能遮住来源后来新增的声明。 */
 export function findContextDisclosure(turns: UnifiedTurn[]): ProcessEvent | null {
-  for (let i = turns.length - 1; i >= 0; i--) {
-    const event = (turns[i]!.events ?? []).find(
-      (e) => e.kind === 'text' && e.summary.startsWith(WATCH_CONTEXT_DISCLOSURE_PREFIX),
-    );
-    if (event) return event;
+  const messages = new Set<string>();
+  let last: ProcessEvent | null = null;
+  for (const turn of turns) {
+    for (const event of turn.events ?? []) {
+      if (event.kind !== 'text' || !event.summary.startsWith(WATCH_CONTEXT_DISCLOSURE_PREFIX)) continue;
+      last = event;
+      const text = event.detail?.startsWith(WATCH_CONTEXT_DISCLOSURE_PREFIX) ? event.detail : event.summary;
+      for (const message of text.split(/\n(?=\[Watch 交接披露：)/)) messages.add(message);
+    }
   }
-  return null;
+  if (!last) return null;
+  const text = [...messages].join('\n');
+  return { ...last, summary: text, detail: text };
 }
 
 export function turnHasContent(t: UnifiedTurn): boolean {
@@ -185,13 +191,23 @@ export function flattenToolOutput(output: unknown): string {
   return '';
 }
 
-/** 从 Codex exec 脚本里抽出 cmd:"..." */
+/** 只认调用脚本的起始形状，shell 命令里提到 tools.exec_command 不等于已经包装。 */
+export function isCodexExecScript(input: string): boolean {
+  return /^\s*(?:(?:const|let|var)\s+[\w$]+\s*=\s*(?:await\s+)?|await\s+)?tools\.exec_command\s*\(/.test(input);
+}
+
+/** 从已识别的 Codex exec 脚本中解码 JSON 字符串；无法解码时保留原脚本。 */
 export function extractExecCommand(input: string): string {
+  if (!isCodexExecScript(input)) return input;
   const cmds: string[] = [];
-  const re = /cmd\s*:\s*"((?:\\.|[^"\\])*)"/g;
+  const re = /tools\.exec_command\s*\(\s*\{\s*cmd\s*:\s*("(?:\\.|[^"\\])*")/g;
   let m: RegExpExecArray | null;
   while ((m = re.exec(input))) {
-    cmds.push(m[1].replace(/\\n/g, '\n').replace(/\\"/g, '"'));
+    try {
+      cmds.push(JSON.parse(m[1]!) as string);
+    } catch {
+      return input; // 非 JSON 的 JS 字符串不猜解码，保留完整脚本供核对。
+    }
   }
   return cmds.length ? cmds.join('\n') : input;
 }
