@@ -13,6 +13,7 @@ import {
 } from '../../core/rich.js';
 import type { ProcessEvent, SessionRef, TokenUsage, UnifiedTurn } from '../../core/types.js';
 import { describeClaudeContinuation, probeClaudeContinuation, readContinuedInRecord, type ClaudeContinuationCounts } from './continuation.js';
+import { describeQueuedImages, readQueuedUserPrompt } from './queued.js';
 
 /**
  * Claude JSONL → 统一时间线（Rich）：
@@ -24,6 +25,8 @@ import { describeClaudeContinuation, probeClaudeContinuation, readContinuedInRec
  * - `isCompactSummary` 的 user 记录在正文前加来源前缀（它由 Claude Code 生成，不是用户原话）
  * - 未识别的 content block 不整块静默跳过：按类型计数写进正文，只含未知块的记录仍保留为一轮
  * - `continued-in`（会话被转入后台）按整份日志计数，续接文件存在性分档披露，不静默换 id
+ * - 顶层 `attachment` 里的 `queued_command`（用户中途发来的消息）还原成用户轮：
+ *   它没有对应的 user 记录，丢掉会让助手回复看起来在回答一个没人问过的问题
  * - 丢弃首条 user 之前的记录
  */
 export async function parseClaudeSession(ref: SessionRef): Promise<UnifiedTurn[]> {
@@ -32,6 +35,11 @@ export async function parseClaudeSession(ref: SessionRef): Promise<UnifiedTurn[]
   let sawUser = false;
   const lastTextEvents = new Map<UnifiedTurn, ProcessEvent>();
   const continuation: ClaudeContinuationCounts = { count: 0, malformed: 0, sessionId: null };
+  // 用户中途发来的消息（顶层 attachment / queued_command）：先记下「当时解析到第几轮」，
+  // 循环结束后再插入。**不能当场 push 用户轮**——紧随其后的 tool_result 记录靠
+  // `turns.at(-1)?.role === 'assistant'` 挂到当前助手轮上，中间插一轮会让这些工具结果被丢弃。
+  const queued: { pos: number; text: string; timestamp: string; sourceUuid: string | null }[] = [];
+  const userUuids = new Set<string>();
 
   for (const line of raw.split('\n')) {
     const trimmed = line.trim();
@@ -53,9 +61,19 @@ export async function parseClaudeSession(ref: SessionRef): Promise<UnifiedTurn[]
       }
       continue;
     }
+    // 用户中途发来的消息：还原成用户轮，否则助手接下来那段回复在交接里没有提问对象
+    const queuedPrompt = readQueuedUserPrompt(record);
+    if (queuedPrompt) {
+      const withImages = queuedPrompt.imageCount > 0
+        ? `${queuedPrompt.text}${queuedPrompt.text ? '\n\n' : ''}${describeQueuedImages(queuedPrompt.imageCount)}`
+        : queuedPrompt.text;
+      queued.push({ pos: turns.length, text: withImages, timestamp: queuedPrompt.timestamp, sourceUuid: queuedPrompt.sourceUuid });
+      continue;
+    }
     if (typeof record !== 'object' || record === null) continue;
     const r = record as Record<string, unknown>;
     const type = r.type;
+    if (type === 'user' && typeof r.uuid === 'string') userUuids.add(r.uuid);
     if (type !== 'user' && type !== 'assistant') continue;
     if (r.isMeta === true || r.isSidechain === true) continue;
 
@@ -109,6 +127,7 @@ export async function parseClaudeSession(ref: SessionRef): Promise<UnifiedTurn[]
       turn.events = turn.events?.filter((event) => event !== finalEvent);
     }
   }
+  insertQueuedUserTurns(turns, queued, userUuids);
   const stripped = stripEmptyEvents(turns);
   const detected = await probeClaudeContinuation(continuation, ref.filePath);
   if (detected && stripped.length > 0) {
@@ -117,6 +136,32 @@ export async function parseClaudeSession(ref: SessionRef): Promise<UnifiedTurn[]
     pushEvent(last, { kind: 'text', summary: text, detail: text, timestamp: last.timestamp, provider: 'claude' });
   }
   return stripped;
+}
+
+/**
+ * 把「用户中途发来的消息」插回时间线。
+ *
+ * 两条判据：
+ * - **去重**：日志里已有 `uuid == source_uuid` 的 user 记录时，SDK 同样跳过这条附件
+ *   （Heeler 记录的 SDK 规则）；这里照同一口径，否则同一条消息会出现两次。
+ * - **落点**：按「这条附件出现时已解析出几轮」插入。附件出现在工具调用之后、`tool_result`
+ *   记录之前时，用户的话应当排在那一轮助手回复**之后**（Claude Code 把它渲染在下一个工具
+ *   结果旁边）；这正好等于附件出现时的轮数。插在 0 号位置（首条用户消息之前）会让整段
+ *   会话多一条前置提问，按「丢弃首条 user 之前的记录」的既有口径跳过。
+ */
+function insertQueuedUserTurns(
+  turns: UnifiedTurn[],
+  queued: { pos: number; text: string; timestamp: string; sourceUuid: string | null }[],
+  userUuids: Set<string>,
+): void {
+  let offset = 0;
+  for (const item of queued) {
+    if (item.sourceUuid && userUuids.has(item.sourceUuid)) continue;
+    const pos = item.pos + offset;
+    if (pos <= 0) continue;
+    turns.splice(pos, 0, { role: 'user', text: item.text, timestamp: item.timestamp });
+    offset += 1;
+  }
 }
 
 /**
