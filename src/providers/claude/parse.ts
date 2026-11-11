@@ -25,8 +25,9 @@ import { describeQueuedImages, readQueuedUserPrompt } from './queued.js';
  * - `isCompactSummary` 的 user 记录在正文前加来源前缀（它由 Claude Code 生成，不是用户原话）
  * - 未识别的 content block 不整块静默跳过：按类型计数写进正文，只含未知块的记录仍保留为一轮
  * - `continued-in`（会话被转入后台）按整份日志计数，续接文件存在性分档披露，不静默换 id
- * - 顶层 `attachment` 里的 `queued_command`（用户中途发来的消息）还原成用户轮：
- *   它没有对应的 user 记录，丢掉会让助手回复看起来在回答一个没人问过的问题
+ * - 顶层 `attachment` 里的 `queued_command`（用户中途发来的消息）**当场**还原成用户轮：
+ *   它没有对应的 user 记录，丢掉会让助手回复看起来在回答一个没人问过的问题；
+ *   插在日志里的原位置才能让「助手续写」成为它的回复（见 `toolResultMountTarget`）
  * - 丢弃首条 user 之前的记录
  */
 export async function parseClaudeSession(ref: SessionRef): Promise<UnifiedTurn[]> {
@@ -35,10 +36,12 @@ export async function parseClaudeSession(ref: SessionRef): Promise<UnifiedTurn[]
   let sawUser = false;
   const lastTextEvents = new Map<UnifiedTurn, ProcessEvent>();
   const continuation: ClaudeContinuationCounts = { count: 0, malformed: 0, sessionId: null };
-  // 用户中途发来的消息（顶层 attachment / queued_command）：先记下「当时解析到第几轮」，
-  // 循环结束后再插入。**不能当场 push 用户轮**——紧随其后的 tool_result 记录靠
-  // `turns.at(-1)?.role === 'assistant'` 挂到当前助手轮上，中间插一轮会让这些工具结果被丢弃。
-  const queued: { pos: number; text: string; timestamp: string; sourceUuid: string | null }[] = [];
+  // 用户中途发来的消息（顶层 attachment / queued_command）：当场插成用户轮，之后到达的助手记录
+  // 经 `ensureAssistant()` 另起一轮，就是这条插话的续写。推迟到循环结束后再插会排到续写**之后**
+  // （错序），末轮还会变成没有回复的用户消息，`describeUnansweredTail()` 据此误报「没人答」。
+  // 紧随其后的 `tool_result` 靠 `mountTargetForToolResult()` 仍挂回上一轮助手，不会丢。
+  const queued: { turn: UnifiedTurn; sourceUuid: string | null }[] = [];
+  const openQueuedTurns = new Set<UnifiedTurn>();
   const userUuids = new Set<string>();
 
   for (const line of raw.split('\n')) {
@@ -64,10 +67,14 @@ export async function parseClaudeSession(ref: SessionRef): Promise<UnifiedTurn[]
     // 用户中途发来的消息：还原成用户轮，否则助手接下来那段回复在交接里没有提问对象
     const queuedPrompt = readQueuedUserPrompt(record);
     if (queuedPrompt) {
+      if (!sawUser) continue;
       const withImages = queuedPrompt.imageCount > 0
         ? `${queuedPrompt.text}${queuedPrompt.text ? '\n\n' : ''}${describeQueuedImages(queuedPrompt.imageCount)}`
         : queuedPrompt.text;
-      queued.push({ pos: turns.length, text: withImages, timestamp: queuedPrompt.timestamp, sourceUuid: queuedPrompt.sourceUuid });
+      const queuedTurn: UnifiedTurn = { role: 'user', text: withImages, timestamp: queuedPrompt.timestamp };
+      turns.push(queuedTurn);
+      openQueuedTurns.add(queuedTurn);
+      queued.push({ turn: queuedTurn, sourceUuid: queuedPrompt.sourceUuid });
       continue;
     }
     if (typeof record !== 'object' || record === null) continue;
@@ -85,9 +92,9 @@ export async function parseClaudeSession(ref: SessionRef): Promise<UnifiedTurn[]
 
     if (type === 'user') {
       if (onlyToolResult) {
-        if (!sawUser || turns.at(-1)?.role !== 'assistant') continue;
-        const last = turns.at(-1)!;
-        for (const ev of events) pushEvent(last, ev);
+        const target = toolResultMountTarget(turns, openQueuedTurns);
+        if (!sawUser || !target) continue;
+        for (const ev of events) pushEvent(target, ev);
         continue;
       }
       sawUser = true;
@@ -104,6 +111,8 @@ export async function parseClaudeSession(ref: SessionRef): Promise<UnifiedTurn[]
     } else {
       if (!sawUser) continue;
       const last = ensureAssistant(turns, timestamp, 'claude');
+      // 已经出现助手续写，说明此前的排队消息不再「等待挂载」，之后的 tool_result 正常挂本 turn
+      openQueuedTurns.clear();
       for (const ev of events) pushEvent(last, ev);
       if (text.trim()) {
         const event: ProcessEvent = {
@@ -127,7 +136,7 @@ export async function parseClaudeSession(ref: SessionRef): Promise<UnifiedTurn[]
       turn.events = turn.events?.filter((event) => event !== finalEvent);
     }
   }
-  insertQueuedUserTurns(turns, queued, userUuids);
+  dropDuplicatedQueuedTurns(turns, queued, userUuids);
   const stripped = stripEmptyEvents(turns);
   const detected = await probeClaudeContinuation(continuation, ref.filePath);
   if (detected && stripped.length > 0) {
@@ -139,28 +148,49 @@ export async function parseClaudeSession(ref: SessionRef): Promise<UnifiedTurn[]
 }
 
 /**
- * 把「用户中途发来的消息」插回时间线。
+ * `tool_result` 记录挂到哪一条助手轮上。
  *
- * 两条判据：
- * - **去重**：日志里已有 `uuid == source_uuid` 的 user 记录时，SDK 同样跳过这条附件
- *   （Heeler 记录的 SDK 规则）；这里照同一口径，否则同一条消息会出现两次。
- * - **落点**：按「这条附件出现时已解析出几轮」插入。附件出现在工具调用之后、`tool_result`
- *   记录之前时，用户的话应当排在那一轮助手回复**之后**（Claude Code 把它渲染在下一个工具
- *   结果旁边）；这正好等于附件出现时的轮数。插在 0 号位置（首条用户消息之前）会让整段
- *   会话多一条前置提问，按「丢弃首条 user 之前的记录」的既有口径跳过。
+ * 正常情况是「最后一条 turn 就是当前助手轮」。**中途消息插进来之后**，末尾可能是那条用户轮，
+ * 紧随的工具结果仍属于它之前那一轮助手（日志里附件就写在工具结果旁边）；跳过排队消息找到
+ * 前面的助手轮，而不是把工具结果丢掉。
  */
-function insertQueuedUserTurns(
+function toolResultMountTarget(turns: UnifiedTurn[], openQueuedTurns: Set<UnifiedTurn>): UnifiedTurn | null {
+  for (let i = turns.length - 1; i >= 0; i--) {
+    const turn = turns[i]!;
+    if (openQueuedTurns.has(turn)) continue;
+    return turn.role === 'assistant' ? turn : null;
+  }
+  return null;
+}
+
+/**
+ * 中途消息的去重：日志里已有 `uuid == source_uuid` 的 user 记录时，SDK 同样跳过这条附件
+ * （Heeler 记录的 SDK 规则）；这里照同一口径，否则同一条消息会出现两次。
+ *
+ * 插入是在日志原位当场做的（不能推迟，见主循环注释），所以去重只能事后移除；移除后可能出现
+ * 两条相邻的助手轮（插话的续写与它前面那轮），按主循环合并助手记录的同一语义并回一轮，
+ * 不让下游看到 parse 平时不会产出的形状。
+ */
+function dropDuplicatedQueuedTurns(
   turns: UnifiedTurn[],
-  queued: { pos: number; text: string; timestamp: string; sourceUuid: string | null }[],
+  queued: { turn: UnifiedTurn; sourceUuid: string | null }[],
   userUuids: Set<string>,
 ): void {
-  let offset = 0;
   for (const item of queued) {
-    if (item.sourceUuid && userUuids.has(item.sourceUuid)) continue;
-    const pos = item.pos + offset;
-    if (pos <= 0) continue;
-    turns.splice(pos, 0, { role: 'user', text: item.text, timestamp: item.timestamp });
-    offset += 1;
+    if (!item.sourceUuid || !userUuids.has(item.sourceUuid)) continue;
+    const index = turns.indexOf(item.turn);
+    if (index < 0) continue;
+    turns.splice(index, 1);
+    const prev = turns[index - 1];
+    const next = turns[index];
+    if (prev?.role === 'assistant' && next?.role === 'assistant') {
+      for (const ev of next.events ?? []) pushEvent(prev, ev);
+      if (next.text.trim()) prev.text = next.text;
+      if (next.timestamp) prev.timestamp = next.timestamp;
+      if (next.usage) prev.usage = next.usage;
+      if (next.incomplete) prev.incomplete = true;
+      turns.splice(index, 1);
+    }
   }
 }
 
