@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process';
-import { lstat, readdir, realpath, stat } from 'node:fs/promises';
+import { readFile, lstat, readdir, realpath, stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
@@ -11,6 +11,7 @@ import { resolveCli } from '../../core/platform.js';
 import { describePathReadFailureReason, isEmptySessionFileReason, isMissingPathError } from '../../core/read-text.js';
 import type { SessionRef } from '../../core/types.js';
 import { claudeProjectsDir, encodeClaudeProjectDir } from '../claude/build.js';
+import { scanContinuedInRecords } from '../claude/continuation.js';
 import { claudeSessionCwdDetail } from '../claude/index.js';
 import { asRecord, connectImportRpc, type ImportRpc, type RpcProfile } from './app-server.js';
 import {
@@ -192,6 +193,51 @@ function notInProjectMessage(sourceId: string, cwd: string, found: ElsewhereSess
   }
 }
 
+/**
+ * `prepare` 的前置拦截：来源会话被转入后台（`continued-in`）时，官方迁移器会整条跳过它。
+ * 检查在文件与 cwd 都已确认之后、任何写盘之前，所以可以承诺「本次未写入任何内容」。
+ * 读不出续接文件状态时用中性措辞，不把「读不出来」写成「没有」。
+ */
+async function continuedImportBlock(ref: SessionRef): Promise<string | null> {
+  let raw: string;
+  try {
+    raw = await readFile(ref.filePath, 'utf8');
+  } catch (error) {
+    // findSource 刚确认过可读；这里再读失败就按真实原因说，不假装没这回事
+    return `无法读取来源会话 ${escapeControlChars(ref.filePath)}：${describePathReadFailureReason(error)}；先修好它再重新预览——本次未写入任何内容`;
+  }
+  const counts = scanContinuedInRecords(raw);
+  if (counts.count === 0 && counts.malformed === 0) return null;
+  const id = counts.sessionId ? escapeControlChars(counts.sessionId) : '';
+  if (!id) {
+    return (
+      `来源会话 ${escapeControlChars(ref.sessionId)} 的日志里有 ${counts.malformed} 条转入后台记录（continued-in），但都没有可用的续接会话 id；` +
+      '官方 Codex 迁移器会跳过这条会话，Watch 无法替你确认后续内容在哪——先在原生 Claude Code 里核对这条会话的续接情况——本次未写入任何内容'
+    );
+  }
+  const target = await continuedTargetState(ref.filePath, counts.sessionId!);
+  const next =
+    target === 'present'
+      ? `官方 Codex 迁移器只导续接会话：请改用 watch import-codex prepare ${id} --cwd ${escapeControlChars(ref.cwd)} --experimental 导入最新状态（续接会话包含转出前的完整历史）`
+      : target === 'missing'
+        ? `续接会话文件现在不存在（可能被移走或删除）；官方 Codex 迁移器会跳过这条会话，Watch 无法确认后续内容在哪——先在原生 Claude Code 里确认那条会话`
+        : `无法确认续接会话文件是否存在；官方 Codex 迁移器会跳过这条会话，先修好它的路径或确认那条会话再重试`;
+  return (
+    `来源会话 ${escapeControlChars(ref.sessionId)} 被转入后台过（continued-in，续接会话 ${id}）；` +
+    `${next}——本次未写入任何内容`
+  );
+}
+
+async function continuedTargetState(filePath: string, sessionId: string): Promise<'present' | 'missing' | 'unknown'> {
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(sessionId)) return 'unknown';
+  try {
+    const info = await stat(path.join(path.dirname(filePath), `${sessionId}.jsonl`));
+    return info.isFile() ? 'present' : 'unknown';
+  } catch (error) {
+    return isMissingPathError(error) ? 'missing' : 'unknown';
+  }
+}
+
 function selectedSession(detected: unknown, plan: ImportPlan): Record<string, unknown> {
   const items = asRecord(detected).items;
   if (!Array.isArray(items)) throw new Error('Codex 没有返回可迁移项');
@@ -269,6 +315,12 @@ export class OfficialCodexImport {
         notInProjectMessage(sourceId, cwd, await locateClaudeSessionElsewhere(this.deps.home, sourceId, cwd)),
       );
     }
+    // 官方迁移器遇到 `continued-in`（会话被转入后台）会**整条跳过**旧文件，只导续接会话
+    // （codex-rs/external-agent-migration 的 records_cla.rs 与 backgrounded_session_imports_only_its_continuation）。
+    // 到这里才检查是因为文件与 cwd 都已经确认可读；不提前拦的话，detect 不返回这条会话，用户只会看到
+    // 「Codex 必须恰好识别出一个匹配的来源会话」——那不是在说真正的原因，也没有可走的下一步。
+    const continued = await continuedImportBlock(source);
+    if (continued) throw new Error(continued);
     const plan: ImportPlan = {
       schema: 1, route: 'claude-code-to-codex-official', source, digest: await fingerprint(source),
       cliVersion: version, codexHome: this.deps.codexHome, home: this.deps.home,
