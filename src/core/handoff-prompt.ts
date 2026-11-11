@@ -144,6 +144,14 @@ export type PromptSessionMeta = {
    * 机器换了）。文档脱离 Watch 后 stderr 不会跟着走，所以这条必须写进正文。
    */
   sourceCwdNote?: string;
+  /**
+   * 来源工作目录是不是一个 git **链接工作树**（`inspectWorktree()` 的结论）。
+   *
+   * 目录名看不出这件事：读者拿到 `/repo/.worktrees/feat` 会以为它就是主工作树，动手时
+   * `cd` 回仓库根改同一份文件，改动就落到了另一个分支上。文档脱离 Watch 后没人能再提示，
+   * 所以这条也写进正文。普通目录 / 普通仓库根不需要这一行。
+   */
+  sourceWorktreeNote?: string;
 };
 
 export type PromptStats = {
@@ -464,6 +472,10 @@ export function buildHandoffPrompt(
   if (meta.sourceCwdNote) {
     addFinding(findings, 'prompt_source_cwd_unavailable', 'degraded', 1);
     lines.push(`- 工作目录状态：${sanitizeBody(meta.sourceCwdNote).text}`);
+  }
+  // 这不是降级，是目录的**类型**：不说的话读者从路径上看不出它是独立工作树。
+  if (meta.sourceWorktreeNote) {
+    lines.push(`- 工作目录类型：${sanitizeBody(meta.sourceWorktreeNote).text}`);
   }
   const range = formatTimeRange(meta.startedAt, meta.updatedAt);
   if (range) {

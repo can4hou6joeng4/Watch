@@ -24,7 +24,7 @@ import { ImportJobs } from './core/import-jobs.js';
 import { officialImportJournalRoot } from './providers/codex/official-import.js';
 import { doctorReport } from './core/doctor.js';
 import type { StoreFootprint } from './core/doctor.js';
-import { cwdAliasHint, cwdControlCharsNote, cwdProblem, describeCwdProblem, describeRecordedCwd, describeWriteCwd, inspectCwd, sameDirectorySync, splitElsewhereByDirectory } from './core/cwd.js';
+import { cwdAliasHint, cwdControlCharsNote, cwdProblem, describeCwdProblem, describeRecordedCwd, describeWorktreeNote, describeWriteCwd, inspectCwd, inspectWorktree, sameDirectorySync, splitElsewhereByDirectory } from './core/cwd.js';
 import { escapeControlChars, hasControlChars } from './core/display.js';
 import { trimUserKey } from './core/cli-input.js';
 import { describeResumeTargetUnfinished } from './core/rich.js';
@@ -1823,11 +1823,20 @@ async function cmdPrompt(
   // 读者照着里面的相对路径与命令动手时，这个目录可能早已不在——这句必须进正文，stderr 不会跟着走。
   // 空字符串不探测：没有可核对的路径，不能把「没记」讲成「现在不存在」。
   let sourceCwdNote: string | undefined;
+  // 链接工作树和目录状态是两件事：目录还在，但它是 `git worktree add` 建出来的独立工作树时，
+  // 文档读者从路径上看不出来，可能回主工作树改同一份文件——必须写进正文（PLAN §5）。
+  let sourceWorktreeNote: string | undefined;
   if (foundRef.cwd.trim()) {
-    const recordedCwdNote = describeRecordedCwd(await inspectCwd(foundRef.cwd), foundRef.cwd);
+    const recordedProbe = await inspectCwd(foundRef.cwd);
+    const recordedCwdNote = describeRecordedCwd(recordedProbe, foundRef.cwd);
     if (recordedCwdNote) {
       sourceCwdNote = recordedCwdNote;
       warnings.push(`来源会话记录的工作目录现在不可用：${recordedCwdNote}`);
+    }
+    // 目录不在时 `.git` 也无从读，此时探测只会得到「不是 worktree」这个假事实，索性不探
+    if (recordedProbe.state === 'ok') {
+      const worktreeNote = describeWorktreeNote(await inspectWorktree(foundRef.cwd));
+      if (worktreeNote) sourceWorktreeNote = worktreeNote;
     }
   }
 
@@ -1854,6 +1863,7 @@ async function cmdPrompt(
       // 文档会被复制走：这条也必须进正文，不能只留在 stderr
       ...(sourceDrift ? { sourceDriftNote: sourceDrift } : {}),
       ...(sourceCwdNote ? { sourceCwdNote } : {}),
+      ...(sourceWorktreeNote ? { sourceWorktreeNote } : {}),
     },
     profile,
     { ...(lastUserTurns !== undefined ? { lastUserTurns } : {}), ...(sinceCompact ? { sinceCompact: true } : {}) },

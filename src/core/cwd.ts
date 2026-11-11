@@ -2,7 +2,8 @@
 // 路径字符串精确比较，路径错了只会安静返回 0，看起来像「这个目录没有会话」。查询类命令与
 // `watch doctor` 统一用这里的说明做披露，避免同一个坑每处各写一份文案。
 import { realpathSync } from 'node:fs';
-import { realpath, stat } from 'node:fs/promises';
+import { readFile, realpath, stat } from 'node:fs/promises';
+import { basename, dirname, join, resolve } from 'node:path';
 import { escapeControlChars, hasControlChars } from './display.js';
 import { normalizePath } from './platform.js';
 
@@ -277,5 +278,113 @@ export async function sessionCwdProblem(cwd: string): Promise<string | null> {
       return `会话记录的工作目录无权访问：${shown}（权限问题，不是被删除）；${tail}${note}`;
     case 'unknown':
       return `无法确认会话记录的工作目录能否进入：${shown}（${probe.reason}）；${tail}${note}`;
+  }
+}
+
+/**
+ * 这个目录是不是一个 **git 链接工作树**（`git worktree add` 建出来的那个）。
+ *
+ * 判据只看文件布局、不调 `git` 二进制、不写任何东西：
+ * - 普通仓库根：`<cwd>/.git` 是**目录** → `other`
+ * - 链接工作树：`<cwd>/.git` 是**文件**，内容 `gitdir: <主仓库>/.git/worktrees/<名>`，
+ *   且该 gitdir 下有 `commondir`（`../..`）→ `worktree`；主工作树 = commondir 解析后的父目录
+ * - 子模块的 `.git` 也是文件（指向 `.git/modules/…`），但**没有** `commondir`——据此不把它
+ *   误报成 worktree，归入 `other`
+ * - 没有 `.git`（含 cwd 只是仓库里某个子目录）：`other`。不向上找：这里只对「cwd 自己是不是
+ *   工作树根」做**正面断言**，`other` 不代表「不是任何仓库的一部分」
+ * - `.git` 存在但读不出来 / 内容不是 `gitdir:` 行：`unknown`，不能讲成「不是 worktree」
+ */
+export type WorktreeInspection =
+  | { state: 'worktree'; branch: string | null; mainWorktree: string | null }
+  | { state: 'other' }
+  | { state: 'unknown'; reason: string };
+
+export async function inspectWorktree(cwd: string): Promise<WorktreeInspection> {
+  const dotGit = join(cwd, '.git');
+  let entry;
+  try {
+    entry = await stat(dotGit);
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === 'ENOENT' || code === 'ENOTDIR') return { state: 'other' };
+    return { state: 'unknown', reason: errnoReason(error) };
+  }
+  if (entry.isDirectory()) return { state: 'other' };
+  if (!entry.isFile()) return { state: 'other' };
+
+  let raw: string;
+  try {
+    raw = await readFile(dotGit, 'utf8');
+  } catch (error) {
+    return { state: 'unknown', reason: errnoReason(error) };
+  }
+  const match = /^\s*gitdir:\s*(.+?)\s*$/m.exec(raw);
+  if (!match) return { state: 'unknown', reason: '.git 文件里没有 gitdir 行' };
+  const gitDir = resolve(cwd, unquoteGitPath(match[1]!));
+
+  let commondirRaw: string;
+  try {
+    commondirRaw = (await readFile(join(gitDir, 'commondir'), 'utf8')).trim();
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    // 没有 commondir：子模块 / gitdir 指向别处，不是链接工作树——这是读到了结论，不是读不出来
+    if (code === 'ENOENT' || code === 'ENOTDIR') return { state: 'other' };
+    return { state: 'unknown', reason: errnoReason(error) };
+  }
+  if (!commondirRaw) return { state: 'unknown', reason: 'commondir 文件为空' };
+  const mainGitDir = resolve(gitDir, commondirRaw);
+  const mainWorktree = basename(mainGitDir) === '.git' ? dirname(mainGitDir) : null;
+  return { state: 'worktree', branch: await readHeadBranch(gitDir), mainWorktree };
+}
+
+/** `<gitDir>/HEAD` 里的 `ref: refs/heads/<分支>`；detached HEAD 或读不出来时 null（不猜）。 */
+async function readHeadBranch(gitDir: string): Promise<string | null> {
+  try {
+    const head = (await readFile(join(gitDir, 'HEAD'), 'utf8')).trim();
+    const match = /^ref:\s*refs\/heads\/(.+)$/.exec(head);
+    return match ? match[1]!.trim() || null : null;
+  } catch {
+    return null;
+  }
+}
+
+/** git 在 `.git` 文件里对含空格 / 特殊字符的路径会加引号并用 C 风格转义；能解就解，不能就原样。 */
+function unquoteGitPath(value: string): string {
+  if (value.length >= 2 && value.startsWith('"') && value.endsWith('"')) {
+    try {
+      return JSON.parse(value);
+    } catch {
+      return value.slice(1, -1);
+    }
+  }
+  return value;
+}
+
+function errnoReason(error: unknown): string {
+  const code = (error as NodeJS.ErrnoException).code;
+  return code ?? (error instanceof Error ? error.message : String(error));
+}
+
+/**
+ * `watch prompt` 文档里的一行：来源会话的工作目录是不是一个 git 链接工作树。
+ *
+ * 文档会被复制进另一家助手：读者拿到 `/repo/.worktrees/feat` 这类路径时，从目录名看不出
+ * 它是独立工作树，很容易 `cd` 到主工作树去改同一份文件（PLAN §5「已有 Worktree 不被悄悄
+ * 切换为主工作树」）。这里只做**只读**识别并写进正文，不改任何路径、不启动 git。
+ * 普通目录 / 普通仓库根 / 子模块返回 null（没有可说的额外事实）；读不出来时如实说读不出来。
+ */
+export function describeWorktreeNote(probe: WorktreeInspection): string | null {
+  switch (probe.state) {
+    case 'other':
+      return null;
+    case 'unknown':
+      return `无法确认这个目录是不是 git 链接工作树（${probe.reason}）；若是，这里的改动属于它自己的分支，动手前先核对`;
+    case 'worktree': {
+      const where = probe.mainWorktree
+        ? `主工作树在 ${showPathInMessage(probe.mainWorktree)}`
+        : '主工作树位置没能从 .git 里确认';
+      const branch = probe.branch ? `，当前分支 ${escapeControlChars(probe.branch)}` : '';
+      return `这是一个 git 链接工作树（${where}${branch}）；这里的改动属于该工作树自己的分支，不要切到主工作树去改同一个文件`;
+    }
   }
 }
