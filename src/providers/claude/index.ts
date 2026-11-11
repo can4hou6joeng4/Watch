@@ -326,6 +326,7 @@ export const claudeAdapter: ProviderAdapter = {
   importTurns: importTurnsToClaude,
   // 只还原 image block；文件类附件（如 OpenCode 的 file part）没有等价块，build 降级为占位文本
   attachmentSupport: 'images',
+  textEventSupport: 'assistant',
   contentFingerprint(ref: SessionRef): Promise<FileDigest | null> {
     return digestFile(ref.filePath);
   },

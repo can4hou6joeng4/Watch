@@ -171,6 +171,13 @@ export interface ProviderAdapter {
    */
   attachmentSupport?: 'images' | 'all';
 
+  /**
+   * 可选：写入侧能保留哪些无附件的 text 事件。缺省 = 不保留；`assistant` = 仅助手轮。
+   * 这类中间说明 / 压缩摘要不参与 round-trip 校验，转入路径须按实际写入的轮次披露损失。
+   * 附件由 attachmentSupport 单独判定，与轮次正文相同的文本不算损失；上下文披露另进 warnings。
+   */
+  textEventSupport?: 'assistant';
+
   /** 可选（TUI 交接用）：找 cwd 下本 provider 最新的原生会话；没有返回 null */
   findLatestSession?(cwd: string): Promise<{ ref: SessionRef; updatedAt: number } | null>;
 

@@ -616,6 +616,7 @@ export const codexAdapter: ProviderAdapter = {
 
   parse: parseCodexSession,
   importTurns: importTurnsToCodex,
+  textEventSupport: 'assistant',
   contentFingerprint(ref: SessionRef): Promise<FileDigest | null> {
     return digestFile(ref.filePath);
   },

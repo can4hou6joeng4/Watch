@@ -56,7 +56,7 @@ export const PI_BRANCH_SUMMARY_PREFIX = '[Pi 分支摘要：由 Pi 生成，不�
  */
 export const WATCH_CONTEXT_DISCLOSURE_PREFIX = '[Watch 交接披露：';
 
-/** 从解析结果里找 Pi 的上下文完整性披露事件（`parsePiSession()` 写入）。 */
+/** 从解析结果里找上下文完整性披露事件（目前由 Pi / Codex 解析器写入）。 */
 export function findContextDisclosure(turns: UnifiedTurn[]): ProcessEvent | null {
   for (let i = turns.length - 1; i >= 0; i--) {
     const event = (turns[i]!.events ?? []).find(
@@ -352,6 +352,30 @@ export function describeAttachmentLoss(
     `来源会话有 ${lost.length} 个附件（${kinds}）不会随这次交接保留：${keptNote}（如「[图片：image/png，1234B]」），` +
     `原始数据不落盘，也无法从目标会话里恢复；需要这些附件时先在来源里另存，或转到 OpenCode（图片与文件都能带）`
   );
+}
+
+/**
+ * 无附件的过程文本不参与 round-trip 校验；按本次实际写入的轮次与目标能力披露。
+ * 附件走 describeAttachmentLoss，上下文披露另进 warnings；正文已经包含的同文事件不重复报损失。
+ */
+export function describeTextEventLoss(
+  turns: UnifiedTurn[],
+  target: { displayName: string; textEventSupport?: 'assistant' },
+): string | null {
+  let lost = 0;
+  for (const turn of turns) {
+    if (turn.role === 'assistant' && target.textEventSupport === 'assistant') continue;
+    for (const event of turn.events ?? []) {
+      if (event.kind !== 'text' || event.attachment || event.summary.startsWith(WATCH_CONTEXT_DISCLOSURE_PREFIX)) continue;
+      const text = (event.detail ?? event.summary).trim();
+      if (text && text !== turn.text.trim()) lost += 1;
+    }
+  }
+  if (lost === 0) return null;
+  const reason = target.textEventSupport === 'assistant'
+    ? `${target.displayName} 只保存助手侧的过程文本，这些用户侧记录不会写入`
+    : `${target.displayName} 不保存这些独立的中间文本`;
+  return `来源会话有 ${lost} 条过程文本不会随这次交接保留：${reason}；这些中间说明或压缩摘要无法从目标会话恢复，需要时请在来源会话里核对，或用 watch prompt <来源会话 id> --profile full 查看`;
 }
 
 /**

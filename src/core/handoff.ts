@@ -3,7 +3,7 @@ import { stat } from 'node:fs/promises';
 import type { SessionRef, TokenUsage, UnifiedTurn } from './types.js';
 import { chainsElsewhereHint, chainsSameDirectoryHint, describeStoreErrorReason, emptyChainBindHint } from './store.js';
 import type { Chain, ChainsElsewhere, Store, SwitchRecord } from './store.js';
-import { dedupeCallEvents, describeAttachmentLoss, describeDanglingToolCalls, describeUnansweredTail, describeResumeTargetUnfinished, findContextDisclosure, mergeTurns, shouldReplacePairedSession, unwrapUserQuery } from './rich.js';
+import { dedupeCallEvents, describeAttachmentLoss, describeTextEventLoss, describeDanglingToolCalls, describeUnansweredTail, describeResumeTargetUnfinished, findContextDisclosure, mergeTurns, shouldReplacePairedSession, unwrapUserQuery } from './rich.js';
 import { describeWriteFailureReason, type FileDigest } from './atomic.js';
 import { addFinding, type Finding } from './findings.js';
 import { escapeControlChars } from './display.js';
@@ -1399,8 +1399,8 @@ export async function handoff(
       `来源会话 ${sourceTip.ref.sessionId}（${source.displayName}）有 ${badSourceLines} 行无法解析（截断或损坏），已跳过；交接内容可能不完整，可在原生 CLI 里打开确认`,
     );
   }
-  // 来源记录的上下文与来源 CLI 现在真正发给模型的不一致（Pi 的 context_edit / custom_message）：
-  // 事件本身不会写进目标原生会话，所以必须在这条路径上单独披露，不能只留给 watch prompt。
+  // Pi 的上下文编辑 / 扩展消息、Codex 的压缩记录会造成来源上下文差异。
+  // 披露事件可能随增量被裁掉，目标也不一定保留，必须单独进入 warnings。
   const contextDisclosure = findContextDisclosure(turns);
   if (contextDisclosure) warnings.push(contextDisclosure.summary);
   // 同上，工具调用没有结果（Ctrl-C、用量耗尽、resume 重放过半截）在两处检查里都看不出来：
@@ -1426,7 +1426,11 @@ export async function handoff(
       // 取锁后再比对指纹：把与原生 writer 的竞态窗口收窄到「快照 → 取锁」之间
       await assertDestUnchanged();
       try {
-        return await target.importTurns(turnsToWrite, cwd, into, opts);
+        // 按实际写入的内容计数，也覆盖零增量但整份重写目标的分支。
+        const textLoss = describeTextEventLoss(turnsToWrite, target);
+        const written = await target.importTurns(turnsToWrite, cwd, into, opts);
+        if (textLoss) warnings.push(textLoss);
+        return written;
       } catch (error) {
         // 写盘失败只有 Node 原文（`EACCES: permission denied, mkdir '…'`），cmdSwitch 会把它
         // 原样放进 `{ ok:false, error }`；换成中文原因，非文件系统错误（round-trip 校验）原样抛

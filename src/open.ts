@@ -1,7 +1,7 @@
 import { stat } from 'node:fs/promises';
 import { describeWriteFailureReason, type FileDigest } from './core/atomic.js';
 import { assertTargetUnchanged, blockedHint, describeSourceChangedDuringHandoff, diffTurns, HandoffBlockedError, snapshotSourceState, type SourceStateSnapshot } from './core/handoff.js';
-import { describeAttachmentLoss, describeDanglingToolCalls, describeUnansweredTail, describeResumeTargetUnfinished, dedupeCallEvents } from './core/rich.js';
+import { describeAttachmentLoss, describeTextEventLoss, describeDanglingToolCalls, describeUnansweredTail, describeResumeTargetUnfinished, dedupeCallEvents, findContextDisclosure } from './core/rich.js';
 import { Store, defaultDbPath, describeStoreErrorReason, describeStoreOpenFailure } from './core/store.js';
 import { IS_WIN, normalizePath, stripDevicePrefix } from './core/platform.js';
 import { trimUserKey } from './core/cli-input.js';
@@ -547,6 +547,9 @@ export async function openSession(
           error: `来源会话 ${source.found.ref.sessionId}（${source.adapter.displayName}）读取失败：${describeReadFailureOrSelf(error)}；本次未写入任何内容`,
         };
       }
+      // 整份来源的上下文差异不随增量裁剪；即使没有新轮次，也不能丢掉这条声明。
+      const contextDisclosure = findContextDisclosure(srcTurns);
+      if (contextDisclosure) warnings.push(contextDisclosure.summary);
       const badSrcLines = await countUnparsableJsonLines(source.found.ref.filePath);
       if (badSrcLines > 0) {
         warnings.push(
@@ -615,7 +618,9 @@ export async function openSession(
         const guard = await target.adapter.acquireWriteLock?.({ ref: target.found.ref });
         try {
           await assertTargetUnchanged(target.adapter, target.found.ref, dstDigest, '并入');
+          const textLoss = describeTextEventLoss(dedup, target.adapter);
           const newRef = await target.adapter.importTurns(dedup, target.found.ref.cwd, target.found.ref);
+          if (textLoss) warnings.push(textLoss);
           merged = dedup.length;
           notes.push(`已把 ${escapeControlChars(from)} 的 ${merged} 轮新内容并入 ${target.adapter.displayName} 会话 ${newRef.sessionId}`);
           // 两个会话记录的工作目录不同：内容来自另一个项目，却写进了这一侧的会话。
@@ -948,6 +953,9 @@ async function planOpenInProvider(
       error: `来源会话 ${escapeControlChars(sourceId)} 读取失败：${describeReadFailureOrSelf(error)}；本次未写入任何内容`,
     };
   }
+  // 来源上下文的差异属于整份日志：复用目标时不能让 diffTurns 把披露一起裁掉。
+  const contextDisclosure = findContextDisclosure(turns);
+  if (contextDisclosure) diagnostics?.push(contextDisclosure.summary);
   // parse 跳过坏行不会报错，round-trip 也比的是解析结果：不扫一遍就会把「少了几轮」当完整转入
   const badSourceLines = await countUnparsableJsonLines(sourceRef.filePath);
   if (badSourceLines > 0) {
@@ -1256,6 +1264,8 @@ export async function openInProvider(
       // 附件的原始数据不会进目标：与 `switch` / `--from` 共用一句，避免三处各写一套
       const attachmentLoss = describeAttachmentLoss(plan.turns, target);
       if (attachmentLoss) warnings.push(attachmentLoss);
+      const textLoss = describeTextEventLoss(plan.turns, target);
+      if (textLoss) warnings.push(textLoss);
     }
     const newRef =
       plan.turns.length > 0 ? await guardedImport(target, plan.targetRef, plan.snapshot, plan.turns, cwd) : plan.targetRef;
@@ -1392,5 +1402,8 @@ export async function checkOpenInProvider(
     }
     throw error;
   }
+  // 与执行使用同一份计划和计数；目标预检拒绝写入时，不把它说成内容损失。
+  const textLoss = describeTextEventLoss(plan.turns, target);
+  if (textLoss) base.warnings = [...(base.warnings ?? []), textLoss];
   return base;
 }
