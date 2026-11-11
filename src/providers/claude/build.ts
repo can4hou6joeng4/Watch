@@ -190,7 +190,7 @@ export function buildClaudeLines(
     const messageId = newMsgId();
     const finalText = turn.text.trim();
     for (const ev of turn.events ?? []) {
-      if (ev.kind === 'text' && (ev.detail ?? ev.summary).trim() === finalText) continue;
+      if (ev.kind === 'text' && !ev.attachment && (ev.detail ?? ev.summary).trim() === finalText) continue;
       emitClaudeEvent(ev, {
         baseRecord,
         assistantMessage,
