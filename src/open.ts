@@ -683,6 +683,9 @@ export async function openSession(
     }
     try {
       const turns = await target.adapter.parse(target.found.ref);
+      // 纯打开也会返回 resume 命令，必须携带未完成或上下文差异的完整声明。
+      const contextDisclosure = findContextDisclosure(turns);
+      if (contextDisclosure) warnings.push(contextDisclosure.summary);
       // 0 轮不一定是「这条会话本来就没内容」（grok / kimi 的 cwd 不来自文件内容，0 字节也能走到这里）：
       // 不探一次，`open` 就会对着一条内容已经丢了的会话打印一条看起来完全正常的 resume
       if (turns.length === 0) {
