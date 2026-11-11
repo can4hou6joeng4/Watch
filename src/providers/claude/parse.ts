@@ -12,6 +12,7 @@ import {
   WATCH_CONTEXT_DISCLOSURE_PREFIX,
 } from '../../core/rich.js';
 import type { ProcessEvent, SessionRef, TokenUsage, UnifiedTurn } from '../../core/types.js';
+import { describeClaudeContinuation, probeClaudeContinuation, readContinuedInRecord, type ClaudeContinuationCounts } from './continuation.js';
 
 /**
  * Claude JSONL → 统一时间线（Rich）：
@@ -22,6 +23,7 @@ import type { ProcessEvent, SessionRef, TokenUsage, UnifiedTurn } from '../../co
  * - assistant 的 `[思考] …` 记录（build 的 thinking 降级形态）还原成 thinking 事件
  * - `isCompactSummary` 的 user 记录在正文前加来源前缀（它由 Claude Code 生成，不是用户原话）
  * - 未识别的 content block 不整块静默跳过：按类型计数写进正文，只含未知块的记录仍保留为一轮
+ * - `continued-in`（会话被转入后台）按整份日志计数，续接文件存在性分档披露，不静默换 id
  * - 丢弃首条 user 之前的记录
  */
 export async function parseClaudeSession(ref: SessionRef): Promise<UnifiedTurn[]> {
@@ -29,6 +31,7 @@ export async function parseClaudeSession(ref: SessionRef): Promise<UnifiedTurn[]
   const turns: UnifiedTurn[] = [];
   let sawUser = false;
   const lastTextEvents = new Map<UnifiedTurn, ProcessEvent>();
+  const continuation: ClaudeContinuationCounts = { count: 0, malformed: 0, sessionId: null };
 
   for (const line of raw.split('\n')) {
     const trimmed = line.trim();
@@ -37,6 +40,17 @@ export async function parseClaudeSession(ref: SessionRef): Promise<UnifiedTurn[]
     try {
       record = JSON.parse(trimmed);
     } catch {
+      continue;
+    }
+    // 转入后台记录顺手计数（`continued-in` 不在 user / assistant 分支里，以前被当未知类型丢掉）
+    const continued = readContinuedInRecord(record);
+    if (continued) {
+      if (continued.sessionId) {
+        continuation.count += 1;
+        continuation.sessionId = continued.sessionId;
+      } else {
+        continuation.malformed += 1;
+      }
       continue;
     }
     if (typeof record !== 'object' || record === null) continue;
@@ -95,7 +109,14 @@ export async function parseClaudeSession(ref: SessionRef): Promise<UnifiedTurn[]
       turn.events = turn.events?.filter((event) => event !== finalEvent);
     }
   }
-  return stripEmptyEvents(turns);
+  const stripped = stripEmptyEvents(turns);
+  const detected = await probeClaudeContinuation(continuation, ref.filePath);
+  if (detected && stripped.length > 0) {
+    const last = stripped[stripped.length - 1]!;
+    const text = describeClaudeContinuation(detected);
+    pushEvent(last, { kind: 'text', summary: text, detail: text, timestamp: last.timestamp, provider: 'claude' });
+  }
+  return stripped;
 }
 
 /**
