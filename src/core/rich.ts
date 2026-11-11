@@ -29,6 +29,21 @@ export const CLAUDE_COMPACT_SUMMARY_PREFIX = '[Claude Code 上下文压缩摘要
  */
 export const OPENCODE_COMPACTION_SUMMARY_PREFIX = '[压缩摘要（由 OpenCode 生成，不是用户原话）]';
 
+/**
+ * Pi 的压缩摘要不是一条 message，而是会话文件里独立的 `type: "compaction"` 条目
+ * （`summary` / `firstKeptEntryId` / `tokensBefore`），pi 自己会把它作为摘要消息注入上下文。
+ * Watch 以前只解析 `type: "message"`，整段摘要无声消失——转入别家后，压缩前的原文还在，
+ * 但 pi 当时的总结没了。这里把它还原成一轮带前缀的用户消息，前缀同时是
+ * `watch prompt --since-compact` 认边界的唯一痕迹（与 Claude / OpenCode 同口径）。
+ */
+export const PI_COMPACTION_SUMMARY_PREFIX = '[Pi 上下文压缩摘要：由 Pi 生成，不是用户原话]';
+
+/**
+ * Pi 的 `type: "branch_summary"` 条目：用户切换分支时，pi 为被放弃的那条分支生成的总结，
+ * 同样作为摘要消息进入上下文。标的理由与压缩摘要一致——它不是用户说过的话，但属于上下文。
+ */
+export const PI_BRANCH_SUMMARY_PREFIX = '[Pi 分支摘要：由 Pi 生成，不是用户原话；总结的是另一条分支]';
+
 export function turnHasContent(t: UnifiedTurn): boolean {
   return t.text.trim() !== '' || (t.events?.length ?? 0) > 0;
 }

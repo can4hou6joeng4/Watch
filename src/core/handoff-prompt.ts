@@ -1,6 +1,6 @@
 import type { Finding } from './findings.js';
 import { addFinding } from './findings.js';
-import { CLAUDE_COMPACT_SUMMARY_PREFIX, OPENCODE_COMPACTION_SUMMARY_PREFIX } from './rich.js';
+import { CLAUDE_COMPACT_SUMMARY_PREFIX, OPENCODE_COMPACTION_SUMMARY_PREFIX, PI_COMPACTION_SUMMARY_PREFIX } from './rich.js';
 import type { ProcessEvent, TokenUsage, UnifiedTurn } from './types.js';
 
 /**
@@ -59,7 +59,8 @@ export type PromptOptions = {
    *
    * 压缩摘要本身已经概括了更早的内容，再把它之前的原始轮次全带上，读者会同时看到
    * 「摘要」与「摘要已经概括过的原文」，既占篇幅又容易把两份并存的叙述当成两件事。
-   * 认两种痕迹：Claude Code 的 `CLAUDE_COMPACT_SUMMARY_PREFIX`（压缩摘要写在 user 轮正文里）
+   * 认三种痕迹：Claude Code 的 `CLAUDE_COMPACT_SUMMARY_PREFIX`（压缩摘要写在 user 轮正文里）、
+   * Pi 的 `PI_COMPACTION_SUMMARY_PREFIX`（`compaction` 条目，`parse` 还原成带前缀的用户轮）
    * 与 OpenCode 2.x 的 `OPENCODE_COMPACTION_SUMMARY_PREFIX`（compaction 事件挂在轮次上）。
    * 别的来源没有这个痕迹时**不裁剪**，并在正文里说明「未裁剪」，不能假装生效。
    */
@@ -320,9 +321,10 @@ function renderEvent(event: ProcessEvent, detailLimit: number | null, stats: Pro
 /**
  * 最近一条压缩摘要所在的下标与来源；没有返回 null。
  *
- * 只认两种**正文痕迹**，不猜时间或文本形状：Claude Code 把摘要写成 user 轮正文的前缀，
- * OpenCode 2.x 把 compaction 写成挂在轮次上的文本事件——前缀是唯一能区分「客户端生成的
- * 摘要」与「用户真的粘贴了一篇总结」的东西。两种痕迹都存在时取更晚的那条。
+ * 只认三种**正文痕迹**，不猜时间或文本形状：Claude Code 把摘要写成 user 轮正文的前缀，
+ * Pi 的 `compaction` 条目由 `parse` 还原成带前缀的用户轮，OpenCode 2.x 把 compaction 写成
+ * 挂在轮次上的文本事件——前缀是唯一能区分「客户端生成的摘要」与「用户真的粘贴了一篇总结」
+ * 的东西。三种痕迹都存在时取更晚的那条。
  */
 /** 这是不是 OpenCode 2.x 的压缩摘要事件（`parse` 按同一前缀写入）。 */
 function isCompactSummaryEvent(event: ProcessEvent): boolean {
@@ -333,10 +335,11 @@ function isCompactSummaryEvent(event: ProcessEvent): boolean {
   );
 }
 
-function lastCompactSummary(turns: UnifiedTurn[]): { index: number; source: 'claude' | 'opencode' } | null {
+function lastCompactSummary(turns: UnifiedTurn[]): { index: number; source: 'claude' | 'opencode' | 'pi' } | null {
   for (let i = turns.length - 1; i >= 0; i--) {
     const t = turns[i]!;
     if (t.role === 'user' && t.text.startsWith(CLAUDE_COMPACT_SUMMARY_PREFIX)) return { index: i, source: 'claude' };
+    if (t.role === 'user' && t.text.startsWith(PI_COMPACTION_SUMMARY_PREFIX)) return { index: i, source: 'pi' };
     if ((t.events ?? []).some(isCompactSummaryEvent)) return { index: i, source: 'opencode' };
   }
   return null;
@@ -375,7 +378,8 @@ export function buildHandoffPrompt(
   // 来源（Claude Code / OpenCode）记下来只为正文措辞：每个读者都该知道这段摘要是谁生成的。
   const compact = options.sinceCompact ? lastCompactSummary(turns) : null;
   const compactAt = compact?.index ?? -1;
-  const compactSource = compact?.source === 'opencode' ? 'OpenCode' : 'Claude Code';
+  const compactSource =
+    compact?.source === 'opencode' ? 'OpenCode' : compact?.source === 'pi' ? 'Pi' : 'Claude Code';
   const compactOmitted = compactAt > 0 ? compactAt : 0;
   const scoped = compactAt >= 0 ? turns.slice(compactAt) : turns;
 
@@ -520,7 +524,7 @@ export function buildHandoffPrompt(
   // 否则读者会以为窗口是从摘要开始的，而实际上面这份文档包含的轮次更多。
   if (options.sinceCompact && compactAt < 0) {
     lines.push(
-      '- 指定了 --since-compact，但这条会话里没有压缩摘要（Claude Code 的压缩摘要记录或 OpenCode 的 compaction 事件），本次未裁剪，正文包含全部轮次',
+      '- 指定了 --since-compact，但这条会话里没有压缩摘要（Claude Code 的压缩摘要记录、Pi 的 compaction 条目或 OpenCode 的 compaction 事件），本次未裁剪，正文包含全部轮次',
     );
   } else if (options.sinceCompact && compactOmitted === 0) {
     lines.push(`- 按 --since-compact 从最近一次压缩摘要开始（摘要之前没有可省略的轮次；摘要由 ${compactSource} 生成，不是用户原话）`);

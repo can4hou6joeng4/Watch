@@ -1,5 +1,13 @@
 import { readFile } from 'node:fs/promises';
-import { ensureAssistant, normalizeUserText, pushEvent, stripEmptyEvents, summarize } from '../../core/rich.js';
+import {
+  ensureAssistant,
+  normalizeUserText,
+  PI_BRANCH_SUMMARY_PREFIX,
+  PI_COMPACTION_SUMMARY_PREFIX,
+  pushEvent,
+  stripEmptyEvents,
+  summarize,
+} from '../../core/rich.js';
 import type { ProcessEvent, SessionRef, TokenUsage, UnifiedTurn } from '../../core/types.js';
 
 export async function parsePiSession(ref: SessionRef): Promise<UnifiedTurn[]> {
@@ -18,6 +26,24 @@ export async function parsePiSession(ref: SessionRef): Promise<UnifiedTurn[]> {
     }
     if (typeof record !== 'object' || record === null) continue;
     const r = record as Record<string, unknown>;
+
+    // pi 把压缩 / 分支摘要写成独立条目（`sessionEntryToContextMessages()` 会把它们注入上下文），
+    // 以前只认 `type: 'message'`，整段摘要连同「上下文被压缩过」这件事一起消失。还原成一轮
+    // 带来源前缀的用户消息：前缀既防目标助手把机器总结当成用户指令，也是 `--since-compact`
+    // 认边界的痕迹。摘要为空时仍留下声明，不把这次压缩吞掉。
+    if (r.type === 'compaction' || r.type === 'branch_summary') {
+      const summary = typeof r.summary === 'string' ? r.summary.trim() : '';
+      const prefix = r.type === 'compaction' ? PI_COMPACTION_SUMMARY_PREFIX : PI_BRANCH_SUMMARY_PREFIX;
+      const timestamp = typeof r.timestamp === 'string' ? r.timestamp : '';
+      turns.push({
+        role: 'user',
+        text: `${prefix}\n${summary || '（摘要内容为空）'}`,
+        timestamp,
+      });
+      sawUser = true;
+      continue;
+    }
+
     if (r.type !== 'message') continue;
     const msg = r.message as Record<string, unknown> | undefined;
     if (!msg) continue;
