@@ -22,6 +22,13 @@ export const CLAUDE_THINKING_PREFIX = '[思考] ';
  */
 export const CLAUDE_COMPACT_SUMMARY_PREFIX = '[Claude Code 上下文压缩摘要：由 Claude Code 生成，不是用户原话]';
 
+/**
+ * OpenCode 2.x 的压缩摘要是 `session_message.type = "compaction"` 事件，`parse` 把它写成
+ * 挂在轮次上的文本事件（`kind: 'text'`）。前缀与 Claude 侧同一用途：既是给读者看的来源声明，
+ * 也是 `watch prompt --since-compact` 认边界的唯一痕迹（不猜文本形状）。
+ */
+export const OPENCODE_COMPACTION_SUMMARY_PREFIX = '[压缩摘要（由 OpenCode 生成，不是用户原话）]';
+
 export function turnHasContent(t: UnifiedTurn): boolean {
   return t.text.trim() !== '' || (t.events?.length ?? 0) > 0;
 }

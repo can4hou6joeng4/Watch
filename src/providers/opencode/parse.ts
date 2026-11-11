@@ -1,5 +1,5 @@
 import { DatabaseSync } from 'node:sqlite';
-import { normalizeUserText } from '../../core/rich.js';
+import { normalizeUserText, OPENCODE_COMPACTION_SUMMARY_PREFIX } from '../../core/rich.js';
 import type { ProcessEvent, SessionRef, TokenUsage, UnifiedTurn } from '../../core/types.js';
 import { detectOpencodeLayout, opencodeDbPath, opencodeDbSqliteError, probeOpencodeDbFile } from './paths.js';
 
@@ -420,7 +420,7 @@ function v2AuxEvents(type: string, data: V2MessageData, time: number): ProcessEv
         {
           kind: 'text',
           timestamp,
-          summary: '[压缩摘要（由 OpenCode 生成，不是用户原话）]',
+          summary: OPENCODE_COMPACTION_SUMMARY_PREFIX,
           detail: [summary, recent ? `（最近对话：${recent}）` : ''].filter(Boolean).join('\n'),
           provider: 'opencode',
         },
@@ -463,6 +463,16 @@ function parseOpencodeV2Turns(db: DatabaseSync, sessionId: string): UnifiedTurn[
     if (last?.role === 'assistant') last.events = [...(last.events ?? []), ...events];
     else pending.push(...events);
   };
+  // 新的 user 轮到达 = 暂存的事件都发生在它之前。必须落回前一条 turn，不能跟着挂到它之后的
+  // assistant 上：那样 compaction 会排在这次提问**之后**（`--since-compact` 按事件所在轮次切窗口，
+  // 就会把这条提问一起裁掉），阅读顺序也与 seq 相反。只有还没有任何 turn 时才继续暂存。
+  const flushPendingToLast = (): void => {
+    if (pending.length === 0) return;
+    const last = turns.at(-1);
+    if (!last) return;
+    last.events = [...(last.events ?? []), ...pending];
+    pending.length = 0;
+  };
 
   for (const row of rows) {
     const data = parseJson<V2MessageData>(row.data);
@@ -479,6 +489,7 @@ function parseOpencodeV2Turns(db: DatabaseSync, sessionId: string): UnifiedTurn[
         bumpCount(unknown, 'user（无文本）');
         continue;
       }
+      flushPendingToLast();
       turns.push(turn);
       continue;
     }
