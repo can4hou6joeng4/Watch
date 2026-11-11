@@ -49,8 +49,10 @@ export const PI_BRANCH_SUMMARY_PREFIX = '[Pi 分支摘要：由 Pi 生成，不�
  * 「这份交接的上下文与 Pi 现在发给模型的不一致」。披露以 **text 事件**挂在最后一轮上，而不是
  * 改写任何轮次的正文：`turnKey`（`handoff.ts`）只由 role + text + callIds 组成，事件不参与
  * 增量对齐——来源会话继续增长时，旧轮次的键不会因为计数变化而漂移（否则 `diffTurns` 会把旧轮次
- * 当成新增内容重复追加）。事件本身不写进目标原生会话（build 只消费已知事件），所以
- * `buildHandoffPrompt()` 在选窗之前单独把它翻成正文的一行，`handoff()` 同时把它放进 warnings。
+ * 当成新增内容重复追加）。事件在各目标的写入侧去向不同：claude / codex 的 build 会把 text
+ * 事件写成 assistant / commentary 文本，pi / grok / kimi / opencode 的 build 会丢弃，不能只靠
+ * 事件把披露带进目标会话，所以 `buildHandoffPrompt()` 在选窗之前单独把它翻成正文的一行，
+ * `handoff()` 同时把它放进 warnings。
  */
 export const WATCH_CONTEXT_DISCLOSURE_PREFIX = '[Watch 交接披露：';
 

@@ -544,7 +544,7 @@ export function buildHandoffPrompt(
   // 否则读者会以为窗口是从摘要开始的，而实际上面这份文档包含的轮次更多。
   if (options.sinceCompact && compactAt < 0) {
     lines.push(
-      '- 指定了 --since-compact，但这条会话里没有压缩摘要（Claude Code 的压缩摘要记录、Pi 的 compaction 条目或 OpenCode 的 compaction 事件），本次未裁剪，正文包含全部轮次',
+      '- 指定了 --since-compact，但这条会话里没有 Watch 可用的压缩摘要（Claude Code 的压缩摘要记录、Pi 的 compaction 条目或 OpenCode 的 compaction 事件；Codex 的 compacted 记录目前只披露、不并入摘要），本次未裁剪，正文包含全部轮次',
     );
   } else if (options.sinceCompact && compactOmitted === 0) {
     lines.push(`- 按 --since-compact 从最近一次压缩摘要开始（摘要之前没有可省略的轮次；摘要由 ${compactSource} 生成，不是用户原话）`);

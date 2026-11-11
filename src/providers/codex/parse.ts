@@ -8,6 +8,7 @@ import {
   pushEvent,
   stripEmptyEvents,
   summarize,
+  WATCH_CONTEXT_DISCLOSURE_PREFIX,
 } from '../../core/rich.js';
 import type { ProcessEvent, SessionRef, TokenUsage, UnifiedTurn } from '../../core/types.js';
 
@@ -16,6 +17,7 @@ import type { ProcessEvent, SessionRef, TokenUsage, UnifiedTurn } from '../../co
  * - response_item message：user 过滤内部上下文；assistant 最终回复覆盖 turn.text
  * - reasoning / function_call / custom_tool_call / command_execution 挂到 assistant.events
  * - commentary 作为 text 事件；已有最终回复后的 commentary 丢掉
+ * - compacted：Codex 压缩上下文后的摘要记录，只计数并披露，不并入摘要正文（见 describeCodexCompaction）
  * - 整份文件无 response_item message 时，回退 event_msg（旧版 wire，无过程事件）
  * - 坏行/空行跳过；丢弃首条 user 之前的记录
  */
@@ -27,6 +29,13 @@ export async function parseCodexSession(ref: SessionRef): Promise<UnifiedTurn[]>
   let sawFallbackUser = false;
   let hasResponseMessages = false;
   let lastAssistantIsCommentary = false;
+  const compaction: CodexCompactionCounts = {
+    total: 0,
+    readable: 0,
+    unreadable: 0,
+    turnsAtFirst: null,
+    fallbackAtFirst: null,
+  };
 
   for (const line of raw.split('\n')) {
     const trimmed = line.trim();
@@ -41,6 +50,25 @@ export async function parseCodexSession(ref: SessionRef): Promise<UnifiedTurn[]>
     const r = record as Record<string, unknown>;
     const timestamp = typeof r.timestamp === 'string' ? r.timestamp : '';
     const payload = r.payload;
+    // 顶层 compacted：payload.message 是 Codex 压缩上下文后注入模型的历史摘要，
+    // payload.replacement_history 是压缩后的上下文投影。真实 rollout 里 message 常为空
+    // （openai/codex#41954、#44363），且压缩前的原始记录可能已被销毁——Watch 不做压缩窗口
+    // 投影，应用它只会重复或丢内容，所以只按整份日志计数，循环结束后挂一条披露事件。
+    // 摘要正文、replacement_history、metadata 一律不复制。
+    if (r.type === 'compacted') {
+      compaction.total += 1;
+      if (compaction.turnsAtFirst === null) {
+        compaction.turnsAtFirst = turns.length;
+        compaction.fallbackAtFirst = fallback.length;
+      }
+      const message =
+        typeof payload === 'object' && payload !== null
+          ? (payload as Record<string, unknown>).message
+          : undefined;
+      if (typeof message === 'string' && message.trim()) compaction.readable += 1;
+      else compaction.unreadable += 1;
+      continue;
+    }
     if (typeof payload !== 'object' || payload === null) continue;
     const p = payload as Record<string, unknown>;
 
@@ -112,7 +140,59 @@ export async function parseCodexSession(ref: SessionRef): Promise<UnifiedTurn[]>
       }
     }
   }
-  return stripEmptyEvents(hasResponseMessages ? turns : fallback);
+  const active = hasResponseMessages ? turns : fallback;
+  // 「压缩点之前有没有对话原文」只能按**最终活动的**时间线判断：混合 wire 时回退时间线会被
+  // 整份丢弃，拿它算出来的「有原文」在返回值里并不成立。
+  const sawConversationBefore = hasResponseMessages
+    ? (compaction.turnsAtFirst ?? 0) > 0
+    : (compaction.fallbackAtFirst ?? 0) > 0;
+  const disclosure = describeCodexCompaction(compaction, sawConversationBefore);
+  if (disclosure && active.length > 0) {
+    const last = active[active.length - 1]!;
+    pushEvent(last, {
+      kind: 'text',
+      summary: disclosure,
+      detail: disclosure,
+      timestamp: last.timestamp,
+      provider: 'codex',
+    });
+  }
+  return stripEmptyEvents(active);
+}
+
+type CodexCompactionCounts = {
+  /** 顶层 compacted 记录总数 */
+  total: number;
+  /** payload.message 为非空字符串 */
+  readable: number;
+  /** message 缺失 / 空 / 非字符串，或 payload 形状不可读 */
+  unreadable: number;
+  /** 首条压缩记录出现时，两条时间线各自的轮次数（null = 还没遇到 compacted） */
+  turnsAtFirst: number | null;
+  fallbackAtFirst: number | null;
+};
+
+/**
+ * 披露文案只说能从日志里证明的事实：
+ * - 「压缩点之前有没有对话原文」由解析器在首条 compacted 时按已解析轮次判定，不无条件断言
+ *   「保留全量原文」——真实 rollout 可能被重建成只剩 session_meta + compacted；
+ * - 只发一条汇总事件：真实会话可能积累几十上百条 compacted，逐条渲染会刷屏；
+ * - 摘要正文与 replacement_history 不复制，措辞里也不说「内容已丢失」。
+ */
+function describeCodexCompaction(counts: CodexCompactionCounts, sawConversationBefore: boolean): string {
+  if (counts.total === 0) return '';
+  const details: string[] = [];
+  if (counts.readable > 0) details.push(`${counts.readable} 条带可读摘要`);
+  if (counts.unreadable > 0) details.push(`${counts.unreadable} 条摘要为空或不可读`);
+  const shape = sawConversationBefore
+    ? '日志在压缩点之前保留了对话原文，交接会包含这些旧内容，可能比 Codex 当前发给模型的上下文更多'
+    : '日志在压缩点之前没有对话原文，Watch 也不解析 replacement_history，交接会缺少这段历史';
+  return (
+    `${WATCH_CONTEXT_DISCLOSURE_PREFIX}Codex 会话日志里有 ${counts.total} 条上下文压缩记录` +
+    (details.length > 0 ? `（${details.join('、')}）` : '') +
+    `，Watch 没有把摘要并入交接、也没有应用 Codex 的压缩窗口：${shape}；` +
+    '需要以 Codex 当前上下文为准时请在原生 Codex 里核对]'
+  );
 }
 
 /**
