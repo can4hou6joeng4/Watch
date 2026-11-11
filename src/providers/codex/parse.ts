@@ -16,9 +16,10 @@ import type { ProcessEvent, SessionRef, TokenUsage, UnifiedTurn } from '../../co
  * Codex rollout JSONL → 统一时间线（Rich）：
  * - response_item message：user 过滤内部上下文；assistant 最终回复覆盖 turn.text
  * - reasoning / function_call / custom_tool_call / command_execution 挂到 assistant.events
- * - commentary 作为 text 事件；已有最终回复后的 commentary 丢掉
+ * - commentary / partial_answer 保留为 text 事件；显式 final_answer 后的阶段文本丢掉；phase 缺省保持旧兼容
+ * - 最后停在阶段消息的助手轮标记 incomplete，并计数披露未记录最终答复
  * - compacted：Codex 压缩上下文后的摘要记录，只计数并披露，不并入摘要正文（见 describeCodexCompaction）
- * - 整份文件无 response_item message 时，回退 event_msg（旧版 wire，无过程事件）
+ * - 整份文件无 response_item message 时，回退 event_msg；agent_message 共享上述阶段处理
  * - 坏行/空行跳过；丢弃首条 user 之前的记录
  */
 export async function parseCodexSession(ref: SessionRef): Promise<UnifiedTurn[]> {
@@ -28,7 +29,34 @@ export async function parseCodexSession(ref: SessionRef): Promise<UnifiedTurn[]>
   let sawUser = false;
   let sawFallbackUser = false;
   let hasResponseMessages = false;
-  let lastAssistantIsCommentary = false;
+  const finalized = new WeakSet<UnifiedTurn>();
+  const acceptAssistant = (turn: UnifiedTurn, text: string, timestamp: string, p: Record<string, unknown>): void => {
+    const isMidTurn = p.phase === 'commentary' || p.phase === 'partial_answer';
+    if (isMidTurn && finalized.has(turn)) return;
+    // 只跳过带 Watch 标记且与最近结构事件对应的回显；原生同文说明仍须保留。
+    const meta = p.internal_chat_message_metadata_passthrough;
+    const marked = typeof meta === 'object' && meta !== null &&
+      (meta as Record<string, unknown>).watch_generated_commentary === true;
+    if (p.phase === 'commentary' && marked && isGeneratedCommentaryMirror(turn, text)) return;
+    if (isMidTurn) {
+      pushEvent(turn, {
+        kind: 'text',
+        summary: text.startsWith(WATCH_CONTEXT_DISCLOSURE_PREFIX)
+          ? text : summarize(text, p.phase === 'partial_answer' ? '阶段回复' : '过程'),
+        detail: text,
+        timestamp,
+        provider: 'codex',
+      });
+      turn.incomplete = true;
+    } else {
+      // 缺省 phase 保持旧正文语义，但不能据此阻断后续明确标记的阶段消息。
+      delete turn.incomplete;
+    }
+    if (p.phase === 'final_answer') finalized.add(turn);
+    turn.text = text;
+    turn.timestamp = timestamp;
+    turn.provider = 'codex';
+  };
   const compaction: CodexCompactionCounts = {
     total: 0,
     readable: 0,
@@ -91,20 +119,11 @@ export async function parseCodexSession(ref: SessionRef): Promise<UnifiedTurn[]>
         if (normalized === null) continue;
         hasResponseMessages = true;
         sawUser = true;
-        lastAssistantIsCommentary = false;
         turns.push({ role: 'user', text: normalized, timestamp });
       } else if (role === 'assistant') {
         if (!sawUser) continue;
-        const isCommentary = p.phase === 'commentary';
-        const last = ensureAssistant(turns, timestamp, 'codex');
-        if (isCommentary && last.text && !lastAssistantIsCommentary) {
-          continue;
-        }
         hasResponseMessages = true;
-        last.text = text;
-        last.timestamp = timestamp;
-        last.provider = 'codex';
-        lastAssistantIsCommentary = isCommentary;
+        acceptAssistant(ensureAssistant(turns, timestamp, 'codex'), text, timestamp, p);
       }
       continue;
     }
@@ -134,9 +153,7 @@ export async function parseCodexSession(ref: SessionRef): Promise<UnifiedTurn[]>
       } else if (p.type === 'agent_message' && typeof p.message === 'string') {
         const text = p.message;
         if (!sawFallbackUser || text.trim() === '') continue;
-        const last = ensureAssistant(fallback, timestamp, 'codex');
-        last.text = text;
-        last.timestamp = timestamp;
+        acceptAssistant(ensureAssistant(fallback, timestamp, 'codex'), text, timestamp, p);
       }
     }
   }
@@ -156,6 +173,12 @@ export async function parseCodexSession(ref: SessionRef): Promise<UnifiedTurn[]>
       timestamp: last.timestamp,
       provider: 'codex',
     });
+  }
+  const incomplete = active.filter((turn) => turn.incomplete).length;
+  if (incomplete > 0) {
+    const last = active[active.length - 1]!;
+    const text = `${WATCH_CONTEXT_DISCLOSURE_PREFIX}Codex 有 ${incomplete} 轮助手回复最后停在 commentary / partial_answer，未记录最终答复；交接保留阶段文本，不能据此认为任务已完成，请在来源核对]`;
+    pushEvent(last, { kind: 'text', summary: text, detail: text, timestamp: last.timestamp, provider: 'codex' });
   }
   return stripEmptyEvents(active);
 }
@@ -255,8 +278,7 @@ function processItemToEvents(p: Record<string, unknown>, timestamp: string): Pro
       const callId = typeof p.call_id === 'string' ? p.call_id : undefined;
       const raw = p.input ?? p.arguments ?? '';
       const rawText = typeof raw === 'string' ? raw : JSON.stringify(raw);
-      const detail =
-        name === 'exec' || name === 'shell' || name === 'shell_command' ? extractExecCommand(rawText) : rawText;
+      const detail = name === 'exec' ? extractExecCommand(rawText) : rawText;
       return [
         {
           ...base,
@@ -348,6 +370,23 @@ function processItemToEvents(p: Record<string, unknown>, timestamp: string): Pro
     default:
       return [];
   }
+}
+
+/**
+ * Watch 写出侧的 commentary 回显：思考写成 `思考: <detail>`，工具调用写成命令本身
+ * （非 exec 为 `<name>: <detail>`，超过 200 字符会截断加 `…`）。这些信息已经由
+ * reasoning / custom_tool_call 记录承载，解析时不能再变出一条过程文本——否则
+ * Watch → Codex → Watch 每次往返都会多出两倍的中间说明。
+ */
+function isGeneratedCommentaryMirror(turn: UnifiedTurn, text: string): boolean {
+  const event = turn.events?.at(-1);
+  if (!event) return false;
+  if (event.kind === 'thinking') return text.trim() === `思考: ${(event.detail ?? event.summary).trim()}`;
+  if (event.kind !== 'tool_call') return false;
+  const detail = event.detail ?? event.summary;
+  const shown = event.name === 'exec' ? detail : `${event.name ?? 'tool'}: ${detail}`;
+  const clipped = shown.length > 200 ? `${shown.slice(0, 199)}…` : shown;
+  return text.trim() === clipped.trim();
 }
 
 function parseToolInput(raw: unknown): unknown {

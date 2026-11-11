@@ -5,7 +5,7 @@ import { randomUUID } from 'node:crypto';
 import { appendFileAtomic, writeFileAtomic } from '../../core/atomic.js';
 import { escapeControlChars } from '../../core/display.js';
 import { verifyWrittenTurns } from '../../core/verify.js';
-import { ENCRYPTED_THINKING, codexToolInput, toCodexToolName, turnHasContent } from '../../core/rich.js';
+import { ENCRYPTED_THINKING, codexToolInput, isCodexExecScript, toCodexToolName, turnHasContent } from '../../core/rich.js';
 import { describePathReadFailureReason, isMissingPathError } from '../../core/read-text.js';
 import { parseCodexSession } from './parse.js';
 import { codexSessionUsage } from './usage.js';
@@ -184,6 +184,7 @@ export function buildCodexLines(
   let lastModelVisibleTokens = 0;
   let turn: { turnId: string; startedAt: number | null } | null = null;
   let turnUsage: TokenUsage | undefined;
+  let turnIncomplete = false;
   let userCount = 0;
   const requireUser = opts?.requireUser ?? true;
   const includeMeta = opts?.includeMeta ?? true;
@@ -247,13 +248,15 @@ export function buildCodexLines(
       info: { total_token_usage: cumulative, last_token_usage: last, model_context_window: null },
       rate_limits: null,
     });
-    push('event_msg', {
-      type: 'task_complete',
-      turn_id: turn.turnId,
-      last_agent_message: null,
-      started_at: turn.startedAt,
-      completed_at: completedAt,
-    });
+    if (!turnIncomplete) {
+      push('event_msg', {
+        type: 'task_complete',
+        turn_id: turn.turnId,
+        last_agent_message: null,
+        started_at: turn.startedAt,
+        completed_at: completedAt,
+      });
+    }
     turn = null;
   };
 
@@ -262,6 +265,7 @@ export function buildCodexLines(
     if (t.role === 'user') {
       closeTurn(null);
       turnUsage = undefined;
+      turnIncomplete = false;
       userCount += 1;
       const startedAt = tsSeconds(t.timestamp);
       const turnId = randomUUID();
@@ -279,6 +283,7 @@ export function buildCodexLines(
       turn = { turnId, startedAt };
     } else {
       turnUsage = t.usage;
+      turnIncomplete = t.incomplete === true;
       if (!turn) {
         if (requireUser) continue; // assistant 前无进行中 turn，跳过
         const startedAt = tsSeconds(t.timestamp);
@@ -299,12 +304,13 @@ export function buildCodexLines(
       if (finalText) {
         responseItemBytes += Buffer.byteLength(t.text);
         lastModelVisibleTokens = Math.floor(responseItemBytes / 4);
-        push('event_msg', { type: 'agent_message', message: t.text, phase: 'final_answer' });
+        const phase = turnIncomplete ? 'partial_answer' : 'final_answer';
+        push('event_msg', { type: 'agent_message', message: t.text, phase });
         push('response_item', {
           type: 'message',
           id: `msg_${randomUUID()}`,
           role: 'assistant',
-          phase: 'final_answer',
+          phase,
           content: [{ type: 'output_text', text: t.text }],
           internal_chat_message_metadata_passthrough: { turn_id: turn.turnId },
         });
@@ -323,7 +329,7 @@ export function buildCodexLines(
 }
 
 function wrapExecInput(name: string, input: string, cwd: string): string {
-  if (name !== 'exec' || input.includes('tools.exec_command')) return input;
+  if (name !== 'exec' || isCodexExecScript(input)) return input;
   return `const r = await tools.exec_command({cmd:${JSON.stringify(input)},workdir:${JSON.stringify(cwd)},yield_time_ms:10000,max_output_tokens:4000}); text(r.output);\n`;
 }
 
@@ -331,6 +337,7 @@ function pushCommentary(
   push: (type: string, payload: Record<string, unknown>) => void,
   text: string,
   turnId: string,
+  generatedMirror = false,
 ): void {
   push('event_msg', { type: 'agent_message', message: text, phase: 'commentary' });
   push('response_item', {
@@ -339,7 +346,10 @@ function pushCommentary(
     role: 'assistant',
     phase: 'commentary',
     content: [{ type: 'output_text', text }],
-    internal_chat_message_metadata_passthrough: { turn_id: turnId },
+    internal_chat_message_metadata_passthrough: {
+      turn_id: turnId,
+      ...(generatedMirror ? { watch_generated_commentary: true } : {}),
+    },
   });
 }
 
@@ -361,7 +371,7 @@ function emitCodexEvent(
       summary: [{ type: 'summary_text', text }],
       internal_chat_message_metadata_passthrough: meta,
     });
-    if (text !== ENCRYPTED_THINKING) pushCommentary(push, `思考: ${text}`, turnId);
+    if (text !== ENCRYPTED_THINKING) pushCommentary(push, `思考: ${text}`, turnId, true);
     return;
   }
   if (ev.kind === 'tool_call') {
@@ -379,7 +389,7 @@ function emitCodexEvent(
       internal_chat_message_metadata_passthrough: meta,
     });
     const shown = name === 'exec' ? codexToolInput(ev) : `${name}: ${codexToolInput(ev)}`;
-    pushCommentary(push, shown.length > 200 ? `${shown.slice(0, 199)}…` : shown, turnId);
+    pushCommentary(push, shown.length > 200 ? `${shown.slice(0, 199)}…` : shown, turnId, true);
     return;
   }
   if (ev.kind === 'tool_result') {

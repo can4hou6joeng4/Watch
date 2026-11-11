@@ -7,6 +7,8 @@ export type UnifiedTurn = {
   events?: ProcessEvent[]; // Rich：思考 / 工具调用 / 工具返回（入账，参与交接）
   /** 本轮 token 用量（源侧 parse 提取，目标侧 build 落盘真实值；无则 undefined） */
   usage?: TokenUsage;
+  /** 来源明确停在非终态的阶段回复；目标若无法表达，仍需携带上下文披露。 */
+  incomplete?: true;
 };
 
 /** 指向某个 Provider 的一个原生会话 */
