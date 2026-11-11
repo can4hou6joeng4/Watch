@@ -9,6 +9,7 @@ import {
   stripEmptyEvents,
   summarize,
   unwrapUserQuery,
+  WATCH_CONTEXT_DISCLOSURE_PREFIX,
 } from '../../core/rich.js';
 import type { ProcessEvent, SessionRef, TokenUsage, UnifiedTurn } from '../../core/types.js';
 
@@ -27,6 +28,7 @@ export async function parseClaudeSession(ref: SessionRef): Promise<UnifiedTurn[]
   const raw = await readFile(ref.filePath, 'utf8');
   const turns: UnifiedTurn[] = [];
   let sawUser = false;
+  const lastTextEvents = new Map<UnifiedTurn, ProcessEvent>();
 
   for (const line of raw.split('\n')) {
     const trimmed = line.trim();
@@ -71,10 +73,26 @@ export async function parseClaudeSession(ref: SessionRef): Promise<UnifiedTurn[]
       if (!sawUser) continue;
       const last = ensureAssistant(turns, timestamp, 'claude');
       for (const ev of events) pushEvent(last, ev);
-      if (text.trim()) last.text = text;
+      if (text.trim()) {
+        const event: ProcessEvent = {
+          kind: 'text',
+          summary: text.startsWith(WATCH_CONTEXT_DISCLOSURE_PREFIX) ? text : summarize(text, '过程'),
+          detail: text,
+          timestamp,
+          provider: 'claude',
+        };
+        pushEvent(last, event);
+        lastTextEvents.set(last, event);
+        last.text = text;
+      }
       if (timestamp) last.timestamp = timestamp;
       const usage = readUsage(r.message);
       if (usage) last.usage = usage;
+    }
+  }
+  for (const [turn, finalEvent] of lastTextEvents) {
+    if (!finalEvent.summary.startsWith(WATCH_CONTEXT_DISCLOSURE_PREFIX)) {
+      turn.events = turn.events?.filter((event) => event !== finalEvent);
     }
   }
   return stripEmptyEvents(turns);
