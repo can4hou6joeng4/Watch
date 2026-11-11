@@ -28,14 +28,21 @@ export async function parsePiSession(ref: SessionRef): Promise<UnifiedTurn[]> {
         : typeof msg.timestamp === 'number'
           ? new Date(msg.timestamp).toISOString()
           : '';
-    const content = Array.isArray(msg.content) ? msg.content : [];
+    // pi 的 UserMessage.content 类型是 `string | (TextContent | ImageContent)[]`（pi-ai 的 types.ts），
+    // 纯字符串以前被 `Array.isArray ? … : []` 折成空数组，整条用户消息连同内容消失。
+    const content = Array.isArray(msg.content)
+      ? msg.content
+      : typeof msg.content === 'string'
+        ? [{ type: 'text', text: msg.content }]
+        : [];
     const extracted = extractBlocks(content, timestamp);
 
     if (role === 'user') {
       const text = normalizeUserText(extracted.text);
       if (!text) continue;
       sawUser = true;
-      turns.push({ role: 'user', text, timestamp });
+      // 图片块的 attachment 挂在这里，转入支持附件的目标（claude / opencode）时才带得过去。
+      turns.push({ role: 'user', text, timestamp, ...(extracted.events.length ? { events: extracted.events } : {}) });
       continue;
     }
     if (role === 'toolResult') {
@@ -113,14 +120,31 @@ function readPiUsage(msg: Record<string, unknown>): TokenUsage | undefined {
   return { inputTokens, outputTokens };
 }
 
+/**
+ * 消息内容块 → 文本 + 过程事件。
+ *
+ * pi-ai 的消息块联合只有 text / thinking / toolCall / image 四种，但「只认识这几种」不等于
+ * 「其余可以静默丢」。以前这里没有 image 分支、也没有兜底：图片块连同原始数据消失（只发图片的
+ * 用户消息整条不见），未知类型的块同样无声无息——`watch prompt` 与转入的目标会话里都少一段，
+ * 而 round-trip 只看 thinking / tool_call / tool_result，拦不住。
+ *
+ * 图片：占位文本进 `texts`（pi 的写回只搬文本，占位是这条图片在 pi 侧唯一留得下的痕迹），
+ * 同时挂一条带 `attachment` 的 text 事件，转入 claude / opencode 时由它们的 build 还原成图片块；
+ * pi 自己不还原附件，由 `describeAttachmentLoss()` 按目标能力披露。
+ * 未知类型：按类型计数写进正文（与 claude parse 同一口径），让只含未知块的消息仍然成为一轮。
+ */
 function extractBlocks(
   blocks: unknown[],
   timestamp: string,
 ): { text: string; events: ProcessEvent[] } {
   const texts: string[] = [];
   const events: ProcessEvent[] = [];
+  const unknown = new Map<string, number>();
   for (const block of blocks) {
-    if (typeof block !== 'object' || block === null) continue;
+    if (typeof block !== 'object' || block === null) {
+      unknown.set('（非对象内容块）', (unknown.get('（非对象内容块）') ?? 0) + 1);
+      continue;
+    }
     const b = block as Record<string, unknown>;
     const type = b.type;
     if (type === 'text' && typeof b.text === 'string') texts.push(b.text);
@@ -145,9 +169,36 @@ function extractBlocks(
         callId,
         input: b.arguments,
       });
+    } else if (type === 'image') {
+      // 字段口径来自 pi-ai 的 ImageContent：`{ type: 'image', data: base64, mimeType }`
+      const media = typeof b.mimeType === 'string' && b.mimeType ? b.mimeType : 'image';
+      const placeholder =
+        typeof b.data === 'string' ? `[图片：${media}，${b.data.length}B]` : `[图片：${media}]`;
+      texts.push(placeholder);
+      if (typeof b.data === 'string') {
+        events.push({
+          kind: 'text',
+          summary: placeholder,
+          detail: placeholder,
+          timestamp,
+          provider: 'pi',
+          attachment: { kind: 'image', mediaType: media, data: b.data },
+        });
+      }
     } else if (type === 'text' && b.text == null && typeof b.content === 'string') {
       texts.push(b.content);
+    } else {
+      const unknownType = typeof type === 'string' && type ? type : '（空类型）';
+      unknown.set(unknownType, (unknown.get(unknownType) ?? 0) + 1);
     }
+  }
+  // 未识别块的占位跟着文本走：`watch prompt` 的文档会被复制走，standard 档位也不展开事件。
+  if (unknown.size > 0) {
+    const total = [...unknown.values()].reduce((a, b) => a + b, 0);
+    const counts = [...unknown.entries()].map(([type, n]) => (n > 1 ? `${type}×${n}` : type)).join('、');
+    texts.push(
+      `[Pi 记录里有 ${total} 个未识别的消息块（${counts}），Watch 暂不解析：这部分原始内容没有并入交接，需要时请在原生 Pi 里查看]`,
+    );
   }
   return { text: texts.join('\n'), events };
 }
