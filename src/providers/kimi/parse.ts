@@ -21,6 +21,8 @@ export async function parseKimiSession(ref: SessionRef): Promise<UnifiedTurn[]> 
   const raw = await readFile(ref.filePath, 'utf8');
   const turns: UnifiedTurn[] = [];
   let state: 'idle' | 'user' | 'assistant' = 'idle';
+  // content.part 里认不出的片段类型按 turn 计数，循环结束后统一写进正文（见下方注释）
+  const unknownParts = new Map<UnifiedTurn, Map<string, number>>();
 
   for (const line of raw.split('\n')) {
     const trimmed = line.trim();
@@ -58,7 +60,11 @@ export async function parseKimiSession(ref: SessionRef): Promise<UnifiedTurn[]> 
       if (state !== 'assistant') continue;
 
       const last = ensureAssistant(turns, timestamp, 'kimi');
-      processLoopEvent(event, last, timestamp);
+      processLoopEvent(event, last, timestamp, (partType) => {
+        const counts = unknownParts.get(last) ?? new Map<string, number>();
+        counts.set(partType, (counts.get(partType) ?? 0) + 1);
+        unknownParts.set(last, counts);
+      });
       continue;
     }
 
@@ -75,6 +81,14 @@ export async function parseKimiSession(ref: SessionRef): Promise<UnifiedTurn[]> 
     }
   }
 
+  // 未识别的 content.part 类型跟着文本走（与 claude / pi / grok 同一口径）：正文会被
+  // `watch prompt` 复制走、也作为文本转入目标会话，standard 档位不展开事件。
+  for (const [turn, counts] of unknownParts) {
+    const total = [...counts.values()].reduce((a, b) => a + b, 0);
+    const shown = [...counts.entries()].map(([t, n]) => (n > 1 ? `${t}×${n}` : t)).join('、');
+    const note = `[Kimi 记录里有 ${total} 个未识别的消息片段（${shown}），Watch 暂不解析：这部分原始内容没有并入交接，需要时请在原生 Kimi 里查看]`;
+    turn.text = [turn.text, note].filter((s) => s.trim()).join('\n\n');
+  }
   return stripEmptyEvents(turns);
 }
 
@@ -126,7 +140,12 @@ function extractUserText(r: Record<string, unknown>): string | null {
   return parts.length > 0 ? parts.join('\n') : null;
 }
 
-function processLoopEvent(event: Record<string, unknown>, turn: UnifiedTurn, timestamp: string): void {
+function processLoopEvent(
+  event: Record<string, unknown>,
+  turn: UnifiedTurn,
+  timestamp: string,
+  onUnknownPart: (partType: string) => void,
+): void {
   const loopType = asString(event.type);
   if (!loopType) return;
   const base = { timestamp, provider: 'kimi' as const };
@@ -140,7 +159,10 @@ function processLoopEvent(event: Record<string, unknown>, turn: UnifiedTurn, tim
 
   if (loopType === 'content.part') {
     const part = asRecord(event.part);
-    if (!part) return;
+    if (!part) {
+      onUnknownPart('（无 part 字段）');
+      return;
+    }
     const partType = asString(part.type);
     if (partType === 'text') {
       const text = asString(part.text);
@@ -158,6 +180,10 @@ function processLoopEvent(event: Record<string, unknown>, turn: UnifiedTurn, tim
       });
       return;
     }
+    // 认不出的片段类型（图片等）以前在这里直接 return：内容连同原始数据无声消失。
+    // 只把 `content.part` 的**片段类型**计数写进正文；未知的 loop 事件类型不计数——
+    // 流式增量（delta）也走 `context.append_loop_event`，逐条计数会把正常会话刷满占位。
+    onUnknownPart(partType ?? '（空类型）');
     return;
   }
 
