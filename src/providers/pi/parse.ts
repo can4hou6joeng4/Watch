@@ -7,6 +7,7 @@ import {
   pushEvent,
   stripEmptyEvents,
   summarize,
+  WATCH_CONTEXT_DISCLOSURE_PREFIX,
 } from '../../core/rich.js';
 import type { ProcessEvent, SessionRef, TokenUsage, UnifiedTurn } from '../../core/types.js';
 
@@ -14,6 +15,14 @@ export async function parsePiSession(ref: SessionRef): Promise<UnifiedTurn[]> {
   const raw = await readFile(ref.filePath, 'utf8');
   const turns: UnifiedTurn[] = [];
   let sawUser = false;
+  // 整份日志里 context_edit / custom_message 的计数（见循环里的注释）
+  const contextEntries: PiContextEntryCounts = {
+    removed: 0,
+    replaced: 0,
+    unknownEdits: 0,
+    customMessages: 0,
+    customImages: 0,
+  };
 
   for (const line of raw.split('\n')) {
     const trimmed = line.trim();
@@ -41,6 +50,22 @@ export async function parsePiSession(ref: SessionRef): Promise<UnifiedTurn[]> {
         timestamp,
       });
       sawUser = true;
+      continue;
+    }
+
+    // `context_edit` / `custom_message` 会改变 Pi 当前发给模型的上下文，但 Watch 没有做
+    // 分支选择与压缩窗口投影，不能安全地应用它们（见 rich.ts 的 `WATCH_CONTEXT_DISCLOSURE_PREFIX`）。
+    // 这里只按整个日志计数，循环结束后把一条披露事件挂到最后一条已解析轮次上。
+    if (r.type === 'context_edit') {
+      const replacement = r.replacement;
+      if (replacement === null) contextEntries.removed += 1;
+      else if (hasReplacementContent(replacement)) contextEntries.replaced += 1;
+      else contextEntries.unknownEdits += 1;
+      continue;
+    }
+    if (r.type === 'custom_message') {
+      contextEntries.customMessages += 1;
+      contextEntries.customImages += countImageBlocks(r.content);
       continue;
     }
 
@@ -117,7 +142,71 @@ export async function parsePiSession(ref: SessionRef): Promise<UnifiedTurn[]> {
     if (timestamp) last.timestamp = timestamp;
     if (usage) last.usage = usage;
   }
+  const disclosure = describePiContextEntries(contextEntries);
+  if (disclosure && turns.length > 0) {
+    const last = turns.at(-1)!;
+    pushEvent(last, {
+      kind: 'text',
+      summary: disclosure,
+      detail: disclosure,
+      timestamp: last.timestamp,
+      provider: 'pi',
+    });
+  }
   return stripEmptyEvents(turns);
+}
+
+type PiContextEntryCounts = {
+  /** replacement === null：该条不再贡献上下文 */
+  removed: number;
+  /** 有字符串 / 数组 content 的替换 */
+  replaced: number;
+  /** replacement 存在但形状认不出 */
+  unknownEdits: number;
+  customMessages: number;
+  customImages: number;
+};
+
+/** 替换载荷是否带可识别的 content（只判形状，不读内容）。 */
+function hasReplacementContent(replacement: unknown): boolean {
+  if (typeof replacement !== 'object' || replacement === null) return false;
+  const content = (replacement as Record<string, unknown>).content;
+  return typeof content === 'string' || Array.isArray(content);
+}
+
+function countImageBlocks(content: unknown): number {
+  if (!Array.isArray(content)) return 0;
+  let images = 0;
+  for (const block of content) {
+    if (typeof block === 'object' && block !== null && (block as Record<string, unknown>).type === 'image') images += 1;
+  }
+  return images;
+}
+
+/**
+ * 披露文案：只说「日志里有多少条」，不说「当前分支生效多少条」——没有做叶路径投影，
+ * 前者是能证明的事实，后者只是猜测。编辑与扩展消息的正文、图片 base64、details 都不复制。
+ */
+function describePiContextEntries(counts: PiContextEntryCounts): string {
+  const parts: string[] = [];
+  const edits = counts.removed + counts.replaced + counts.unknownEdits;
+  if (edits > 0) {
+    const detail: string[] = [];
+    if (counts.removed) detail.push(`删除 ${counts.removed} 条`);
+    if (counts.replaced) detail.push(`替换 ${counts.replaced} 条`);
+    if (counts.unknownEdits) detail.push(`形状无法识别 ${counts.unknownEdits} 条`);
+    parts.push(`${edits} 条上下文编辑（${detail.join('、')}）`);
+  }
+  if (counts.customMessages > 0) {
+    parts.push(`${counts.customMessages} 条扩展消息${counts.customImages ? `（含图片 ${counts.customImages} 张）` : ''}`);
+  }
+  if (parts.length === 0) return '';
+  return (
+    `${WATCH_CONTEXT_DISCLOSURE_PREFIX}Pi 会话日志里有 ${parts.join(' 和 ')}，` +
+    'Watch 没有应用这些编辑、也没有并入扩展内容：本交接保留的是原始日志，' +
+    '可能比 Pi 当前发给模型的上下文多出已被删除或改写的旧内容，同时缺少扩展提供的内容；' +
+    '需要以 Pi 当前上下文为准时请在原生 Pi 里核对]'
+  );
 }
 
 /**

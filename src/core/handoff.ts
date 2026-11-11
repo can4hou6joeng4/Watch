@@ -3,7 +3,7 @@ import { stat } from 'node:fs/promises';
 import type { SessionRef, TokenUsage, UnifiedTurn } from './types.js';
 import { chainsElsewhereHint, chainsSameDirectoryHint, describeStoreErrorReason, emptyChainBindHint } from './store.js';
 import type { Chain, ChainsElsewhere, Store, SwitchRecord } from './store.js';
-import { dedupeCallEvents, describeAttachmentLoss, describeDanglingToolCalls, describeUnansweredTail, describeResumeTargetUnfinished, mergeTurns, shouldReplacePairedSession, unwrapUserQuery } from './rich.js';
+import { dedupeCallEvents, describeAttachmentLoss, describeDanglingToolCalls, describeUnansweredTail, describeResumeTargetUnfinished, findContextDisclosure, mergeTurns, shouldReplacePairedSession, unwrapUserQuery } from './rich.js';
 import { describeWriteFailureReason, type FileDigest } from './atomic.js';
 import { addFinding, type Finding } from './findings.js';
 import { escapeControlChars } from './display.js';
@@ -1399,6 +1399,10 @@ export async function handoff(
       `来源会话 ${sourceTip.ref.sessionId}（${source.displayName}）有 ${badSourceLines} 行无法解析（截断或损坏），已跳过；交接内容可能不完整，可在原生 CLI 里打开确认`,
     );
   }
+  // 来源记录的上下文与来源 CLI 现在真正发给模型的不一致（Pi 的 context_edit / custom_message）：
+  // 事件本身不会写进目标原生会话，所以必须在这条路径上单独披露，不能只留给 watch prompt。
+  const contextDisclosure = findContextDisclosure(turns);
+  if (contextDisclosure) warnings.push(contextDisclosure.summary);
   // 同上，工具调用没有结果（Ctrl-C、用量耗尽、resume 重放过半截）在两处检查里都看不出来：
   // `diffTurns` 只比解析结果，round-trip 只比「写进去的内容」。`switch` 是 CLI 主路径，
   // 不披露就会把「那一轮做了一半」当成完整交接。

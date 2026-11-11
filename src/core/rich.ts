@@ -44,6 +44,27 @@ export const PI_COMPACTION_SUMMARY_PREFIX = '[Pi 上下文压缩摘要：由 Pi 
  */
 export const PI_BRANCH_SUMMARY_PREFIX = '[Pi 分支摘要：由 Pi 生成，不是用户原话；总结的是另一条分支]';
 
+/**
+ * Pi 的 `context_edit` / `custom_message` 条目不在 `parsePiSession()` 的还原范围内，但读者必须知道
+ * 「这份交接的上下文与 Pi 现在发给模型的不一致」。披露以 **text 事件**挂在最后一轮上，而不是
+ * 改写任何轮次的正文：`turnKey`（`handoff.ts`）只由 role + text + callIds 组成，事件不参与
+ * 增量对齐——来源会话继续增长时，旧轮次的键不会因为计数变化而漂移（否则 `diffTurns` 会把旧轮次
+ * 当成新增内容重复追加）。事件本身不写进目标原生会话（build 只消费已知事件），所以
+ * `buildHandoffPrompt()` 在选窗之前单独把它翻成正文的一行，`handoff()` 同时把它放进 warnings。
+ */
+export const WATCH_CONTEXT_DISCLOSURE_PREFIX = '[Watch 交接披露：';
+
+/** 从解析结果里找 Pi 的上下文完整性披露事件（`parsePiSession()` 写入）。 */
+export function findContextDisclosure(turns: UnifiedTurn[]): ProcessEvent | null {
+  for (let i = turns.length - 1; i >= 0; i--) {
+    const event = (turns[i]!.events ?? []).find(
+      (e) => e.kind === 'text' && e.summary.startsWith(WATCH_CONTEXT_DISCLOSURE_PREFIX),
+    );
+    if (event) return event;
+  }
+  return null;
+}
+
 export function turnHasContent(t: UnifiedTurn): boolean {
   return t.text.trim() !== '' || (t.events?.length ?? 0) > 0;
 }

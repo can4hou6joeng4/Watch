@@ -1,6 +1,6 @@
 import type { Finding } from './findings.js';
 import { addFinding } from './findings.js';
-import { CLAUDE_COMPACT_SUMMARY_PREFIX, OPENCODE_COMPACTION_SUMMARY_PREFIX, PI_COMPACTION_SUMMARY_PREFIX } from './rich.js';
+import { CLAUDE_COMPACT_SUMMARY_PREFIX, findContextDisclosure, OPENCODE_COMPACTION_SUMMARY_PREFIX, PI_COMPACTION_SUMMARY_PREFIX, WATCH_CONTEXT_DISCLOSURE_PREFIX } from './rich.js';
 import type { ProcessEvent, TokenUsage, UnifiedTurn } from './types.js';
 
 /**
@@ -335,6 +335,18 @@ function isCompactSummaryEvent(event: ProcessEvent): boolean {
   );
 }
 
+/**
+ * Pi 的上下文完整性披露是整条会话的元信息，已经在头部渲染成「上下文完整性」一行；
+ * 把它当普通过程记录展开 / 计入「省略 N 条过程记录」会重复且误导。
+ */
+function isContextDisclosureEvent(event: ProcessEvent): boolean {
+  return (
+    event.kind === 'text' &&
+    typeof event.summary === 'string' &&
+    event.summary.startsWith(WATCH_CONTEXT_DISCLOSURE_PREFIX)
+  );
+}
+
 function lastCompactSummary(turns: UnifiedTurn[]): { index: number; source: 'claude' | 'opencode' | 'pi' } | null {
   for (let i = turns.length - 1; i >= 0; i--) {
     const t = turns[i]!;
@@ -413,7 +425,7 @@ export function buildHandoffPrompt(
     // 否则 `--since-compact` 会切掉摘要之前的轮次，却把摘要本身也一起丢掉——留下的只有
     // 「从摘要开始」这一句，而摘要根本没有出现。
     const compactEvents = events.filter(isCompactSummaryEvent);
-    const procEvents = events.filter((e) => !isCompactSummaryEvent(e));
+    const procEvents = events.filter((e) => !isCompactSummaryEvent(e) && !isContextDisclosureEvent(e));
     if (compactEvents.length) {
       for (const event of compactEvents) body.push(renderEvent(event, limits.textLimit, stats));
       body.push('');
@@ -480,6 +492,14 @@ export function buildHandoffPrompt(
   // 这不是降级，是目录的**类型**：不说的话读者从路径上看不出它是独立工作树。
   if (meta.sourceWorktreeNote) {
     lines.push(`- 工作目录类型：${sanitizeBody(meta.sourceWorktreeNote).text}`);
+  }
+  // 来源记录的上下文与来源 CLI 当前发给模型的不一致（目前由 Pi parse 写入）：这个事件在
+  // 正文里默认不展开（standard 档位 eventsPerTurn = 0），所以必须在头部单独说一句。扫描发生在
+  // `--since-compact` / `--last` / 档位裁剪之前——披露不能跟着被裁掉的轮次一起消失。
+  const contextDisclosure = findContextDisclosure(turns);
+  if (contextDisclosure) {
+    addFinding(findings, 'prompt_context_disclosure', 'degraded', 1);
+    lines.push(`- 上下文完整性：${sanitizeBody(contextDisclosure.summary).text}`);
   }
   const range = formatTimeRange(meta.startedAt, meta.updatedAt);
   if (range) {
