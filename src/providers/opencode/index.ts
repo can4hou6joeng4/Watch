@@ -218,6 +218,8 @@ export const opencodeAdapter: ProviderAdapter = {
 
   parse: parseOpencodeSession,
   importTurns: importTurnsToOpencode,
+  // build 把 attachment 写回 file part（图片与文件都带数据）
+  attachmentSupport: 'all',
   findLatestSession: findLatestOpencodeSession,
   listSessions: listOpencodeSessions,
   findById: findOpencodeSessionById,

@@ -283,6 +283,40 @@ export function describeDanglingToolCalls(
 }
 
 /**
+ * 交接时附件能否跟着走。`assertRoundTrip` 只比 thinking / tool_call / tool_result，
+ * `attachment` 挂在 text 事件上、不参与校验，于是「图片只留了占位文本」这条路径
+ * 在三处防护里都看不出来：目标会话照常可读、round-trip 照常通过，只有原始数据没了。
+ *
+ * 判定用适配器自报的 `attachmentSupport`（缺省 = 一家都不带），文案同时说清
+ * 「丢的是什么、目标侧还剩什么、要带附件该去哪里」，不写成「部分内容未同步」这种空话。
+ */
+export function describeAttachmentLoss(
+  turns: UnifiedTurn[],
+  target: { displayName: string; attachmentSupport?: 'images' | 'all' },
+): string | null {
+  const support = target.attachmentSupport ?? 'none';
+  if (support === 'all') return null;
+  const lost = turns
+    .flatMap((t) => t.events ?? [])
+    .filter((e) => {
+      if (!e.attachment) return false;
+      return !(support === 'images' && e.attachment.kind === 'image');
+    });
+  if (lost.length === 0) return null;
+  const images = lost.filter((e) => e.attachment?.kind === 'image').length;
+  const files = lost.length - images;
+  const kinds = [images ? `${images} 张图片` : '', files ? `${files} 个文件附件` : ''].filter(Boolean).join('、');
+  const keptNote =
+    support === 'images'
+      ? `${target.displayName} 只还原图片块，文件类附件只留占位文本`
+      : `${target.displayName} 的写入侧不还原附件的原始数据，只留占位文本`;
+  return (
+    `来源会话有 ${lost.length} 个附件（${kinds}）不会随这次交接保留：${keptNote}（如「[图片：image/png，1234B]」），` +
+    `原始数据不落盘，也无法从目标会话里恢复；需要这些附件时先在来源里另存，或转到 OpenCode（图片与文件都能带）`
+  );
+}
+
+/**
  * 会话最后停在用户这一侧：用户说了话，没有对应的助手回复就断了。
  *
  * 这是「工具调用没有结果」之外的另一种中断形状（Ctrl-C、用量耗尽、进程被杀、文件被截断）：

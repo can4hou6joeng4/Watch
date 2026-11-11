@@ -3,7 +3,7 @@ import { stat } from 'node:fs/promises';
 import type { SessionRef, TokenUsage, UnifiedTurn } from './types.js';
 import { chainsElsewhereHint, chainsSameDirectoryHint, describeStoreErrorReason, emptyChainBindHint } from './store.js';
 import type { Chain, ChainsElsewhere, Store, SwitchRecord } from './store.js';
-import { dedupeCallEvents, describeDanglingToolCalls, describeUnansweredTail, describeResumeTargetUnfinished, mergeTurns, shouldReplacePairedSession, unwrapUserQuery } from './rich.js';
+import { dedupeCallEvents, describeAttachmentLoss, describeDanglingToolCalls, describeUnansweredTail, describeResumeTargetUnfinished, mergeTurns, shouldReplacePairedSession, unwrapUserQuery } from './rich.js';
 import { describeWriteFailureReason, type FileDigest } from './atomic.js';
 import { addFinding, type Finding } from './findings.js';
 import { escapeControlChars } from './display.js';
@@ -1409,6 +1409,10 @@ export async function handoff(
   // 照常并入目标，round-trip 两边都含它所以校验通过——不主动披露就会把半轮当完整交接。
   const unanswered = describeUnansweredTail(turns, sourceLabel);
   if (unanswered) warnings.push(unanswered);
+  // 附件原始数据不参与 round-trip（attachment 挂在 text 事件上），目标写不进去时也不会有任何一处报错：
+  // 目标会话照常可读、校验照常通过，只是图片 / 文件没了。交接前按目标自报的能力主动披露。
+  const attachmentLoss = describeAttachmentLoss(turns, target);
+  if (attachmentLoss) warnings.push(attachmentLoss);
   // 目标级保护：传入即将写入的会话，Codex 据此检查 per-thread writer 锁（而非只看 Desktop 是否运行）
   await target.preflight?.({ ref: into, cwd });
   // 协作写锁：供应商支持时在写入期间独占原生锁，收窄与原生 writer 的竞态窗口

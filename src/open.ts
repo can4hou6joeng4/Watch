@@ -1,7 +1,7 @@
 import { stat } from 'node:fs/promises';
 import { describeWriteFailureReason, type FileDigest } from './core/atomic.js';
 import { assertTargetUnchanged, blockedHint, describeSourceChangedDuringHandoff, diffTurns, HandoffBlockedError, snapshotSourceState, type SourceStateSnapshot } from './core/handoff.js';
-import { describeDanglingToolCalls, describeUnansweredTail, describeResumeTargetUnfinished, dedupeCallEvents } from './core/rich.js';
+import { describeAttachmentLoss, describeDanglingToolCalls, describeUnansweredTail, describeResumeTargetUnfinished, dedupeCallEvents } from './core/rich.js';
 import { Store, defaultDbPath, describeStoreErrorReason, describeStoreOpenFailure } from './core/store.js';
 import { IS_WIN, normalizePath, stripDevicePrefix } from './core/platform.js';
 import { trimUserKey } from './core/cli-input.js';
@@ -593,6 +593,9 @@ export async function openSession(
       // 写前快照：与 handoff 一致，写入前再比一次（目标被外部写入则中止）
       const dstDigest = (await target.adapter.contentFingerprint?.(target.found.ref)) ?? null;
       const outgoing = diffTurns(srcTurns, dstTurns);
+      // 与 switch 同一口径：附件原始数据不进 round-trip，目标侧不支持时只会静默剩下占位文本
+      const attachmentLoss = describeAttachmentLoss(srcTurns, target.adapter);
+      if (attachmentLoss) warnings.push(attachmentLoss);
       // 目标就是这条即将 resume 的会话：它自己没收尾要说，与来源那一侧各说各的
       warnResumeTargetUnfinished(dstTurns, `目标会话 ${escapeControlChars(targetId)}（${target.adapter.displayName}）`, outgoing.length, (msg) =>
         warnings.push(msg),
@@ -1248,6 +1251,11 @@ export async function openInProvider(
         );
         if (sidecar) warnings.push(sidecar);
       }
+    }
+    if (plan.turns.length > 0) {
+      // 附件的原始数据不会进目标：与 `switch` / `--from` 共用一句，避免三处各写一套
+      const attachmentLoss = describeAttachmentLoss(plan.turns, target);
+      if (attachmentLoss) warnings.push(attachmentLoss);
     }
     const newRef =
       plan.turns.length > 0 ? await guardedImport(target, plan.targetRef, plan.snapshot, plan.turns, cwd) : plan.targetRef;

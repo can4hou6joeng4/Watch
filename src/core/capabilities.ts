@@ -27,6 +27,8 @@ export type ProviderCapability = {
   requiresCliForNewSession: boolean;
   /** 写入前有目标级检查（Codex 的 per-thread writer 锁） */
   preflight: boolean;
+  /** 写入侧能还原的附件：`none` = 一律只留占位文本（交接时据此披露原始数据丢失） */
+  attachments: 'none' | 'images' | 'all';
   /** 能原子取协作写锁，收窄「探测 → 写入」的竞态窗口 */
   writeLock: boolean;
   /** 能扫 token 用量 */
@@ -49,6 +51,7 @@ export function describeProviderCapability(a: ProviderAdapter): ProviderCapabili
     createEmptySession: typeof a.createEmptySession === 'function',
     requiresCliForNewSession: a.requiresCliForNewSession === true,
     preflight: typeof a.preflight === 'function',
+    attachments: a.attachmentSupport ?? 'none',
     writeLock: typeof a.acquireWriteLock === 'function',
     sessionUsage: typeof a.sessionUsage === 'function',
     sessionUsageSidecar: typeof a.sessionUsagePath === 'function',
@@ -97,6 +100,7 @@ export function formatCapabilities(rows: ProviderCapability[]): string {
     );
     const aux = [
       `写入前置检查 ${mark(row.preflight)}`,
+      `附件 ${row.attachments === 'all' ? '图片与文件' : row.attachments === 'images' ? '仅图片' : '仅占位'}`,
       `协作写锁 ${mark(row.writeLock)}`,
       `归属统计 ${mark(row.unattributable)}`,
       row.listSessionsCap === undefined ? '列表不截断' : `列表上限 ${row.listSessionsCap}`,
