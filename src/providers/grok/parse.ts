@@ -28,15 +28,41 @@ function asRecord(value: unknown): Record<string, unknown> | null {
   return null;
 }
 
-function extractUserText(content: unknown): string {
-  if (typeof content === 'string') return content;
-  if (!Array.isArray(content)) return '';
+/**
+ * 消息 `content` → 文本 + 未识别块的计数。
+ *
+ * grok 的 user / assistant `content` 既可能是字符串，也可能是内容块数组。以前只有
+ * `extractUserText()` 处理 user 侧且只认 `type: 'text'` 的块，其余块（图片等）连同内容
+ * 一起消失；assistant 侧更直接——`typeof r.content === 'string' ? … : ''`，一条数组形状的
+ * 回复会被当成空文本，如果它同时没有 tool_calls，整条回复就此不见。`watch prompt` 与转入的
+ * 目标会话里都少一段，而 round-trip 只比 thinking / tool_call / tool_result，拦不住。
+ *
+ * 未知块按 `type×n` 计数写进正文（与 claude / pi 同一口径），让只含未知块的消息仍然成为一轮。
+ * `null` / `undefined` 是正常的「这条消息没有文本」（带 tool_calls 的 assistant 行就是如此），
+ * 不计数。
+ */
+function extractContent(content: unknown): { text: string; unknown: Map<string, number> } {
+  const unknown = new Map<string, number>();
+  if (typeof content === 'string') return { text: content, unknown };
+  if (!Array.isArray(content)) return { text: '', unknown };
   const parts: string[] = [];
   for (const block of content) {
     const b = asRecord(block);
-    if (b?.type === 'text' && typeof b.text === 'string') parts.push(b.text);
+    if (b?.type === 'text' && typeof b.text === 'string') {
+      parts.push(b.text);
+      continue;
+    }
+    const type = b && typeof b.type === 'string' && b.type ? b.type : '（非对象内容块）';
+    unknown.set(type, (unknown.get(type) ?? 0) + 1);
   }
-  return parts.join('\n');
+  return { text: parts.join('\n'), unknown };
+}
+
+function unknownBlockNote(unknown: Map<string, number>): string {
+  if (unknown.size === 0) return '';
+  const total = [...unknown.values()].reduce((a, b) => a + b, 0);
+  const counts = [...unknown.entries()].map(([type, n]) => (n > 1 ? `${type}×${n}` : type)).join('、');
+  return `[Grok 记录里有 ${total} 个未识别的消息块（${counts}），Watch 暂不解析：这部分原始内容没有并入交接，需要时请在原生 Grok 里查看]`;
 }
 
 function parseToolArguments(raw: unknown): unknown {
@@ -92,7 +118,10 @@ export async function parseGrokSession(ref: SessionRef): Promise<UnifiedTurn[]> 
     const timestamp = grokTimestamp(base, lineIndex);
 
     if (type === 'user') {
-      const text = normalizeUserText(extractUserText(r.content));
+      const extractedContent = extractContent(r.content);
+      const text = normalizeUserText(
+        [extractedContent.text, unknownBlockNote(extractedContent.unknown)].filter(Boolean).join('\n\n'),
+      );
       if (!text) continue;
       sawUser = true;
       turns.push({ role: 'user', text, timestamp });
@@ -101,7 +130,10 @@ export async function parseGrokSession(ref: SessionRef): Promise<UnifiedTurn[]> 
 
     if (type === 'assistant') {
       if (!sawUser) continue;
-      const content = typeof r.content === 'string' ? r.content : '';
+      const extractedContent = extractContent(r.content);
+      const content = [extractedContent.text, unknownBlockNote(extractedContent.unknown)]
+        .filter(Boolean)
+        .join('\n\n');
       const toolCalls = Array.isArray(r.tool_calls) ? r.tool_calls : [];
 
       // Grok 把 tool_calls 和最终文本拆成两条 assistant 行；
