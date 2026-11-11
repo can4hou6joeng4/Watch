@@ -1,6 +1,6 @@
 import { spawn } from 'node:child_process';
 import { describeDetectFailure, isCommandMissing, resolveCli } from '../../core/platform.js';
-import { PreflightBlockedError, type PreflightContext, type ProviderAdapter } from '../adapter.js';
+import { PreflightBlockedError, type PreflightContext, type ProviderAdapter, type WriteLimit } from '../adapter.js';
 import type { ProcessEvent, SessionRef, TokenUsage, UnifiedTurn } from '../../core/types.js';
 import { escapeControlChars } from '../../core/display.js';
 import { parseOpencodeSession } from './parse.js';
@@ -127,27 +127,39 @@ async function opencodeSessionUsage(ref: SessionRef): Promise<TokenUsage | null>
 }
 
 /**
- * 写入前的布局检查：2.x 库只读（读路径 2026-11-11 起支持，写路径还没验证）。
+ * 只读探测：这个 OpenCode 库能不能写。返回 null = 可写。
  *
- * 不在这里拦的话，`open --to opencode --check` 会先报 `writable: true`，到真正写入时
- * 才由 `assertUsableOpencodeDb()` 抛错——预检说的和实际做的相反。`open` / `switch` /
- * `handoff` 三条写路径都会先调 preflight，所以这里给出的是同一句结构化 `blocked`。
+ * `preflight` 与 `writeLimit`（doctor 用）共用这一份判定，同一件事不能有两条说法：
+ * preflight 把它包成 `PreflightBlockedError`，doctor 把它印成「能读不能写」。
  * 判的是 `opencodeDbPath()`：写路径（`createEmptyOpencodeSession` / `importTurnsToOpencode`）
  * 都写这个库，而不是 `ctx.ref.filePath`。
  */
-async function opencodePreflight(_ctx?: PreflightContext): Promise<void> {
+function opencodeWriteLimit(): WriteLimit | null {
   const dbPath = opencodeDbPath();
-  if (detectOpencodeLayout(dbPath) !== 'v2') return;
-  throw new PreflightBlockedError({
+  if (detectOpencodeLayout(dbPath) !== 'v2') return null;
+  return {
     code: 'opencode_v2_readonly',
-    message:
+    reason:
       `OpenCode 数据库是 2.x 布局（表: session_v2 / session_message）：${escapeControlChars(dbPath)}；` +
       `Watch 能读取这种布局，但写入只在 1.x（session / message / part）上验证过`,
     hint:
       `未写入任何内容。可以用 watch open <会话 id> 在原生的 OpenCode 2.x 里继续；` +
       `或把 WATCH_OPENCODE_DB 指向一个 1.x 布局的库再转入；` +
       `不要删除或挪走这个库——那是 OpenCode 正在使用的数据`,
-  });
+  };
+}
+
+/**
+ * 写入前的布局检查：2.x 库只读（读路径 2026-11-11 起支持，写路径还没验证）。
+ *
+ * 不在这里拦的话，`open --to opencode --check` 会先报 `writable: true`，到真正写入时
+ * 才由 `assertUsableOpencodeDb()` 抛错——预检说的和实际做的相反。`open` / `switch` /
+ * `handoff` 三条写路径都会先调 preflight，所以这里给出的是同一句结构化 `blocked`。
+ */
+async function opencodePreflight(_ctx?: PreflightContext): Promise<void> {
+  const limit = opencodeWriteLimit();
+  if (!limit) return;
+  throw new PreflightBlockedError({ code: limit.code, message: limit.reason, hint: limit.hint });
 }
 
 export const opencodeAdapter: ProviderAdapter = {
@@ -155,6 +167,7 @@ export const opencodeAdapter: ProviderAdapter = {
   displayName: 'OpenCode',
 
   preflight: opencodePreflight,
+  writeLimit: async (): Promise<WriteLimit | null> => opencodeWriteLimit(),
 
   async detect(): Promise<boolean> {
     return new Promise((resolve, reject) => {

@@ -1,5 +1,5 @@
 import { realpath, stat } from 'node:fs/promises';
-import type { ProviderAdapter } from '../providers/adapter.js';
+import type { ProviderAdapter, WriteLimit } from '../providers/adapter.js';
 import { listAdapters, listProviders } from '../providers/registry.js';
 import type { ProviderInfo } from './types.js';
 import type { Chain, ChainsElsewhere } from './store.js';
@@ -101,6 +101,14 @@ export type StorageProbe = {
    * `sessions` / `recent` 里根本不会出现，四条通道都不说话，用户会以为它从来没存在过。
    */
   unattributable?: number;
+  /**
+   * 这个存储只能读、不能写（如 OpenCode 2.x 布局）：`count` 读得出来，但转入 / switch
+   * 会被 preflight 拒绝。只报条数时 doctor 看起来一切正常，用户要到一次失败的写入
+   * 才知道写不了——排障入口该先说出来。
+   */
+  writeLimit?: WriteLimit;
+  /** `writeLimit` 探测本身失败（不能当成「没有限制」） */
+  writeLimitError?: string;
 };
 
 export type DoctorReport = {
@@ -347,12 +355,28 @@ export async function doctorReport(cwd: string, deps: DoctorDeps): Promise<Docto
         });
       }
       const unattributable = unattributableStats.find((s) => s.provider === adapter.id)?.count;
+      // 条数读得出来不代表写得进去（OpenCode 2.x 只能读）：写入限制与读取结果分开探，
+      // 探测失败记成 `writeLimitError` 而不是「没有限制」——同一个错误不能有两种讲法
+      let writeLimit: WriteLimit | null = null;
+      let writeLimitError: string | undefined;
+      if (adapter.writeLimit) {
+        try {
+          writeLimit = await adapter.writeLimit(cwd);
+        } catch (error) {
+          writeLimitError = error instanceof Error ? error.message : String(error);
+          warnings.push(
+            `${adapter.displayName} 写入能力探测失败：${writeLimitError}；这不代表可以写入，转入前先用 watch open --check 确认`,
+          );
+        }
+      }
       storage.push({
         provider: adapter.id,
         count: listed.length,
         ...(capped ? { capped: true } : {}),
         ...(unreadable.length ? { unreadable: unreadable.length } : {}),
         ...(unattributable ? { unattributable } : {}),
+        ...(writeLimit ? { writeLimit } : {}),
+        ...(writeLimitError ? { writeLimitError } : {}),
       });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);

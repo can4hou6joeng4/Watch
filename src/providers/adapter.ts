@@ -6,6 +6,22 @@ export type ImportTurnsOpts = { replace?: boolean };
 /** `preflight` 的目标上下文：告诉适配器即将写入哪个会话（无 ref = 新建/未知目标） */
 export type PreflightContext = { ref?: SessionRef; cwd?: string };
 
+/**
+ * 「这个存储能读、但 Watch 写不进去」的只读限制（如 OpenCode 2.x 布局）。
+ *
+ * 与 `PreflightBlock` 的区别是**没有时机**：`preflight` 回答「这一次写入会不会被拒绝」，
+ * 这里回答「这个存储本身只能读」。`watch doctor` 用它提前说明，不必等一次失败的转入。
+ * `code` / `reason` / `hint` 与 preflight 抛出的结构化 block 同源，同一件事不能有两套说法。
+ */
+export type WriteLimit = {
+  /** 机器可读原因，如 `opencode_v2_readonly` */
+  code: string;
+  /** 真原因（哪个存储、什么布局、为什么写不了） */
+  reason: string;
+  /** 下一步：能照抄的动作 / 不该做的事 */
+  hint?: string;
+};
+
 /** `preflight` 拒绝写入时携带的结构化原因（CLI / 桌面据此给出可操作提示） */
 export type PreflightBlock = {
   /** 机器可读原因，如 `codex_target_busy` / `codex_desktop_running` */
@@ -140,6 +156,10 @@ export interface ProviderAdapter {
   /** 可选：写入该 Provider 前的检查。传入目标会话时会做目标级判定（如 Codex 的 per-thread writer 锁）；
    *  不传 ctx 时保持保守语义。不通过则抛 PreflightBlockedError（结构化）或其他 Error。 */
   preflight?(ctx?: PreflightContext): Promise<void>;
+
+  /** 可选：只读探测「这个存储是否只能读不能写」。不写任何文件、不探测运行中的进程；
+   *  返回 null 表示可写。doctor 据此给出「能读不能写」的说明。 */
+  writeLimit?(cwd?: string): Promise<WriteLimit | null>;
 
   /** 可选（TUI 交接用）：找 cwd 下本 provider 最新的原生会话；没有返回 null */
   findLatestSession?(cwd: string): Promise<{ ref: SessionRef; updatedAt: number } | null>;

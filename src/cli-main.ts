@@ -2003,6 +2003,13 @@ async function cmdDoctor(cwd: string, json: boolean, strict: boolean): Promise<v
               ? `≥ ${st.count} 个会话（已达列表上限，实际可能更多${st.unreadable ? `，其中 ${st.unreadable} 条读不出来` : ''}）${unattributableText}`
               : `${st.count} 个会话${st.unreadable ? `（${st.unreadable} 条读不出来）` : ''}${unattributableText}`;
         console.log(`  ${st.provider.padEnd(10)} ${countText}`);
+        // 只读存储是「已知且能读」的状态，不进 warnings（--strict 不该因此常红）；
+        // 探测失败才是降级，已经在上面的警告里说过，这里只补一行「未确认」
+        if (st.writeLimit) {
+          console.log(`  写入受限（${st.writeLimit.code}）: ${st.writeLimit.reason}`);
+          if (st.writeLimit.hint) console.log(`    ${st.writeLimit.hint}`);
+        }
+        if (st.writeLimitError) console.log(`  写入能力未确认: ${st.writeLimitError}`);
       }
     }
     if (report.store.available) {
