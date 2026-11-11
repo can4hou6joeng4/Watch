@@ -127,6 +127,31 @@ export async function cwdProblem(cwd: string): Promise<string | null> {
 }
 
 /**
+ * `watch prompt` 文档里的一行：来源会话**记录下来的**工作目录现在是什么状态。
+ *
+ * 与 `describeCwdProblem()` / `describeWriteCwd()` 的区别在于时态和读者：这里没有查询、也没有写入，
+ * 文档会被复制到另一家助手 / 另一台机器 / 另一天再读。会话当初在那个目录里干活，文档里记的相对路径、
+ * 文件路径、`npm run` 命令都以它为前提；目录没了或读不出来时，读者照着做会在错误的地方开始。
+ * 不在 `missing` 时统一说成「路径写错」——会话记录里的路径不是用户刚敲的，最常见的原因是目录被移走 /
+ * 删除，或者这份记录来自另一台机器。
+ */
+export function describeRecordedCwd(probe: CwdInspection, cwd: string): string | null {
+  const shown = showPathInMessage(cwd);
+  switch (probe.state) {
+    case 'ok':
+      return null;
+    case 'not-directory':
+      return `${shown} 现在是同名文件，不是目录（多半是被替换了）；文档里的相对路径与命令都以它为前提，动手前先换成可用的工作目录`;
+    case 'missing':
+      return `${shown} 现在不存在（会话记录之后目录被移走或删除，或这份记录来自另一台机器）；文档里的相对路径与命令都以它为前提，动手前先确认工作目录`;
+    case 'denied':
+      return `${shown} 现在读不出来（权限问题，不是路径写错）；文档里的相对路径与命令都以它为前提，动手前先确认权限或换一个可用的工作目录`;
+    case 'unknown':
+      return `${shown} 现在无法确认是否存在（${probe.reason}）；文档里的相对路径与命令都以它为前提，动手前先确认工作目录`;
+  }
+}
+
+/**
  * `--cwd` 是**同一个目录的另一种写法**时的说明（路径本身没问题，`cwdProblem()` 返回 null）。
  *
  * 各 provider 按原生记录的路径字符串精确比较，于是同一个目录换个写法就一条会话都查不到：

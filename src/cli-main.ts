@@ -24,7 +24,7 @@ import { ImportJobs } from './core/import-jobs.js';
 import { officialImportJournalRoot } from './providers/codex/official-import.js';
 import { doctorReport } from './core/doctor.js';
 import type { StoreFootprint } from './core/doctor.js';
-import { cwdAliasHint, cwdControlCharsNote, cwdProblem, describeCwdProblem, describeWriteCwd, inspectCwd, sameDirectorySync, splitElsewhereByDirectory } from './core/cwd.js';
+import { cwdAliasHint, cwdControlCharsNote, cwdProblem, describeCwdProblem, describeRecordedCwd, describeWriteCwd, inspectCwd, sameDirectorySync, splitElsewhereByDirectory } from './core/cwd.js';
 import { escapeControlChars, hasControlChars } from './core/display.js';
 import { trimUserKey } from './core/cli-input.js';
 import { describeResumeTargetUnfinished } from './core/rich.js';
@@ -1819,6 +1819,18 @@ async function cmdPrompt(
   );
   if (sourceDrift) warnings.push(sourceDrift);
 
+  // 来源记录里的 cwd 现在还在不在：与本次 `--cwd` 无关（那由上面的 cwdIssue 管）。文档会被复制走，
+  // 读者照着里面的相对路径与命令动手时，这个目录可能早已不在——这句必须进正文，stderr 不会跟着走。
+  // 空字符串不探测：没有可核对的路径，不能把「没记」讲成「现在不存在」。
+  let sourceCwdNote: string | undefined;
+  if (foundRef.cwd.trim()) {
+    const recordedCwdNote = describeRecordedCwd(await inspectCwd(foundRef.cwd), foundRef.cwd);
+    if (recordedCwdNote) {
+      sourceCwdNote = recordedCwdNote;
+      warnings.push(`来源会话记录的工作目录现在不可用：${recordedCwdNote}`);
+    }
+  }
+
   const result = buildHandoffPrompt(
     turns,
     {
@@ -1841,6 +1853,7 @@ async function cmdPrompt(
       ...(autoPicked ? { autoPicked: true } : {}),
       // 文档会被复制走：这条也必须进正文，不能只留在 stderr
       ...(sourceDrift ? { sourceDriftNote: sourceDrift } : {}),
+      ...(sourceCwdNote ? { sourceCwdNote } : {}),
     },
     profile,
     { ...(lastUserTurns !== undefined ? { lastUserTurns } : {}), ...(sinceCompact ? { sinceCompact: true } : {}) },

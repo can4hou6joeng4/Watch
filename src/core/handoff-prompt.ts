@@ -136,6 +136,14 @@ export type PromptSessionMeta = {
    * 它只说重跑会重渲染一份新的。
    */
   sourceDriftNote?: string;
+  /**
+   * 来源会话记录的 `cwd` **现在**是什么状态（不存在 / 不是目录 / 读不出来）。
+   *
+   * 与「本轮 `--cwd` 有没有问题」是两回事：这里没有查询发生，文档会被复制到另一台机器或
+   * 另一天，读者照着里面记的相对路径与命令动手时，那个目录可能早就不在（会话被移走、
+   * 机器换了）。文档脱离 Watch 后 stderr 不会跟着走，所以这条必须写进正文。
+   */
+  sourceCwdNote?: string;
 };
 
 export type PromptStats = {
@@ -451,6 +459,12 @@ export function buildHandoffPrompt(
     );
   }
   lines.push(`- 工作目录：${sanitizeBody(meta.cwd).text}`);
+  // 目录状态单独一行而不是塞进上一行括注：它说的是「现在」，上一行说的是「会话当初记录的是什么」，
+  // 两者不一致时正是读者最需要看见差别的地方。
+  if (meta.sourceCwdNote) {
+    addFinding(findings, 'prompt_source_cwd_unavailable', 'degraded', 1);
+    lines.push(`- 工作目录状态：${sanitizeBody(meta.sourceCwdNote).text}`);
+  }
   const range = formatTimeRange(meta.startedAt, meta.updatedAt);
   if (range) {
     if (range.startUnusable) addFinding(findings, 'prompt_time_range_start_unusable', 'degraded', 1);
