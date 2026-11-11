@@ -414,13 +414,32 @@ export function buildHandoffPrompt(
     if (raw.escaped) stats.escapedBodies += 1;
     const clipped = clip(raw.text.trim(), limits.textLimit);
     if (clipped.truncated) stats.truncatedTexts += 1;
+    const events = turn.events ?? [];
+    const attachments = events.filter((e) => e.attachment).length;
+    // 附件一律不随文档走（base64 会撑爆粘贴内容），但**必须在这里计数**，不能等到
+    // `eventsPerTurn === 0` 提前 return 之后——standard / minimal 档位从来走不到那一行，
+    // 于是「来源有图片」在默认档位里连一个数字都不出现。
+    if (attachments) {
+      stats.attachmentsOmitted += attachments;
+      addFinding(findings, 'prompt_attachments_omitted', 'skipped', attachments);
+    }
     if (clipped.text.length > 0) {
       body.push(`### ${roleLabel(turn.role)}`);
       body.push('');
       body.push(clipped.text);
       body.push('');
+    } else if (attachments > 0) {
+      // 只有附件、没有正文的轮次（纯图片提问）以前连标题都不输出：stats 里计了一轮，
+      // 正文里却找不到它，读者会以为助手在自说自话。给一行「这一轮只有附件」的说明，
+      // 让轮次边界在文档里可见——图片本身不带（上一段已计入 attachmentsOmitted）。
+      body.push(`### ${roleLabel(turn.role)}`);
+      body.push('');
+      const placeholders = events
+        .filter((e) => e.attachment)
+        .map((e) => `[随来源记录的附件：${e.attachment!.kind === 'image' ? '图片' : '文件'}，原始数据未附在此文档]`);
+      body.push(placeholders.join('\n'));
+      body.push('');
     }
-    const events = turn.events ?? [];
     // 压缩摘要不是「过程噪声」而是更早内容的浓缩：档位不展开过程记录时也必须保留。
     // 否则 `--since-compact` 会切掉摘要之前的轮次，却把摘要本身也一起丢掉——留下的只有
     // 「从摘要开始」这一句，而摘要根本没有出现。
@@ -449,11 +468,6 @@ export function buildHandoffPrompt(
       body.push('</details>');
       body.push('');
       stats.includedEvents += shown.length;
-    }
-    const attachments = events.filter((e) => e.attachment).length;
-    if (attachments) {
-      stats.attachmentsOmitted += attachments;
-      addFinding(findings, 'prompt_attachments_omitted', 'skipped', attachments);
     }
   }
 
