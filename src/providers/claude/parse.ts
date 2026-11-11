@@ -20,6 +20,7 @@ import type { ProcessEvent, SessionRef, TokenUsage, UnifiedTurn } from '../../co
  * - 同一 user turn 内多条 assistant 合并：过程事件累积，文本留最后一条非空
  * - assistant 的 `[思考] …` 记录（build 的 thinking 降级形态）还原成 thinking 事件
  * - `isCompactSummary` 的 user 记录在正文前加来源前缀（它由 Claude Code 生成，不是用户原话）
+ * - 未识别的 content block 不整块静默跳过：按类型计数写进正文，只含未知块的记录仍保留为一轮
  * - 丢弃首条 user 之前的记录
  */
 export async function parseClaudeSession(ref: SessionRef): Promise<UnifiedTurn[]> {
@@ -120,6 +121,11 @@ function extractRich(
   }
   const parts: string[] = [];
   const events: ProcessEvent[] = [];
+  // 未识别的 content block（`document` / `server_tool_use` / 新版本新增的类型）以前走 switch 的
+  // 隐式 default，**整个块连同内容一起消失**：文档里少一段、转入目标会话时也少一段，而
+  // `watch prompt` / `open` 看起来完全正常。OpenCode 2.x 早就按「计数 + 写进内容」处理同类情况，
+  // 这里对齐。
+  const unknown = new Map<string, number>();
   let sawVisible = false;
   let onlyToolResult = true;
   const base = { timestamp, provider: 'claude' as const };
@@ -221,7 +227,24 @@ function extractRich(
         }
         break;
       }
+      default: {
+        const unknownType = typeof b.type === 'string' && b.type ? b.type : '（空类型）';
+        unknown.set(unknownType, (unknown.get(unknownType) ?? 0) + 1);
+        break;
+      }
     }
+  }
+  // 未识别块的占位写进正文而不是只进事件：正文会被 `watch prompt` 复制走、也会作为文本转入
+  // 目标会话，只有跟着文本走才到得了读者眼前。写成占位也让它所在的 user / assistant 记录不被
+  // 当成「空记录」丢掉（只含未知块的 user 消息正是最容易整条消失的一档）。
+  if (unknown.size > 0) {
+    const total = [...unknown.values()].reduce((a, b) => a + b, 0);
+    const counts = [...unknown.entries()].map(([type, n]) => (n > 1 ? `${type}×${n}` : type)).join('、');
+    parts.push(
+      `[Claude 记录里有 ${total} 个未识别的消息块（${counts}），Watch 暂不解析：这部分原始内容没有并入交接，需要时请在原生 Claude Code 里查看]`,
+    );
+    sawVisible = true;
+    onlyToolResult = false;
   }
   const text = parts
     .filter((p) => p.trim() !== '')
