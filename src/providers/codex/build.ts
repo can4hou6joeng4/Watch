@@ -6,6 +6,7 @@ import { appendFileAtomic, writeFileAtomic } from '../../core/atomic.js';
 import { escapeControlChars } from '../../core/display.js';
 import { verifyWrittenTurns } from '../../core/verify.js';
 import { ENCRYPTED_THINKING, codexToolInput, isCodexExecScript, toCodexToolName, turnHasContent } from '../../core/rich.js';
+import { codexUserTurnContent } from './media.js';
 import { describePathReadFailureReason, isMissingPathError } from '../../core/read-text.js';
 import { parseCodexSession } from './parse.js';
 import { codexSessionUsage } from './usage.js';
@@ -273,11 +274,18 @@ export function buildCodexLines(
       push('turn_context', { turn_id: turnId, cwd });
       push('event_msg', { type: 'user_message', message: t.text });
       responseItemBytes += Buffer.byteLength(t.text);
+      // 附件按原生 ContentItem 写回用户轮（见 codex/media.ts）：input_image 只接受 URL，
+      // inline 数据重新拼成 data URI；文件 / 音频类型没有通用块，落成正文说明。
+      // 以前这里完全不看 turn.events，图片转入 Codex 后原始数据消失，两边都没有披露。
+      const userContent = codexUserTurnContent(t);
       push('response_item', {
         type: 'message',
         id: `msg_${randomUUID()}`,
         role: 'user',
-        content: [{ type: 'input_text', text: t.text }],
+        content: [
+          ...userContent.texts.map((text) => ({ type: 'input_text', text })),
+          ...userContent.items,
+        ],
         internal_chat_message_metadata_passthrough: { turn_id: turnId },
       });
       turn = { turnId, startedAt };
@@ -404,10 +412,27 @@ function emitCodexEvent(
     return;
   }
   if (ev.kind === 'text') {
+    // 带附件的 text 事件：Codex 的 assistant 侧没有图片 / 音频块可写，
+    // 只能把占位文本落成 commentary——原始数据由 describeAttachmentLoss() 披露。
     const text = (ev.detail ?? ev.summary).trim();
     if (!text) return;
     pushCommentary(push, text, turnId);
   }
+}
+
+/**
+ * 写出侧的受控降级（round-trip 校验的期望模型）：与 `buildCodexLines` 共用
+ * `codexUserTurnContent()`——写出侧写入的 `input_text` 会按 `\n\n` 拼回正文，
+ * 媒体块反解成带 attachment 的事件（不进正文）。期望文本因此与真读回来的完全一致，
+ * 若两边写法分叉（例如只改一侧的占位），round-trip 会当场失败而不是静默通过。
+ */
+function expectCodexRoundTrip(turns: UnifiedTurn[]): UnifiedTurn[] {
+  return turns.map((turn) => {
+    if (turn.role !== 'user') return turn;
+    const { texts } = codexUserTurnContent(turn);
+    if (texts.length === 0) return turn;
+    return { ...turn, text: texts.join('\n\n') };
+  });
 }
 
 /** 统一时间线 → 原生会话：无 into 则新建；有 into 且文件在则追加；replace 则整文件重写 */
@@ -432,7 +457,13 @@ export async function importTurnsToCodex(
     await writeFileAtomic(into.filePath, lines.join('\n') + '\n', {
       backup: true,
       verify: async (tmp) =>
-        verifyWrittenTurns({ parse: (p) => parseCodexSession({ ...into, filePath: p }), filePath: tmp, turns, provider: 'codex' }),
+        verifyWrittenTurns({
+          parse: (p) => parseCodexSession({ ...into, filePath: p }),
+          filePath: tmp,
+          turns,
+          provider: 'codex',
+          expect: expectCodexRoundTrip,
+        }),
     });
     return into;
   }
@@ -459,6 +490,7 @@ export async function importTurnsToCodex(
             filePath: tmp,
             turns,
             provider: 'codex',
+            expect: expectCodexRoundTrip,
           }),
       });
       return into;
@@ -486,6 +518,7 @@ export async function importTurnsToCodex(
         filePath: tmp,
         turns,
         provider: 'codex',
+        expect: expectCodexRoundTrip,
       }),
   });
   return { provider: 'codex', sessionId, filePath, cwd };

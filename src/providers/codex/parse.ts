@@ -11,16 +11,30 @@ import {
   WATCH_CONTEXT_DISCLOSURE_PREFIX,
 } from '../../core/rich.js';
 import type { ProcessEvent, SessionRef, TokenUsage, UnifiedTurn } from '../../core/types.js';
+import {
+  CODEX_EMPTY_USER_TEXT,
+  codexMediaAttachment,
+  codexMediaPlaceholder,
+  codexMediaRefFromContentItem,
+} from './media.js';
 
 /**
  * Codex rollout JSONL → 统一时间线（Rich）：
  * - response_item message：user 过滤内部上下文；assistant 最终回复覆盖 turn.text
+ * - content 块按类型处理：input_text / output_text 拼正文；input_image 可携带时挂 attachment text 事件
+ *   （data URI 拆成 mediaType + data，http(s) 原样），file_id 引用 / input_audio / 未识别块写正文占位；
+ *   refusal 作为终态正文保留，不能当成「没有回复」
  * - reasoning / function_call / custom_tool_call / command_execution 挂到 assistant.events
  * - commentary / partial_answer 保留为 text 事件；显式 final_answer 后的阶段文本丢掉；phase 缺省保持旧兼容
  * - 最后停在阶段消息的助手轮标记 incomplete，并计数披露未记录最终答复
  * - compacted：Codex 压缩上下文后的摘要记录，只计数并披露，不并入摘要正文（见 describeCodexCompaction）
- * - 整份文件无 response_item message 时，回退 event_msg；agent_message 共享上述阶段处理
+ * - 整份文件无 response_item message 时，回退 event_msg；agent_message 共享上述阶段处理，
+ *   user_message 的 images / file_ids / local_images / audio 字段按同一口径处理
  * - 坏行/空行跳过；丢弃首条 user 之前的记录
+ *
+ * 已知边界：现代 rollout 同时写 response_item 与 event_msg 两条流，整份日志只采用前者；
+ * 只有旧格式（整份没有 response_item message）才用 event_msg。两条流混在一份文件里时，
+ * 后者有内容也拿不到逐轮对应关系，无法安全合并，不做部分并入。
  */
 export async function parseCodexSession(ref: SessionRef): Promise<UnifiedTurn[]> {
   const raw = await readFile(ref.filePath, 'utf8');
@@ -111,19 +125,34 @@ export async function parseCodexSession(ref: SessionRef): Promise<UnifiedTurn[]>
 
     if (r.type === 'response_item' && p.type === 'message') {
       const role = typeof p.role === 'string' ? p.role : '';
-      const text = flattenCodexContent(p.content);
-      if (text.trim() === '') continue;
+      const parsed = parseCodexContent(p.content, timestamp);
       if (role === 'user') {
-        if (isInternalCodexContext(text)) continue;
-        const normalized = normalizeUserText(stripCodexRequestWrapper(text));
+        if (isInternalCodexContext(parsed.text)) continue;
+        const normalized = normalizeUserText(stripCodexRequestWrapper(parsed.text));
         if (normalized === null) continue;
+        // 完全空的 message（没有文本、也没有任何可识别块）仍按旧语义跳过：
+        // 只有「原文非空、但剥完包裹什么都不剩」（如只剩 `<image 1>` 标签）或带媒体块时
+        // 才补占位——否则会替一条本该忽略的空记录造出对话轮。
+        if (normalized === '' && parsed.text.trim() === '' && parsed.placeholders.length === 0) continue;
+        // 纯图片用户轮以前整轮被丢：下一条助手回复会被 ensureAssistant 并进上一轮并覆盖正文，
+        // 把「针对图片的回答」错配到更早的提问上。文本为空时补一句来源事实，既保住轮次边界，
+        // 也避免目标侧写出空文本块（Claude 等不接受空 text 块）。
+        const text = normalized === '' ? emptyUserTurnText(parsed.placeholders.join('\n')) : normalized;
         hasResponseMessages = true;
         sawUser = true;
-        turns.push({ role: 'user', text: normalized, timestamp });
+        const turn: UnifiedTurn = { role: 'user', text, timestamp };
+        if (parsed.events.length) turn.events = parsed.events;
+        turns.push(turn);
       } else if (role === 'assistant') {
         if (!sawUser) continue;
+        // 只有附件、没有文字的助手消息同样保留为终态回复：整条跳过会让
+        // `unansweredUserTail()` 把这一轮讲成「用户问了没人答」。
+        const text = parsed.text.trim() === '' ? parsed.placeholders.join('\n') : parsed.text;
+        if (text.trim() === '') continue;
         hasResponseMessages = true;
-        acceptAssistant(ensureAssistant(turns, timestamp, 'codex'), text, timestamp, p);
+        const turn = ensureAssistant(turns, timestamp, 'codex');
+        acceptAssistant(turn, text, timestamp, p);
+        for (const ev of parsed.events) pushEvent(turn, ev);
       }
       continue;
     }
@@ -145,11 +174,22 @@ export async function parseCodexSession(ref: SessionRef): Promise<UnifiedTurn[]>
       }
       if (p.type === 'user_message' && typeof p.message === 'string') {
         const text = p.message;
-        if (text.trim() === '' || isInternalCodexContext(text)) continue;
+        // 旧版事件可能只带媒体字段、message 为空；有附件内容时不能整条丢掉
+        const legacy = legacyUserMedia(p, timestamp);
+        if ((text.trim() === '' && legacy.placeholders.length === 0) || isInternalCodexContext(text)) continue;
         const normalized = normalizeUserText(stripCodexRequestWrapper(text));
         if (normalized === null) continue;
+        // 旧版 event_msg 把附件拆成并行字段（官方 UserMessageEvent 的 images / file_ids /
+        // local_images / audio）。这里只做占位与披露：local_* 是 Codex 本机路径，
+        // 解析期读取它们等于替一条会话日志打开任意文件读取面，不做。
         sawFallbackUser = true;
-        fallback.push({ role: 'user', text: normalized, timestamp });
+        const turn: UnifiedTurn = {
+          role: 'user',
+          text: normalized === '' ? emptyUserTurnText([...legacy.placeholders, ...legacy.events.map((e) => e.summary)].join('\n')) : normalized,
+          timestamp,
+        };
+        if (legacy.events.length) turn.events = legacy.events;
+        fallback.push(turn);
       } else if (p.type === 'agent_message' && typeof p.message === 'string') {
         const text = p.message;
         if (!sawFallbackUser || text.trim() === '') continue;
@@ -363,9 +403,12 @@ function processItemToEvents(p: Record<string, unknown>, timestamp: string): Pro
     }
     case 'agent_message': {
       // 协作者/中间消息：不进 turn.text（最终回复由 response_item message 覆盖），只作为中间文本
-      const text = flattenCodexContent(p.content);
+      const parsed = parseCodexContent(p.content, timestamp);
+      const text = [parsed.text, ...parsed.placeholders].filter((t) => t.trim() !== '').join('\n');
       if (!text.trim()) return [];
-      return [{ ...base, kind: 'text', summary: summarize(text, '过程'), detail: text }];
+      const events: ProcessEvent[] = [{ ...base, kind: 'text', summary: summarize(text, '过程'), detail: text }];
+      for (const ev of parsed.events) events.push(ev);
+      return events;
     }
     default:
       return [];
@@ -434,20 +477,145 @@ function reasoningPlaintext(p: Record<string, unknown>): string | null {
   return null;
 }
 
-/** content 扁平化（对齐 flatten_codex_content）：string 直取；数组取各项 text，跳过 encrypted_content */
-function flattenCodexContent(content: unknown): string {
-  if (typeof content === 'string') return content;
-  if (!Array.isArray(content)) return '';
-  return content
-    .map((item) => {
-      if (typeof item === 'string') return item;
-      if (typeof item !== 'object' || item === null) return '';
-      const b = item as Record<string, unknown>;
-      if (b.type === 'encrypted_content') return '';
-      return typeof b.text === 'string' ? b.text : '';
-    })
-    .filter((text) => text.trim() !== '')
-    .join('\n\n');
+/**
+ * 旧版 `event_msg.user_message` 的附件字段（官方 `UserMessageEvent`）：
+ * `images` / `image_details` / `file_ids` / `image_order` / `local_images` / `audio` /
+ * `audio_references` / `audio_order` / `local_audio`。
+ *
+ * 只读取**能落到统一时间线**的那部分：`images` / `audio` 的 data URI 与 http(s) 链接。
+ * `local_images` / `local_audio` 是 Codex 本机路径，`file_ids` 是不透明引用，三者都读不到
+ * 原始数据——写占位进正文，不能讲成「附件已带过来」。**解析器不打开这些路径**。
+ */
+function legacyUserMedia(
+  p: Record<string, unknown>,
+  timestamp: string,
+): { placeholders: string[]; events: ProcessEvent[] } {
+  const placeholders: string[] = [];
+  const events: ProcessEvent[] = [];
+  const collect = (value: unknown, media: 'image' | 'audio'): void => {
+    if (!Array.isArray(value)) return;
+    for (const entry of value) {
+      if (typeof entry !== 'string' || !entry) continue;
+      const field = media === 'image' ? 'image_url' : 'audio_url';
+      const ref = codexMediaRefFromContentItem({ type: media === 'image' ? 'input_image' : 'input_audio', [field]: entry }, media);
+      if (!ref) continue;
+      placeholders.push(codexMediaPlaceholder(ref, media));
+      const attachment = codexMediaAttachment(ref, media);
+      if (attachment) {
+        const placeholder = codexMediaPlaceholder(ref, media);
+        events.push({ kind: 'text', summary: placeholder, detail: placeholder, timestamp, provider: 'codex', attachment });
+      }
+    }
+  };
+  collect(p.images, 'image');
+  collect(p.audio, 'audio');
+  const ids = Array.isArray(p.file_ids) ? p.file_ids.filter((x): x is string => typeof x === 'string').length : 0;
+  if (ids > 0) placeholders.push(`[${ids} 个图片 file_id 引用：原始数据不在 rollout 里]`);
+  const localImages = Array.isArray(p.local_images) ? p.local_images.length : 0;
+  if (localImages > 0) placeholders.push(`[${localImages} 张本地图片：记录里只有本机路径，Watch 不读取这些文件]`);
+  const localAudio = Array.isArray(p.local_audio) ? p.local_audio.length : 0;
+  if (localAudio > 0) placeholders.push(`[${localAudio} 个本地音频：记录里只有本机路径，Watch 不读取这些文件]`);
+  return { placeholders, events };
+}
+
+/**
+ * `response_item.message.content` 的逐块解析（对齐官方 `ContentItem`：
+ * `input_text` / `input_image` / `input_audio` / `output_text`，外加历史记录里的 `refusal`）。
+ *
+ * 以前这里是 `flattenCodexContent()`：只取每项的 `text`，其余静默丢。后果不止少一段文字——
+ * 纯图片用户轮整轮消失，下一条助手回复被 `ensureAssistant()` 并进上一轮并覆盖正文，
+ * 「针对图片的回答」于是错配到更早的提问上，且三处防护（round-trip / diffTurns / 展示）
+ * 都只看解析结果，看不出来。
+ *
+ * 口径与 claude / pi 的附件处理一致：
+ * - 可携带的图片（data URI 或 http(s)）产出一条带 `attachment` 的 text 事件；**占位不并进
+ *   `turn.text`**，否则写回 `input_image` 后反解会多出一份占位（与 claude build 的注释同因）。
+ * - 只有 `turn.text` 为空时才用占位兜底（`placeholders`），保证轮次边界不塌、目标侧不会收到空文本块。
+ * - 读不到原图的三档（`file_id` 引用 / 音频 / 未知块）如实写进正文：文档会被复制走，
+ *   standard 档位也不展开事件，只写事件等于没写。
+ */
+type CodexContentParse = {
+  /** 文本块原文（未经 wrapper / 内部上下文过滤） */
+  text: string;
+  /** 附件占位（正文为空时用作兜底）与带 attachment 的事件 */
+  placeholders: string[];
+  events: ProcessEvent[];
+};
+
+function parseCodexContent(content: unknown, timestamp: string): CodexContentParse {
+  if (typeof content === 'string') return { text: content, placeholders: [], events: [] };
+  if (!Array.isArray(content)) return { text: '', placeholders: [], events: [] };
+  const texts: string[] = [];
+  const placeholders: string[] = [];
+  const events: ProcessEvent[] = [];
+  const unknown = new Map<string, number>();
+  const addUnknown = (type: unknown): void => {
+    const key = typeof type === 'string' && type ? type : '（空类型）';
+    unknown.set(key, (unknown.get(key) ?? 0) + 1);
+  };
+  for (const item of content) {
+    if (typeof item === 'string') {
+      texts.push(item);
+      continue;
+    }
+    if (typeof item !== 'object' || item === null) {
+      addUnknown('（非对象内容块）');
+      continue;
+    }
+    const b = item as Record<string, unknown>;
+    if (b.type === 'input_text' || b.type === 'output_text') {
+      if (typeof b.text === 'string' && b.text !== '') texts.push(b.text);
+      continue;
+    }
+    if (b.type === 'input_image' || b.type === 'input_audio') {
+      const media = b.type === 'input_image' ? 'image' : 'audio';
+      const ref = codexMediaRefFromContentItem(b, media)!;
+      if (ref.kind === 'unreadable') {
+        // 读不到原图 / 原音频（file_id 或不认识的链接）：没有可挂的 attachment，
+        // 只能把事实写进正文——写成事件会在 standard 档位里整条消失。
+        texts.push(ref.placeholder);
+        continue;
+      }
+      placeholders.push(codexMediaPlaceholder(ref, media));
+      const attachment = codexMediaAttachment(ref, media);
+      if (attachment) {
+        const placeholder = codexMediaPlaceholder(ref, media);
+        events.push({ kind: 'text', summary: placeholder, detail: placeholder, timestamp, provider: 'codex', attachment });
+      }
+      continue;
+    }
+    if (b.type === 'refusal') {
+      // 拒绝回复是终态答复，不是「没有回复」：只当事件会让人误以为这一轮被中断，
+      // 而 `unansweredUserTail()` 还会把会话讲成「用户问了没人答」。
+      const refusal = typeof b.refusal === 'string' ? b.refusal.trim() : '';
+      texts.push(refusal ? `[Codex 拒绝了这次请求] ${refusal}` : '[Codex 拒绝了这次请求（未记录原因）]');
+      continue;
+    }
+    if (b.type === 'encrypted_content') continue;
+    // 历史记录里存在没有 type 的文本块（旧 flatten 的兼容面）；有 text 就照文本读。
+    if (typeof b.text === 'string' && b.text !== '') {
+      texts.push(b.text);
+      continue;
+    }
+    addUnknown(b.type);
+  }
+  if (unknown.size > 0) {
+    const total = [...unknown.values()].reduce((a, b) => a + b, 0);
+    const counts = [...unknown.entries()].map(([type, n]) => (n > 1 ? `${type}×${n}` : type)).join('、');
+    texts.push(
+      `[Codex 记录里有 ${total} 个未识别的消息块（${counts}），Watch 暂不解析：这部分原始内容没有并入交接，需要时请在原生 Codex 里查看]`,
+    );
+  }
+  return {
+    text: texts.filter((t) => t.trim() !== '').join('\n\n'),
+    placeholders,
+    events,
+  };
+}
+
+/** 用户消息正文为空时的兜底：先给附件占位，再给「记录里只剩包裹」的说明。 */
+function emptyUserTurnText(fallback: string): string {
+  return fallback || CODEX_EMPTY_USER_TEXT;
 }
 
 /** Codex 把 AGENTS.md、环境上下文等内部信息包装成 user 消息，不属于对话（对齐 is_internal_codex_context） */
@@ -462,10 +630,12 @@ function isInternalCodexContext(text: string): boolean {
   );
 }
 
-/** 带附件的用户消息把真实请求包在 `## My request for Codex:` 之后（对齐 strip_codex_request_wrapper） */
+/** 带附件的用户消息把真实请求包在 `## My request for Codex:` 之后（对齐官方 `extract_prompt_request_with_offset`） */
 function stripCodexRequestWrapper(text: string): string {
   const MARKER = '## My request for Codex:';
-  const idx = text.indexOf(MARKER);
+  // 官方用 `rsplit_once`：取**最后**一个 marker，marker 之前是注入的上下文。旧实现取第一个，
+  // 于是用户正文里本身出现这句（引用对话、贴日志）时会被当成 marker，前半段全部丢失。
+  const idx = text.lastIndexOf(MARKER);
   if (idx === -1) return text;
   return text
     .slice(idx + MARKER.length)
