@@ -39,6 +39,19 @@ import {
  */
 export async function parseCodexSession(ref: SessionRef): Promise<UnifiedTurn[]> {
   const raw = await readFile(ref.filePath, 'utf8');
+  return parseCodexRaw(raw).turns;
+}
+
+/**
+ * 判断既有 rollout 是否正在依靠 `event_msg` 回退时间线（整份文件没有有效 `response_item`
+ * 对话消息，但有至少一条 `event_msg` 对话）。`importTurnsToCodex` 的追加分支用它做
+ * fail-closed 拦截：直接追加 `response_item` 行会翻转 `hasResponseMessages`，让旧历史消失。
+ */
+export function isLegacyEventMsgRollout(raw: string): boolean {
+  return parseCodexRaw(raw).usesEventFallback;
+}
+
+function parseCodexRaw(raw: string): { turns: UnifiedTurn[]; usesEventFallback: boolean } {
   const turns: UnifiedTurn[] = [];
   const fallback: UnifiedTurn[] = [];
   let sawUser = false;
@@ -212,7 +225,10 @@ export async function parseCodexSession(ref: SessionRef): Promise<UnifiedTurn[]>
     const text = `${WATCH_CONTEXT_DISCLOSURE_PREFIX}Codex 有 ${incomplete} 轮助手回复最后停在 commentary / partial_answer，未记录最终答复；交接保留阶段文本，不能据此认为任务已完成，请在来源核对]`;
     pushEvent(last, { kind: 'text', summary: text, detail: text, timestamp: last.timestamp, provider: 'codex' });
   }
-  return stripEmptyEvents(active);
+  return {
+    turns: stripEmptyEvents(active),
+    usesEventFallback: !hasResponseMessages && fallback.length > 0,
+  };
 }
 
 type CodexCompactionCounts = {

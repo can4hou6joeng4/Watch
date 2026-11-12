@@ -1,4 +1,4 @@
-import { access, mkdir, readdir, readFile, stat } from 'node:fs/promises';
+import { mkdir, readdir, readFile, stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
@@ -9,7 +9,7 @@ import { verifyWrittenTurns } from '../../core/verify.js';
 import { ENCRYPTED_THINKING, codexToolInput, isCodexExecScript, toCodexToolName, turnHasContent } from '../../core/rich.js';
 import { codexUserTurnContent } from './media.js';
 import { describePathReadFailureReason, isMissingPathError } from '../../core/read-text.js';
-import { parseCodexSession } from './parse.js';
+import { isLegacyEventMsgRollout, parseCodexSession } from './parse.js';
 import { codexSessionUsage } from './usage.js';
 import type { ProcessEvent, SessionRef, TokenUsage, UnifiedTurn } from '../../core/types.js';
 import type { ImportTurnsOpts } from '../adapter.js';
@@ -465,9 +465,23 @@ export async function importTurnsToCodex(
   }
 
   if (into?.filePath) {
+    let existingRaw: string | null = null;
     try {
-      await access(into.filePath);
+      existingRaw = await readFile(into.filePath, 'utf8');
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+        throw new Error(
+          `读取既有 Codex 会话文件失败：${describePathReadFailureReason(error)}（${escapeControlChars(into.filePath)}）；未写入，避免破坏既有历史`,
+        );
+      }
+    }
+    if (existingRaw !== null) {
       if (turns.length === 0) return into;
+      if (isLegacyEventMsgRollout(existingRaw)) {
+        throw new Error(
+          `目标 Codex 会话是旧版 event_msg-only 格式，不支持直接追加现代 response_item 记录（${escapeControlChars(into.filePath)}）；追加会翻转解析时间线、让既有对话从 Watch 视图消失；本次未写入任何内容，请改用新建目标会话或以覆盖模式重建后再转入`,
+        );
+      }
       // 追加到既有 rollout：它可能已经累计过一大笔用量，`total_token_usage` 必须接着涨。
       // 从 0 起算会让 `codexSessionUsage()`（取最后一条 `total_token_usage`）只剩这次追加的部分，
       // 既有历史全部凭空消失。读不出来就抛错（写路径 fail closed），不猜一个数。
@@ -490,8 +504,6 @@ export async function importTurnsToCodex(
           }),
       });
       return into;
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
     }
   }
 
