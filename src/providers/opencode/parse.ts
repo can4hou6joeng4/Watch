@@ -264,6 +264,8 @@ function messageToTurn(
  */
 type V2MessageRow = { id: string; type: string; seq: number; time_created: number; data: string };
 
+type V2PartRow = { message_id: string; ordinal: number; type: string; data: string };
+
 type V2ToolState = {
   status?: string;
   input?: Record<string, unknown>;
@@ -341,11 +343,14 @@ function v2AssistantTurn(
   row: V2MessageRow,
   data: V2MessageData,
   unknown: Map<string, number>,
+  parts?: V2ContentItem[],
 ): UnifiedTurn | null {
   const time = typeof data.time?.created === 'number' ? data.time.created : row.time_created;
   const timestamp = isoFromEpochMs(time);
-  const items: V2ContentItem[] =
+  const inline: V2ContentItem[] =
     typeof data.content === 'string' ? [{ type: 'text', text: data.content }] : Array.isArray(data.content) ? data.content : [];
+  // 与上游 withParts() 同一顺序：session_part 行（按 ordinal）在前，旧构建写在行内的 content 在后
+  const items: V2ContentItem[] = parts?.length ? [...parts, ...inline] : inline;
   const texts: string[] = [];
   const events: ProcessEvent[] = [];
 
@@ -442,6 +447,41 @@ function v2AuxEvents(type: string, data: V2MessageData, time: number): ProcessEv
   }
 }
 
+/**
+ * 2.x 的 assistant 内容可能被拆进 `session_part`（migration `20261029002625`，2026-10-29）。
+ *
+ * `experimental.part_rows` 开启时（local / dev 构建默认开启，release 默认关闭），assistant
+ * 每个 part 单独一行，`session_message.data.content` 只留空 envelope；上游读取
+ * （packages/core/src/session/history.ts 的 `withParts`）按 `(message_id, ordinal)` 拼回
+ * `data.content` 之前再解码。只读 `session_message` 会把这类会话解析成「只有提问、助手一句
+ * 没回」——整段回复连同思考与工具调用静默消失。
+ *
+ * 只对 assistant 行生效（上游同样只处理 assistant）。part 行的 `type` 列是权威值，`data`
+ * 里即使有 `type` 也被它覆盖——上游解码就是 `{ ...row.data, type: row.type }`。
+ * 2026-10-29 之前的 2.x 库没有这张表：没有表 = 没拆过 part，不是「读不出来」，
+ * 所以先查 sqlite_master 再取行，不用 catch 把查询失败讲成「没有」。
+ */
+function readV2Parts(db: DatabaseSync, sessionId: string, unknown: Map<string, number>): Map<string, V2ContentItem[]> {
+  const byMessage = new Map<string, V2ContentItem[]>();
+  const table = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='session_part'").get();
+  if (!table) return byMessage;
+  const rows = db
+    .prepare('SELECT message_id, ordinal, type, data FROM session_part WHERE session_id = ? ORDER BY message_id, ordinal')
+    .all(sessionId) as V2PartRow[];
+  for (const row of rows) {
+    const parsed = parseJson<Record<string, unknown>>(row.data);
+    if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+      bumpCount(unknown, `part:${row.type || '（空类型）'}（data 无法解析）`);
+      continue;
+    }
+    const item = { ...(parsed as unknown as V2ContentItem), type: row.type };
+    const list = byMessage.get(row.message_id);
+    if (list) list.push(item);
+    else byMessage.set(row.message_id, [item]);
+  }
+  return byMessage;
+}
+
 function parseOpencodeV2Turns(db: DatabaseSync, sessionId: string): UnifiedTurn[] {
   const rows = db
     .prepare(
@@ -454,6 +494,7 @@ function parseOpencodeV2Turns(db: DatabaseSync, sessionId: string): UnifiedTurn[
   // 非对话事件先挂到上一条 turn；上一条还没有时暂存，等下一轮对话出现再挂（不单独造 turn）
   const pending: ProcessEvent[] = [];
   const unknown = new Map<string, number>();
+  const partsByMessage = readV2Parts(db, sessionId, unknown);
   let lastTime = 0;
 
   // 事件属于「模型处理这一轮的过程」，优先挂到它之后的 assistant turn；
@@ -496,7 +537,7 @@ function parseOpencodeV2Turns(db: DatabaseSync, sessionId: string): UnifiedTurn[
     }
 
     if (row.type === 'assistant') {
-      const turn = v2AssistantTurn(row, data, unknown);
+      const turn = v2AssistantTurn(row, data, unknown, partsByMessage.get(row.id));
       if (!turn) continue;
       // 与 1.x 相同的一档合并：纯文本的助手消息接在带工具调用的上一条之后，归回同一个 turn
       const prev = turns.at(-1) ?? null;
