@@ -476,19 +476,45 @@ function appendUnknownDisclosure(turns: UnifiedTurn[], summary: string, detail: 
   ];
 }
 
-function v2ToolResultText(state: V2ToolState | undefined): string | undefined {
+/**
+ * 工具结果正文。上游 v2.2.7 的 `toolResult` 把 completed 状态的 `state.content`
+ * （`Tool.Content` = text | file 的联合）整体传给模型；只认 text 项会让**纯 file 结果**
+ * 整条 tool_result 消失，调用还会被下游报成「没有结果」。file 项只留可读占位，
+ * `uri` 不复制（可能是 data URI，原始载荷会撑爆交接并泄漏进文本）。
+ * 形状异常按原因计数，与 content 区其它分支同一口径。
+ */
+function v2ToolResultText(state: V2ToolState | undefined, unknown: Map<string, number>): string | undefined {
   if (state?.error?.message) return state.error.message;
   const content = state?.content;
   if (typeof content === 'string') return content;
   if (Array.isArray(content)) {
-    const texts = content
-      .map((c) =>
-        c && typeof c === 'object' && typeof (c as { text?: unknown }).text === 'string'
-          ? (c as { text: string }).text
-          : '',
-      )
-      .filter((t) => t.length > 0);
-    if (texts.length) return texts.join('\n');
+    const parts: string[] = [];
+    for (const item of content) {
+      if (!item || typeof item !== 'object') {
+        bumpCount(unknown, 'tool:content（非对象）');
+        continue;
+      }
+      const entry = item as { type?: unknown; text?: unknown; mime?: unknown; name?: unknown };
+      if (entry.type === 'text') {
+        if (typeof entry.text === 'string') {
+          if (entry.text) parts.push(entry.text);
+        } else {
+          bumpCount(unknown, 'tool:content:text（text 不是字符串）');
+        }
+        continue;
+      }
+      if (entry.type === 'file') {
+        if (typeof entry.mime !== 'string' || !entry.mime) {
+          bumpCount(unknown, 'tool:content:file（mime 不是字符串）');
+        }
+        const mime = typeof entry.mime === 'string' && entry.mime ? entry.mime : '未知类型';
+        const name = typeof entry.name === 'string' && entry.name ? `，${entry.name}` : '';
+        parts.push(`[文件附件：${mime}${name}]`);
+        continue;
+      }
+      bumpCount(unknown, `tool:content:${typeof entry.type === 'string' && entry.type ? entry.type : '（空类型）'}`);
+    }
+    if (parts.length) return parts.join('\n');
   }
   if (typeof state?.output === 'string') return state.output;
   if (state?.output !== undefined) return JSON.stringify(state.output);
@@ -564,7 +590,7 @@ function v2AssistantTurn(
         summary: `${item.name ?? 'tool'} ${JSON.stringify(input).slice(0, 200)}`,
         provider: 'opencode',
       });
-      const output = v2ToolResultText(item.state);
+      const output = v2ToolResultText(item.state, unknown);
       if (output !== undefined) {
         events.push({ kind: 'tool_result', timestamp, callId, detail: output, summary: output.slice(0, 200), provider: 'opencode' });
       }
