@@ -36,12 +36,15 @@ async function detectClaudeIdentity(projectsDir: string): Promise<ClaudeIdentity
     }
     let fileVersion: string | undefined;
     for (const line of content.split('\n').slice(0, 200)) {
-      let record: Record<string, unknown>;
+      let parsed: unknown;
       try {
-        record = JSON.parse(line);
+        parsed = JSON.parse(line);
       } catch {
         continue;
       }
+      // JSON 值不一定是消息对象；与正文解析一致跳过，不能让 null 中断身份探测。
+      if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) continue;
+      const record = parsed as Record<string, unknown>;
       fileVersion ??= typeof record.version === 'string' ? record.version : undefined;
       if (record.type !== 'assistant') continue;
       const message = record.message as Record<string, unknown> | undefined;
@@ -349,12 +352,15 @@ async function scanClaudeTarget(filePath: string): Promise<{ lastUuid: string | 
   const callIds = new Set<string>();
   for (const line of raw.split('\n')) {
     if (!line.trim()) continue;
-    let record: Record<string, unknown>;
+    let parsed: unknown;
     try {
-      record = JSON.parse(line) as Record<string, unknown>;
+      parsed = JSON.parse(line);
     } catch {
       continue;
     }
+    // 原始行由原子追加完整保留；非对象不提供 uuid，也不能遮住其后的调用 ID。
+    if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) continue;
+    const record = parsed as Record<string, unknown>;
     if (typeof record.uuid === 'string') lastUuid = record.uuid;
     if (record.type !== 'assistant') continue;
     const content = (record.message as Record<string, unknown> | undefined)?.content;
