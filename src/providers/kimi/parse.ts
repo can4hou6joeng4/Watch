@@ -37,11 +37,16 @@ export async function parseKimiSession(ref: SessionRef): Promise<UnifiedTurn[]> 
     const timestamp = time ? isoFromEpochMs(time) : '';
 
     if (type === 'turn.prompt' || type === 'turn.steer') {
-      const text = extractUserText(r);
-      if (text === null) continue;
-      const normalized = normalizeUserText(text);
+      const extracted = extractUserInput(r, timestamp);
+      if (extracted === null) continue;
+      const normalized = normalizeUserText(extracted.text);
       if (normalized === null) continue;
-      turns.push({ role: 'user', text: normalized, timestamp });
+      turns.push({
+        role: 'user',
+        text: normalized,
+        timestamp,
+        ...(extracted.events.length ? { events: extracted.events } : {}),
+      });
       state = 'user';
       continue;
     }
@@ -119,21 +124,79 @@ function asStringArray(value: unknown): string[] {
   return value.map((v) => (typeof v === 'string' ? v : '')).filter((s) => s !== '');
 }
 
-/** 从 turn.prompt / turn.steer 提取用户文本 */
-function extractUserText(r: Record<string, unknown>): string | null {
+/**
+ * 从 turn.prompt / turn.steer 提取用户输入。
+ *
+ * Kimi wire 的 prompt part（kimi-code `klient` schemas）只有三种：`text` / `image_url` /
+ * `video_url`，后两者是 `{ imageUrl | videoUrl: { url } }`。以前这里只收 `text`，图片与视频
+ * 连同原始数据一起消失——纯图片提问会让整条 user 轮不见，助手回复因此成为首轮，转入
+ * claude 时还会被「首条 user 之前跳过」的规则连带丢掉，而命令照报成功。
+ *
+ * 可还原的媒体挂成 `attachment`（转入 claude / opencode 时能写回）；写不出原样的至少把
+ * 占位写进正文，未知类型按 `type×n` 计数——与 pi / codex / grok 的用户侧同一口径。
+ */
+function extractUserInput(
+  r: Record<string, unknown>,
+  timestamp: string,
+): { text: string; events: ProcessEvent[] } | null {
   const origin = asRecord(r.origin);
   if (asString(origin?.kind) !== 'user') return null;
   const input = r.input;
   if (!Array.isArray(input)) return null;
   const parts: string[] = [];
+  const events: ProcessEvent[] = [];
+  const unknown = new Map<string, number>();
   for (const block of input) {
     const b = asRecord(block);
-    if (b?.type === 'text') {
+    if (!b) {
+      unknown.set('（非对象输入块）', (unknown.get('（非对象输入块）') ?? 0) + 1);
+      continue;
+    }
+    if (b.type === 'text') {
       const text = asString(b.text);
       if (text) parts.push(text);
+      continue;
     }
+    if (b.type === 'image_url') {
+      const url = asString(asRecord(b.imageUrl)?.url);
+      if (!url) {
+        unknown.set('image_url（缺少地址）', (unknown.get('image_url（缺少地址）') ?? 0) + 1);
+        continue;
+      }
+      const dataUri = /^data:([^;,]+);base64,(.*)$/s.exec(url);
+      const placeholder = dataUri
+        ? `[图片：${dataUri[1] || 'image'}，${dataUri[2]!.length}B]`
+        : `[图片：${url}]`;
+      parts.push(placeholder);
+      const attachment = dataUri
+        ? { kind: 'image' as const, mediaType: dataUri[1] || 'image', data: dataUri[2]! }
+        : { kind: 'image' as const, url };
+      events.push({ kind: 'text', summary: placeholder, detail: placeholder, timestamp, provider: 'kimi', attachment });
+      continue;
+    }
+    if (b.type === 'video_url') {
+      const url = asString(asRecord(b.videoUrl)?.url);
+      if (!url) {
+        unknown.set('video_url（缺少地址）', (unknown.get('video_url（缺少地址）') ?? 0) + 1);
+        continue;
+      }
+      // 视频没有目标侧可还原的通用块：按文件附件挂出去，交接时由 describeAttachmentLoss 披露。
+      const placeholder = `[视频：${url}]`;
+      parts.push(placeholder);
+      events.push({ kind: 'text', summary: placeholder, detail: placeholder, timestamp, provider: 'kimi', attachment: { kind: 'file', url } });
+      continue;
+    }
+    const key = asString(b.type) ?? '（空类型）';
+    unknown.set(key, (unknown.get(key) ?? 0) + 1);
   }
-  return parts.length > 0 ? parts.join('\n') : null;
+  if (unknown.size > 0) {
+    const total = [...unknown.values()].reduce((a, b) => a + b, 0);
+    const shown = [...unknown.entries()].map(([t, n]) => (n > 1 ? `${t}×${n}` : t)).join('、');
+    parts.push(
+      `[Kimi 记录里有 ${total} 个未识别的输入片段（${shown}），Watch 暂不解析：这部分原始内容没有并入交接，需要时请在原生 Kimi 里查看]`,
+    );
+  }
+  return parts.length > 0 ? { text: parts.join('\n'), events } : null;
 }
 
 function processLoopEvent(
