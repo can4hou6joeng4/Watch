@@ -5,6 +5,7 @@ import type { ProcessEvent, SessionRef, TokenUsage, UnifiedTurn } from '../../co
 import { escapeControlChars } from '../../core/display.js';
 import { parseOpencodeSession } from './parse.js';
 import { detectOpencodeLayout } from './paths.js';
+import { checkOpencodeTargetRevert } from './revert.js';
 import {
   createEmptyOpencodeSession,
   findLatestOpencodeSession,
@@ -156,10 +157,10 @@ function opencodeWriteLimit(): WriteLimit | null {
  * 才由 `assertUsableOpencodeDb()` 抛错——预检说的和实际做的相反。`open` / `switch` /
  * `handoff` 三条写路径都会先调 preflight，所以这里给出的是同一句结构化 `blocked`。
  */
-async function opencodePreflight(_ctx?: PreflightContext): Promise<void> {
+async function opencodePreflight(ctx?: PreflightContext): Promise<void> {
   const limit = opencodeWriteLimit();
-  if (!limit) return;
-  throw new PreflightBlockedError({ code: limit.code, message: limit.reason, hint: limit.hint });
+  if (limit) throw new PreflightBlockedError({ code: limit.code, message: limit.reason, hint: limit.hint });
+  if (ctx?.ref) await checkOpencodeTargetRevert(ctx.ref.sessionId);
 }
 
 export const opencodeAdapter: ProviderAdapter = {

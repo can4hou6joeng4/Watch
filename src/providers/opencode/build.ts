@@ -14,6 +14,8 @@ import {
   probeOpencodeDbFile,
 } from './paths.js';
 
+import { assertOpencodeTargetNotReverted } from './revert.js';
+
 export { opencodeDbPath, opencodeSessionsRoot } from './paths.js';
 
 const BASE62 = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz';
@@ -372,9 +374,15 @@ export async function importTurnsToOpencode(
     throw opencodeDbSqliteError(dbPath, '打开', error);
   }
   try {
-    ensureMinimalSchema(db); // into 指向的库若被清库/重装，兜底建表
+    // 预检必须早于任何 DDL：`ensureMinimalSchema` 的建表同样是持久写入。否则守卫报
+    // 「本次未写入任何内容」时，库结构（如被删的 part 表）已经被重建，库字节已经改变。
+    assertOpencodeTargetNotReverted(db, ref.sessionId);
     db.exec('BEGIN');
     try {
+      // 必须在事务内重查；预检通过后，原生客户端仍可能登记新的回退点。
+      assertOpencodeTargetNotReverted(db, ref.sessionId);
+      // into 指向的库若被清库/重装，兜底建表；DDL 在事务内，失败会随 ROLLBACK 一并撤销。
+      ensureMinimalSchema(db);
       // replace 语义 = 清空重建：DELETE 先于写入执行，baseline 归零后对账「重建后总数 == turns 总数」；
       // append 语义 = baseline + 期望增量 == after。两种模式共用同一断言。
       const baseline = opts?.replace

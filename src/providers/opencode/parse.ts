@@ -3,6 +3,7 @@ import { normalizeUserText, OPENCODE_COMPACTION_SUMMARY_PREFIX, OPENCODE_SYNTHET
 import { isoFromEpochMs } from '../../core/time.js';
 import type { ProcessEvent, SessionRef, TokenUsage, UnifiedTurn } from '../../core/types.js';
 import { detectOpencodeLayout, opencodeDbPath, opencodeDbSqliteError, probeOpencodeDbFile } from './paths.js';
+import { describeOpencodeRevert, readOpencodeRevert } from './revert.js';
 
 type MessageRow = {
   id: string;
@@ -713,68 +714,97 @@ export async function parseOpencodeSession(ref: SessionRef): Promise<UnifiedTurn
 
   try {
     if (v2) return parseOpencodeV2Turns(db, ref.sessionId);
-    const messages = db
-      .prepare('SELECT id, time_created, data FROM message WHERE session_id = ? ORDER BY time_created, id')
-      .all(ref.sessionId) as MessageRow[];
+    // 正文与回退状态必须来自同一个读取快照：先读 message / part、再读 session.revert 之间，
+    // 原生 cleanup 可能删掉回退点之后的消息并清掉 revert——那样会返回已回退的正文，却没有任何
+    // 「日志含已回退内容」的披露。显式 BEGIN 让这条只读连接从第一次 SELECT 起持有同一快照
+    // （WAL 下不阻塞写者），读完再一并结束。
+    db.exec('BEGIN');
+    let sealed = false;
+    try {
+      const messages = db
+        .prepare('SELECT id, time_created, data FROM message WHERE session_id = ? ORDER BY time_created, id')
+        .all(ref.sessionId) as MessageRow[];
 
-    if (messages.length === 0) return [];
+      if (messages.length === 0) {
+        sealed = true;
+        return [];
+      }
 
-    const parts = db
-      .prepare('SELECT id, message_id, time_created, data FROM part WHERE session_id = ? ORDER BY time_created, id')
-      .all(ref.sessionId) as PartRow[];
+      const parts = db
+        .prepare('SELECT id, message_id, time_created, data FROM part WHERE session_id = ? ORDER BY time_created, id')
+        .all(ref.sessionId) as PartRow[];
 
-    const partsByMessage = new Map<string, PartRow[]>();
-    for (const part of parts) {
-      const list = partsByMessage.get(part.message_id) ?? [];
-      list.push(part);
-      partsByMessage.set(part.message_id, list);
-    }
+      const partsByMessage = new Map<string, PartRow[]>();
+      for (const part of parts) {
+        const list = partsByMessage.get(part.message_id) ?? [];
+        list.push(part);
+        partsByMessage.set(part.message_id, list);
+      }
 
-    const unknown = new Map<string, number>();
-    const stats: V1ParseStats = { ignoredTexts: 0 };
-    const turns: UnifiedTurn[] = [];
-    let lastTime = 0;
-    for (const msg of messages) {
-      if (msg.time_created > lastTime) lastTime = msg.time_created;
-      const turn = messageToTurn(msg, partsByMessage.get(msg.id) ?? [], turns.at(-1) ?? null, unknown, stats);
-      if (turn) turns.push(turn);
-    }
-    // ignored 文本是「来源自己没送进模型上下文」的数据：不并入对话，但也不能无声消失。
-    // 与 pi / kimi / claude 的上下文披露同一载体（WATCH_CONTEXT_DISCLOSURE_PREFIX 事件），
-    // 进 prompt 头部「上下文完整性」、handoff warnings 与 open warnings。
-    if (stats.ignoredTexts > 0) {
-      const carrier = [...turns].reverse().find((turn) => turn.role === 'user' || turn.text.trim());
-      if (carrier) {
-        const text =
-          `${WATCH_CONTEXT_DISCLOSURE_PREFIX}OpenCode 日志里有 ${stats.ignoredTexts} 段被原生标记为 ignored 的文本没有并入对话；` +
-          '上游 OpenCode 不把这类文本送进模型上下文（message-v2 的 toModelMessages 会跳过），Watch 照同一口径处理，' +
-          '原文仍保留在 OpenCode 库里，需要时请在原生客户端核对]';
-        carrier.events = [
-          ...(carrier.events ?? []),
-          { kind: 'text', summary: text, detail: text, timestamp: carrier.timestamp, provider: 'opencode' },
+      const unknown = new Map<string, number>();
+      const stats: V1ParseStats = { ignoredTexts: 0 };
+      const turns: UnifiedTurn[] = [];
+      let lastTime = 0;
+      for (const msg of messages) {
+        if (msg.time_created > lastTime) lastTime = msg.time_created;
+        const turn = messageToTurn(msg, partsByMessage.get(msg.id) ?? [], turns.at(-1) ?? null, unknown, stats);
+        if (turn) turns.push(turn);
+      }
+      // 回退标记登记后、原生 cleanup 之前，库里仍保留已回退的消息。只披露，不猜当前投影；
+      // 事件不改正文，避免只新增回退状态时 diffTurns 重放旧轮。空工具助手轮不能承载文本。
+      const revert = readOpencodeRevert(db, ref.sessionId);
+      if (revert) {
+        const carrier = [...turns].reverse().find((turn) => turn.role === 'user' || turn.text.trim());
+        if (carrier) {
+          const text = `${WATCH_CONTEXT_DISCLOSURE_PREFIX}${describeOpencodeRevert(revert)}]`;
+          carrier.events = [...(carrier.events ?? []),
+            { kind: 'text', summary: text, detail: text, timestamp: carrier.timestamp, provider: 'opencode' }];
+        }
+      }
+      // ignored 文本是「来源自己没送进模型上下文」的数据：不并入对话，但也不能无声消失。
+      // 与 pi / kimi / claude 的上下文披露同一载体（WATCH_CONTEXT_DISCLOSURE_PREFIX 事件），
+      // 进 prompt 头部「上下文完整性」、handoff warnings 与 open warnings。
+      if (stats.ignoredTexts > 0) {
+        const carrier = [...turns].reverse().find((turn) => turn.role === 'user' || turn.text.trim());
+        if (carrier) {
+          const text =
+            `${WATCH_CONTEXT_DISCLOSURE_PREFIX}OpenCode 日志里有 ${stats.ignoredTexts} 段被原生标记为 ignored 的文本没有并入对话；` +
+            '上游 OpenCode 不把这类文本送进模型上下文（message-v2 的 toModelMessages 会跳过），Watch 照同一口径处理，' +
+            '原文仍保留在 OpenCode 库里，需要时请在原生客户端核对]';
+          carrier.events = [
+            ...(carrier.events ?? []),
+            { kind: 'text', summary: text, detail: text, timestamp: carrier.timestamp, provider: 'opencode' },
+          ];
+        }
+      }
+      // 与 2.x 同一披露面：坏 JSON / 未知类型不能静默消失，把条数与类型写进最后一条 turn。
+      // 没有任何可搬运的对话时无处承载（返回 [] 会让调用方按「0 轮」拒绝或披露），这一档
+      // 等同于「没有可交接的内容」，边界与 v2 一致。
+      if (unknown.size > 0 && turns.length > 0) {
+        const total = [...unknown.values()].reduce((a, b) => a + b, 0);
+        const last = turns.at(-1)!;
+        last.events = [
+          ...(last.events ?? []),
+          {
+            kind: 'text',
+            timestamp: isoFromEpochMs(lastTime || Date.now()),
+            summary: `[OpenCode 有 ${total} 处未识别或无法解析的数据，未并入对话]`,
+            detail:
+              `${describeCounts(unknown)}；Watch 只识别 user / assistant 消息与 text / reasoning / tool / file 内容，` +
+              'step-start / step-finish / patch / snapshot 是原生步骤与快照记账、compaction 是压缩标记，都不并入对话；其余原样跳过，不猜含义',
+            provider: 'opencode',
+          },
         ];
       }
+      sealed = true;
+      return turns;
+    } finally {
+      try {
+        db.exec(sealed ? 'COMMIT' : 'ROLLBACK');
+      } catch {
+        // 连接随后会关闭；这里不掩盖解析本身的结果或错误
+      }
     }
-    // 与 2.x 同一披露面：坏 JSON / 未知类型不能静默消失，把条数与类型写进最后一条 turn。
-    // 没有任何可搬运的对话时无处承载（返回 [] 会让调用方按「0 轮」拒绝或披露），这一档
-    // 等同于「没有可交接的内容」，边界与 v2 一致。
-    if (unknown.size > 0 && turns.length > 0) {
-      const total = [...unknown.values()].reduce((a, b) => a + b, 0);
-      const last = turns.at(-1)!;
-      last.events = [
-        ...(last.events ?? []),
-        {
-          kind: 'text',
-          timestamp: isoFromEpochMs(lastTime || Date.now()),
-          summary: `[OpenCode 有 ${total} 处未识别或无法解析的数据，未并入对话]`,
-          detail:
-            `${describeCounts(unknown)}；Watch 只识别 user / assistant 消息与 text / reasoning / tool / file 内容，` +
-            'step-start / step-finish / patch / snapshot 是原生步骤与快照记账、compaction 是压缩标记，都不并入对话；其余原样跳过，不猜含义',
-          provider: 'opencode',
-        },
-      ];
-    }
-    return turns;
   } catch (error) {
     // 「file is not a database」是在 prepare 时才抛的：打开成功不代表库可用，也要翻成中文
     throw opencodeDbSqliteError(dbPath, '查询', error);
