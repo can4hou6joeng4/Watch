@@ -888,6 +888,25 @@ async function warnTargetBadLines(
   }
 }
 
+/** 链上/复用配对后，提示目标会话同文本轮次里未携带的来源过程事件（与 `--from` 口径一致） */
+function warnPairedMissingEvents(
+  sourceTurns: UnifiedTurn[],
+  targetTurns: UnifiedTurn[],
+  targetRef: SessionRef,
+  target: ProviderAdapter,
+  sourceId: string,
+  diagnostics?: string[],
+): void {
+  const missingEvents = countPairedTurnsMissingEvents(sourceTurns, targetTurns);
+  if (missingEvents > 0) {
+    diagnostics?.push(
+      `目标会话 ${escapeControlChars(targetRef.sessionId)}（${target.displayName}）已有 ${missingEvents} 轮与来源同文本的回复，` +
+        `但缺少来源里的过程事件（思考 / 过程文本 / 工具调用等）：这些轮次按文本对齐被判为「已包含」，对应过程事件不会写进目标` +
+        `；需要完整过程记录时可用 watch prompt ${escapeControlChars(sourceId)} --profile full 查看来源原文`,
+    );
+  }
+}
+
 /**
  * 只读解析「把 sourceId 转入 providerId」会落到哪个目标会话、需要写多少轮。
  * 决策顺序与旧实现一致：属主即目标（resume）→ 链上配对 → 内容复用 → 新建。
@@ -1042,6 +1061,7 @@ async function planOpenInProvider(
       const delta = dedupeCallEvents(diffTurns(turns, pairTurns));
       if (delta.length < turns.length / 2) {
         await warnTargetBadLines(chainPaired, target, diagnostics);
+        warnPairedMissingEvents(turns, pairTurns, chainPaired, target, sourceId, diagnostics);
         // 复用后 resume 的就是这条会话：它自己的断点要披露，与来源那一侧分开说
         warnResumeTargetUnfinished(
           pairTurns,
@@ -1139,6 +1159,7 @@ async function planOpenInProvider(
       };
     }
     await warnTargetBadLines(reuse, target, diagnostics);
+    warnPairedMissingEvents(turns, destinationTurns, reuse, target, sourceId, diagnostics);
     const delta = dedupeCallEvents(diffTurns(turns, destinationTurns));
     // 复用后 resume 的就是这条会话：它自己的断点要披露，与来源那一侧分开说
     warnResumeTargetUnfinished(destinationTurns, `目标会话 ${reuse.sessionId}（${target.displayName}）`, delta.length, (msg) =>
@@ -1229,7 +1250,12 @@ export async function openInProvider(
 
   const cliBlock = await newSessionCliBlock(target, plan);
   if (cliBlock) {
-    return { ok: false, error: cliBlock.error, blocked: { code: cliBlock.code, hint: cliBlock.hint } };
+    return {
+      ok: false,
+      error: cliBlock.error,
+      blocked: { code: cliBlock.code, hint: cliBlock.hint },
+      ...(diagnostics.length ? { warnings: [...diagnostics] } : {}),
+    };
   }
 
   if (plan.kind === 'resume') {
@@ -1297,7 +1323,13 @@ export async function openInProvider(
     }
     const newRef =
       plan.turns.length > 0 ? await guardedImport(target, plan.targetRef, plan.snapshot, plan.turns, cwd) : plan.targetRef;
-    if (!newRef) return { ok: false, error: '转入目标会话失败: 未获得可用的目标会话引用' };
+    if (!newRef) {
+      return {
+        ok: false,
+        error: '转入目标会话失败: 未获得可用的目标会话引用',
+        ...(warnings.length ? { warnings } : {}),
+      };
+    }
     if (plan.note) notes.push(plan.note);
     // 真的转入了内容才谈得上「转过去的是哪一刻的」：resume 快路径在上面已经返回
     if (plan.turns.length > 0) {
@@ -1339,7 +1371,13 @@ export async function openInProvider(
   } catch (error) {
     const blocked = blockedFrom(error);
     const raw = error instanceof Error ? error.message : String(error);
-    return blocked ? { ok: false, error: raw, blocked } : { ok: false, error: `转入新会话失败: ${describeWriteFailureReason(error) ?? raw}` };
+    const msg = blocked ? raw : `转入新会话失败: ${describeWriteFailureReason(error) ?? raw}`;
+    return {
+      ok: false,
+      error: msg,
+      ...(blocked ? { blocked } : {}),
+      ...(warnings.length ? { warnings } : {}),
+    };
   }
 }
 
@@ -1431,6 +1469,8 @@ export async function checkOpenInProvider(
     throw error;
   }
   // 与执行使用同一份计划和计数；目标预检拒绝写入时，不把它说成内容损失。
+  const attachmentLoss = describeAttachmentLoss(plan.turns, target);
+  if (attachmentLoss) base.warnings = [...(base.warnings ?? []), attachmentLoss];
   const textLoss = describeTextEventLoss(plan.turns, target);
   if (textLoss) base.warnings = [...(base.warnings ?? []), textLoss];
   return base;
