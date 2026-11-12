@@ -13,8 +13,11 @@ export async function readTextOrEmpty(filePath: string, label = '既有会话文
     return await readFile(filePath, 'utf8');
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') return '';
-    const message = error instanceof Error ? error.message : String(error);
-    throw new Error(`读取${label}失败：${message}（未写入，避免用空内容覆盖既有历史）`);
+    // 裸 errno（`EISDIR: illegal operation on a directory, read`）既看不出是哪个文件，
+    // 也给不出下一步：与其它读取点统一走中文分档，并把路径（可能带控制字符）转义后带上
+    throw new Error(
+      `读取${label}失败：${describePathReadFailureReason(error)}（${escapeControlChars(filePath)}）；未写入，避免用空内容覆盖既有历史`,
+    );
   }
 }
 
