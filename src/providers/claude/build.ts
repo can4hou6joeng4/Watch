@@ -236,7 +236,9 @@ function expectClaudeRoundTrip(turns: UnifiedTurn[]): UnifiedTurn[] {
       if (filePlaces.length === 0) {
         out.push(t);
       } else {
-        out.push({ ...t, text: [t.text.trim(), ...filePlaces].filter(Boolean).join('\n\n') });
+        // build 原样写 t.text、parse 按 `\n\n` 拼块；若这里 trim 掉末尾换行，
+        // `"你好\n" + 附件` 写出后反解会多出空行，round-trip 会误判失配
+        out.push({ ...t, text: [t.text, ...filePlaces].filter(Boolean).join('\n\n') });
       }
       continue;
     }
