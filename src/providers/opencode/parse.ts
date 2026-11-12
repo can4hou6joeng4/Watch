@@ -192,14 +192,31 @@ function partToEvents(part: OpencodePartData, baseTime: number): ProcessEvent[] 
   return events;
 }
 
+/**
+ * 1.x 原生会写、但不承载对话内容的步骤标记（1.18.29 原生验收记录的 partTypes：
+ * text / step-start / reasoning / tool / step-finish）。解析不搬运它们，也不该算作丢失；
+ * 其余没被映射的类型一律计入未识别披露，不猜含义。
+ */
+const V1_IGNORED_PART_TYPES = new Set(['step-start', 'step-finish']);
+
 function messageToTurn(
   msg: MessageRow,
   parts: PartRow[],
   prevTurn: UnifiedTurn | null,
+  unknown: Map<string, number>,
 ): UnifiedTurn | null {
   const data = parseJson<OpencodeMessageData>(msg.data);
-  const role = data?.role;
-  if (role !== 'user' && role !== 'assistant') return null;
+  // 坏 JSON / 非对象 JSON 以前让整条消息连同 parts 一起消失；坏 role 同理。
+  // 这两种都不是「这轮没有内容」，必须计数给调用方披露。
+  if (typeof data !== 'object' || data === null || Array.isArray(data)) {
+    bumpCount(unknown, 'message（data 无法解析）');
+    return null;
+  }
+  const role = data.role;
+  if (role !== 'user' && role !== 'assistant') {
+    bumpCount(unknown, `message:${typeof role === 'string' && role ? role : '（缺少 role）'}`);
+    return null;
+  }
 
   const baseTime = data?.time?.created ?? msg.time_created;
   const timestamp = isoFromEpochMs(baseTime);
@@ -210,15 +227,30 @@ function messageToTurn(
 
   for (const partRow of parts) {
     const part = parseJson<OpencodePartData>(partRow.data);
-    if (!part) continue;
+    // 与 message 同档：坏 JSON 或非对象 JSON 不能静默跳过。`parseJson` 的类型断言不做
+    // 形状校验，字符串 / 数字 / 数组都会原样穿过，所以这里按对象重新判定。
+    if (typeof part !== 'object' || part === null || Array.isArray(part)) {
+      bumpCount(unknown, 'part（data 无法解析）');
+      continue;
+    }
+    const partType = typeof (part as { type?: unknown }).type === 'string' ? (part as { type: string }).type : '';
+    if (!partType) {
+      bumpCount(unknown, 'part（空类型）');
+      continue;
+    }
+    if (V1_IGNORED_PART_TYPES.has(partType)) continue;
     const partTime = partRow.time_created;
     if (isTextPart(part)) {
       if (part.text) textParts.push(part.text);
-    } else {
+    } else if (isReasoningPart(part) || isToolPart(part) || isFilePart(part)) {
       if (isToolPart(part)) hasToolEvents = true;
       const partEvent = filePartToEvent(part, partTime);
       if (partEvent) events.push(partEvent);
       events.push(...partToEvents(part, partTime));
+    } else {
+      // text / reasoning / tool / file 之外的类型（patch / subtask / agent / retry 等）不搬运内容，
+      // 但必须把类型与条数交给最后一条 turn 披露，不能让它看起来从未存在。
+      bumpCount(unknown, `part:${partType}`);
     }
   }
 
@@ -630,10 +662,32 @@ export async function parseOpencodeSession(ref: SessionRef): Promise<UnifiedTurn
       partsByMessage.set(part.message_id, list);
     }
 
+    const unknown = new Map<string, number>();
     const turns: UnifiedTurn[] = [];
+    let lastTime = 0;
     for (const msg of messages) {
-      const turn = messageToTurn(msg, partsByMessage.get(msg.id) ?? [], turns.at(-1) ?? null);
+      if (msg.time_created > lastTime) lastTime = msg.time_created;
+      const turn = messageToTurn(msg, partsByMessage.get(msg.id) ?? [], turns.at(-1) ?? null, unknown);
       if (turn) turns.push(turn);
+    }
+    // 与 2.x 同一披露面：坏 JSON / 未知类型不能静默消失，把条数与类型写进最后一条 turn。
+    // 没有任何可搬运的对话时无处承载（返回 [] 会让调用方按「0 轮」拒绝或披露），这一档
+    // 等同于「没有可交接的内容」，边界与 v2 一致。
+    if (unknown.size > 0 && turns.length > 0) {
+      const total = [...unknown.values()].reduce((a, b) => a + b, 0);
+      const last = turns.at(-1)!;
+      last.events = [
+        ...(last.events ?? []),
+        {
+          kind: 'text',
+          timestamp: isoFromEpochMs(lastTime || Date.now()),
+          summary: `[OpenCode 有 ${total} 处未识别或无法解析的数据，未并入对话]`,
+          detail:
+            `${describeCounts(unknown)}；Watch 只识别 user / assistant 消息与 text / reasoning / tool / file 内容，` +
+            'step-start / step-finish 是原生步骤标记、不并入对话；其余原样跳过，不猜含义',
+          provider: 'opencode',
+        },
+      ];
     }
     return turns;
   } catch (error) {
