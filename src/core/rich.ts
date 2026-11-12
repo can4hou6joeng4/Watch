@@ -112,7 +112,14 @@ export function normalizeUserText(text: string): string | null {
 }
 
 export function textKey(t: UnifiedTurn): string {
-  return `${t.role}\n${unwrapUserQuery(t.text).trim()}`;
+  const body = unwrapUserQuery(t.text).trim();
+  // 空正文助手工具轮如果只按 role+text 匹配，所有工具轮都会撞成同一把键而把 dest 独有轮误配给 source，
+  // 从而丢掉 source 轮或覆盖 dest 独有轮；有正文的轮仍不拼 callId，保留「缺事件侧照文本补全」语义
+  if (t.role === 'assistant' && !body) {
+    const callIds = [...new Set((t.events ?? []).map((e) => e.callId).filter((id): id is string => Boolean(id)))];
+    if (callIds.length > 0) return `${t.role}\n\n${callIds.join(',')}`;
+  }
+  return `${t.role}\n${body}`;
 }
 
 /**
