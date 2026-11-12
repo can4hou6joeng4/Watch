@@ -1,3 +1,4 @@
+import { asJsonObject, parseJsonObject } from '../../core/jsonl.js';
 import type { ProcessEvent } from '../../core/types.js';
 import { truncateDetail } from '../claude/events.js';
 
@@ -12,14 +13,9 @@ const stamp = (): string => new Date().toISOString();
  * - thread.started / turn.* / error 行不产事件（错误由调用方错误路径处理）
  */
 export function codexLineToProcessEvents(line: string): ProcessEvent[] {
-  let e: Record<string, unknown>;
-  try {
-    e = JSON.parse(line);
-  } catch {
-    return [];
-  }
-  if (e.type !== 'item.completed') return [];
-  const item = e.item as Record<string, unknown> | undefined;
+  const e = parseJsonObject(line);
+  if (!e || e.type !== 'item.completed') return [];
+  const item = asJsonObject(e.item);
   if (!item || typeof item.type !== 'string') return [];
   const base = { timestamp: stamp(), provider: 'codex' };
 

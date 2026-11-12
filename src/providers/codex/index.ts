@@ -9,6 +9,7 @@ import * as readline from 'node:readline';
 import { promisify } from 'node:util';
 import { digestFile } from '../../core/atomic.js';
 import type { FileDigest } from '../../core/atomic.js';
+import { asJsonObject, parseJsonObject } from '../../core/jsonl.js';
 import { describePathReadFailureReason } from '../../core/read-text.js';
 import type { ProviderAdapter, PreflightContext } from '../adapter.js';
 import { PreflightBlockedError, SessionLookupFailureError } from '../adapter.js';
@@ -170,15 +171,11 @@ async function rolloutCwdDetail(
     };
   }
   if (!first) return { cwd: null, error: '文件是空的（没有 session_meta 首行）' };
-  let record: Record<string, unknown>;
-  try {
-    record = JSON.parse(first) as Record<string, unknown>;
-  } catch {
-    return { cwd: null, error: '首行不是合法 JSON' };
-  }
+  const record = parseJsonObject(first);
+  if (!record) return { cwd: null, error: '首行不是合法 JSON 对象' };
   if (record.type !== 'session_meta') return { cwd: null, error: '首行不是 session_meta 记录' };
-  const payload = record.payload as Record<string, unknown> | undefined;
-  if (typeof payload?.cwd !== 'string' || !payload.cwd) {
+  const payload = asJsonObject(record.payload);
+  if (!payload || typeof payload.cwd !== 'string' || !payload.cwd) {
     return { cwd: null, error: 'session_meta 缺少 cwd' };
   }
   return { cwd: payload.cwd };
@@ -340,27 +337,28 @@ async function codexFirstUserText(filePath: string): Promise<{ text: string | nu
   for (const line of content.split('\n')) {
     const trimmed = line.trim();
     if (!trimmed) continue;
-    try {
-      const record = JSON.parse(trimmed) as Record<string, unknown>;
-      const payload = record.payload as Record<string, unknown> | undefined;
-      let text = '';
-      if (record.type === 'event_msg' && payload?.type === 'user_message' && typeof payload.message === 'string') {
-        text = payload.message;
-      } else if (record.type === 'response_item' && payload?.type === 'message' && payload.role === 'user') {
-        const contentArr = payload.content as Record<string, unknown>[] | undefined;
-        if (Array.isArray(contentArr)) {
-          text = contentArr
-            .filter((c) => typeof c.text === 'string')
-            .map((c) => c.text as string)
-            .join(' ');
-        }
+    const record = parseJsonObject(trimmed);
+    if (!record) continue;
+    const payload = asJsonObject(record.payload);
+    if (!payload) continue;
+    let text = '';
+    if (record.type === 'event_msg' && payload.type === 'user_message' && typeof payload.message === 'string') {
+      text = payload.message;
+    } else if (record.type === 'response_item' && payload.type === 'message' && payload.role === 'user') {
+      const contentArr = payload.content;
+      if (Array.isArray(contentArr)) {
+        text = contentArr
+          .map((c) => {
+            const item = asJsonObject(c);
+            return typeof item?.text === 'string' ? item.text : null;
+          })
+          .filter((t): t is string => t !== null)
+          .join(' ');
       }
-      const clean = text.replace(/\s+/g, ' ').trim();
-      if (clean && !clean.startsWith('<environment_context>') && !clean.startsWith('<user_instructions>')) {
-        return { text: clean.slice(0, 80) };
-      }
-    } catch {
-      continue;
+    }
+    const clean = text.replace(/\s+/g, ' ').trim();
+    if (clean && !clean.startsWith('<environment_context>') && !clean.startsWith('<user_instructions>')) {
+      return { text: clean.slice(0, 80) };
     }
   }
   return { text: null };
@@ -429,8 +427,8 @@ async function codexEnv(): Promise<NodeJS.ProcessEnv> {
   }
   if (!env.OPENAI_API_KEY) {
     try {
-      const auth = JSON.parse(await readFile(path.join(codexHome, 'auth.json'), 'utf8')) as Record<string, unknown>;
-      if (typeof auth.OPENAI_API_KEY === 'string' && auth.OPENAI_API_KEY) {
+      const auth = parseJsonObject(await readFile(path.join(codexHome, 'auth.json'), 'utf8'));
+      if (auth && typeof auth.OPENAI_API_KEY === 'string' && auth.OPENAI_API_KEY) {
         env.OPENAI_API_KEY = auth.OPENAI_API_KEY;
       }
     } catch {
@@ -496,19 +494,15 @@ function eventErrorSummary(stdout: string): string {
   for (const line of stdout.split('\n')) {
     const trimmed = line.trim();
     if (!trimmed) continue;
-    let event: Record<string, unknown>;
-    try {
-      event = JSON.parse(trimmed);
-    } catch {
-      continue;
-    }
+    const event = parseJsonObject(trimmed);
+    if (!event) continue;
     if (event.type === 'turn.failed') {
-      const err = event.error as Record<string, unknown> | undefined;
+      const err = asJsonObject(event.error);
       if (typeof err?.message === 'string') last = err.message;
     } else if (event.type === 'error' && typeof event.message === 'string') {
       last = event.message;
     } else if (event.type === 'item.completed') {
-      const item = event.item as Record<string, unknown> | undefined;
+      const item = asJsonObject(event.item);
       if (item?.type === 'error' && typeof item.message === 'string') last = item.message;
     }
   }
@@ -521,13 +515,9 @@ function lastAgentMessageFromEvents(stdout: string): string {
   for (const line of stdout.split('\n')) {
     const trimmed = line.trim();
     if (!trimmed) continue;
-    let event: Record<string, unknown>;
-    try {
-      event = JSON.parse(trimmed);
-    } catch {
-      continue;
-    }
-    const item = event.item as Record<string, unknown> | undefined;
+    const event = parseJsonObject(trimmed);
+    if (!event) continue;
+    const item = asJsonObject(event.item);
     if (event.type === 'item.completed' && item?.type === 'agent_message' && typeof item.text === 'string') {
       last = item.text;
     } else if (event.type === 'agent_message' && typeof event.message === 'string') {
@@ -542,12 +532,8 @@ function threadIdFromEvents(stdout: string): string | null {
   for (const line of stdout.split('\n')) {
     const trimmed = line.trim();
     if (!trimmed) continue;
-    let event: Record<string, unknown>;
-    try {
-      event = JSON.parse(trimmed);
-    } catch {
-      continue;
-    }
+    const event = parseJsonObject(trimmed);
+    if (!event) continue;
     if (event.type === 'thread.started' && typeof event.thread_id === 'string') return event.thread_id;
   }
   return null;

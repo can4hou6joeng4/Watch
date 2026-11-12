@@ -1,4 +1,5 @@
 import { readFile } from 'node:fs/promises';
+import { asJsonObject, parseJsonObject } from '../../core/jsonl.js';
 import {
   ENCRYPTED_THINKING,
   ensureAssistant,
@@ -82,14 +83,8 @@ export async function parseCodexSession(ref: SessionRef): Promise<UnifiedTurn[]>
   for (const line of raw.split('\n')) {
     const trimmed = line.trim();
     if (!trimmed) continue;
-    let record: unknown;
-    try {
-      record = JSON.parse(trimmed);
-    } catch {
-      continue;
-    }
-    if (typeof record !== 'object' || record === null) continue;
-    const r = record as Record<string, unknown>;
+    const r = parseJsonObject(trimmed);
+    if (!r) continue;
     const timestamp = typeof r.timestamp === 'string' ? r.timestamp : '';
     const payload = r.payload;
     // 顶层 compacted：payload.message 是 Codex 压缩上下文后注入模型的历史摘要，
@@ -103,16 +98,13 @@ export async function parseCodexSession(ref: SessionRef): Promise<UnifiedTurn[]>
         compaction.turnsAtFirst = turns.length;
         compaction.fallbackAtFirst = fallback.length;
       }
-      const message =
-        typeof payload === 'object' && payload !== null
-          ? (payload as Record<string, unknown>).message
-          : undefined;
+      const message = asJsonObject(payload)?.message;
       if (typeof message === 'string' && message.trim()) compaction.readable += 1;
       else compaction.unreadable += 1;
       continue;
     }
-    if (typeof payload !== 'object' || payload === null) continue;
-    const p = payload as Record<string, unknown>;
+    const p = asJsonObject(payload);
+    if (!p) continue;
 
     if (r.type === 'response_item' && p.type !== 'message') {
       if (!sawUser) continue;
@@ -558,11 +550,11 @@ function parseCodexContent(content: unknown, timestamp: string): CodexContentPar
       texts.push(item);
       continue;
     }
-    if (typeof item !== 'object' || item === null) {
+    const b = asJsonObject(item);
+    if (!b) {
       addUnknown('（非对象内容块）');
       continue;
     }
-    const b = item as Record<string, unknown>;
     if (b.type === 'input_text' || b.type === 'output_text') {
       if (typeof b.text === 'string' && b.text !== '') texts.push(b.text);
       continue;

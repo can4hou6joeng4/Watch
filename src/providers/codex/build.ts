@@ -4,6 +4,7 @@ import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { appendFileAtomic, writeFileAtomic } from '../../core/atomic.js';
 import { escapeControlChars } from '../../core/display.js';
+import { asJsonObject, parseJsonObject } from '../../core/jsonl.js';
 import { verifyWrittenTurns } from '../../core/verify.js';
 import { ENCRYPTED_THINKING, codexToolInput, isCodexExecScript, toCodexToolName, turnHasContent } from '../../core/rich.js';
 import { codexUserTurnContent } from './media.js';
@@ -35,14 +36,9 @@ async function detectCodexIdentity(sessionsDir: string): Promise<CodexIdentity> 
       continue;
     }
     for (const line of content.split('\n').slice(0, 20)) {
-      let record: Record<string, unknown>;
-      try {
-        record = JSON.parse(line);
-      } catch {
-        continue;
-      }
-      if (record.type !== 'session_meta') continue;
-      const payload = record.payload as Record<string, unknown> | undefined;
+      const record = parseJsonObject(line);
+      if (!record || record.type !== 'session_meta') continue;
+      const payload = asJsonObject(record.payload);
       if (!payload) continue;
       const originator = typeof payload.originator === 'string' ? payload.originator : undefined;
       const source = typeof payload.source === 'string' ? payload.source : undefined;
