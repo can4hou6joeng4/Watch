@@ -248,7 +248,18 @@ function expectClaudeRoundTrip(turns: UnifiedTurn[]): UnifiedTurn[] {
       return detail.length > 0 && detail !== ENCRYPTED_THINKING;
     });
     if (!t.text.trim() && events.length === 0) continue;
-    out.push({ ...t, events });
+    // build 把「非图片附件」事件写成助手正文行（图片写成 image 块，不占正文）。
+    // 正文为空时，反解回来的正文就是最后一条这样的文本；期望必须预测它，否则
+    // 一次合法的附件降级会被 round-trip 拒绝（占位明明写进去了，校验却说文本不一致）。
+    let expectedText = t.text;
+    if (!t.text.trim()) {
+      const rows = (t.events ?? [])
+        .filter((e) => e.kind === 'text' && !(e.attachment && e.attachment.kind === 'image'))
+        .map((e) => (e.detail ?? e.summary ?? '').trim())
+        .filter(Boolean);
+      if (rows.length > 0) expectedText = rows.at(-1)!;
+    }
+    out.push({ ...t, text: expectedText, events });
   }
   return out;
 }
