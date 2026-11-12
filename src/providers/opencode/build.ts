@@ -339,8 +339,15 @@ function buildStepFinishPartData(reason: string): string {
 
 function buildToolPartData(ev: ProcessEvent, fallbackCallId: string, time: number): string {
   // metadata 是 v1.18+ ToolStateCompleted 必填键（Record，可空对象），缺了整个 GET messages 会被 schema 校验拒掉
-  const state: Record<string, unknown> = { status: 'completed', title: ev.name ?? 'tool', metadata: {}, time: { start: time, end: time + 1 } };
-  if (ev.kind === 'tool_call') state.input = ev.input ?? {};
+  const state: Record<string, unknown> = {
+    status: ev.kind === 'tool_call' ? 'error' : 'completed',
+    title: ev.name ?? 'tool',
+    input: ev.kind === 'tool_call' ? ev.input ?? {} : {},
+    metadata: ev.kind === 'tool_call' ? { watch_unfinished_tool: true } : {},
+    time: { start: time, end: time + 1 },
+  };
+  // 调用先按明确失败保存，匹配到真实结果后才改成 completed；缺结果时也符合原生状态 schema。
+  if (ev.kind === 'tool_call') state.error = '[未完成工具调用] 来源会话未记录工具结果，交接时按失败状态保存';
   if (ev.kind === 'tool_result') state.output = ev.detail ?? ev.summary ?? '';
   return JSON.stringify({ type: 'tool', callID: ev.callId || fallbackCallId, tool: ev.kind === 'tool_call' ? ev.name : 'tool', state });
 }
@@ -563,6 +570,8 @@ async function writeOpencodeTurns(
                 parsed.state ??= {};
                 parsed.state.output = ev.detail ?? ev.summary ?? '';
                 parsed.state.status = 'completed';
+                delete parsed.state.error;
+                delete parsed.state.metadata?.watch_unfinished_tool;
                 db.prepare('UPDATE part SET data = ? WHERE id = ?').run(JSON.stringify(parsed), pending.partId);
               }
               pendingTools.delete(callId);

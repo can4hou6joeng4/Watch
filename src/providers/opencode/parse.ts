@@ -38,6 +38,14 @@ type OpencodeMessageData = {
   };
 };
 
+type OpencodeToolState = {
+  status?: string;
+  input?: Record<string, unknown>;
+  output?: unknown;
+  error?: string;
+  metadata?: Record<string, unknown>;
+};
+
 type OpencodePartData =
   | { type: 'text'; text?: string; time?: { start?: number; end?: number } }
   | { type: 'reasoning'; text?: string }
@@ -45,11 +53,7 @@ type OpencodePartData =
       type: 'tool';
       callID?: string;
       tool?: string;
-      state?: {
-        status?: string;
-        input?: Record<string, unknown>;
-        output?: unknown;
-      };
+      state?: OpencodeToolState;
     }
   | { type: 'file'; mime?: unknown; url?: unknown; filename?: unknown; path?: unknown }
   | { type: string };
@@ -73,9 +77,9 @@ function isFilePart(part: OpencodePartData): part is {
 }
 
 /**
- * file part → attachment text 事件（不搬进 turn.text，避免文本翻倍；也不拆 base64——
- * url 本身就是 data URI，数据随 attachment.url 过链，opencode build 可还原 file part）。
- * 占位文本放 event summary/detail，保证任何展示层可读。
+ * file part → attachment text 事件（不搬进 turn.text，避免文本翻倍）。
+ * 图片按 MIME 还原为 image，base64 data URI 拆为 data，避免转入 Claude 时被误写成 URL source；
+ * 普通文件仍保留 file/url，外部图片链接同样保留 url。占位放 summary/detail，保证展示层可读。
  */
 function filePartToEvent(part: OpencodePartData, time: number): ProcessEvent | null {
   if (!isFilePart(part)) return null;
@@ -85,13 +89,15 @@ function filePartToEvent(part: OpencodePartData, time: number): ProcessEvent | n
   const size = url ? `，约${Math.floor(url.length * 3 / 4)}B` : '';
   const name = filename ? ` ${filename}` : '';
   const placeholder = `[附件：${mime}${size}${name}]`;
+  const image = /^image\//i.test(mime);
+  const encoded = image && url ? /^data:[^;,]+;base64,([\s\S]*)$/i.exec(url) : null;
   return {
     kind: 'text',
     timestamp: isoFromEpochMs(time),
     summary: placeholder,
     detail: placeholder,
     provider: 'opencode',
-    attachment: { kind: 'file', mediaType: mime, url, filename },
+    attachment: { kind: image ? 'image' : 'file', mediaType: mime, ...(encoded ? { data: encoded[1]! } : { url }), filename },
   };
 }
 
@@ -140,7 +146,7 @@ function isToolPart(part: OpencodePartData): part is {
   type: 'tool';
   callID?: string;
   tool?: string;
-  state?: { status?: string; input?: Record<string, unknown>; output?: unknown };
+  state?: OpencodeToolState;
 } {
   return (part as { type: string }).type === 'tool';
 }
@@ -158,22 +164,27 @@ function partToEvents(part: OpencodePartData, baseTime: number): ProcessEvent[] 
   } else if (isToolPart(part)) {
     const callId = part.callID ?? `oc-${crypto.randomUUID()}`;
     const input = part.state?.input ?? {};
+    // Watch 用合法 error 状态承载来源未记录结果的调用；它并非一次真实失败返回，不能伪造 tool_result。
+    const unfinished = part.state?.status === 'error' && part.state.metadata?.watch_unfinished_tool === true;
     events.push({
       kind: 'tool_call',
       timestamp: isoFromEpochMs(baseTime),
       name: part.tool ?? 'tool',
       callId,
       input,
-      summary: `${part.tool ?? 'tool'} ${JSON.stringify(input).slice(0, 200)}`,
+      summary: `${unfinished ? '[未完成工具调用] ' : ''}${part.tool ?? 'tool'} ${JSON.stringify(input).slice(0, 200)}`,
       provider: 'opencode',
     });
-    if (part.state?.output !== undefined) {
+    const output = part.state?.status === 'error' && typeof part.state.error === 'string'
+      ? `[工具执行失败] ${part.state.error}`
+      : part.state?.output;
+    if (!unfinished && output !== undefined) {
       events.push({
         kind: 'tool_result',
         timestamp: isoFromEpochMs(baseTime),
         callId,
-        detail: typeof part.state.output === 'string' ? part.state.output : JSON.stringify(part.state.output),
-        summary: typeof part.state.output === 'string' ? part.state.output : JSON.stringify(part.state.output).slice(0, 200),
+        detail: typeof output === 'string' ? output : JSON.stringify(output),
+        summary: typeof output === 'string' ? output : JSON.stringify(output).slice(0, 200),
         provider: 'opencode',
       });
     }
@@ -236,6 +247,7 @@ function messageToTurn(
     (prevTurn.events ?? []).some((e) => e.kind === 'tool_call')
   ) {
     prevTurn.text = prevTurn.text ? `${prevTurn.text}\n\n${text}` : text;
+    if (events.length > 0) prevTurn.events = [...(prevTurn.events ?? []), ...events];
     if (usage) prevTurn.usage = usage;
     return null;
   }
