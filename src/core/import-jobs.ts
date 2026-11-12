@@ -87,6 +87,33 @@ function describeReadError(error: unknown, file: string): string {
   return `${error instanceof Error ? error.message : String(error)}：${shown}`;
 }
 
+/**
+ * 写执行日志时的失败。与 `describeReadError()` 分开：写路径的下一步是「修权限 / 换目录」，
+ * 不是「按 id 手动核对」；而且「未写入任何内容」这句在 claim 之后不能再说（那时写入可能
+ * 已经发生）。两处都只用 fs `code` 判定，非 fs 错误原样带原文。
+ */
+function describeWriteError(error: unknown, file: string, next: string): string {
+  const shown = escapeControlChars(file);
+  const code = (error as NodeJS.ErrnoException).code;
+  if (code === 'EACCES' || code === 'EPERM') {
+    return `没有权限写执行日志（权限或归属变了？）：${shown}；${next}`;
+  }
+  if (code === 'EROFS') {
+    return `执行日志所在目录是只读文件系统：${shown}；${next}`;
+  }
+  if (code === 'ENOSPC' || code === 'EDQUOT') {
+    return `磁盘空间不足，写不进执行日志：${shown}；${next}`;
+  }
+  if (code === 'ENOTDIR') {
+    return `执行日志路径上的某一级不是目录（被同名文件占住了？）：${shown}；${next}`;
+  }
+  if (code === 'EEXIST' && file.endsWith('started.json')) {
+    return `这次导入已被另一次执行 claim（执行日志里已有 started.json）：${shown}；${next}`;
+  }
+  const reason = error instanceof Error ? error.message : String(error);
+  return `写执行日志失败（${reason}）：${shown}；${next}`;
+}
+
 /** An exclusive, persistent claim survives crashes. Never erase it to retry a write. */
 export class ImportJobs {
   constructor(private root: string) {}
@@ -119,6 +146,7 @@ export class ImportJobs {
     }
   }
 
+  /** 打开失败原样抛给调用方：它知道这个文件是什么（plan.json / started.json），由它补中文原因与下一步 */
   private async exclusive(file: string, value: unknown): Promise<void> {
     const handle = await open(file, 'wx', 0o600);
     try {
@@ -131,11 +159,20 @@ export class ImportJobs {
 
   private async persistPlan(plan: ImportJobPlan): Promise<string> {
     const id = importPlanId(plan);
-    await mkdir(this.dir(id), { recursive: true, mode: 0o700 });
+    const dir = this.dir(id);
     try {
-      await this.exclusive(path.join(this.dir(id), 'plan.json'), plan);
+      await mkdir(dir, { recursive: true, mode: 0o700 });
+      await this.exclusive(path.join(dir, 'plan.json'), plan);
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+      if ((error as NodeJS.ErrnoException).code === 'EEXIST') return id;
+      throw new Error(
+        describeWriteError(
+          error,
+          dir,
+          // prepare 阶段只写日志，还没碰任何原生数据：「未写入任何内容」成立
+          '本次未写入任何内容；确认该目录可写（权限、只读挂载、磁盘空间）后重试，或用 WATCH_DB 指向一个可写的路径',
+        ),
+      );
     }
     return id;
   }
@@ -170,6 +207,30 @@ export class ImportJobs {
     return plan;
   }
 
+  /**
+   * 读一份 plan.json 并做**公共**校验（sha256 对得上、是个对象）。
+   *
+   * route 不同不算「文件被改动」：官方导入与项目关联共用同一个日志根，拿错子命令
+   * （`status <项目关联计划 id>` / `project-status <导入计划 id>`）是很常见的手误，
+   * 而 plan.json 完好、下一步是换另一个子命令——不能与「文件被篡改」共用一句
+   * 「删除该日志目录后重新 prepare」，那会让人删掉一份完全正常的日志。
+   */
+  private async readPlanFile<T extends ImportJobPlan & { route?: unknown }>(
+    id: string,
+    label: string,
+    hint: string,
+    idSource = '',
+  ): Promise<T> {
+    const file = path.join(this.dir(id), 'plan.json');
+    const raw = await this.readText(file);
+    if (raw === null) throw new Error(`找不到${label} ${id}：${escapeControlChars(file)} 不存在${idSource}`);
+    const plan = this.parseJson<T>(raw, file, `${label} ${id} 的 plan.json `, hint);
+    if (importPlanId(plan) !== id) {
+      throw new Error(`${label}与确认的 id 不匹配（plan.json 被改动，或与其他计划混在了一起）：${id}；${hint}`);
+    }
+    return plan;
+  }
+
   async saveRouteOutcome<T>(id: string, outcome: T): Promise<void> {
     await writeFileAtomic(path.join(this.dir(id), 'outcome.json'), JSON.stringify(outcome) + '\n');
   }
@@ -182,14 +243,21 @@ export class ImportJobs {
   }
 
   async projectPlan(id: string): Promise<ProjectBindingPlan> {
-    const file = path.join(this.dir(id), 'plan.json');
-    const raw = await this.readText(file);
-    if (raw === null) {
-      throw new Error(`找不到项目关联计划 ${id}：${escapeControlChars(file)} 不存在（计划 id 来自 watch import-codex project-prepare 的输出）`);
-    }
-    const plan = this.parseJson<ProjectBindingPlan>(raw, file, `项目关联计划 ${id} 的 plan.json `, '可删除该日志目录后重新 prepare（会得到新的计划 id）');
-    if (importPlanId(plan) !== id || plan.schema !== 1 || plan.route !== 'codex-project-association') {
-      throw new Error('项目关联计划与确认的 id 不匹配');
+    const label = '项目关联计划';
+    const plan = await this.readPlanFile<ProjectBindingPlan>(
+      id,
+      label,
+      '可删除该日志目录后重新 prepare（会得到新的计划 id）',
+      '（计划 id 来自 watch import-codex project-prepare 的输出）',
+    );
+    if (plan.schema !== 1 || plan.route !== 'codex-project-association') {
+      // route 不对说明拿错了计划（多半是子命令用错），文件本身完好：下一步是换成另一个子命令，
+      // 不是删日志。`status` 吃这份计划、`project-status` 吃官方导入计划也是同一档。
+      const found = typeof plan.route === 'string' ? plan.route : '（没有 route 字段）';
+      throw new Error(
+        `${label} ${id} 的 route 是 ${found}，不是 codex-project-association：这份日志不是项目关联计划（可能拿错了计划 id 或子命令）；` +
+          '若它是官方导入计划，请改用 watch import-codex status ' + id,
+      );
     }
     return plan;
   }
@@ -205,15 +273,21 @@ export class ImportJobs {
   }
 
   async plan(id: string): Promise<ImportPlan> {
-    const file = path.join(this.dir(id), 'plan.json');
-    // 裸 ENOENT 只说「没有这个文件」，用户看不出下一句该干嘛
-    const raw = await this.readText(file);
-    if (raw === null) {
-      throw new Error(`找不到导入计划 ${id}：${escapeControlChars(file)} 不存在（计划 id 来自 watch import-codex prepare 的输出）`);
-    }
-    const plan = this.parseJson<ImportPlan>(raw, file, `导入计划 ${id} 的 plan.json `, '可删除该日志目录后重新 prepare（会得到新的计划 id）');
-    if (importPlanId(plan) !== id || plan.schema !== 1 || plan.route !== 'claude-code-to-codex-official') {
-      throw new Error(`导入计划与确认的 id 不匹配（plan.json 被改动，或与其他计划混在了一起）：${id}`);
+    // 裸 ENOENT 只说「没有这个文件」，用户看不出下一句该干嘛；计划 id 来自 prepare 的输出
+    const label = '导入计划';
+    const plan = await this.readPlanFile<ImportPlan>(
+      id,
+      label,
+      '可删除该日志目录后重新 prepare（会得到新的计划 id）',
+      '（计划 id 来自 watch import-codex prepare 的输出）',
+    );
+    if (plan.schema !== 1 || plan.route !== 'claude-code-to-codex-official') {
+      // 与 projectPlan() 同一档：route 不同是「拿错了计划」，文件完好，下一步是换子命令而不是删日志
+      const found = typeof plan.route === 'string' ? plan.route : '（没有 route 字段）';
+      throw new Error(
+        `${label} ${id} 的 route 是 ${found}，不是 claude-code-to-codex-official：这份日志不是官方导入计划（可能拿错了计划 id 或子命令）；` +
+          '若它是项目关联计划，请改用 watch import-codex project-status ' + id,
+      );
     }
     return plan;
   }
@@ -246,7 +320,21 @@ export class ImportJobs {
   }
 
   async claim(id: string): Promise<void> {
-    await this.exclusive(path.join(this.dir(id), 'started.json'), { startedAt: new Date().toISOString() });
+    const file = path.join(this.dir(id), 'started.json');
+    try {
+      await this.exclusive(file, { startedAt: new Date().toISOString() });
+    } catch (error) {
+      // claim 本身就是写操作的一部分：只有这里失败才保证原生侧还没动过，但也**不能说**
+      // 「未写入任何内容」——用户看到这句会以为整个导入没开始，转头可能就重跑一次。
+      // 下一步是核对日志与目标锁，不是删掉它们重来。
+      throw new Error(
+        describeWriteError(
+          error,
+          file,
+          '本次导入没有启动；先确认这条执行日志与目标锁（同目录的 started.json / 原生侧锁文件）的状态，不要在未核对前重复执行或删除日志',
+        ),
+      );
+    }
   }
 
   async save(id: string, outcome: ImportOutcome): Promise<void> {
@@ -323,10 +411,20 @@ export class ImportJobs {
       let plan: ImportPlan;
       let outcome: ImportOutcome | null;
       try {
-        plan = await this.plan(id);
-        outcome = await this.outcome(id);
+        // 只验公共部分（id 对得上、能解析）：这里**不能**用 `plan()`，它会按 route 拒绝
+        // 项目关联日志——那些是同一根目录下的正常日志，不是坏日志，报进 `skipped` 会让每次
+        // 预览/状态都说「有 N 份读不出来，无法确认是否重复导入」，还可能把人引去删日志。
+        plan = await this.readPlanFile<ImportPlan>(id, '导入计划', '可删除该日志目录后重新 prepare（会得到新的计划 id）');
       } catch (error) {
         // 读不出这一条就说这一条；后面的日志照常检查，不因一条坏日志放弃整次重复导入检查
+        skipped.push({ id, reason: error instanceof Error ? error.message : String(error) });
+        continue;
+      }
+      // 只有官方导入 route 才有「导入过同一来源会话」这回事
+      if (plan.route !== 'claude-code-to-codex-official' || plan.schema !== 1) continue;
+      try {
+        outcome = await this.outcome(id);
+      } catch (error) {
         skipped.push({ id, reason: error instanceof Error ? error.message : String(error) });
         continue;
       }
