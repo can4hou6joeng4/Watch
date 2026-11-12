@@ -1,6 +1,6 @@
 import type { Finding } from './findings.js';
 import { addFinding } from './findings.js';
-import { CLAUDE_COMPACT_SUMMARY_PREFIX, findContextDisclosure, OPENCODE_COMPACTION_SUMMARY_PREFIX, PI_COMPACTION_SUMMARY_PREFIX, WATCH_CONTEXT_DISCLOSURE_PREFIX } from './rich.js';
+import { CLAUDE_COMPACT_SUMMARY_PREFIX, findContextDisclosure, KIMI_COMPACTION_SUMMARY_PREFIX, OPENCODE_COMPACTION_SUMMARY_PREFIX, PI_COMPACTION_SUMMARY_PREFIX, WATCH_CONTEXT_DISCLOSURE_PREFIX } from './rich.js';
 import type { ProcessEvent, TokenUsage, UnifiedTurn } from './types.js';
 
 /**
@@ -59,8 +59,9 @@ export type PromptOptions = {
    *
    * 压缩摘要本身已经概括了更早的内容，再把它之前的原始轮次全带上，读者会同时看到
    * 「摘要」与「摘要已经概括过的原文」，既占篇幅又容易把两份并存的叙述当成两件事。
-   * 认三种痕迹：Claude Code 的 `CLAUDE_COMPACT_SUMMARY_PREFIX`（压缩摘要写在 user 轮正文里）、
-   * Pi 的 `PI_COMPACTION_SUMMARY_PREFIX`（`compaction` 条目，`parse` 还原成带前缀的用户轮）
+   * 认四种痕迹：Claude Code 的 `CLAUDE_COMPACT_SUMMARY_PREFIX`（压缩摘要写在 user 轮正文里）、
+   * Pi 的 `PI_COMPACTION_SUMMARY_PREFIX`（`compaction` 条目，`parse` 还原成带前缀的用户轮）、
+   * Kimi 的 `KIMI_COMPACTION_SUMMARY_PREFIX`（`context.apply_compaction.summary`，同样还原成用户轮）
    * 与 OpenCode 2.x 的 `OPENCODE_COMPACTION_SUMMARY_PREFIX`（compaction 事件挂在轮次上）。
    * 别的来源没有这个痕迹时**不裁剪**，并在正文里说明「未裁剪」，不能假装生效。
    */
@@ -341,10 +342,10 @@ function renderEvent(event: ProcessEvent, detailLimit: number | null, stats: Pro
 /**
  * 最近一条压缩摘要所在的下标与来源；没有返回 null。
  *
- * 只认三种**正文痕迹**，不猜时间或文本形状：Claude Code 把摘要写成 user 轮正文的前缀，
- * Pi 的 `compaction` 条目由 `parse` 还原成带前缀的用户轮，OpenCode 2.x 把 compaction 写成
- * 挂在轮次上的文本事件——前缀是唯一能区分「客户端生成的摘要」与「用户真的粘贴了一篇总结」
- * 的东西。三种痕迹都存在时取更晚的那条。
+ * 只认四种**正文痕迹**，不猜时间或文本形状：Claude Code 把摘要写成 user 轮正文的前缀，
+ * Pi 的 `compaction` 条目与 Kimi 的 `context.apply_compaction` 都由 `parse` 还原成带前缀的
+ * 用户轮，OpenCode 2.x 把 compaction 写成挂在轮次上的文本事件——前缀是唯一能区分
+ * 「客户端生成的摘要」与「用户真的粘贴了一篇总结」的东西。四种痕迹都存在时取更晚的那条。
  */
 /** 这是不是 OpenCode 2.x 的压缩摘要事件（`parse` 按同一前缀写入）。 */
 function isCompactSummaryEvent(event: ProcessEvent): boolean {
@@ -367,11 +368,12 @@ function isContextDisclosureEvent(event: ProcessEvent): boolean {
   );
 }
 
-function lastCompactSummary(turns: UnifiedTurn[]): { index: number; source: 'claude' | 'opencode' | 'pi' } | null {
+function lastCompactSummary(turns: UnifiedTurn[]): { index: number; source: 'claude' | 'opencode' | 'pi' | 'kimi' } | null {
   for (let i = turns.length - 1; i >= 0; i--) {
     const t = turns[i]!;
     if (t.role === 'user' && t.text.startsWith(CLAUDE_COMPACT_SUMMARY_PREFIX)) return { index: i, source: 'claude' };
     if (t.role === 'user' && t.text.startsWith(PI_COMPACTION_SUMMARY_PREFIX)) return { index: i, source: 'pi' };
+    if (t.role === 'user' && t.text.startsWith(KIMI_COMPACTION_SUMMARY_PREFIX)) return { index: i, source: 'kimi' };
     if ((t.events ?? []).some(isCompactSummaryEvent)) return { index: i, source: 'opencode' };
   }
   return null;
@@ -411,7 +413,13 @@ export function buildHandoffPrompt(
   const compact = options.sinceCompact ? lastCompactSummary(turns) : null;
   const compactAt = compact?.index ?? -1;
   const compactSource =
-    compact?.source === 'opencode' ? 'OpenCode' : compact?.source === 'pi' ? 'Pi' : 'Claude Code';
+    compact?.source === 'opencode'
+      ? 'OpenCode'
+      : compact?.source === 'pi'
+        ? 'Pi'
+        : compact?.source === 'kimi'
+          ? 'Kimi'
+          : 'Claude Code';
   const compactOmitted = compactAt > 0 ? compactAt : 0;
   const scoped = compactAt >= 0 ? turns.slice(compactAt) : turns;
 
@@ -587,9 +595,15 @@ export function buildHandoffPrompt(
   }
   // 指定了 --since-compact 却没有可裁剪的摘要：必须在正文里说清「未生效」，
   // 否则读者会以为窗口是从摘要开始的，而实际上面这份文档包含的轮次更多。
+  // 「没有摘要」只说明 --since-compact 这一层没裁；`--last` / 档位上限仍可能裁掉轮次，
+  // 此时不能再说「正文包含全部轮次」——同一份文档里前后两句相反，读者会以为背景齐全。
   if (options.sinceCompact && compactAt < 0) {
+    const unavailable =
+      '这条会话里没有 Watch 可用的压缩摘要（Claude Code 的压缩摘要记录、Pi 的 compaction 条目、Kimi 的 context.apply_compaction 或 OpenCode 的 compaction 事件；Codex 的 compacted 记录目前只披露、不并入摘要）';
     lines.push(
-      '- 指定了 --since-compact，但这条会话里没有 Watch 可用的压缩摘要（Claude Code 的压缩摘要记录、Pi 的 compaction 条目或 OpenCode 的 compaction 事件；Codex 的 compacted 记录目前只披露、不并入摘要），本次未裁剪，正文包含全部轮次',
+      stats.omittedTurns > 0
+        ? `- 指定了 --since-compact，但${unavailable}，未按 --since-compact 裁剪；正文仍按档位 / --last 省略了 ${stats.omittedTurns} 轮，并未包含全部轮次（见下方「本次省略」）`
+        : `- 指定了 --since-compact，但${unavailable}，本次未裁剪，正文包含全部轮次`,
     );
   } else if (options.sinceCompact && compactOmitted === 0) {
     lines.push(`- 按 --since-compact 从最近一次压缩摘要开始（摘要之前没有可省略的轮次；摘要由 ${compactSource} 生成，不是用户原话）`);
