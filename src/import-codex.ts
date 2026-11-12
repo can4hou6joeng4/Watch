@@ -27,6 +27,24 @@ const IMPORT_POSITIONAL_HINT: Record<string, string> = {
 };
 
 /**
+ * 项目关联计划的文本模式摘要（三行）。`projectName` / `projectId` 来自原生 app-server 的
+ * `project/read` 响应，是 Codex 侧写入的名字——与本仓库所有插值进终端的字符串同属不可信输入，
+ * 必须过 `escapeControlChars()`（ESC 能改颜色 / 窗口标题 / 清屏，而 stdout 没有第二个显示层）。
+ * 抽成函数是为了让这段逐字可测：文本模式整体只有真连上 codex app-server 才走得到。
+ */
+export function formatProjectPlanText(plan: {
+  thread: { sessionId: string; cwd: string };
+  projectName: string;
+  projectId: string;
+}): string {
+  return (
+    `线程: ${plan.thread.sessionId}\n` +
+    `项目: ${escapeControlChars(plan.projectName)} (${escapeControlChars(plan.projectId)})\n` +
+    `目录: ${escapeControlChars(plan.thread.cwd)}`
+  );
+}
+
+/**
  * 先按白名单自查一遍参数，再把结果交给 `parseArgs`。
  *
  * 直接让 `parseArgs` 报错会把 Node 的英文原文塞给用户（`Unknown option '--desktop'` /
@@ -184,7 +202,7 @@ export async function runImportCodex(args: string[]): Promise<void> {
     if (json) console.log(JSON.stringify({ ok, ...result }));
     else {
       console.log(`计划: ${result.planId}\n状态: ${result.status}`);
-      if ('thread' in result.plan) console.log(`线程: ${result.plan.thread.sessionId}\n项目: ${result.plan.projectName} (${result.plan.projectId})\n目录: ${escapeControlChars(result.plan.thread.cwd)}`);
+      if ('thread' in result.plan) console.log(formatProjectPlanText(result.plan));
       else console.log(`来源: ${result.plan.source.sessionId}\n项目目录: ${escapeControlChars(result.plan.source.cwd)}`);
       if ('evidenceScope' in result && result.status === 'associated') console.log('这里只记录关联结果；status 不查询实时项目成员关系。');
       console.log(`Codex 数据目录: ${escapeControlChars(result.plan.target?.path ?? result.plan.codexHome)}`);
