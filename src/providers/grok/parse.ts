@@ -1,9 +1,9 @@
 import { readFile, stat } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
-import { ensureAssistant, normalizeUserText, pushEvent, stripEmptyEvents, summarize } from '../../core/rich.js';
+import { ensureAssistant, normalizeUserText, pushEvent, stripEmptyEvents, summarize, WATCH_CONTEXT_DISCLOSURE_PREFIX } from '../../core/rich.js';
 import { asJsonObject, parseJsonObject } from '../../core/jsonl.js';
-import type { ProcessEvent, SessionRef, TokenUsage, UnifiedTurn } from '../../core/types.js';
-import { grokUpdateTurnUsages } from './usage.js';
+import type { ProcessEvent, SessionRef, UnifiedTurn } from '../../core/types.js';
+import { grokUpdateScan } from './usage.js';
 
 type ChatLine =
   | { type: 'system'; content: string }
@@ -225,11 +225,11 @@ export async function parseGrokSession(ref: SessionRef): Promise<UnifiedTurn[]> 
     }
   }
 
-  return attachTurnUsages(ref.filePath, stripEmptyEvents(turns));
+  return attachGrokSidecars(ref.filePath, stripEmptyEvents(turns));
 }
 
 /**
- * 把同目录 `updates.jsonl` 里每轮的 `turn_completed.usage` 挂回对应的 assistant 轮。
+ * 把同目录 `updates.jsonl` 里的逐轮用量挂回 assistant 轮，并披露上下文压缩次数。
  *
  * 用量不在 `chat_history.jsonl`（本函数读的那份），而在 `updates.jsonl`——原生 `/resume`
  * 与 session restore 的权威日志，写出侧 `buildGrokUpdateLines()` 也把 `turn.usage` 写在那里。
@@ -241,20 +241,48 @@ export async function parseGrokSession(ref: SessionRef): Promise<UnifiedTurn[]> 
  * 数量不等说明有一侧被截断或重放，按顺序硬套会把第 N 轮的用量挂到别人头上——宁可不填，
  * 也不能编一个看似合理却错位的数（同 pi 不猜多 assistant 轮的既有取舍）。
  *
+ * **`compaction_checkpoint` 只披露、不还原**：它表示 Grok 压缩过上下文，摘要正文在旁路
+ * `compaction_checkpoints/` 文件里，格式未验证。直接读并拼进交接，会把未经验证的内容当成
+ * Grok 的原话；完全不说是更糟的方向——用户会以为目标会话拿到了 Grok 当前的全部上下文。
+ * 披露写成 `WATCH_CONTEXT_DISCLOSURE_PREFIX` 事件，由 `findContextDisclosure()` 汇入
+ * prompt 头部、handoff warnings 与 open 三处。
+ *
  * 读不出来同样不挂且不抛：用量是辅助数据，`updates.jsonl` 坏了不该让可读的内容交接失败；
  * 信息层 `grokSessionUsage()` 会在 `usage` / `open` 的 `warnings` 里单独报这个读取失败。
  */
-async function attachTurnUsages(chatPath: string, turns: UnifiedTurn[]): Promise<UnifiedTurn[]> {
-  let usages: TokenUsage[] | null;
+async function attachGrokSidecars(chatPath: string, turns: UnifiedTurn[]): Promise<UnifiedTurn[]> {
+  // 不让纯工具轮的空正文被披露文本替换；有真实用户轮或非空助手正文才挂载声明。
+  const carrier = [...turns].reverse().find((turn) => turn.role === 'user' || turn.text.trim());
+  const disclose = (message: string): void => {
+    if (!carrier) return;
+    const text = `${WATCH_CONTEXT_DISCLOSURE_PREFIX}${message}]`;
+    pushEvent(carrier, { kind: 'text', summary: text, detail: text, timestamp: carrier.timestamp, provider: 'grok' });
+  };
+  let scan: Awaited<ReturnType<typeof grokUpdateScan>>;
   try {
-    usages = await grokUpdateTurnUsages(join(dirname(chatPath), 'updates.jsonl'));
-  } catch {
+    scan = await grokUpdateScan(join(dirname(chatPath), 'updates.jsonl'));
+  } catch (error) {
+    disclose(`Grok 的 updates.jsonl 读取失败，无法确认上下文压缩记录与逐轮用量；本次仅保留 chat_history.jsonl 中可读的对话。${error instanceof Error ? error.message : String(error)}`);
     return turns;
   }
-  if (!usages || usages.length === 0) return turns;
-  const assistants = turns.filter((t) => t.role === 'assistant');
-  if (assistants.length !== usages.length) return turns;
-  for (let i = 0; i < assistants.length; i++) assistants[i].usage = usages[i];
+  if (!scan) return turns;
+  if (scan.usages.length > 0) {
+    const assistants = turns.filter((t) => t.role === 'assistant');
+    if (assistants.length === scan.usages.length) {
+      for (let i = 0; i < assistants.length; i++) assistants[i].usage = scan.usages[i];
+    }
+  }
+  // 坏行本身已经由用量层（`usageBadLines`）在 prompt 头部 / open / handoff / usage 四处披露，
+  // 这里不再单独重复一句；但坏行可能吞掉 compaction_checkpoint，压缩计数就只是下界——
+  // 那句话必须挂在压缩披露里，不能把「读到 N 次」讲成「一共 N 次」。
+  if (scan.compactions > 0) {
+    disclose(
+      `Grok 的 updates.jsonl 记录了 ${scan.compactions} 次上下文压缩（compaction_checkpoint）` +
+      (scan.badLines > 0 ? `；另有 ${scan.badLines} 行无法解析，实际压缩次数可能更多` : '') +
+      `；Watch 的解析以 chat_history.jsonl 为准，压缩摘要与压缩后重建的上下文没有并入这次交接：` +
+      `目标会话看到的可能是压缩前的历史，与 Grok 当前实际使用的上下文不一致，需要精确续接时请在原生 Grok 中核对。`,
+    );
+  }
   return turns;
 }
 

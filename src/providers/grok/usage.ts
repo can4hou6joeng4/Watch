@@ -1,6 +1,7 @@
 import { readFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import type { SessionRef, TokenUsage } from '../../core/types.js';
+import { parseJsonObject } from '../../core/jsonl.js';
 import { describeSessionReadFailure, isMissingPathError } from '../../core/read-text.js';
 
 /**
@@ -59,6 +60,20 @@ export async function grokSessionUsage(ref: SessionRef): Promise<TokenUsage | nu
  * 其余读不出来照常抛错，由 `chainUsage` 记成「读取失败」而不是「无数据」。
  */
 export async function grokUpdateTurnUsages(updatesPath: string): Promise<TokenUsage[] | null> {
+  const scan = await grokUpdateScan(updatesPath);
+  return scan ? scan.usages : null;
+}
+
+/**
+ * `updates.jsonl` 的单次扫描结果：逐轮用量 + 上下文压缩次数。
+ *
+ * 搬运层需要两者（用量挂到 assistant 轮，压缩次数写成上下文披露），却只该读一遍文件：
+ * 分开读会让同一条会话在大文件上多付一次 IO，也让「文件读不出来」出现两种处理方式。
+ * 信息层仍只关心用量，经 `grokUpdateTurnUsages()` 取 `usages`。
+ */
+export type GrokUpdateScan = { usages: TokenUsage[]; compactions: number; badLines: number };
+
+export async function grokUpdateScan(updatesPath: string): Promise<GrokUpdateScan | null> {
   let raw: string;
   try {
     raw = await readFile(updatesPath, 'utf8');
@@ -67,26 +82,30 @@ export async function grokUpdateTurnUsages(updatesPath: string): Promise<TokenUs
     throw new Error(describeSessionReadFailure(updatesPath, error));
   }
   const usages: TokenUsage[] = [];
+  let compactions = 0;
+  let badLines = 0;
   for (const line of raw.split('\n')) {
     if (!line.trim()) continue;
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(line);
-    } catch {
+    const rec = parseJsonObject(line);
+    if (!rec) {
+      badLines += 1;
       continue;
     }
-    // 非对象只跳过该行，其余轮次的用量继续按顺序收集；旁路文件由共用坏行计数披露下界。
-    if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) continue;
-    const rec = parsed as Record<string, unknown>;
     const params = asRecord(rec.params);
     const update = asRecord(params?.update) ?? asRecord(rec.update);
     if (!update) continue;
+    if (update.sessionUpdate === 'compaction_checkpoint') {
+      // Grok 每次压缩上下文都写一条；摘要正文在会话目录的 compaction_checkpoints/ 旁路文件里，
+      // 格式未经验证，这里只计数、不读也不拼进交接（见 parseGrokSession 的披露）。
+      compactions += 1;
+      continue;
+    }
     if (update.sessionUpdate !== 'turn_completed') continue;
     const u = pick(update.usage);
     if (!u) continue;
     usages.push(u);
   }
-  return usages;
+  return { usages, compactions, badLines };
 }
 
 function pick(usage: unknown): TokenUsage | null {
