@@ -69,12 +69,15 @@ export async function grokUpdateTurnUsages(updatesPath: string): Promise<TokenUs
   const usages: TokenUsage[] = [];
   for (const line of raw.split('\n')) {
     if (!line.trim()) continue;
-    let rec: Record<string, unknown>;
+    let parsed: unknown;
     try {
-      rec = JSON.parse(line) as Record<string, unknown>;
+      parsed = JSON.parse(line);
     } catch {
       continue;
     }
+    // 非对象只跳过该行，其余轮次的用量继续按顺序收集；旁路文件由共用坏行计数披露下界。
+    if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) continue;
+    const rec = parsed as Record<string, unknown>;
     const params = asRecord(rec.params);
     const update = asRecord(params?.update) ?? asRecord(rec.update);
     if (!update) continue;
