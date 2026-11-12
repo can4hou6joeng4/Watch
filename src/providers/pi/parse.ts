@@ -140,7 +140,22 @@ export async function parsePiSession(ref: SessionRef): Promise<UnifiedTurn[]> {
 
     const last = ensureAssistant(turns, timestamp, 'pi');
     for (const ev of extracted.events) pushEvent(last, ev);
-    if (extracted.text.trim()) last.text = extracted.text;
+    if (extracted.text.trim()) {
+      // 同一助手轮里「说明文字 + 工具调用」之后又来了新的说明文字时，正文只会保留最后一段；
+      // 被覆盖的中间说明以前直接从时间线消失（`watch prompt` 少一段、转入 claude / codex
+      // 时也少一段），而 round-trip 只比最终正文，拦不住。与 claude parse 同口径：把被覆盖的
+      // 正文留成 text 事件，最终正文仍取最后一段。纯流式重复（两段完全相同）不重复记录。
+      if (last.text.trim() && last.text !== extracted.text) {
+        pushEvent(last, {
+          kind: 'text',
+          summary: summarize(last.text, '过程'),
+          detail: last.text,
+          timestamp: last.timestamp,
+          provider: 'pi',
+        });
+      }
+      last.text = extracted.text;
+    }
     if (timestamp) last.timestamp = timestamp;
     if (usage) last.usage = usage;
   }
