@@ -28,6 +28,11 @@ function parseJson<T>(raw: string): T | null {
 type OpencodeMessageData = {
   role?: string;
   time?: { created?: number; completed?: number };
+  /** 1.x 压缩摘要消息（compaction.ts 的 processCompaction 写入） */
+  summary?: boolean;
+  finish?: string;
+  error?: unknown;
+  parentID?: string;
   model?: { providerID?: string; modelID?: string };
   tokens?: {
     total?: number;
@@ -193,11 +198,19 @@ function partToEvents(part: OpencodePartData, baseTime: number): ProcessEvent[] 
 }
 
 /**
- * 1.x 原生会写、但不承载对话内容的步骤标记（1.18.29 原生验收记录的 partTypes：
- * text / step-start / reasoning / tool / step-finish）。解析不搬运它们，也不该算作丢失；
- * 其余没被映射的类型一律计入未识别披露，不猜含义。
+ * 1.x 原生会写、但不承载对话内容的记账 part。
+ *
+ * 依据上游 v1.18.29（16747470f976aca3d362ad730bcd3fe82ecc2c9a）的
+ * `packages/opencode/src/session/processor.ts`：`step-start` / `step-finish` 是每个 step 的
+ * 起止帧，`patch` 在每次改过文件的 step-finish 与 cleanup 之后写入（`snapshot.patch()` 有
+ * 文件差异才写），`snapshot` 同属快照记账。第三方实现 catchup（8280337）与 CASR（fac8916）
+ * 也显式忽略这四种。第五十八轮只排除了 step-start / step-finish，于是**任何改过文件的正常
+ * 会话**都会带一条「有 N 处未识别」的假披露，还会被 claude / codex 写进目标会话。
+ *
+ * `compaction` 单独处理：它标记压缩点，正文由紧随其后的 `summary: true` 消息承载（见下方
+ * 压缩摘要分支），不是丢失的数据。
  */
-const V1_IGNORED_PART_TYPES = new Set(['step-start', 'step-finish']);
+const V1_IGNORED_PART_TYPES = new Set(['step-start', 'step-finish', 'patch', 'snapshot']);
 
 function messageToTurn(
   msg: MessageRow,
@@ -239,6 +252,8 @@ function messageToTurn(
       continue;
     }
     if (V1_IGNORED_PART_TYPES.has(partType)) continue;
+    // 压缩标记本身没有对话内容；摘要正文在随后的 `summary: true` 助手消息里
+    if (partType === 'compaction') continue;
     const partTime = partRow.time_created;
     if (isTextPart(part)) {
       if (part.text) textParts.push(part.text);
@@ -248,7 +263,7 @@ function messageToTurn(
       if (partEvent) events.push(partEvent);
       events.push(...partToEvents(part, partTime));
     } else {
-      // text / reasoning / tool / file 之外的类型（patch / subtask / agent / retry 等）不搬运内容，
+      // text / reasoning / tool / file 之外的类型（subtask / agent / retry 等）不搬运内容，
       // 但必须把类型与条数交给最后一条 turn 披露，不能让它看起来从未存在。
       bumpCount(unknown, `part:${partType}`);
     }
@@ -267,6 +282,39 @@ function messageToTurn(
     }
   }
   const text = textParts.join('\n\n');
+
+  // OpenCode 1.x 的压缩（compaction.ts 的 create / processCompaction）：先写一条只含
+  // `compaction` part 的 user 消息，再写一条 `summary: true` 的 assistant 摘要消息。
+  // 摘要不是助手对用户说的话——按普通回复处理时，前一轮带工具调用就会被并进那一轮正文
+  // （还会顶掉那一轮的真实 usage）；`--since-compact` 也完全认不出来（它只认
+  // OPENCODE_COMPACTION_SUMMARY_PREFIX 事件）。这里与 2.x 的 compaction 事件统一形状：
+  // 完成的压缩（上游 completedCompactions 判据：summary && finish && !error）写成带前缀的
+  // text 事件挂在当前轮次上；未完成 / 出错的压缩没有替换上下文，只保留正文并声明未生效，
+  // **不作为压缩边界**（catchup 同样只认 status === "completed"）。
+  // 摘要调用本身是一次独立请求，其 usage 不并入前一轮（事件没有用量字段，宁可不记）。
+  if (role === 'assistant' && data.summary === true) {
+    const completed = Boolean(data.finish) && data.finish !== 'error' && data.error === undefined;
+    const summaryEvent: ProcessEvent = completed
+      ? {
+          kind: 'text',
+          timestamp,
+          summary: OPENCODE_COMPACTION_SUMMARY_PREFIX,
+          detail: text || '（本次压缩没有留下摘要正文）',
+          provider: 'opencode',
+        }
+      : {
+          kind: 'text',
+          timestamp,
+          summary: '[OpenCode 压缩摘要未生效（未完成或出错），上下文未被替换]',
+          detail: text,
+          provider: 'opencode',
+        };
+    if (prevTurn) {
+      prevTurn.events = [...(prevTurn.events ?? []), ...events, summaryEvent];
+      return null;
+    }
+    return { role, text: '', timestamp, provider: 'opencode', events: [...events, summaryEvent] };
+  }
 
   // OpenCode build 把含工具调用的 assistant turn 拆成两条 message：
   // 1) tool-calls（finish='tool-calls'） 2) 最终文本（finish='stop'）。
@@ -684,7 +732,7 @@ export async function parseOpencodeSession(ref: SessionRef): Promise<UnifiedTurn
           summary: `[OpenCode 有 ${total} 处未识别或无法解析的数据，未并入对话]`,
           detail:
             `${describeCounts(unknown)}；Watch 只识别 user / assistant 消息与 text / reasoning / tool / file 内容，` +
-            'step-start / step-finish 是原生步骤标记、不并入对话；其余原样跳过，不猜含义',
+            'step-start / step-finish / patch / snapshot 是原生步骤与快照记账、compaction 是压缩标记，都不并入对话；其余原样跳过，不猜含义',
           provider: 'opencode',
         },
       ];
