@@ -480,10 +480,20 @@ function v2ToolResultText(state: V2ToolState | undefined): string | undefined {
   return undefined;
 }
 
-function v2UserTurn(row: V2MessageRow, data: V2MessageData): UnifiedTurn | null {
+function v2UserTurn(row: V2MessageRow, data: V2MessageData, unknown: Map<string, number>): UnifiedTurn | null {
   const raw = typeof data.text === 'string' ? data.text : typeof data.content === 'string' ? data.content : '';
   const normalized = normalizeUserText(raw);
-  if (!normalized) return null;
+  if (!normalized) {
+    // 上游 User.text 是权威字符串字段；有值但类型不对时，「无文本」会把真实原因盖掉。
+    if (data.text !== undefined && typeof data.text !== 'string') {
+      bumpCount(unknown, 'user（text 不是字符串）');
+    } else if (data.content !== undefined && typeof data.content !== 'string') {
+      bumpCount(unknown, 'user（content 不是字符串）');
+    } else {
+      bumpCount(unknown, 'user（无文本）');
+    }
+    return null;
+  }
   const time = typeof data.time?.created === 'number' ? data.time.created : row.time_created;
   return { role: 'user', text: normalized, timestamp: isoFromEpochMs(time), provider: 'opencode' };
 }
@@ -514,11 +524,18 @@ function v2AssistantTurn(
       continue;
     }
     if (item.type === 'text') {
-      if (typeof item.text === 'string' && item.text) texts.push(item.text);
+      if (typeof item.text === 'string') {
+        if (item.text) texts.push(item.text);
+      } else {
+        // 上游 text / reasoning 的 text 都是必填字符串；类型不对时以前直接丢弃，
+        // 整段答复或思考消失且没有任何计数。
+        bumpCount(unknown, 'content:text（text 不是字符串）');
+      }
     } else if (item.type === 'reasoning') {
-      const text = typeof item.text === 'string' ? item.text : '';
-      if (text) {
-        events.push({ kind: 'thinking', timestamp, detail: text, summary: text, provider: 'opencode' });
+      if (typeof item.text !== 'string') {
+        bumpCount(unknown, 'content:reasoning（text 不是字符串）');
+      } else if (item.text) {
+        events.push({ kind: 'thinking', timestamp, detail: item.text, summary: item.text, provider: 'opencode' });
       }
     } else if (item.type === 'tool') {
       const callId = item.id ?? `oc-${crypto.randomUUID()}`;
@@ -681,11 +698,8 @@ function parseOpencodeV2Turns(db: DatabaseSync, sessionId: string): UnifiedTurn[
     }
 
     if (row.type === 'user') {
-      const turn = v2UserTurn(row, data);
-      if (!turn) {
-        bumpCount(unknown, 'user（无文本）');
-        continue;
-      }
+      const turn = v2UserTurn(row, data, unknown);
+      if (!turn) continue;
       flushPendingToLast();
       turns.push(turn);
       continue;
