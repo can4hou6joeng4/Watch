@@ -7,6 +7,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { homedir } from 'node:os';
 import path from 'node:path';
 import { writeFileAtomic } from '../../core/atomic.js';
+import { asJsonObject, parseJsonObject } from '../../core/jsonl.js';
 import { describePathReadFailureReason, emptySessionFileReasonFromStat, readTextOrEmpty } from '../../core/read-text.js';
 import { verifyWrittenTurns } from '../../core/verify.js';
 import { mergeConsecutiveAssistant } from '../../core/rich.js';
@@ -107,23 +108,19 @@ async function readChatLines(filePath: string): Promise<ChatLine[]> {
   const lines: ChatLine[] = [];
   for (const line of raw.split('\n')) {
     if (!line.trim()) continue;
-    try {
-      lines.push(JSON.parse(line) as ChatLine);
-    } catch {
-      // ignore malformed
-    }
+    // 顶层 null / 数组 / 标量也是合法 JSON：以前照推，随后 `existing.find(l => l.type === 'system')`
+    // 与 chatMsgCount 的 filter 会以 TypeError 中断整次追加写入。
+    const rec = parseJsonObject(line);
+    if (rec) lines.push(rec as ChatLine);
   }
   return lines;
 }
 
 async function readSummary(filePath: string): Promise<Record<string, unknown> | null> {
   const raw = await readFile(filePath, 'utf8').catch(() => '');
-  if (!raw.trim()) return null;
-  try {
-    return JSON.parse(raw) as Record<string, unknown>;
-  } catch {
-    return null;
-  }
+  // 非对象 summary（`"bad"` / `42` / `[]`）以前被当成对象返回，随后 `summary.updated_at = now`
+  // 在严格模式下抛 TypeError；按「读不出可用摘要」处理，由调用方重建。
+  return parseJsonObject(raw);
 }
 
 /** 本机最近的 grok 会话 summary.json（按 mtime 降序）；用于探测原生身份 */
@@ -193,13 +190,12 @@ async function readModelFingerprint(chatPath: string, modelId: string): Promise<
   for (let i = lines.length - 1; i >= 0; i -= 1) {
     const line = lines[i]!.trim();
     if (!line) continue;
-    try {
-      const record = JSON.parse(line) as { type?: unknown; model_id?: unknown; model_fingerprint?: unknown };
-      if (record.type !== 'assistant' || record.model_id !== modelId) continue;
-      if (typeof record.model_fingerprint === 'string' && record.model_fingerprint) return record.model_fingerprint;
-    } catch {
-      continue; // 尾部截断行
-    }
+    const record = parseJsonObject(line) as
+      | { type?: unknown; model_id?: unknown; model_fingerprint?: unknown }
+      | null;
+    if (!record) continue; // 尾部截断行 / 非对象值
+    if (record.type !== 'assistant' || record.model_id !== modelId) continue;
+    if (typeof record.model_fingerprint === 'string' && record.model_fingerprint) return record.model_fingerprint;
   }
   return undefined;
 }
@@ -388,8 +384,7 @@ export async function findGrokSessionById(
         continue;
       }
       const summary = await readSummary(path.join(sessionDir, 'summary.json'));
-      const info = summary?.info;
-      const summaryCwd = typeof info === 'object' && info !== null ? (info as { cwd?: unknown }).cwd : undefined;
+      const summaryCwd = asJsonObject(summary?.info)?.cwd;
       const cwd = typeof summaryCwd === 'string' && summaryCwd ? summaryCwd : dirCwd;
       const preview =
         typeof summary?.generated_title === 'string'
@@ -794,7 +789,7 @@ export async function importTurnsToGrok(
   if (typeof summary.sandbox_profile !== 'string' || !summary.sandbox_profile) {
     summary.sandbox_profile = identity.sandboxProfile;
   }
-  if (!summary.info || typeof summary.info !== 'object') {
+  if (!summary.info || typeof summary.info !== 'object' || Array.isArray(summary.info)) {
     summary.info = { id: ref.sessionId, cwd };
   } else {
     (summary.info as Record<string, unknown>).id = ref.sessionId;

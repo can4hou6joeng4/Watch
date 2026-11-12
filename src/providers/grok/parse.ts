@@ -1,6 +1,7 @@
 import { readFile, stat } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { ensureAssistant, normalizeUserText, pushEvent, stripEmptyEvents, summarize } from '../../core/rich.js';
+import { asJsonObject, parseJsonObject } from '../../core/jsonl.js';
 import type { ProcessEvent, SessionRef, TokenUsage, UnifiedTurn } from '../../core/types.js';
 import { grokUpdateTurnUsages } from './usage.js';
 
@@ -24,8 +25,7 @@ type ChatLine =
   | { type: string };
 
 function asRecord(value: unknown): Record<string, unknown> | null {
-  if (value && typeof value === 'object' && !Array.isArray(value)) return value as Record<string, unknown>;
-  return null;
+  return asJsonObject(value);
 }
 
 /**
@@ -101,13 +101,7 @@ export async function parseGrokSession(ref: SessionRef): Promise<UnifiedTurn[]> 
   const records: Record<string, unknown>[] = [];
   for (const line of raw.split('\n')) {
     if (!line.trim()) continue;
-    let record: unknown;
-    try {
-      record = JSON.parse(line);
-    } catch {
-      continue;
-    }
-    const r = asRecord(record);
+    const r = parseJsonObject(line);
     if (r) records.push(r);
   }
   const base = anchor === null ? null : anchor.fromMtime ? anchor.ms - (records.length - 1) : anchor.ms;
@@ -250,10 +244,8 @@ async function attachTurnUsages(chatPath: string, turns: UnifiedTurn[]): Promise
 
 async function readGrokCreatedAt(filePath: string): Promise<string | null> {
   try {
-    const summary = JSON.parse(await readFile(join(dirname(filePath), 'summary.json'), 'utf8')) as {
-      created_at?: unknown;
-    };
-    return typeof summary.created_at === 'string' && summary.created_at ? summary.created_at : null;
+    const summary = parseJsonObject(await readFile(join(dirname(filePath), 'summary.json'), 'utf8'));
+    return typeof summary?.created_at === 'string' && summary.created_at ? summary.created_at : null;
   } catch {
     return null;
   }
