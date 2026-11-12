@@ -223,8 +223,18 @@ function cwdUnusableConclusion(subject: string, consequence: string): string {
   );
 }
 
+/**
+ * 列表里的时间格式化。
+ *
+ * 原生记录里的数值时间戳可能越界（单位写错、字段被写坏）：`new Date(ms).toISOString()`
+ * 对超出 ECMAScript 范围（±8.64e15 ms）的值抛 `RangeError: Invalid time value`，文本模式
+ * 整条列表直接崩溃退出，而同一份数据的 `--json` 只是原样印出数字，看起来完全正常。
+ * 越界时给出可读占位，既不中断列表，也不把 1970-01-01 这种伪造时间当成事实。
+ */
 function fmtTime(ms: number): string {
-  return new Date(ms).toISOString();
+  const date = new Date(ms);
+  if (Number.isNaN(date.getTime())) return '时间不可用（记录里的时间戳越界）';
+  return date.toISOString();
 }
 
 /**
@@ -693,6 +703,9 @@ async function cmdStatus(cwd: string, json: boolean, chain?: string): Promise<vo
     console.log(JSON.stringify({
       ok: true,
       ...result,
+      // `ok:true` + `history:[]` 分不清「链确实没有记录」与「库打不开 / switch_events 读失败」。
+      // 文本模式已用「（历史读取失败…）」区分，JSON 也要一个显式字段，桌面端才能渲染失败态。
+      historyAvailable: Boolean(store) && !result.historyFailed,
       ...(elsewhereJson.length ? { chainsElsewhere: elsewhereJson } : {}),
       ...(unattributableStats.length ? { unattributable: unattributableJson(unattributableStats) } : {}),
     }));
