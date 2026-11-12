@@ -3,7 +3,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { readText, writeText } from '@tauri-apps/plugin-clipboard-manager';
 import { ArrowDownLeft, ArrowRight, ArrowUpRight, Check, ChevronDown, ClipboardPaste, Copy, FileText, Folder, History, Info, LoaderCircle, Monitor, Moon, RefreshCw, Search, Settings2, ShieldCheck, Sun, SunMoon, Terminal, Workflow, X } from 'lucide-react';
 import { assertSameCodexImportPlan, beginCodexOpen, completeCodexOpen, failCodexOpen, importedCodexThreadId, parseCodexImportResult, viewForCodexImportResult, type CodexImportResult, type CodexImportView } from './codex-import.js';
-import { AGENTS, buildCommand, handoffRoute, historyView, parsePrecheckBlocked, parseThemePreference, providerDetectFailures, recentView, resolveTheme, sourceWarnings, THEME_OPTIONS, usableTerminals, type ProviderDetectFailure, type PrecheckResponse, type ThemePreference } from './handoff-ui.js';
+import { AGENTS, blockedHeading, buildCommand, handoffRoute, historyView, parsePrecheckBlocked, parseThemePreference, providerDetectFailures, recentStateFromError, recentStateFromView, recentView, resolveTheme, sourceWarnings, THEME_OPTIONS, usableTerminals, type ProviderDetectFailure, type PrecheckResponse, type RecentState, type ThemePreference } from './handoff-ui.js';
 import './App.css';
 
 type TerminalId = 'terminal' | 'kaku' | 'iterm2' | 'ghostty';
@@ -18,7 +18,8 @@ type Detect = { status: 'idle' | 'loading' } | { status: 'ok'; source: Source } 
 type Blocked = { code: string; sessionId?: string; holders?: { pid: number; command: string }[]; hint?: string };
 type Precheck = { status: 'idle' | 'checking' | 'ok' | 'blocked' | 'error'; writable?: boolean; note?: string; notes?: string[]; warnings?: string[]; blocked?: Blocked; error?: string };
 type Transfer = { provider: string; sessionId: string; cwd?: string; notes: string[]; warnings?: string[]; delivery?: 'copied' | 'launched'; error?: string };
-type BlockedNotice = { provider: string; sourceId: string; info: Blocked; error: string };
+// 失败卡片：blocked 存在表示结构化写入拒绝；没有 blocked 时是转换失败，只展示 error/warnings，不承诺零写入
+type TransferFailure = { provider: string; sourceId: string; error: string; warnings: string[]; blocked?: Blocked };
 const native = () => '__TAURI_INTERNALS__' in window && Boolean(window.__TAURI_INTERNALS__);
 const windows = /windows/i.test(navigator.userAgent);
 const labels = Object.fromEntries(AGENTS.map((agent) => [agent.id, agent.label]));
@@ -38,17 +39,13 @@ export default function App() {
   const [demo, setDemo] = useState(() => !native() && new URLSearchParams(location.search).get('demo') === '1');
   const [page, setPage] = useState<Page>('handoff');
   const [detect, setDetect] = useState<Detect>({ status: 'idle' });
-  const [recents, setRecents] = useState<Recent[]>([]);
+  // 「近期会话」一份状态一起更新：失败时 items/omitted 必须同步清空，不能只改 error 留下上一轮列表
+  const [recent, setRecent] = useState<RecentState<Recent>>({ items: [], omitted: 0, warnings: [], error: '' });
   const [providers, setProviders] = useState<Provider[]>([]);
   const [history, setHistory] = useState<Record[]>([]);
   const [historyError, setHistoryError] = useState('');
   // 链尾文件不存在 / 读不出来时 status 会带 warnings：以前只取 history，「暂无接力记录」照样显示
   const [historyWarnings, setHistoryWarnings] = useState<string[]>([]);
-  const [recentError, setRecentError] = useState('');
-  // `recent` 默认只回最近 8 条：被截断时说明还有多少，别让侧栏看起来像全集
-  const [recentOmitted, setRecentOmitted] = useState(0);
-  // 单家会话列表读不出来 / 撞到上限时 recent 会带 warnings：只取 sessions 会把残缺列表当成完整列表
-  const [recentWarnings, setRecentWarnings] = useState<string[]>([]);
   // CLI 桥拉不起来（Node 版本不够 / 核心缺失）时 providers 会是空的：不能让它悄悄显示成「环境未检测」
   const [providersError, setProvidersError] = useState('');
   // 单家 detect() 抛错时 CLI 会给 available:false + error：混进「CLI 未检测到」会被当成没装
@@ -74,12 +71,14 @@ export default function App() {
   const [notice, setNotice] = useState<{ type: 'ok' | 'error'; text: string } | null>(null);
   const [codexImport, setCodexImport] = useState<CodexImportView>({ status: 'idle' });
   const [transfers, setTransfers] = useState<{ [provider: string]: Transfer }>({});
-  // 目标被占用等写入拒绝：只对「同一来源 + 同一目标」展示，来源/目标一变自然失效
-  const [blockedNotice, setBlockedNotice] = useState<BlockedNotice | null>(null);
+  // 转换 / 写入失败：只对「同一来源 + 同一目标」展示，来源/目标一变自然失效。
+  // 卡片保留 CLI 带回的 warnings（降级原因、未写入声明），不随 toast 消失。
+  const [failureNotice, setFailureNotice] = useState<TransferFailure | null>(null);
   const input = useRef<HTMLInputElement>(null);
   const request = useRef(0);
   const precheckRequest = useRef(0);
   const historyRequest = useRef(0);
+  const recentRequest = useRef(0);
   const toastTimer = useRef<number | undefined>(undefined);
   const id = sessionId.trim();
   const source = detect.status === 'ok' ? detect.source : null;
@@ -89,20 +88,25 @@ export default function App() {
   const ready = source !== null && route !== 'unresolved';
   const result = 'result' in codexImport ? codexImport.result : undefined;
   const activeTransfer = transfers[target] ?? null;
-  const blockedHere = blockedNotice && blockedNotice.provider === target && blockedNotice.sourceId === id ? blockedNotice : null;
+  const failureHere = failureNotice && failureNotice.provider === target && failureNotice.sourceId === id ? failureNotice : null;
   function setTransfer(value: Transfer) { setTransfers((saved) => ({ ...saved, [value.provider]: value })); }
   const command = activeTransfer ? buildCommand(agent, activeTransfer.sessionId, activeTransfer.cwd, yolo, windows) : route === 'resume' ? buildCommand(agent, id, source?.cwd, yolo, windows) : '';
   function toast(text: string, type: 'ok' | 'error' = 'ok') { window.clearTimeout(toastTimer.current); setNotice({ type, text }); toastTimer.current = window.setTimeout(() => setNotice(null), 6000); }
   useEffect(() => () => window.clearTimeout(toastTimer.current), []);
   async function loadRecents() {
     if (!native()) return;
+    // 刷新按钮、导入成功后刷新与首次加载可能并发：后发出的请求才算数，过期响应不能覆盖新结果
+    const version = ++recentRequest.current;
     try {
       const data = await invoke<{ ok?: unknown; error?: unknown; sessions?: unknown; warnings?: unknown; unavailable?: unknown; truncated?: unknown; total?: unknown }>('list_recent_sessions');
-      const view = recentView(data);
-      // ok:false / 内容不合契约都走这里：以前只 throw 一句「无法读取」，读不出来的 provider 混在少了几条的列表里
-      if (view.error) { setRecents([]); setRecentOmitted(0); setRecentWarnings(view.warnings); setRecentError(view.error); return; }
-      setRecents(view.items as Recent[]); setRecentOmitted(view.omitted); setRecentWarnings(view.warnings); setRecentError('');
-    } catch (error) { setRecentWarnings([]); setRecentError(message(error)); }
+      if (version !== recentRequest.current) return;
+      // ok:false / 内容不合契约都走这里：失败时清空旧列表与截断计数，不能把上一轮结果当本次刷新
+      setRecent(recentStateFromView<Recent>(recentView(data)));
+    } catch (error) {
+      if (version !== recentRequest.current) return;
+      // 桥报错（找不到 node / 子进程崩溃）同样清空并持久显示原因，不只在 toast 里说一次
+      setRecent(recentStateFromError(message(error)));
+    }
   }
   useEffect(() => {
     if (!native()) return;
@@ -125,7 +129,7 @@ export default function App() {
   }, []);
   useEffect(() => {
     const version = ++request.current;
-    setCodexImport({ status: 'idle' }); setTransfers({}); setNotice(null); setExpanded(false);
+    setCodexImport({ status: 'idle' }); setTransfers({}); setFailureNotice(null); setNotice(null); setExpanded(false);
     if (demo && id === DEMO_ID) { setDetect({ status: 'ok', source: demoSource }); return; }
     if (!id) { setDetect({ status: 'idle' }); return; }
     if (!native()) { setDetect({ status: 'error', error: '浏览器预览无法读取本地会话。演示使用合成记录，不写入 Agent 存储。' }); return; }
@@ -222,15 +226,23 @@ export default function App() {
   }
   async function handoff() {
     if (!ready || busy || route === 'official-codex') return;
-    setBusy('handoff'); let completed = activeTransfer;
+    setBusy('handoff'); setFailureNotice(null); let completed = activeTransfer;
     try {
       if (!completed) {
         if (route === 'resume') completed = { provider: target, sessionId: id, cwd: source?.cwd, notes: [], warnings: [] };
-        else { const data = demo ? { ok: true, sessionId: DEMO_TARGET, cwd: demoSource.cwd, notes: ['演示转换：不代表该方向通过原生验收。'] } : await invoke<{ ok?: boolean; sessionId?: string; cwd?: string; notes?: string[]; warnings?: string[]; error?: string; blocked?: boolean; code?: string; holders?: { pid: number; command: string }[]; hint?: string }>('open_in', { sourceId: id, providerId: target }); if (!data.ok || !data.sessionId) { const failure = new Error(data.error || '转换失败') as Error & { info?: Blocked }; if (data.blocked) failure.info = { code: data.code ?? 'blocked', sessionId: data.sessionId, holders: data.holders, hint: data.hint }; throw failure; } setBlockedNotice(null); completed = { provider: target, sessionId: data.sessionId, cwd: data.cwd, notes: data.notes ?? [], warnings: data.warnings ?? [] }; }
+        else { const data = demo ? { ok: true, sessionId: DEMO_TARGET, cwd: demoSource.cwd, notes: ['演示转换：不代表该方向通过原生验收。'] } : await invoke<{ ok?: boolean; sessionId?: string; cwd?: string; notes?: string[]; warnings?: string[]; error?: string; blocked?: boolean; code?: string; holders?: { pid: number; command: string }[]; hint?: string }>('open_in', { sourceId: id, providerId: target }); if (!data.ok || !data.sessionId) { const failure = new Error(data.error || '转换失败') as Error & { info?: Blocked; warnings?: string[] }; if (data.blocked) failure.info = { code: data.code ?? 'blocked', sessionId: data.sessionId, holders: data.holders, hint: data.hint }; failure.warnings = sourceWarnings(data); throw failure; } completed = { provider: target, sessionId: data.sessionId, cwd: data.cwd, notes: data.notes ?? [], warnings: data.warnings ?? [] }; }
         setTransfer(completed);
       }
       await deliver(completed); void loadRecents();
-    } catch (error) { const info = (error as { info?: Blocked }).info; if (info) setBlockedNotice({ provider: target, sourceId: id, info, error: message(error) }); if (completed) setTransfer({ ...completed, error: message(error) }); toast(message(error), 'error'); }
+    } catch (error) {
+      const info = (error as { info?: Blocked }).info;
+      const warnings = sourceWarnings(error as { warnings?: unknown });
+      // open_in 被拒时 CLI 会带回 warnings（降级原因、未写入声明）。以前只弹一次 toast，
+      // 提示消失后什么都不剩；落成持久卡片。deliver() 的失败已有 activeTransfer.error 承接，不重复建卡。
+      if (info || warnings.length || !completed) setFailureNotice({ provider: target, sourceId: id, error: message(error), warnings, blocked: info });
+      if (completed) setTransfer({ ...completed, error: message(error) });
+      toast(message(error), 'error');
+    }
     finally { setBusy(null); }
   }
   const titles = { handoff: '会话接力', history: '接力记录', compatibility: '支持路径', settings: '设置' };
@@ -240,7 +252,7 @@ export default function App() {
       <a className="brand" href="#" onClick={(event) => { event.preventDefault(); setPage('handoff'); }}><span className="brand-mark"><img className="mark-light" src="/watch-mark-light.svg" alt="" width="26" height="13" /><img className="mark-dark" src="/watch-mark.svg" alt="" width="26" height="13" /></span><span>Watch<small>值更 / Session Relay</small></span></a>
       <span className="nav-caption">工作空间</span>
       <nav aria-label="主导航">{([{ key: 'handoff', label: '会话接力', icon: Workflow }, { key: 'history', label: '接力记录', icon: History }, { key: 'compatibility', label: '支持路径', icon: ShieldCheck }, { key: 'settings', label: '设置', icon: Settings2 }] as const).map((item) => <button key={item.key} className={`nav-item ${page === item.key ? 'active' : ''}`} onClick={() => setPage(item.key)} title={item.label} aria-label={item.label} aria-current={page === item.key ? 'page' : undefined}><item.icon size={17} /><span>{item.label}</span>{item.key === 'handoff' && <ArrowUpRight size={14} className="nav-trailing" />}</button>)}</nav>
-      <div className="sidebar-recents"><div className="sidebar-heading"><span className="nav-caption">近期会话</span><button className="icon-button" title="刷新近期会话" aria-label="刷新近期会话" onClick={loadRecents}><RefreshCw size={14} /></button></div>{recents.length ? recents.slice(0, 8).map((entry) => <button key={`${entry.provider}-${entry.sessionId}`} className={`recent-item ${entry.sessionId === id ? 'selected' : ''}`} disabled={busy !== null} onClick={() => { setDemo(false); setSessionId(entry.sessionId); setPage('handoff'); }} title={entry.preview || entry.cwd}><img src={`/${entry.provider}.svg`} alt="" /><span>{basename(entry.cwd)}<small>{labels[entry.provider] || entry.provider} · {relativeTime(entry.updatedAt)}</small></span></button>) : <p className="sidebar-empty">{recentError || (native() ? '暂无近期会话' : '浏览器预览 · 本地记录不可访问')}</p>}{recentOmitted > 0 && <p className="sidebar-empty">另有 {recentOmitted} 条更早的会话未列出</p>}{recentWarnings.map((warning, index) => <p className="sidebar-warning" key={`rw${index}`}>{warning}</p>)}</div>
+      <div className="sidebar-recents"><div className="sidebar-heading"><span className="nav-caption">近期会话</span><button className="icon-button" title="刷新近期会话" aria-label="刷新近期会话" onClick={loadRecents}><RefreshCw size={14} /></button></div>{recent.items.length ? recent.items.slice(0, 8).map((entry) => <button key={`${entry.provider}-${entry.sessionId}`} className={`recent-item ${entry.sessionId === id ? 'selected' : ''}`} disabled={busy !== null} onClick={() => { setDemo(false); setSessionId(entry.sessionId); setPage('handoff'); }} title={entry.preview || entry.cwd}><img src={`/${entry.provider}.svg`} alt="" /><span>{basename(entry.cwd)}<small>{labels[entry.provider] || entry.provider} · {relativeTime(entry.updatedAt)}</small></span></button>) : <p className="sidebar-empty">{recent.error || (native() ? '暂无近期会话' : '浏览器预览 · 本地记录不可访问')}</p>}{recent.omitted > 0 && <p className="sidebar-empty">另有 {recent.omitted} 条更早的会话未列出</p>}{recent.warnings.map((warning, index) => <p className="sidebar-warning" key={`rw${index}`}>{warning}</p>)}</div>
       <div className="sidebar-bottom"><span className="local-status"><span className="status-dot" />{demo ? '合成演示' : native() ? '本地运行' : '浏览器预览'}</span><span className="theme-switch" role="radiogroup" aria-label="外观">{THEME_OPTIONS.map((option) => <button key={option.value} type="button" role="radio" aria-checked={theme === option.value} aria-label={option.label} title={option.label} className={theme === option.value ? 'active' : ''} onClick={() => chooseTheme(option.value)}>{option.value === 'system' ? <SunMoon size={13} /> : option.value === 'light' ? <Sun size={13} /> : <Moon size={13} />}</button>)}</span><span className="version">v0.1.1</span></div>
     </aside>
     <div className="app-content">
@@ -281,7 +293,7 @@ export default function App() {
             {codexImport.status === 'uncertain' && <><div className="warning-message" role="alert"><Info size={16} />提交结果不确定。保留计划与锁，只查询状态，不重复导入。</div><button className="secondary-button" disabled={busy !== null} onClick={() => updateImport(codexImport.result)}><RefreshCw size={15} />查询状态</button></>}
             {codexImport.status === 'error' && <><div className="state-message error" role="alert"><Info size={16} />{codexImport.message}</div><button className="secondary-button" disabled={busy !== null} onClick={() => codexImport.result ? updateImport(codexImport.result) : prepare()}><RefreshCw size={15} />{codexImport.result ? '查询现有计划' : '重新预览'}</button></>}
             {codexImport.status === 'imported' && <><div className="success-message" role="status"><Check size={17} />{demo ? '演示导入完成 · 无真实写入' : '会话已导入'}{codexImport.opened && <span>· 已请求打开目标</span>}</div>{codexImport.openError && <p className="warning-message" role="alert">打开失败：{codexImport.openError}。目标已保留，不重复导入。</p>}<div className="button-row"><button className="primary-button" disabled={busy !== null} onClick={() => openCodex(codexImport.result)}>{codexImport.opening ? <LoaderCircle className="spin" size={16} /> : <Monitor size={16} />}{codexImport.openError ? '重试打开' : '打开目标会话'}</button><button className="secondary-button" onClick={() => copyFeedback(buildCommand(agent, importedCodexThreadId(codexImport.result)!, codexImport.result.plan.source.cwd, false, windows))}><Copy size={15} />复制恢复命令</button></div></>}
-          </div> : <div className="standard-handoff"><p className="route-description">{route === 'resume' ? '使用原会话 ID 和来源工作目录恢复。' : '转入目标后生成恢复命令。不同格式可能降级或丢失部分记录；具体说明以转换结果为准。'}</p>{!ready && <p className="muted">等待来源识别完成</p>}{command && <div className="command-output"><span>$</span><code>{command}</code><button className="icon-button" title="复制恢复命令" aria-label="复制恢复命令" onClick={() => copyFeedback(command)}><Copy size={16} /></button></div>}{blockedHere && <div className="transfer-result blocked-message" role="alert"><span className="blocked-heading"><Info size={16} />目标会话被占用，本次未写入任何内容</span>{blockedHere.info.sessionId && <div className="blocked-target"><span>目标会话</span><code>{blockedHere.info.sessionId}</code></div>}{!!blockedHere.info.holders?.length && <p className="warning-message">占用者：{blockedHere.info.holders.map((holder) => `PID ${holder.pid} ${holder.command}`).join('、')}</p>}<p className="warning-message">{blockedHere.error}</p>{blockedHere.info.hint && <p className="muted">{blockedHere.info.hint}</p>}</div>}{activeTransfer && <div className="transfer-result"><span className="success-message"><Check size={16} />{route === 'resume' ? '恢复命令已生成' : '目标会话已生成'}</span><code>{activeTransfer.sessionId}</code>{activeTransfer.notes.map((note, index) => <p className="muted" key={`n${index}`}>{note}</p>)}{activeTransfer.warnings?.map((warning, index) => <p className="warning-message" key={`w${index}`}>{warning}</p>)}{activeTransfer.error && <p className="warning-message" role="alert">{activeTransfer.error}。重试仅交付恢复命令，不重复转换。</p>}</div>}<div className="delivery-options"><label><Terminal size={15} />{modeSelect('交付方式')}</label><label className="toggle-label"><input type="checkbox" checked={yolo} disabled={busy !== null || !agent.yolo} onChange={(event) => setYolo(event.target.checked)} /><span>YOLO</span></label></div>{yolo && agent.yolo && <p className="warning-message"><Info size={15} />免确认参数会放宽目标 Agent 的权限或沙箱保护。</p>}<button className="primary-button" disabled={!ready || busy !== null} onClick={() => { if (blockedHere) setBlockedNotice(null); void handoff(); }}>{busy ? <LoaderCircle className="spin" size={16} /> : <ArrowRight size={16} />}{activeTransfer ? mode === 'copy' ? '再次复制命令' : '仅重新打开' : blockedHere ? '重试转入' : route === 'resume' ? mode === 'copy' ? '复制恢复命令' : '在终端中继续' : mode === 'copy' ? '转入并复制命令' : '转入并启动终端'}</button></div>}
+          </div> : <div className="standard-handoff"><p className="route-description">{route === 'resume' ? '使用原会话 ID 和来源工作目录恢复。' : '转入目标后生成恢复命令。不同格式可能降级或丢失部分记录；具体说明以转换结果为准。'}</p>{!ready && <p className="muted">等待来源识别完成</p>}{command && <div className="command-output"><span>$</span><code>{command}</code><button className="icon-button" title="复制恢复命令" aria-label="复制恢复命令" onClick={() => copyFeedback(command)}><Copy size={16} /></button></div>}{failureHere && <div className="transfer-result blocked-message" role="alert"><span className="blocked-heading"><Info size={16} />{failureHere.blocked ? blockedHeading(failureHere.blocked) : '本次转入失败'}</span>{failureHere.blocked?.sessionId && <div className="blocked-target"><span>目标会话</span><code>{failureHere.blocked.sessionId}</code></div>}{!!failureHere.blocked?.holders?.length && <p className="warning-message">占用者：{failureHere.blocked.holders.map((holder) => `PID ${holder.pid} ${holder.command}`).join('、')}</p>}<p className="warning-message">{failureHere.error}</p>{failureHere.warnings.map((warning, index) => <p className="warning-message" key={`fw${index}`}>{warning}</p>)}{failureHere.blocked?.hint && <p className="muted">{failureHere.blocked.hint}</p>}</div>}{activeTransfer && <div className="transfer-result"><span className="success-message"><Check size={16} />{route === 'resume' ? '恢复命令已生成' : '目标会话已生成'}</span><code>{activeTransfer.sessionId}</code>{activeTransfer.notes.map((note, index) => <p className="muted" key={`n${index}`}>{note}</p>)}{activeTransfer.warnings?.map((warning, index) => <p className="warning-message" key={`w${index}`}>{warning}</p>)}{activeTransfer.error && <p className="warning-message" role="alert">{activeTransfer.error}。重试仅交付恢复命令，不重复转换。</p>}</div>}<div className="delivery-options"><label><Terminal size={15} />{modeSelect('交付方式')}</label><label className="toggle-label"><input type="checkbox" checked={yolo} disabled={busy !== null || !agent.yolo} onChange={(event) => setYolo(event.target.checked)} /><span>YOLO</span></label></div>{yolo && agent.yolo && <p className="warning-message"><Info size={15} />免确认参数会放宽目标 Agent 的权限或沙箱保护。</p>}<button className="primary-button" disabled={!ready || busy !== null} onClick={() => void handoff()}>{busy ? <LoaderCircle className="spin" size={16} /> : <ArrowRight size={16} />}{activeTransfer ? mode === 'copy' ? '再次复制命令' : '仅重新打开' : failureHere ? '重试转入' : route === 'resume' ? mode === 'copy' ? '复制恢复命令' : '在终端中继续' : mode === 'copy' ? '转入并复制命令' : '转入并启动终端'}</button></div>}
           </div>
         </section></div><div className="page-footnote"><ShieldCheck size={14} /><span>Watch 不搬迁凭据、权限或模型内部状态。</span><button className="text-button" onClick={() => setPage('compatibility')}>查看路径限制<ArrowUpRight size={13} /></button></div>
       </>}

@@ -55,6 +55,22 @@ export function parsePrecheckBlocked(data: PrecheckResponse): PrecheckBlocked | 
     hint: detail.hint,
   };
 }
+
+/**
+ * 写入被拒卡片的标题。
+ *
+ * `open_in` 的失败不都是「占用」：CLI 缺失（cli_missing）、检测失败（cli_detect_failed）、
+ * OpenCode 2.x 只读（opencode_v2_readonly）、目标文件不存在（target_missing）都走同一条
+ * `blocked` 通道。只有写者占用类 code 或探测到 holders 时才能说「目标会话被占用」；
+ * 其余用中性标题，否则用户会照着「关闭客户端」去修一个其实没装的 CLI。
+ */
+export function blockedHeading(info: { code?: unknown; holders?: unknown } | null | undefined): string {
+  const code = typeof info?.code === 'string' ? info.code : '';
+  const occupied = code === 'codex_target_busy' ||
+    code === 'codex_desktop_running' ||
+    (Array.isArray(info?.holders) && info.holders.length > 0);
+  return occupied ? '目标会话被占用，本次未写入任何内容' : '本次转入被阻止，未写入任何内容';
+}
 /**
  * `resolve_cwd`（= `watch open <id> --json`）带回的降级原因，供来源面板展示。
  *
@@ -92,7 +108,10 @@ export type HistoryView = {
  * 把「没读成」讲成「没有记录」。这里把三种情况分开：记录 / 降级原因 / 失败原因。
  */
 export function historyView(
-  data: { ok?: unknown; error?: unknown; history?: unknown; warnings?: unknown } | null | undefined,
+  data: {
+    ok?: unknown; error?: unknown; history?: unknown; warnings?: unknown;
+    historyAvailable?: unknown; historyFailed?: unknown;
+  } | null | undefined,
 ): HistoryView {
   const entries = Array.isArray(data?.history) ? (data!.history as unknown[]) : [];
   const warnings = sourceWarnings(data);
@@ -101,6 +120,12 @@ export function historyView(
     error = typeof data.error === 'string' && data.error.trim()
       ? data.error.trim()
       : '读取接力记录失败（status 没有返回原因）；请用 watch status --json 查看';
+  } else if (data && (data.historyAvailable === false || data.historyFailed === true)) {
+    // ok:true + history:[] 分不清「链确实没有记录」与「本地库打不开 / switch_events 读失败」。
+    // CLI 用 historyAvailable 显式区分两档；不能把后者渲染成「暂无接力记录」。
+    error = warnings.length
+      ? '读取接力记录失败：本地库不可用或链历史读不出来（原因见上方警告）；这不是「暂无接力记录」，处理后再回到此页'
+      : '读取接力记录失败（status 没有提供历史读取失败的原因）；请用 watch status --json 查看';
   }
   return { entries, warnings, error };
 }
@@ -187,6 +212,33 @@ export function recentView(
   return { items, omitted, warnings: parts, error };
 }
 
+export type RecentState<T = unknown> = {
+  items: T[];
+  /** 被 `--limit` 截断的条数（0 表示这一份就是全部） */
+  omitted: number;
+  warnings: string[];
+  /** 非空表示本次刷新失败；此时 items 已清空，不能继续显示上一轮结果 */
+  error: string;
+};
+
+/**
+ * 把 `recentView()` 折成侧栏状态。
+ *
+ * 失败时（ok:false / 内容不合契约）必须清空 items 与 omitted：只在错误分支设 error 会让
+ * 侧栏继续显示上一轮的列表，看起来像一次成功的刷新。并发刷新由 App 的 request sequence
+ * 丢弃过期响应，这里只保证单次结果内部一致。
+ */
+export function recentStateFromView<T>(view: RecentView): RecentState<T> {
+  return view.error
+    ? { items: [], omitted: 0, warnings: view.warnings, error: view.error }
+    : { items: view.items as T[], omitted: view.omitted, warnings: view.warnings, error: '' };
+}
+
+/** 桥本身报错（找不到 node / tsx 起不来 / 子进程崩溃）时的状态：同样清空旧列表。 */
+export function recentStateFromError<T = never>(error: string): RecentState<T> {
+  return { items: [], omitted: 0, warnings: [], error };
+}
+
 export function shellQuote(value: string) { return `'${value.replace(/'/g, `'\\''`)}'`; }export function powershellQuote(value: string) { return `'${value.replace(/'/g, `''`)}'`; }
 export function buildCommand(agent: Agent, id: string, cwd: string | undefined, yolo: boolean, windows = false) {
   // Native IDs are arguments, not shell fragments. Keep ordinary IDs readable.
@@ -194,7 +246,12 @@ export function buildCommand(agent: Agent, id: string, cwd: string | undefined, 
   let command = agent.command(argument);
   if (yolo && agent.yolo) command += ` ${agent.yolo}`;
   if (!cwd) return command;
-  return windows ? `Set-Location -LiteralPath ${powershellQuote(cwd)}; ${command}` : `cd ${shellQuote(cwd)} && ${command}`;
+  // Windows PowerShell 的 Set-Location 默认是 non-terminating error：cwd 不存在时后面的
+  // resume 命令照样执行，落在当前目录（conhost 回退分支甚至没有 cwd 参数）。
+  // -ErrorAction Stop 把错误升级为 terminating；再用 $? 显式终止，避免语句列表继续往下跑。
+  return windows
+    ? `Set-Location -LiteralPath ${powershellQuote(cwd)} -ErrorAction Stop; if (-not $?) { exit 1 }; ${command}`
+    : `cd ${shellQuote(cwd)} && ${command}`;
 }
 
 /** 主题偏好：亮色 / 暗色 / 跟随系统。持久化键 watch-theme；没保存过即跟随系统。 */
