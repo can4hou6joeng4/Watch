@@ -374,9 +374,18 @@ export function psQuote(s: string): string {
   return `'${s.replace(/'/g, `''`)}'`;
 }
 
-/** 拼接可复制的 cd：isWin=true 用 PowerShell，其它用 POSIX。纯函数供单测两平台 */
+/**
+ * 拼接可复制的 cd：isWin=true 用 PowerShell，其它用 POSIX。纯函数供单测两平台。
+ *
+ * Windows PowerShell 的 `Set-Location` 默认产生 **non-terminating** 错误：目标目录被删 /
+ * 无权访问时，紧随其后的 resume 命令仍会执行，Agent 于是在原目录里启动，而 Watch 已经
+ * 报「恢复命令已生成」。`-ErrorAction Stop` 把它升级成终止错误，`$?` 判断再显式退出，
+ * 确保目录切换成功之前不会启动 Agent（桌面端 `handoff-ui.ts` 的 buildCommand 同规则）。
+ */
 export function buildCdFor(cwd: string, isWin: boolean): string {
-  return isWin ? `Set-Location -LiteralPath ${psQuote(cwd)}` : `cd ${shellQuote(cwd)}`;
+  return isWin
+    ? `Set-Location -LiteralPath ${psQuote(cwd)} -ErrorAction Stop; if (-not $?) { exit 1 }`
+    : `cd ${shellQuote(cwd)}`;
 }
 
 /** 拼接可复制的完整命令（cd → resume）。Windows：`;` 分隔；POSIX：`&&` */
