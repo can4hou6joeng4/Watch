@@ -283,7 +283,12 @@ function extractRich(
   const base = { timestamp, provider: 'claude' as const };
 
   for (const block of blocks) {
-    if (typeof block !== 'object' || block === null) continue;
+    // 数组元素不是对象（null / 字符串 / 数字）以前直接 continue：连类型都没有，纯坏块
+    // 的 user 记录整条消失，后续助手回复会被目标当成首轮。与未知 block 类型同档计数。
+    if (typeof block !== 'object' || block === null) {
+      unknown.set('（非对象内容块）', (unknown.get('（非对象内容块）') ?? 0) + 1);
+      continue;
+    }
     const b = block as Record<string, unknown>;
     switch (b.type) {
       case 'text':
@@ -378,6 +383,10 @@ function extractRich(
               : undefined;
         if (attachment) {
           events.push({ ...base, kind: 'text', summary: placeholder, detail: placeholder, attachment });
+        } else {
+          // source 里既没有 data 也没有 url：还原不了原始图片，但占位必须留下——
+          // 以前这里整块消失（sawVisible 已置真，连空记录都不会被别人发现）。
+          events.push({ ...base, kind: 'text', summary: placeholder, detail: placeholder });
         }
         break;
       }
