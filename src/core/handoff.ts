@@ -1513,8 +1513,17 @@ export async function handoff(
     // 损坏，导致 Kimi 无法识别历史；对已有目标 session 强制 rewrite 可修复。
     if (into) {
       try {
-        await guardedWrite(dedupeCallEvents(turns), { replace: true });
-        addFinding(findings, 'handoff.rewrite_only', 'synthesized', 1);
+        // 来源 0 轮时没有可对账的内容：不重写目标。以前 `guardedWrite(空 turns, {replace:true})`
+        // 恰好是空操作，这条契约（「空来源不改动目标」）由既有回归锁住；换用 mergeTurns 后
+        // 载荷变成目标自己的轮次，重写会换掉目标文件的 uuid——没有收益，只有数据搅动。
+        if (turns.length > 0) {
+          // 重写载荷不能是来源轮次：零增量只说明「来源是目标的子序列」，目标可能承接之后
+          // 又在原生 CLI 里继续聊过（目标独有的轮次根本不参与 diffTurns 比较）。用来源整份
+          // 覆盖会把它们静默删掉，而结果只有 `turnCount: 0`。mergeTurns 保留目标独有轮次、
+          // 并在来源过程事件更全时取来源那份——与非零增量的 replace 分支是同一份载荷。
+          await guardedWrite(dedupeCallEvents(mergeTurns(turns, destTurns)), { replace: true });
+          addFinding(findings, 'handoff.rewrite_only', 'synthesized', 1);
+        }
       } catch (error) {
         if (error instanceof HandoffBlockedError) throw error;
         console.error('[watch] 重写目标 session 失败，仍尝试 resume:', error);
