@@ -11,7 +11,7 @@ import { writeFileAtomic } from '../../core/atomic.js';
 import { inspectCwd, type CwdInspection } from '../../core/cwd.js';
 import { parseJsonObject } from '../../core/jsonl.js';
 import { describePathReadFailureReason } from '../../core/read-text.js';
-import { assistantOnlyIncrementReason, userTurnTextForWrite } from '../../core/rich.js';
+import { assistantOnlyIncrementReason, assistantTurnTextForWrite, userTurnTextForWrite } from '../../core/rich.js';
 import { expectAttachmentPlaceholders, verifyWrittenTurns } from '../../core/verify.js';
 import { parseKimiSession } from './parse.js';
 import type { ImportTurnsOpts } from '../adapter.js';
@@ -431,7 +431,10 @@ export function buildKimiWireLines(turns: UnifiedTurn[], startTurnId: number): s
 
     const turnIdStr = String(turnId);
     const events = turn.events ?? [];
-    const hasText = turn.text.trim().length > 0;
+    // 只搬正文的目标由这里决定实际写什么：纯附件助手轮必须留下占位文本，
+    // 否则 describeAttachmentLoss 的「只留占位」承诺在助手侧落空。
+    const bodyText = assistantTurnTextForWrite(turn);
+    const hasText = bodyText.trim().length > 0;
     const hasEvents = events.length > 0;
 
     const hasToolCalls = events.some((e) => e.kind === 'tool_call');
@@ -493,7 +496,7 @@ export function buildKimiWireLines(turns: UnifiedTurn[], startTurnId: number): s
             turnId: turnIdStr,
             step: hasEvents ? 2 : 1,
             stepUuid: stepUuid2,
-            part: { type: 'text', text: turn.text },
+            part: { type: 'text', text: bodyText },
           },
           time: textStartTime + 1,
         }),
