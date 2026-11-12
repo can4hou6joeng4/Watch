@@ -10,6 +10,7 @@ import { promisify } from 'node:util';
 import { createHash, randomUUID } from 'node:crypto';
 import { writeFileAtomic } from '../../core/atomic.js';
 import { inspectCwd, type CwdInspection } from '../../core/cwd.js';
+import { parseJsonObject } from '../../core/jsonl.js';
 import { describePathReadFailureReason } from '../../core/read-text.js';
 import { verifyWrittenTurns } from '../../core/verify.js';
 import { parseKimiSession } from './parse.js';
@@ -122,10 +123,9 @@ export async function kimiUntrackedSessions(): Promise<{
   let unparsable = 0;
   for (const line of raw.split('\n')) {
     if (!line.trim()) continue;
-    let rec: Record<string, unknown>;
-    try {
-      rec = JSON.parse(line);
-    } catch {
+    const rec = parseJsonObject(line);
+    if (!rec) {
+      // 合法 JSON 的 null / 数组 / 标量同样不是索引记录；不计数会让 collectUnattributable / unattributable 静默漏报。
       unparsable += 1;
       continue;
     }
@@ -191,12 +191,8 @@ export async function listKimiSessionsByCwd(
   let parseable = 0;
   for (const line of raw.split('\n')) {
     if (!line.trim()) continue;
-    let rec: Record<string, unknown>;
-    try {
-      rec = JSON.parse(line);
-    } catch {
-      continue;
-    }
+    const rec = parseJsonObject(line);
+    if (!rec) continue;
     parseable += 1;
     if (rec.workDir !== cwd) continue;
     const sessionDir = typeof rec.sessionDir === 'string' ? rec.sessionDir : '';
@@ -301,12 +297,8 @@ function extractSessionIdFromStream(stdout: string): string | null {
   for (const line of stdout.split('\n')) {
     const trimmed = line.trim();
     if (!trimmed) continue;
-    let event: Record<string, unknown>;
-    try {
-      event = JSON.parse(trimmed);
-    } catch {
-      continue;
-    }
+    const event = parseJsonObject(trimmed);
+    if (!event) continue;
     if (event.role === 'meta' && event.type === 'session.resume_hint' && typeof event.session_id === 'string') {
       return event.session_id;
     }
@@ -319,12 +311,8 @@ async function truncateToHeader(filePath: string): Promise<void> {
   const lines: string[] = [];
   for (const line of raw.split('\n')) {
     if (!line.trim()) continue;
-    let event: Record<string, unknown>;
-    try {
-      event = JSON.parse(line);
-    } catch {
-      continue;
-    }
+    const event = parseJsonObject(line);
+    if (!event) continue;
     if (HEADER_TYPES.has(typeof event.type === 'string' ? event.type : '')) {
       lines.push(line);
     }
@@ -339,12 +327,8 @@ async function readWireLines(filePath: string): Promise<string[]> {
 }
 
 function isHeaderLine(line: string): boolean {
-  try {
-    const event = JSON.parse(line) as Record<string, unknown>;
-    return HEADER_TYPES.has(typeof event.type === 'string' ? event.type : '');
-  } catch {
-    return false;
-  }
+  const event = parseJsonObject(line);
+  return event !== null && HEADER_TYPES.has(typeof event.type === 'string' ? event.type : '');
 }
 
 function nextTurnId(filePath: string): number {
@@ -353,12 +337,8 @@ function nextTurnId(filePath: string): number {
     const raw = readFileSync(filePath, 'utf8');
     for (const line of raw.split('\n')) {
       if (!line.trim()) continue;
-      let event: Record<string, unknown>;
-      try {
-        event = JSON.parse(line);
-      } catch {
-        continue;
-      }
+      const event = parseJsonObject(line);
+      if (!event) continue;
       if (event.type === 'turn.ended') {
         const turnId = typeof event.turnId === 'number' ? event.turnId : -1;
         if (turnId > maxTurn) maxTurn = turnId;

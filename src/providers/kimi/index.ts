@@ -5,6 +5,7 @@ import { promisify } from 'node:util';
 import path from 'node:path';
 import { digestFile } from '../../core/atomic.js';
 import type { FileDigest } from '../../core/atomic.js';
+import { asJsonObject, parseJsonObject } from '../../core/jsonl.js';
 import { describeEmptySessionFile, describePathReadFailureReason, isMissingPathError } from '../../core/read-text.js';
 import { escapeControlChars } from '../../core/display.js';
 import { SessionLookupFailureError } from '../adapter.js';
@@ -37,12 +38,8 @@ function parseStreamJson(stdout: string): { sessionId?: string; text: string } {
   for (const line of stdout.split('\n')) {
     const trimmed = line.trim();
     if (!trimmed) continue;
-    let event: Record<string, unknown>;
-    try {
-      event = JSON.parse(trimmed);
-    } catch {
-      continue;
-    }
+    const event = parseJsonObject(trimmed);
+    if (!event) continue;
     if (event.role === 'meta' && event.type === 'session.resume_hint' && typeof event.session_id === 'string') {
       sessionId = event.session_id;
     } else if (event.role === 'assistant' && typeof event.content === 'string') {
@@ -100,18 +97,14 @@ async function firstUserText(filePath: string): Promise<{ text: string | null; e
   if (raw.length === 0) return { text: null, error: describeEmptySessionFile(filePath) };
   for (const line of raw.split('\n')) {
     if (!line.trim()) continue;
-    let event: Record<string, unknown>;
-    try {
-      event = JSON.parse(line);
-    } catch {
-      continue;
-    }
-    if (event.type !== 'turn.prompt') continue;
+    const event = parseJsonObject(line);
+    if (!event || event.type !== 'turn.prompt') continue;
     const input = event.input;
     if (!Array.isArray(input)) continue;
     for (const block of input) {
-      if (typeof block === 'object' && block !== null && (block as { type?: unknown }).type === 'text') {
-        const text = typeof (block as { text?: unknown }).text === 'string' ? (block as { text: string }).text : '';
+      const b = asJsonObject(block);
+      if (b?.type === 'text') {
+        const text = typeof b.text === 'string' ? b.text : '';
         const clean = text.replace(/\s+/g, ' ').trim();
         if (clean) return { text: clean.slice(0, 80) };
       }
@@ -181,10 +174,10 @@ export async function findKimiSessionById(
   let unparsable = 0;
   for (const line of raw.split('\n')) {
     if (!line.trim()) continue;
-    let rec: Record<string, unknown>;
-    try {
-      rec = JSON.parse(line);
-    } catch {
+    const rec = parseJsonObject(line);
+    if (!rec) {
+      // 非对象 JSON（null / [] / 标量）既不能当有效索引条目，也要和语法坏行同档计入 unparsable，
+      // 否则全为非对象行的坏索引会绕过 kimiIndexLoss / unattributable 守卫。
       unparsable += 1;
       continue;
     }
@@ -291,21 +284,16 @@ export async function kimiSessionUsage(ref: SessionRef): Promise<TokenUsage | nu
   };
   for (const line of raw.split('\n')) {
     if (!line.trim()) continue;
-    let r: Record<string, unknown>;
-    try {
-      r = JSON.parse(line);
-    } catch {
-      continue;
-    }
+    const r = parseJsonObject(line);
+    if (!r) continue;
     if (r.type === 'usage.record') {
       // 原生还会按 step 记 usage（`usageScope: "step"`）。那些是同一轮拆出来的中间量，
       // 计入就会翻倍：ccusage（ccusage/ccusage，19.4k stars）的 kimi 适配器只认
       // `usageScope === "turn"` 的记录，其它一律跳过。这里同样只在「显式写了别的 scope」时跳过，
       // 没有 `usageScope` 的记录照旧累加（历史文件与本地回归的既有形状）。
       if (typeof r.usageScope === 'string' && r.usageScope !== 'turn') continue;
-      const u = r.usage;
-      if (typeof u !== 'object' || u === null) continue;
-      const usage = u as Record<string, unknown>;
+      const usage = asJsonObject(r.usage);
+      if (!usage) continue;
       input += toNum(usage.inputOther) + toNum(usage.inputCacheRead) + toNum(usage.inputCacheCreation);
       output += toNum(usage.output);
       saw = true;
@@ -313,12 +301,9 @@ export async function kimiSessionUsage(ref: SessionRef): Promise<TokenUsage | nu
       continue;
     }
     if (r.type === 'context.append_loop_event') {
-      const event = r.event;
-      if (typeof event !== 'object' || event === null) continue;
-      const e = event as Record<string, unknown>;
-      if (e.type !== 'step.end') continue;
-      const u = e.usage;
-      const usage = usageFromRecord(typeof u === 'object' && u !== null ? (u as Record<string, unknown>) : null);
+      const e = asJsonObject(r.event);
+      if (!e || e.type !== 'step.end') continue;
+      const usage = usageFromRecord(asJsonObject(e.usage));
       if (usage) pendingStepUsage = usage;
       continue;
     }

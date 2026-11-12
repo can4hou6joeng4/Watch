@@ -1,4 +1,5 @@
 import { readFile } from 'node:fs/promises';
+import { asJsonObject, parseJsonObject } from '../../core/jsonl.js';
 import { ensureAssistant, normalizeUserText, pushEvent, stripEmptyEvents, summarize } from '../../core/rich.js';
 import type { ProcessEvent, SessionRef, TokenUsage, UnifiedTurn } from '../../core/types.js';
 
@@ -27,14 +28,8 @@ export async function parseKimiSession(ref: SessionRef): Promise<UnifiedTurn[]> 
   for (const line of raw.split('\n')) {
     const trimmed = line.trim();
     if (!trimmed) continue;
-    let record: unknown;
-    try {
-      record = JSON.parse(trimmed);
-    } catch {
-      continue;
-    }
-    if (typeof record !== 'object' || record === null) continue;
-    const r = record as Record<string, unknown>;
+    const r = parseJsonObject(trimmed);
+    if (!r) continue;
     const type = r.type;
     const time = typeof r.time === 'number' ? r.time : undefined;
     const timestamp = time ? new Date(time).toISOString() : '';
@@ -110,8 +105,7 @@ export function usageFromRecord(usage: Record<string, unknown> | null): TokenUsa
 }
 
 function asRecord(value: unknown): Record<string, unknown> | null {
-  if (value && typeof value === 'object' && !Array.isArray(value)) return value as Record<string, unknown>;
-  return null;
+  return asJsonObject(value);
 }
 
 function asString(value: unknown): string | null {
