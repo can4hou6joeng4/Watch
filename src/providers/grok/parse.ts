@@ -129,6 +129,13 @@ export async function parseGrokSession(ref: SessionRef): Promise<UnifiedTurn[]> 
         .filter(Boolean)
         .join('\n\n');
       const toolCalls = Array.isArray(r.tool_calls) ? r.tool_calls : [];
+      // 重放行可能整行只有已出现过的调用：不建空助手轮，否则后面会留下一个
+      // 没有任何 tool_call 的轮次，写入侧无法配对（见下方 tool_result 分支）。
+      const freshCalls = toolCalls.filter((tc) => {
+        const id = typeof asRecord(tc)?.id === 'string' ? (asRecord(tc)!.id as string) : undefined;
+        return !(id && seenCallIds.has(id));
+      });
+      if (!content.trim() && freshCalls.length === 0) continue;
 
       // Grok 把 tool_calls 和最终文本拆成两条 assistant 行；
       // 解析时合并回同一个 UnifiedTurn，保持 round-trip 稳定。
@@ -145,11 +152,12 @@ export async function parseGrokSession(ref: SessionRef): Promise<UnifiedTurn[]> 
 
       const assistant = ensureAssistant(turns, timestamp, 'grok');
       if (content.trim()) assistant.text = content;
-      for (const tc of toolCalls) {
+      for (const tc of freshCalls) {
         const t = asRecord(tc);
         if (!t) continue;
         const name = typeof t.name === 'string' ? t.name : 'tool';
         const callId = typeof t.id === 'string' ? t.id : undefined;
+        // 同一行里也可能重复登记同一调用（Grok CLI 的真实形态），只留首个
         if (callId && seenCallIds.has(callId)) continue;
         if (callId) seenCallIds.add(callId);
         pushEvent(assistant, {
@@ -167,11 +175,19 @@ export async function parseGrokSession(ref: SessionRef): Promise<UnifiedTurn[]> 
     }
 
     if (type === 'tool_result') {
-      if (!sawUser || turns.at(-1)?.role !== 'assistant') continue;
-      const last = turns.at(-1)!;
+      if (!sawUser) continue;
       const callId = typeof r.tool_call_id === 'string' ? r.tool_call_id : undefined;
       // 重放历史里同一调用的 result 也会跨代再现，同 id 只留首个
       if (callId && seenResultIds.has(callId)) continue;
+      // 结果按 callId 挂回真正发起调用的轮次：重放行被去重后，最后一条 assistant 可能
+      // 根本不含这个调用（甚至已被跳过而当前是 user 轮），挂上去就是一个孤儿结果。
+      const owner = callId
+        ? [...turns].reverse().find(
+            (t) => t.role === 'assistant' && (t.events ?? []).some((e) => e.kind === 'tool_call' && e.callId === callId),
+          )
+        : undefined;
+      const last = owner ?? (turns.at(-1)?.role === 'assistant' ? turns.at(-1) : undefined);
+      if (!last) continue;
       if (callId) seenResultIds.add(callId);
       const output = parseToolOutput(r.content);
       pushEvent(last, {
