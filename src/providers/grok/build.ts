@@ -10,7 +10,7 @@ import { writeFileAtomic } from '../../core/atomic.js';
 import { asJsonObject, parseJsonObject } from '../../core/jsonl.js';
 import { describePathReadFailureReason, emptySessionFileReasonFromStat, readTextOrEmpty } from '../../core/read-text.js';
 import { verifyWrittenTurns, expectAttachmentPlaceholders } from '../../core/verify.js';
-import { assistantOnlyIncrementReason, mergeConsecutiveAssistant, userTurnTextForWrite } from '../../core/rich.js';
+import { assistantOnlyIncrementReason, assistantTurnTextForWrite, mergeConsecutiveAssistant, userTurnTextForWrite } from '../../core/rich.js';
 import { parseGrokSession } from './parse.js';
 
 const execFileAsync = promisify(execFile);
@@ -626,9 +626,11 @@ export function buildGrokUpdateLines(
       );
     }
 
-    if (turn.text.trim()) {
+    // 只搬正文：纯附件助手轮用占位文本兜底，chat 与 updates 两份日志保持一致
+    const bodyText = assistantTurnTextForWrite(turn);
+    if (bodyText.trim()) {
       lines.push(
-        acpLine(sessionId, { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: turn.text } }, ms),
+        acpLine(sessionId, { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: bodyText } }, ms),
       );
     }
 
@@ -717,6 +719,8 @@ export async function importTurnsToGrok(
       pushLine(buildReasoningLine(ev));
     }
 
+    // 与 ACP 日志同一投影：助手轮的附件占位必须进正文，否则这一轮写成空内容
+    const bodyText = assistantTurnTextForWrite(turn);
     if (toolCalls.length > 0) {
       // Grok TUI 期望 tool_calls 所在的 assistant 行 content 为空，
       // 最终文本单独作为下一条 assistant 行跟在 tool_result 后面。
@@ -740,12 +744,12 @@ export async function importTurnsToGrok(
         pushLine(buildToolResultLine(ev));
       }
 
-      if (turn.text.trim()) {
-        pushLine(buildAssistantLine(turn.text, [], modelId, identity));
+      if (bodyText.trim()) {
+        pushLine(buildAssistantLine(bodyText, [], modelId, identity));
         chatMsgCount += 1;
       }
     } else {
-      pushLine(buildAssistantLine(turn.text, [], modelId, identity));
+      pushLine(buildAssistantLine(bodyText, [], modelId, identity));
       chatMsgCount += 1;
     }
   }
