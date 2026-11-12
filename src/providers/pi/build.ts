@@ -3,6 +3,7 @@ import { dirname, join } from 'node:path';
 import { homedir } from 'node:os';
 import { randomBytes, randomUUID } from 'node:crypto';
 import { writeFileAtomic } from '../../core/atomic.js';
+import { parseJsonObject } from '../../core/jsonl.js';
 import { readTextOrEmpty } from '../../core/read-text.js';
 import { verifyWrittenTurns } from '../../core/verify.js';
 import { parsePiSession } from './parse.js';
@@ -23,8 +24,6 @@ function nid(): string {
   return randomBytes(4).toString('hex');
 }
 
-type Line = Record<string, unknown>;
-
 export async function importTurnsToPi(
   turns: UnifiedTurn[],
   cwd: string,
@@ -42,42 +41,48 @@ export async function importTurnsToPi(
   let sessionId = into?.sessionId ?? randomUUID();
   let filePath = into?.filePath ?? join(dir, `${isoFileStamp()}_${sessionId}.jsonl`);
   let parentId: string | null = null;
-  const out: Line[] = [];
+  // 既有行按原文保留（异常行不丢、不重写），新行才 JSON.stringify。
+  // 以前追加分支对每一行裸 JSON.parse 后再整体重写：`null` / `[]` / 半截行会直接抛
+  // SyntaxError 让整次追加失败，合法行也被压缩格式。
+  const pieces: string[] = [];
+  let hasSessionHeader = false;
 
   if (into && !opts?.replace) {
     const existing = await readTextOrEmpty(into.filePath);
     for (const line of existing.split('\n')) {
       if (!line.trim()) continue;
-      out.push(JSON.parse(line) as Line);
+      pieces.push(line);
+      const rec = parseJsonObject(line);
+      if (!rec) continue;
+      if (rec.type === 'session') hasSessionHeader = true;
+      // 只认真正解析得出的对象 id：坏行不遮住它之前最后一条合法消息
+      if (typeof rec.id === 'string') parentId = rec.id;
     }
-    const last = out.at(-1);
-    if (last && typeof last.id === 'string') parentId = last.id;
     sessionId = into.sessionId;
     filePath = into.filePath;
   } else if (into && opts?.replace) {
     const existing = await readTextOrEmpty(into.filePath);
-    const header = existing.split('\n').find((l) => l.includes('"type":"session"'));
-    if (header) {
-      const h = JSON.parse(header) as Line;
-      out.push(h);
-      if (typeof h.id === 'string') {
-        sessionId = h.id;
-        parentId = h.id;
-      }
+    // 不能用 `includes('"type":"session"')`：普通消息的文本 / 嵌套对象里出现同一子串会被误认成头
+    const headerLine = existing.split('\n').find((l) => parseJsonObject(l)?.type === 'session');
+    if (headerLine) {
+      const h = parseJsonObject(headerLine)!;
+      pieces.push(headerLine);
+      hasSessionHeader = true;
+      if (typeof h.id === 'string') parentId = h.id;
     }
     filePath = into.filePath;
     sessionId = into.sessionId;
   }
 
-  if (!out.some((l) => l.type === 'session')) {
+  if (!hasSessionHeader) {
     const ts = new Date().toISOString();
-    out.push({ type: 'session', version: 3, id: sessionId, timestamp: ts, cwd });
+    pieces.push(JSON.stringify({ type: 'session', version: 3, id: sessionId, timestamp: ts, cwd }));
     parentId = sessionId;
   }
 
   for (const turn of turns) {
     if (turn.role === 'user') {
-      parentId = pushMessage(out, parentId, 'user', turn.timestamp, [{ type: 'text', text: turn.text }]);
+      parentId = pushMessage(pieces, parentId, 'user', turn.timestamp, [{ type: 'text', text: turn.text }]);
       continue;
     }
     const content: unknown[] = [];
@@ -98,7 +103,7 @@ export async function importTurnsToPi(
     // 有工具调用时，为了避免 Pi TUI 把 final text 显示在 toolResult 消息之前，
     // 先只发 thinking/toolCall，再把 final text 作为一条独立 assistant 消息跟在 toolResult 后面。
     if (!hasToolEvents && turn.text.trim()) content.push({ type: 'text', text: turn.text });
-    const assistantMsgId = pushMessage(out, parentId, 'assistant', turn.timestamp, content, undefined, turn.usage);
+    const assistantMsgId = pushMessage(pieces, parentId, 'assistant', turn.timestamp, content, undefined, turn.usage);
     parentId = assistantMsgId;
     let toolResultIndex = 0;
     for (const ev of turn.events ?? []) {
@@ -107,18 +112,18 @@ export async function importTurnsToPi(
       // 确保 tool_result message 时间严格晚于 assistant message，避免 Pi TUI 排序错乱
       const shifted = new Date(baseMs + 1000 + toolResultIndex * 100).toISOString();
       toolResultIndex += 1;
-      parentId = pushMessage(out, parentId, 'toolResult', shifted, [
+      parentId = pushMessage(pieces, parentId, 'toolResult', shifted, [
         { type: 'text', text: ev.detail ?? ev.summary },
       ], ev);
     }
     if (hasToolEvents && turn.text.trim()) {
       const finalTs = new Date((Date.parse(turn.timestamp) || Date.now()) + 2000 + toolResultIndex * 100).toISOString();
-      parentId = pushMessage(out, parentId, 'assistant', finalTs, [{ type: 'text', text: turn.text }], undefined, turn.usage);
+      parentId = pushMessage(pieces, parentId, 'assistant', finalTs, [{ type: 'text', text: turn.text }], undefined, turn.usage);
     }
   }
 
   await mkdir(dirname(filePath), { recursive: true });
-  await writeFileAtomic(filePath, out.map((l) => JSON.stringify(l)).join('\n') + '\n', {
+  await writeFileAtomic(filePath, pieces.join('\n') + '\n', {
     backup: Boolean(into?.filePath),
     verify: async (tmp) =>
       verifyWrittenTurns({
@@ -132,7 +137,7 @@ export async function importTurnsToPi(
 }
 
 function pushMessage(
-  out: Line[],
+  out: string[],
   parentId: string | null,
   role: string,
   timestamp: string,
@@ -159,13 +164,15 @@ function pushMessage(
     };
     message.provider = 'pi';
   }
-  out.push({
-    type: 'message',
-    id,
-    parentId,
-    timestamp: ts,
-    message,
-  });
+  out.push(
+    JSON.stringify({
+      type: 'message',
+      id,
+      parentId,
+      timestamp: ts,
+      message,
+    }),
+  );
   return id;
 }
 

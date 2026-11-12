@@ -14,6 +14,7 @@ import {
   emptySessionFileReasonFromStat,
   isMissingPathError,
 } from '../../core/read-text.js';
+import { parseJsonObject } from '../../core/jsonl.js';
 import type { SessionRef, TokenUsage, UnifiedTurn } from '../../core/types.js';
 import { parsePiSession } from './parse.js';
 import { encodePiProjectDir, importTurnsToPi, piSessionsRoot } from './build.js';
@@ -97,12 +98,11 @@ async function piSessionCwdDetail(filePath: string): Promise<{ cwd: string | nul
   if (raw.length === 0) return { cwd: null, error: describeEmptySessionFile(filePath) };
   for (const line of raw.split('\n')) {
     if (!line.trim()) continue;
-    let rec: Record<string, unknown>;
-    try {
-      rec = JSON.parse(line);
-    } catch {
-      continue;
-    }
+    // 顶层 null / 数组 / 标量是合法 JSON 但不是记录：以前直接读 `rec.cwd`（null 抛 TypeError），
+    // 或遇到 `[]` / `42` 就 break，把其后的 session 头一起跳过——改为只认对象记录，
+    // 首个对象仍按「首条可解析记录」语义处理。
+    const rec = parseJsonObject(line);
+    if (!rec) continue;
     if (typeof rec.cwd === 'string' && rec.cwd) return { cwd: rec.cwd };
     break;
   }
