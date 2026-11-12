@@ -46,6 +46,13 @@ export function indexTexts(turns: UnifiedTurn[]): string[] {
   return out;
 }
 
+export type SearchCoverage = {
+  /** 本次命中列表上限的 provider id（更早的会话根本没枚举到） */
+  capped: string[];
+  /** 本次至少有一个会话未完整进入索引（解析失败 / 写索引失败 / 含坏行 / 读不出状态 / 非普通文件） */
+  incomplete: string[];
+};
+
 export async function reindexCwd(
   cwd: string,
   adapters: ProviderAdapter[],
@@ -53,6 +60,7 @@ export async function reindexCwd(
   warnings?: string[],
   unavailable?: string[],
   emptied?: EmptiedSession[],
+  coverage?: SearchCoverage,
 ): Promise<number> {
   let n = 0;
   for (const adapter of adapters) {
@@ -73,6 +81,7 @@ export async function reindexCwd(
     // 不说清楚，「搜不到」会被当成「没聊过」
     const cap = adapter.listSessionsCap;
     if (cap !== undefined && list.length >= cap) {
+      coverage?.capped.push(adapter.id);
       warnings?.push(
         `${adapter.id} 会话数达到列表上限 ${cap}，本次只索引最近的 ${cap} 个会话，更早的会话搜不到`,
       );
@@ -194,6 +203,9 @@ export async function reindexCwd(
       warnings?.push(
         `${adapter.id} 有 ${occupied} 个会话路径不是普通文件（被同名目录或设备文件占住了），本次未更新其索引（首个：${firstOccupied}）`,
       );
+    }
+    if (failed > 0 || writeFailed > 0 || badLineSessions > 0 || unreadable > 0 || occupied > 0) {
+      coverage?.incomplete.push(adapter.id);
     }
     let keepFailed = 0;
     let firstKeepError = '';

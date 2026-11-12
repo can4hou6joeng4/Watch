@@ -5,7 +5,7 @@ import { chainsElsewhereHint, chainsSameDirectoryHint, isStoreError, SEARCH_MAX_
 import type { Chain, ChainsElsewhere, SearchElsewhere } from './core/store.js';
 import { describeFindings } from './core/findings.js';
 import { adoptIntoChain, blockedHint, chainStatus, chainUsage, collectTips, createChainSession, currentChainShiftNote, describeSourceChangedDuringPrompt, emptyChainBindHint, handoff, HandoffBlockedError, notCurrentChainWarning, pickLatestTip, rebindHint, snapshotSourceState, storeUnavailableWarning } from './core/handoff.js';
-import { reindexCwd } from './core/search.js';
+import { reindexCwd, type SearchCoverage } from './core/search.js';
 import type { SessionRef } from './core/types.js';
 import type { TokenUsage } from './core/types.js';
 import {
@@ -1174,14 +1174,20 @@ async function cmdOpen(
     if (result.ok && cwdIgnored) result.warnings = [...(result.warnings ?? []), cwdIgnored];
     if (!result.ok) {
       // 目标被占用等写入拒绝：带上结构化原因，供桌面端/脚本给出可操作提示（未写入任何内容）
-      const extra = result.blocked ? { blocked: true, ...result.blocked } : undefined;
+      const extra: Record<string, unknown> = {
+        ...(result.blocked ? { blocked: true, ...result.blocked } : {}),
+        ...(result.warnings?.length ? { warnings: result.warnings } : {}),
+      };
+      if (!json) {
+        for (const warning of result.warnings ?? []) console.error(`提示: ${warning}`);
+      }
       if (!json && result.blocked) {
         // 与 failBlocked 同一格式：文本模式也要给 code 与下一步，不能只在 --json 里有
         console.error(`[blocked:${result.blocked.code}] ${result.error ?? '未知错误'}`);
         if (result.blocked.hint) console.error(result.blocked.hint);
         process.exit(1);
       }
-      fail(json, result.error ?? '未知错误', extra);
+      fail(json, result.error ?? '未知错误', Object.keys(extra).length ? extra : undefined);
     }
     if (json) {
       console.log(JSON.stringify(result));
@@ -2908,7 +2914,8 @@ async function cmdUsage(cwd: string, json: boolean, chain?: string): Promise<voi
       // 用「；」拼接而不是嵌套括注：`（读取失败: …（…））` 读起来分不清哪层在解释哪层
       const notes: string[] = [];
       if (item.error) notes.push(`读取失败: ${item.error}`);
-      else if (item.usage === null) notes.push('无 usage 字段');
+      else if (item.usage === null && !item.usageBadLines) notes.push('无 usage 字段');
+      else if (item.usage === null && item.usageBadLines) notes.push('未读出有效用量');
       if (item.usageBadLines) {
         notes.push(`用量数据源另有 ${item.usageBadLines} 行无法解析，这些行没计入，这个数是下界`);
       }
@@ -2976,7 +2983,8 @@ async function cmdSearch(cwd: string, json: boolean, query: string, resetIndex =
     if (ephemeralDb) {
       warnings.push(ephemeralStoreWarning('搜索索引建在这份临时库里，命令结束就没了（每次 search 都要重新全量索引）'));
     }
-    await reindexCwd(cwd, listAdapters(), store, warnings, unavailable, emptied);
+    const coverage: SearchCoverage = { capped: [], incomplete: [] };
+    await reindexCwd(cwd, listAdapters(), store, warnings, unavailable, emptied, coverage);
     // 0 字节会话（进程被杀 / 只写了一半 / 磁盘满）索引里一行内容都没有，命中永远为零。
     // 只回「没有匹配」会被读成「那句话没聊过」，而它可能正躺在一条内容已丢失的会话里。
     // `sessions` / `recent` / `doctor` 早已披露这一档，搜索是最后一个沉默的入口。
@@ -3008,9 +3016,11 @@ async function cmdSearch(cwd: string, json: boolean, query: string, resetIndex =
     // 索引里已经知道这个目录的另一种写法是什么字符串时用它当下一步，与 notes 里那条保持一致
     // （realpath 未必查得到：索引按记录里的原字符串存）
     if (!hits.length && !cwdIssue) {
-      // 有一家没读成、或有一批文件压根没进索引时，零命中只说明「没搜到」，不是「写法不对」
+      // 有一家没读成、达到列表上限、或有一批文件压根没进/未完整进索引时，零命中只说明「没搜到」，不是「写法不对」
       const alias = await cwdAliasHint(cwd, sameDirectoryElsewhere[0]?.cwd, [
         ...unavailable,
+        ...coverage.capped,
+        ...coverage.incomplete,
         ...unattributableStats.map((s) => s.provider),
         ...emptied.map((r) => r.provider),
       ]);
@@ -3033,6 +3043,16 @@ async function cmdSearch(cwd: string, json: boolean, query: string, resetIndex =
       if (unavailable.length) {
         notes.push(
           `本次没有命中，但 ${unavailable.join(' / ')} 的会话列表没能读取（原因见上方警告），搜索没有覆盖到它们——不代表这些 Agent 里没有匹配；先修好这些存储（权限、路径或库状态）再重试`,
+        );
+      }
+      if (coverage.capped.length) {
+        notes.push(
+          `本次没有命中，但 ${coverage.capped.join(' / ')} 的会话数已达列表上限（原因见上方警告），更早的会话没有进入搜索索引——无法确认它们里面是否有你要找的内容`,
+        );
+      }
+      if (coverage.incomplete.length) {
+        notes.push(
+          `本次没有命中，但 ${coverage.incomplete.join(' / ')} 有会话未能完整写入搜索索引（原因见上方警告），这部分内容本次没有覆盖到——不代表这个目录里没聊过；按上方提示处理后重跑 search 即可`,
         );
       }
       const unattrNote = unattributableSearchNote(unattributableStats);
