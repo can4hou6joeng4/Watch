@@ -1,7 +1,7 @@
 import { stat } from 'node:fs/promises';
 import { describeWriteFailureReason, type FileDigest } from './core/atomic.js';
 import { assertTargetUnchanged, blockedHint, describeSourceChangedDuringHandoff, diffTurns, HandoffBlockedError, snapshotSourceState, type SourceStateSnapshot } from './core/handoff.js';
-import { describeAttachmentLoss, describeTextEventLoss, describeDanglingToolCalls, describeUnansweredTail, describeResumeTargetUnfinished, dedupeCallEvents, findContextDisclosure } from './core/rich.js';
+import { describeAttachmentLoss, describeTextEventLoss, describeDanglingToolCalls, describeUnansweredTail, describeResumeTargetUnfinished, dedupeCallEvents, findContextDisclosure, countPairedTurnsMissingEvents } from './core/rich.js';
 import { Store, defaultDbPath, describeStoreErrorReason, describeStoreOpenFailure } from './core/store.js';
 import { IS_WIN, normalizePath, stripDevicePrefix } from './core/platform.js';
 import { trimUserKey } from './core/cli-input.js';
@@ -596,6 +596,18 @@ export async function openSession(
       // 写前快照：与 handoff 一致，写入前再比一次（目标被外部写入则中止）
       const dstDigest = (await target.adapter.contentFingerprint?.(target.found.ref)) ?? null;
       const outgoing = diffTurns(srcTurns, dstTurns);
+      // `diffTurns` 按 role + 文本 + callId 对齐：目标已有一段同文本、但没有来源那份思考 /
+      // 过程文本的回复时，这一轮被判成「已包含」而跳过——过程事件静默消失，`notes` 还会说
+      // 「内容已全部包含」。这条路径不做整份重写（目标格式未必存得下这些事件，且每次
+      // `--from` 都会重演一次），但必须披露有多少轮只并入了文本。
+      const missingEvents = countPairedTurnsMissingEvents(srcTurns, dstTurns);
+      if (missingEvents > 0) {
+        warnings.push(
+          `目标会话 ${escapeControlChars(targetId)}（${target.adapter.displayName}）已有 ${missingEvents} 轮与来源同文本的回复，` +
+            `但缺少来源里的过程事件（思考 / 过程文本 / 工具调用等）：这些轮次按文本对齐被判为「已包含」，对应过程事件不会写进目标` +
+            `；需要完整过程记录时可用 watch prompt ${escapeControlChars(from)} --profile full 查看来源原文`,
+        );
+      }
       // 与 switch 同一口径：附件原始数据不进 round-trip，目标侧不支持时只会静默剩下占位文本
       const attachmentLoss = describeAttachmentLoss(srcTurns, target.adapter);
       if (attachmentLoss) warnings.push(attachmentLoss);
@@ -814,7 +826,16 @@ export type OpenPlan = {
 };
 
 type PlannedOpen =
-  | { ok: true; adapter: ProviderAdapter; sourceRef: SessionRef; sourceProvider: string; cwd: string; plan: OpenPlan }
+  | {
+      ok: true;
+      adapter: ProviderAdapter;
+      sourceRef: SessionRef;
+      sourceProvider: string;
+      cwd: string;
+      /** 来源快照基线，取在读取来源内容之前；resume 快路径不写文件，用不到但一并带上 */
+      sourceSnapshot: SourceStateSnapshot | null;
+      plan: OpenPlan;
+    }
   | { ok: false; error: string };
 
 /**
@@ -912,7 +933,12 @@ async function planOpenInProvider(
   if (cwdIssue) diagnostics?.push(cwdIssue);
   const sourceRef = source.found.ref;
   const sourceProvider = source.adapter.id;
-  const base = { ok: true as const, adapter: target, sourceRef, sourceProvider, cwd };
+  // 来源快照基线必须在**任何内容读取之前**取：来源侧没有 TOCTOU 守卫，规划期间用户在原生 CLI
+  // 里继续说话、或另一条命令正在追加时，新增轮次既不会转过去、也检测不到。以前这句在
+  // `planOpenInProvider` 返回之后才取（规划里已经 parse 过来源），把追加后的状态当成了基线，
+  // 写完后比对永远相同；`--from` 那条路径一直是 parse 之前取（见本文件 srcSnapshot 处）。
+  const sourceSnapshot = await snapshotSourceState(sourceRef.filePath);
+  const base = { ok: true as const, adapter: target, sourceRef, sourceProvider, cwd, sourceSnapshot };
 
   // 属主即目标：无需转化，直接 resume
   if (sourceProvider === providerId) {
@@ -1197,10 +1223,9 @@ export async function openInProvider(
   const mapping = store ?? openMappingDb(diagnostics);
   const planned = await planOpenInProvider(sourceId, providerId, mapping, diagnostics);
   if (!planned.ok) return { ok: false, error: attachDiagnostics(planned.error, diagnostics) };
-  const { adapter: target, sourceRef, sourceProvider, cwd, plan } = planned;
-  // 来源快照基线：`plan` 里已经读过来源会话，这里是「写完之后再比一次」的参照。
-  // 来源侧没有 TOCTOU 守卫，期间被追加的话，转过去的只是规划那一刻的内容
-  const srcSnapshot = await snapshotSourceState(sourceRef.filePath);
+  const { adapter: target, sourceRef, sourceProvider, cwd, plan, sourceSnapshot: srcSnapshot } = planned;
+  // 来源快照的基线在 `planOpenInProvider` 读取来源之前就取好了（见那里的注释）：
+  // 这里只负责写完之后再比一次，期间（含规划阶段）被追加的话都能报出来
 
   const cliBlock = await newSessionCliBlock(target, plan);
   if (cliBlock) {
