@@ -438,6 +438,9 @@ type V2MessageData = {
   skill?: string;
   name?: string;
   error?: { message?: string };
+  /** user 的附件与技能（上游 Prompt.files / Prompt.skills），形状在解析处逐项收窄 */
+  files?: unknown;
+  skills?: unknown;
 };
 
 /**
@@ -521,10 +524,103 @@ function v2ToolResultText(state: V2ToolState | undefined, unknown: Map<string, n
   return undefined;
 }
 
+/** 上游 `attachmentContent()` 只把这几类当图片媒体；其余走文本 / 其它分支。 */
+const V2_IMAGE_MIMES = new Set(['image/png', 'image/jpeg', 'image/gif', 'image/webp']);
+
+/**
+ * user 消息的 `files` / `skills`（上游 v2.2.7 的 `toLLMMessage` 在 user 分支把它们与
+ * `Prompt.text` 一起送进模型上下文）。
+ *
+ * 以前只读 `text`：附件与技能静默消失，纯附件提问还会被记成「user（无文本）」整轮丢掉。
+ * 这里给每个附件产一条带 `attachment` 的 text 事件（与 1.x `filePartToEvent` 同形），
+ * 技能产一条 `[技能已激活：name]` 事件。**不复制 inline 的非图片载荷**（text/plain 的
+ * base64 可能是整份文件，会撑爆交接）；图片按上游的 4 种 mime 还原 `data`。
+ * 形状异常按原因计数，不静默。
+ */
+function v2UserAttachmentEvents(
+  data: V2MessageData,
+  timestamp: string,
+  unknown: Map<string, number>,
+): ProcessEvent[] {
+  const events: ProcessEvent[] = [];
+  const files = data.files;
+  if (files !== undefined) {
+    if (!Array.isArray(files)) {
+      bumpCount(unknown, 'user:files（不是数组）');
+    } else {
+      for (const raw of files) {
+        if (!raw || typeof raw !== 'object') {
+          bumpCount(unknown, 'user:files（非对象）');
+          continue;
+        }
+        const file = raw as { data?: unknown; mime?: unknown; name?: unknown; source?: unknown };
+        if (typeof file.mime !== 'string' || !file.mime) {
+          bumpCount(unknown, 'user:files（mime 不是字符串）');
+          continue;
+        }
+        const name = typeof file.name === 'string' && file.name ? file.name : undefined;
+        const source =
+          file.source && typeof file.source === 'object' ? (file.source as { type?: unknown; uri?: unknown }) : undefined;
+        const uri = source?.type === 'uri' && typeof source.uri === 'string' ? source.uri : undefined;
+        const base64 = typeof file.data === 'string' && file.data ? file.data : undefined;
+        const image = V2_IMAGE_MIMES.has(file.mime);
+        const placeholder = `[附件：${file.mime}${name ? `，${name}` : ''}]`;
+        events.push({
+          kind: 'text',
+          timestamp,
+          summary: placeholder,
+          detail: placeholder,
+          provider: 'opencode',
+          attachment: {
+            kind: image ? 'image' : 'file',
+            mediaType: file.mime,
+            ...(image && base64 ? { data: base64 } : {}),
+            ...(!image && uri ? { url: uri } : {}),
+            ...(name ? { filename: name } : {}),
+          },
+        });
+      }
+    }
+  }
+  const skills = data.skills;
+  if (skills !== undefined) {
+    if (!Array.isArray(skills)) {
+      bumpCount(unknown, 'user:skills（不是数组）');
+    } else {
+      for (const raw of skills) {
+        if (!raw || typeof raw !== 'object') {
+          bumpCount(unknown, 'user:skills（非对象）');
+          continue;
+        }
+        const skill = raw as { name?: unknown; text?: unknown };
+        if (typeof skill.name !== 'string' || !skill.name) {
+          bumpCount(unknown, 'user:skills（无 name）');
+          continue;
+        }
+        const text = typeof skill.text === 'string' ? skill.text : '';
+        events.push({
+          kind: 'text',
+          timestamp,
+          summary: `[技能已激活：${skill.name}] ${text.slice(0, 160)}`.trim(),
+          detail: text,
+          provider: 'opencode',
+        });
+      }
+    }
+  }
+  return events;
+}
+
 function v2UserTurn(row: V2MessageRow, data: V2MessageData, unknown: Map<string, number>): UnifiedTurn | null {
   const raw = typeof data.text === 'string' ? data.text : typeof data.content === 'string' ? data.content : '';
   const normalized = normalizeUserText(raw);
+  const time = typeof data.time?.created === 'number' ? data.time.created : row.time_created;
+  const timestamp = isoFromEpochMs(time);
+  const events = v2UserAttachmentEvents(data, timestamp, unknown);
   if (!normalized) {
+    // 纯附件 / 纯技能提问：上游 content 由附件与技能文本组成，仍会产出 user 消息。
+    // 以前一律按「无文本」跳过，整轮消失；有 events 时保留空正文轮，由写出侧补占位。
+    if (events.length > 0) return { role: 'user', text: '', timestamp, provider: 'opencode', events };
     // 上游 User.text 是权威字符串字段；有值但类型不对时，「无文本」会把真实原因盖掉。
     if (data.text !== undefined && typeof data.text !== 'string') {
       bumpCount(unknown, 'user（text 不是字符串）');
@@ -535,8 +631,9 @@ function v2UserTurn(row: V2MessageRow, data: V2MessageData, unknown: Map<string,
     }
     return null;
   }
-  const time = typeof data.time?.created === 'number' ? data.time.created : row.time_created;
-  return { role: 'user', text: normalized, timestamp: isoFromEpochMs(time), provider: 'opencode' };
+  const turn: UnifiedTurn = { role: 'user', text: normalized, timestamp, provider: 'opencode' };
+  if (events.length > 0) turn.events = events;
+  return turn;
 }
 
 function v2AssistantTurn(
