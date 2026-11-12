@@ -3,7 +3,7 @@ import { stat } from 'node:fs/promises';
 import type { SessionRef, TokenUsage, UnifiedTurn } from './types.js';
 import { chainsElsewhereHint, chainsSameDirectoryHint, describeStoreErrorReason, emptyChainBindHint } from './store.js';
 import type { Chain, ChainsElsewhere, Store, SwitchRecord } from './store.js';
-import { dedupeCallEvents, describeAttachmentLoss, describeTextEventLoss, describeDanglingToolCalls, describeUnansweredTail, describeResumeTargetUnfinished, findContextDisclosure, mergeTurns, shouldReplacePairedSession, unwrapUserQuery } from './rich.js';
+import { dedupeCallEvents, describeAttachmentLoss, describeTextEventLoss, describeDanglingToolCalls, describeUnansweredTail, describeResumeTargetUnfinished, findContextDisclosure, mergeTurns, shouldReplacePairedSession, turnIdentityKey } from './rich.js';
 import { describeWriteFailureReason, type FileDigest } from './atomic.js';
 import { addFinding, type Finding } from './findings.js';
 import { escapeControlChars } from './display.js';
@@ -22,11 +22,8 @@ export class HandoffBlockedError extends Error {
   }
 }
 
-function turnKey(t: UnifiedTurn): string {  const callIds = (t.events ?? [])
-    .map((e) => e.callId)
-    .filter((id): id is string => Boolean(id))
-    .join(',');
-  return `${t.role}\n${unwrapUserQuery(t.text).trim()}\n${callIds}`;
+function turnKey(t: UnifiedTurn): string {
+  return turnIdentityKey(t);
 }
 
 /** 写入被拒后给用户的下一步：不同 code 的原因完全不同，不能一句「确认停止写入后重试」包打天下 */

@@ -45,6 +45,14 @@ export const PI_COMPACTION_SUMMARY_PREFIX = '[Pi 上下文压缩摘要：由 Pi 
 export const PI_BRANCH_SUMMARY_PREFIX = '[Pi 分支摘要：由 Pi 生成，不是用户原话；总结的是另一条分支]';
 
 /**
+ * Kimi 的 `context.apply_compaction` 是顶层 wire 记录，`summary` 是 Kimi 生成的历史摘要。
+ * 与 Pi 的 `compaction` 条目同一口径：还原成带前缀的用户轮，前缀同时是
+ * `watch prompt --since-compact` 认边界的唯一痕迹。摘要为空时也保留「压缩过」的声明，
+ * 不能把整条记录丢掉。
+ */
+export const KIMI_COMPACTION_SUMMARY_PREFIX = '[Kimi 上下文压缩摘要：由 Kimi 生成，不是用户原话]';
+
+/**
  * Pi 的 `context_edit` / `custom_message` 条目不在 `parsePiSession()` 的还原范围内，但读者必须知道
  * 「这份交接的上下文与 Pi 现在发给模型的不一致」。披露以 **text 事件**挂在最后一轮上，而不是
  * 改写任何轮次的正文：`turnKey`（`handoff.ts`）只由 role + text + callIds 组成，事件不参与
@@ -111,20 +119,125 @@ export function normalizeUserText(text: string): string | null {
   return unwrapped.trim();
 }
 
+/** Watch 为合法复用 ID 生成的稳定后缀；对账时折回原始 ID，避免把已写入的重映射当成新增。 */
+const WATCH_REMAPPED_CALL_ID = /__watch_dup_\d+$/;
+
+function canonicalCallId(callId: string): string {
+  return callId.replace(WATCH_REMAPPED_CALL_ID, '');
+}
+
+/** 事件种类 + callId：call 与 result 必须分开身份，不能只按裸 callId 排序。 */
+function callEventIdentities(t: UnifiedTurn): string[] {
+  return (t.events ?? [])
+    .filter((e) => (e.kind === 'tool_call' || e.kind === 'tool_result') && e.callId)
+    .map((e) => `${e.kind}:${canonicalCallId(e.callId!)}`);
+}
+
+/** 纯附件轮的稳定内容身份：原始数据优先，其次 url / 文件名 / 占位文本。 */
+function attachmentIdentities(t: UnifiedTurn): string[] {
+  return (t.events ?? [])
+    .filter((e) => e.attachment)
+    .map((e) => {
+      const a = e.attachment!;
+      const raw = a.data ?? a.url ?? a.filename;
+      return JSON.stringify({
+        kind: a.kind,
+        mediaType: a.mediaType ?? '',
+        data: a.data ?? '',
+        url: a.url ?? '',
+        filename: a.filename ?? '',
+        placeholder: raw ? '' : (e.detail ?? e.summary ?? '').trim(),
+      });
+    })
+    .sort();
+}
+
+function isMultisetSubset(subset: string[], superset: string[]): boolean {
+  const counts = new Map<string, number>();
+  for (const item of superset) counts.set(item, (counts.get(item) ?? 0) + 1);
+  for (const item of subset) {
+    const left = counts.get(item) ?? 0;
+    if (left === 0) return false;
+    counts.set(item, left - 1);
+  }
+  return true;
+}
+
+/**
+ * 两轮能否对齐。与单一 `textKey` 不同，这里能表达「一侧缺事件」：
+ * 双方都有调用身份时必须有一侧是另一侧的多重子集，才能按文本补全；
+ * 双方调用身份完全不同（同正文但各说各的工具）时不得误配，否则一侧独有工具历史会被覆盖。
+ */
+export function turnsPair(a: UnifiedTurn, b: UnifiedTurn): boolean {
+  if (a.role !== b.role) return false;
+  const aBody = unwrapUserQuery(a.text).trim();
+  const bBody = unwrapUserQuery(b.text).trim();
+  if (aBody !== bBody) return false;
+  if (!aBody) {
+    const aAtt = attachmentIdentities(a);
+    const bAtt = attachmentIdentities(b);
+    if ((aAtt.length > 0 || bAtt.length > 0) && aAtt.join('\u0000') !== bAtt.join('\u0000')) return false;
+  }
+  const aCalls = callEventIdentities(a);
+  const bCalls = callEventIdentities(b);
+  if (aCalls.length === 0 || bCalls.length === 0) return true;
+  return isMultisetSubset(aCalls, bCalls) || isMultisetSubset(bCalls, aCalls);
+}
+
+/**
+ * 增量对齐使用的轮次身份：正文 + 按 `kind:callId` 规范化的调用多重集。
+ * 只排序裸 callId 会把「call A + result A」与「call A + call A」混为同一轮；
+ * 同阶段内允许目标格式重排（Grok 把所有 call 集中写在 result 之前）。
+ * 纯附件轮没有正文，必须把附件内容纳入身份，否则不同图片会被当成同一轮。
+ */
+export function turnIdentityKey(t: UnifiedTurn): string {
+  const body = unwrapUserQuery(t.text).trim();
+  const calls = callEventIdentities(t).sort();
+  const attachments = body ? [] : attachmentIdentities(t);
+  return JSON.stringify([t.role, body, calls, attachments]);
+}
+
 export function textKey(t: UnifiedTurn): string {
   const body = unwrapUserQuery(t.text).trim();
-  // 空正文助手工具轮如果只按 role+text 匹配，所有工具轮都会撞成同一把键而把 dest 独有轮误配给 source，
-  // 从而丢掉 source 轮或覆盖 dest 独有轮；有正文的轮仍不拼 callId，保留「缺事件侧照文本补全」语义
-  if (t.role === 'assistant' && !body) {
-    const callIds = [...new Set((t.events ?? []).map((e) => e.callId).filter((id): id is string => Boolean(id)))];
-    if (callIds.length > 0) return `${t.role}\n\n${callIds.join(',')}`;
+  // 空正文轮如果只按 role+text 匹配，所有工具轮 / 纯附件轮都会撞成同一把键；
+  // 有正文的轮仍保留「缺事件侧照文本补全」语义（turnsPair 负责子集判断）。
+  if (!body) {
+    const calls = callEventIdentities(t).sort();
+    const attachments = attachmentIdentities(t);
+    if (calls.length > 0 || attachments.length > 0) {
+      return JSON.stringify([t.role, body, calls, attachments]);
+    }
   }
   return `${t.role}\n${body}`;
 }
 
 /**
+ * 配对轮的事件选择：不能用「事件数组更长」单独决定覆盖方向。
+ * 目标有、来源没有的调用 / 结果必须保留；来源有、目标没有的调用则取来源那份。
+ * 调用覆盖关系相同（或双方都没有调用）时才按事件数量取更全的一份。
+ */
+function mergePairedTurn(source: UnifiedTurn, dest: UnifiedTurn): UnifiedTurn {
+  const sourceCalls = callEventIdentities(source);
+  const destCalls = callEventIdentities(dest);
+  const sourceCoversDest = isMultisetSubset(destCalls, sourceCalls);
+  const destCoversSource = isMultisetSubset(sourceCalls, destCalls);
+  let useSource: boolean;
+  if (sourceCoversDest && destCoversSource) {
+    useSource = (source.events?.length ?? 0) > (dest.events?.length ?? 0);
+  } else if (sourceCoversDest) {
+    useSource = true;
+  } else if (destCoversSource) {
+    useSource = false;
+  } else {
+    useSource = (source.events?.length ?? 0) > (dest.events?.length ?? 0);
+  }
+  return useSource ? { ...dest, events: source.events } : dest;
+}
+
+/**
  * 按文本对齐合并：保留 dest 独有回合，source 过程事件更全则覆盖到对应 dest 回合，
- * 再接上 source 未匹配后缀。
+ * 再接上 source 未匹配的中间缺口与后缀。匹配点之前的 source 轮必须原样保留——
+ * 否则「某轮只是缺事件」触发的整份重写会顺手吞掉来源里真正新增的中间问答。
  */
 export function mergeTurns(source: UnifiedTurn[], dest: UnifiedTurn[]): UnifiedTurn[] {
   let si = 0;
@@ -132,14 +245,14 @@ export function mergeTurns(source: UnifiedTurn[], dest: UnifiedTurn[]): UnifiedT
   for (const d of dest) {
     let found = -1;
     for (let i = si; i < source.length; i++) {
-      if (textKey(source[i]!) === textKey(d)) {
+      if (turnsPair(source[i]!, d)) {
         found = i;
         break;
       }
     }
     if (found >= 0) {
-      const s = source[found]!;
-      out.push((s.events?.length ?? 0) > (d.events?.length ?? 0) ? { ...d, events: s.events } : d);
+      for (let i = si; i < found; i++) out.push(source[i]!);
+      out.push(mergePairedTurn(source[found]!, d));
       si = found + 1;
     } else {
       out.push(d);
@@ -150,9 +263,9 @@ export function mergeTurns(source: UnifiedTurn[], dest: UnifiedTurn[]): UnifiedT
 }
 
 /**
- * 按 textKey 对齐后，**dest 回合缺少 source 过程事件**的回合数。
+ * 按 turnsPair 对齐后，**dest 回合缺少 source 过程事件**的回合数。
  *
- * `diffTurns` 用 turnKey（role + 文本 + callId）对齐：一轮同文本、但来源多出 thinking /
+ * `diffTurns` 用轮次身份（正文 + 调用身份）对齐：一轮同文本、但来源多出 thinking /
  * 过程文本（都不带 callId）的回复会被判成「目标已包含」而跳过，过程事件静默消失。
  * 这里是同一件事的计数版——`handoff` 用它决定是否整份重写；`open --from` 不能重写
  * （目标格式可能存不下这些事件，重写会在每次 `--from` 时反复发生），但必须据此披露。
@@ -164,7 +277,7 @@ export function countPairedTurnsMissingEvents(source: UnifiedTurn[], dest: Unifi
   for (const d of dest) {
     let found = -1;
     for (let i = si; i < source.length; i++) {
-      if (textKey(source[i]!) === textKey(d)) {
+      if (turnsPair(source[i]!, d)) {
         found = i;
         break;
       }
@@ -275,6 +388,13 @@ export function mergeConsecutiveAssistant(turns: UnifiedTurn[]): UnifiedTurn[] {
     if (t.role === 'assistant' && prev?.role === 'assistant') {
       prev.text = [prev.text, t.text].filter((s) => s.trim()).join('\n\n');
       if (t.events?.length) prev.events = [...(prev.events ?? []), ...t.events];
+      // 目标只保留一条回复时，后续独立轮次的真实用量不能凭空消失。
+      if (t.usage) {
+        prev.usage = {
+          inputTokens: (prev.usage?.inputTokens ?? 0) + t.usage.inputTokens,
+          outputTokens: (prev.usage?.outputTokens ?? 0) + t.usage.outputTokens,
+        };
+      }
     } else {
       out.push({ ...t, events: t.events ? [...t.events] : undefined });
     }
@@ -289,31 +409,124 @@ export function stripEmptyEvents(turns: UnifiedTurn[]): UnifiedTurn[] {
   return turns;
 }
 
+type CallOccurrence = {
+  baseId: string;
+  call: ProcessEvent;
+  results: ProcessEvent[];
+  index: number;
+  newId: string | null;
+  drop: boolean;
+};
+
+/** 调用 / 结果的可比较载荷；时间戳不参与，重放副本可能带着不同的写入时间。 */
+function callPayload(event: ProcessEvent): string {
+  return JSON.stringify({
+    kind: event.kind,
+    name: event.name ?? '',
+    input: event.input ?? null,
+    summary: event.summary,
+    detail: event.detail ?? '',
+  });
+}
+
+function occurrenceFingerprint(occ: CallOccurrence): string {
+  return JSON.stringify([callPayload(occ.call), occ.results.map(callPayload)]);
+}
+
+function remappedCallId(baseId: string, index: number, used: Set<string>): string {
+  let n = index + 1;
+  let candidate = `${baseId}__watch_dup_${n}`;
+  while (used.has(candidate)) {
+    n += 1;
+    candidate = `${baseId}__watch_dup_${n}`;
+  }
+  used.add(candidate);
+  return candidate;
+}
+
 /**
- * 会话级 callId 去重：同一 callId 语义上就是一次调用，只保留首次出现。
- * resume 重放/fork 会让同一调用跨代再现（grok 尤甚，重复还会随链路切换在目标
- * 会话里持续增殖），且「写回全量、parse 去重」会让 round-trip 校验不对称——
- * 因此在导入边界统一收敛，无 callId 的事件不参与。
+ * 会话级 callId 去重：完全相同的调用 + 结果视为一次重放，只保留首次出现。
+ *
+ * 同一 callId 完成后再发起**另一次内容不同的调用**不是重放——直接删掉会让第二轮真实
+ * 工具历史静默消失。目标又普遍要求同一会话内 callId 唯一，因此这种复用把整组
+ * call/result 稳定重映射到新 ID（同一输入每次得到同一个新 ID），而不是删除。
+ * 无 callId 的事件不参与。
  */
 export function dedupeCallEvents(turns: UnifiedTurn[]): UnifiedTurn[] {
-  const seenCalls = new Set<string>();
-  const seenResults = new Set<string>();
-  return turns.map((t) => {
-    if (!t.events?.length) return t;
-    let changed = false;
-    const kept = t.events.filter((e) => {
-      if (e.kind !== 'tool_call' && e.kind !== 'tool_result') return true;
-      if (!e.callId) return true;
-      const seen = e.kind === 'tool_call' ? seenCalls : seenResults;
-      if (seen.has(e.callId)) {
-        changed = true;
-        return false;
+  const byId = new Map<string, CallOccurrence[]>();
+  const eventLabels: Array<CallOccurrence | null> = [];
+  const all: CallOccurrence[] = [];
+  for (const turn of turns) {
+    for (const event of turn.events ?? []) {
+      let label: CallOccurrence | null = null;
+      if (event.kind === 'tool_call' && event.callId) {
+        const list = byId.get(event.callId) ?? [];
+        const occ: CallOccurrence = {
+          baseId: event.callId,
+          call: event,
+          results: [],
+          index: list.length,
+          newId: null,
+          drop: false,
+        };
+        list.push(occ);
+        byId.set(event.callId, list);
+        all.push(occ);
+        label = occ;
+      } else if (event.kind === 'tool_result' && event.callId) {
+        const list = byId.get(event.callId);
+        if (list?.length) {
+          // 结果按未配对调用先进先出；同一调用有多条结果时都挂在最后一条出现上。
+          const occ = list.find((item) => item.results.length === 0) ?? list.at(-1)!;
+          occ.results.push(event);
+          label = occ;
+        }
       }
-      seen.add(e.callId);
-      return true;
-    });
-    return changed ? { ...t, events: kept } : t;
+      eventLabels.push(label);
+    }
+  }
+
+  const used = new Set(byId.keys());
+  for (const occ of all) {
+    const prior = byId.get(occ.baseId)!.slice(0, occ.index);
+    if (prior.length === 0) continue;
+    const fingerprint = occurrenceFingerprint(occ);
+    if (occ.results.length === 0) {
+      // 同一条调用被重复登记（Claude 行内重复 tool_use、resume 重放）仍然收敛，
+      // 但只有调用载荷相同才算；内容不同说明是另一组待完成调用，下面走重映射。
+      if (prior.some((item) => callPayload(item.call) === callPayload(occ.call))) occ.drop = true;
+      else occ.newId = remappedCallId(occ.baseId, occ.index, used);
+    } else if (prior.some((item) => occurrenceFingerprint(item) === fingerprint)) {
+      occ.drop = true;
+    } else {
+      occ.newId = remappedCallId(occ.baseId, occ.index, used);
+    }
+  }
+
+  let changed = false;
+  let eventIndex = 0;
+  const out = turns.map((turn) => {
+    if (!turn.events?.length) return turn;
+    let turnChanged = false;
+    const events: ProcessEvent[] = [];
+    for (const event of turn.events) {
+      const occ = eventLabels[eventIndex++];
+      if (occ?.drop) {
+        changed = true;
+        turnChanged = true;
+        continue;
+      }
+      if (occ?.newId) {
+        changed = true;
+        turnChanged = true;
+        events.push(event.callId === occ.newId ? event : { ...event, callId: occ.newId });
+      } else {
+        events.push(event);
+      }
+    }
+    return turnChanged ? { ...turn, events } : turn;
   });
+  return changed ? out : turns;
 }
 
 /**
