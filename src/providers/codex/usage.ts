@@ -13,12 +13,16 @@ export async function codexSessionUsage(ref: SessionRef): Promise<TokenUsage | n
   let last: TokenUsage | null = null;
   for (const line of raw.split('\n')) {
     if (!line.trim()) continue;
-    let rec: Record<string, unknown>;
+    let parsed: unknown;
     try {
-      rec = JSON.parse(line) as Record<string, unknown>;
+      parsed = JSON.parse(line);
     } catch {
       continue;
     }
+    // JSON 语法有效不等于消息对象有效：顶层 null / 数组 / 标量只跳过该行，
+    // 其余有效累计继续读取；入口按共用坏行计数披露下界（与 Claude 用量同一档）。
+    if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) continue;
+    const rec = parsed as Record<string, unknown>;
     const payload = rec.payload as Record<string, unknown> | undefined;
     const kind = payload?.type ?? rec.type;
     if (kind !== 'token_count') continue;
