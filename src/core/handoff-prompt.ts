@@ -293,6 +293,23 @@ function takeLastUserTurns(turns: UnifiedTurn[], n: number): { kept: UnifiedTurn
   return { kept: turns, omitted: 0 };
 }
 
+/**
+ * `--last N` 是从倒数第 N 条 **user** 轮起截的：`--since-compact` 的窗口起点（摘要轮）如果挂在
+ * 助手轮上（OpenCode 2.x 的 compaction），或 N 不够大时摘要本身也是 user 轮，都会被整段甩掉——
+ * 而正文头部仍宣称「从最近一次压缩摘要开始」。把窗口起点补回 kept，并从省略计数里扣掉它
+ * （它已经不在「被省略」里了）。不带 `--since-compact` 时不补：那时摘要轮本来就不属于窗口。
+ */
+function keepCompactAnchor(
+  picked: { kept: UnifiedTurn[]; omitted: number },
+  scoped: UnifiedTurn[],
+  compactAt: number,
+): { kept: UnifiedTurn[]; omitted: number } {
+  if (compactAt < 0 || scoped.length === 0) return picked;
+  const anchor = scoped[0]!;
+  if (picked.kept.includes(anchor)) return picked;
+  return { kept: [anchor, ...picked.kept], omitted: Math.max(picked.omitted - 1, 0) };
+}
+
 /** 单行摘要的硬上限：摘要本身就该短，超了只标省略，不追加「已截断」说明 */
 function clipInline(text: string, limit: number): { text: string; truncated: boolean } {
   const chars = Array.from(text);
@@ -398,9 +415,11 @@ export function buildHandoffPrompt(
   const compactOmitted = compactAt > 0 ? compactAt : 0;
   const scoped = compactAt >= 0 ? turns.slice(compactAt) : turns;
 
-  // 显式 `--last N` 优先于档位的轮次上限：用户点名了窗口，就不该再被档位偷偷缩一次
+  // 显式 `--last N` 优先于档位的轮次上限：用户点名了窗口，就不该再被档位偷偷缩一次。
+  // 但 `--since-compact` 的摘要锚点两条路径都要保住（第 55 轮补齐 --last 这一侧，
+  // 第 54 轮只修了档位裁剪）：摘要轮可能是助手轮，也可能因 N 不够大被窗口甩掉。
   const selection = options.lastUserTurns !== undefined
-    ? takeLastUserTurns(scoped, options.lastUserTurns)
+    ? keepCompactAnchor(takeLastUserTurns(scoped, options.lastUserTurns), scoped, compactAt)
     : selectTurns(scoped, limits.maxTurns, compactAt >= 0);
   const { kept, omitted } = selection;
   stats.includedTurns = kept.length;
@@ -426,11 +445,18 @@ export function buildHandoffPrompt(
       stats.attachmentsOmitted += attachments;
       addFinding(findings, 'prompt_attachments_omitted', 'skipped', attachments);
     }
+    // 压缩摘要不是「过程噪声」而是更早内容的浓缩：档位不展开过程记录时也必须保留。
+    // 否则 `--since-compact` 会切掉摘要之前的轮次，却把摘要本身也一起丢掉——留下的只有
+    // 「从摘要开始」这一句，而摘要根本没有出现。
+    const compactEvents = events.filter(isCompactSummaryEvent);
+    const procEvents = events.filter((e) => !isCompactSummaryEvent(e) && !isContextDisclosureEvent(e));
+    let headed = false;
     if (clipped.text.length > 0) {
       body.push(`### ${roleLabel(turn.role)}`);
       body.push('');
       body.push(clipped.text);
       body.push('');
+      headed = true;
     } else if (attachments > 0) {
       // 只有附件、没有正文的轮次（纯图片提问）以前连标题都不输出：stats 里计了一轮，
       // 正文里却找不到它，读者会以为助手在自说自话。给一行「这一轮只有附件」的说明，
@@ -442,13 +468,15 @@ export function buildHandoffPrompt(
         .map((e) => `[随来源记录的附件：${e.attachment!.kind === 'image' ? '图片' : '文件'}，原始数据未附在此文档]`);
       body.push(placeholders.join('\n'));
       body.push('');
+      headed = true;
     }
-    // 压缩摘要不是「过程噪声」而是更早内容的浓缩：档位不展开过程记录时也必须保留。
-    // 否则 `--since-compact` 会切掉摘要之前的轮次，却把摘要本身也一起丢掉——留下的只有
-    // 「从摘要开始」这一句，而摘要根本没有出现。
-    const compactEvents = events.filter(isCompactSummaryEvent);
-    const procEvents = events.filter((e) => !isCompactSummaryEvent(e) && !isContextDisclosureEvent(e));
     if (compactEvents.length) {
+      // 摘要轮常常只有事件、没有正文（OpenCode 2.x 挂在助手轮上）：它作为 --since-compact
+      // 的窗口起点被单独保留时，没有轮次标题会让这段摘要看着像文档级说明而不是某一轮。
+      if (!headed) {
+        body.push(`### ${roleLabel(turn.role)}`);
+        body.push('');
+      }
       for (const event of compactEvents) body.push(renderEvent(event, limits.textLimit, stats));
       body.push('');
       stats.includedEvents += compactEvents.length;
