@@ -698,7 +698,7 @@ async function cmdStatus(cwd: string, json: boolean, chain?: string): Promise<vo
     }));
     return;
   }
-  const { tips, chainTip, chainTipUnusable, unreadable, history, chain: current, warnings } = result;
+  const { tips, chainTip, chainTipUnusable, unreadable, history, historyFailed, chain: current, warnings } = result;
   for (const warning of warnings) console.error(`警告: ${warning}`);
   // 链名是用户输入、库里可能留着写入守卫上线前的坏名字：进终端前转义，别把 ESC / 换行打出去
   if (current) console.log(`链: ${escapeControlChars(current.name)}${current.status === 'archived' ? ' [归档]' : ''}  (${current.id})`);
@@ -766,11 +766,15 @@ async function cmdStatus(cwd: string, json: boolean, chain?: string): Promise<vo
     }
   } else if (store) {
     console.log('');
-    console.log('切换链: （空）');
-    // 上一行是结论：本目录没有链。别处有链时必须接着指路，否则「（空）」会被当成链没了。
-    // 「同一个目录的另一种写法」与「确实是别的目录」分开说，两句话的下一步不同
-    if (splitElsewhere.same.length) console.log(chainsSameDirectoryHint(splitElsewhere.same));
-    if (splitElsewhere.other.length) console.log(chainsElsewhereHint(splitElsewhere.other));
+    // `history = []` 有两种来源：链真的没有记录，或 `switch_events` 读失败。后者上方已有
+    // warning，但正文这句「（空）」是结论，会把脚本 / 用户引向「本目录没有链记录」。
+    console.log(historyFailed ? '切换链: （历史读取失败，无法判断有没有记录）' : '切换链: （空）');
+    if (!historyFailed) {
+      // 上一行是结论：本目录没有链。别处有链时必须接着指路，否则「（空）」会被当成链没了。
+      // 「同一个目录的另一种写法」与「确实是别的目录」分开说，两句话的下一步不同
+      if (splitElsewhere.same.length) console.log(chainsSameDirectoryHint(splitElsewhere.same));
+      if (splitElsewhere.other.length) console.log(chainsElsewhereHint(splitElsewhere.other));
+    }
   }
 }
 
