@@ -263,10 +263,13 @@ function formatTimeRange(startedAt?: number, updatedAt?: number): TimeRange | nu
  * 只按「最近 N 轮」切会把任务描述甩掉，而首条 user 消息通常正是「要做什么」。
  * 若首轮本来就在最近 N 轮里，不重复保留，直接整段截取。
  */
-function selectTurns(turns: UnifiedTurn[], maxTurns: number | null): { kept: UnifiedTurn[]; omitted: number } {
+function selectTurns(
+  turns: UnifiedTurn[],
+  maxTurns: number | null,
+  keepFirst = false,
+): { kept: UnifiedTurn[]; omitted: number } {
   if (maxTurns === null || turns.length <= maxTurns) return { kept: turns, omitted: 0 };
-  const firstUserIndex = turns.findIndex((t) => t.role === 'user');
-  const head = firstUserIndex >= 0 ? turns[firstUserIndex] : undefined;
+  const head = keepFirst ? turns[0] : turns[turns.findIndex((t) => t.role === 'user')];
   const tailCount = head ? Math.max(maxTurns - 1, 0) : maxTurns;
   const tail = turns.slice(Math.max(turns.length - tailCount, 0));
   if (!head) return { kept: tail, omitted: turns.length - tail.length };
@@ -398,7 +401,7 @@ export function buildHandoffPrompt(
   // 显式 `--last N` 优先于档位的轮次上限：用户点名了窗口，就不该再被档位偷偷缩一次
   const selection = options.lastUserTurns !== undefined
     ? takeLastUserTurns(scoped, options.lastUserTurns)
-    : selectTurns(scoped, limits.maxTurns);
+    : selectTurns(scoped, limits.maxTurns, compactAt >= 0);
   const { kept, omitted } = selection;
   stats.includedTurns = kept.length;
   stats.omittedTurns = omitted + compactOmitted;
