@@ -1,3 +1,4 @@
+import { userTurnTextForWrite } from './rich.js';
 import type { UnifiedTurn } from './types.js';
 
 /**
@@ -31,6 +32,15 @@ export function assertRoundTrip(input: UnifiedTurn[], parsed: UnifiedTurn[], pro
     const missing = wantIds.filter((id) => !gotIds.has(id));
     if (missing.length) fail(`#${i} (${w.role}) 丢失 callId: ${missing.join(', ')}`);
   }
+}
+
+/** 不支持附件块、只能把用户轮附件降级成正文占位的目标共用的 round-trip 期望变换 */
+export function expectAttachmentPlaceholders(turns: UnifiedTurn[]): UnifiedTurn[] {
+  return turns.map((t) => {
+    if (t.role !== 'user') return t;
+    const text = userTurnTextForWrite(t);
+    return text === t.text ? t : { ...t, text };
+  });
 }
 
 /**

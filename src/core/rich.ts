@@ -142,10 +142,18 @@ export function mergeTurns(source: UnifiedTurn[], dest: UnifiedTurn[]): UnifiedT
   return out;
 }
 
-/** 对齐后的 dest 回合缺 source 的过程事件 → 必须整文件重写，不能追加到最终回复后面 */
-export function shouldReplacePairedSession(source: UnifiedTurn[], dest: UnifiedTurn[]): boolean {
-  if (dest.length === 0) return false;
+/**
+ * 按 textKey 对齐后，**dest 回合缺少 source 过程事件**的回合数。
+ *
+ * `diffTurns` 用 turnKey（role + 文本 + callId）对齐：一轮同文本、但来源多出 thinking /
+ * 过程文本（都不带 callId）的回复会被判成「目标已包含」而跳过，过程事件静默消失。
+ * 这里是同一件事的计数版——`handoff` 用它决定是否整份重写；`open --from` 不能重写
+ * （目标格式可能存不下这些事件，重写会在每次 `--from` 时反复发生），但必须据此披露。
+ */
+export function countPairedTurnsMissingEvents(source: UnifiedTurn[], dest: UnifiedTurn[]): number {
+  if (dest.length === 0) return 0;
   let si = 0;
+  let count = 0;
   for (const d of dest) {
     let found = -1;
     for (let i = si; i < source.length; i++) {
@@ -155,11 +163,16 @@ export function shouldReplacePairedSession(source: UnifiedTurn[], dest: UnifiedT
       }
     }
     if (found >= 0) {
-      if ((source[found]!.events?.length ?? 0) > (d.events?.length ?? 0)) return true;
+      if ((source[found]!.events?.length ?? 0) > (d.events?.length ?? 0)) count += 1;
       si = found + 1;
     }
   }
-  return false;
+  return count;
+}
+
+/** 对齐后的 dest 回合缺 source 的过程事件 → 必须整文件重写，不能追加到最终回复后面 */
+export function shouldReplacePairedSession(source: UnifiedTurn[], dest: UnifiedTurn[]): boolean {
+  return countPairedTurnsMissingEvents(source, dest) > 0;
 }
 
 export function toClaudeToolName(name: string): string {
@@ -334,6 +347,53 @@ export function describeDanglingToolCalls(
   if (dangling.length === 0) return null;
   const shown = dangling.slice(0, 3).join(', ');
   return `${label}有 ${dangling.length} 次工具调用没有结果（callId: ${shown}${dangling.length > 3 ? ' 等' : ''}），可能在中断或仍在运行：${next}`;
+}
+
+/**
+ * 目标格式没有附件块时，用户轮里每个附件在正文里留下的占位行（`[图片：image/png，1234B]`）。
+ *
+ * pi / kimi / grok 的 build 只搬 `turn.text`——纯图片用户轮的正文是空串，写出去后
+ * parse 直接跳过这一轮（三家都要求 user 轮有正文），round-trip 于是报「turn 数不一致」
+ * 把整次交接拒掉。按既有约定（codex 的 `CODEX_EMPTY_USER_TEXT`、claude 的非图片附件占位），
+ * 占位要写进正文：`describeAttachmentLoss()` 已经承诺「只留占位文本」，那就得真的留下。
+ *
+ * 只取没进过正文的那部分——`turn.text` 里已经含同一行占位时不重复追加
+ * （pi / claude 的 parse 把占位写进了正文）。
+ */
+export function attachmentPlaceholders(turn: UnifiedTurn): string[] {
+  const out: string[] = [];
+  for (const ev of turn.events ?? []) {
+    if (ev.kind !== 'text' || !ev.attachment) continue;
+    const text = (ev.detail ?? ev.summary ?? '').trim();
+    if (!text || turn.text.includes(text)) continue;
+    out.push(text);
+  }
+  return out;
+}
+
+/** 用户轮写进目标正文的实际文本：原正文 + 附件占位（没有附件时就是原正文） */
+export function userTurnTextForWrite(turn: UnifiedTurn): string {
+  const places = attachmentPlaceholders(turn);
+  if (places.length === 0) return turn.text;
+  return [turn.text.trim(), ...places].filter(Boolean).join('\n\n');
+}
+
+/**
+ * 只有助手轮、没有用户轮的增量：pi / kimi / grok 的格式把助手回复挂在用户提问下，
+ * 无法单独追加（claude / codex / opencode 可以）。必须报**这个**原因，而不是
+ * 「没有可迁移的用户消息」——来源会话明明有用户消息，只是这次的增量里没有。
+ *
+ * 返回 `null` 表示可以写；否则给出面向用户的原因（各 build 在 into 分支直接抛）。
+ */
+export function assistantOnlyIncrementReason(turns: UnifiedTurn[]): string | null {
+  const hasUser = turns.some((t) => t.role === 'user' && (t.text.trim() !== '' || attachmentPlaceholders(t).length > 0));
+  const hasAssistant = turns.some((t) => t.role === 'assistant' && turnHasContent(t));
+  if (hasUser || !hasAssistant) return null;
+  return (
+    '这次增量里只有助手回复、没有用户提问：pi / kimi / grok 的会话格式把助手回复挂在提问下面，' +
+    '无法单独追加一条回复。请改用 watch open <来源会话 id> --to <其他 provider> 转到支持单独追加的 ' +
+    'claude / codex / opencode，或先在来源里补一条提问后再交接'
+  );
 }
 
 /**
