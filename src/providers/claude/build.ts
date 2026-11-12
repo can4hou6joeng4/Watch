@@ -275,6 +275,10 @@ function emitClaudeEvent(
     if (!thinking || thinking === ENCRYPTED_THINKING) return;
     const record = ctx.baseRecord();
     record.type = 'assistant';
+    // Watch 自己生成的降级思考行必须带标记：`[思考] ` 前缀在原生正文里同样可能出现，
+    // 只凭前缀还原会把真正的回复误判成 thinking（正文随之改变、round-trip 也会拒绝）。
+    // 标记写在记录顶层（与 message 内字段分开），parser 只认带标记的记录。
+    record.watchGeneratedThinking = true;
     record.message = ctx.assistantMessage(ctx.messageId, [{ type: 'text', text: `${CLAUDE_THINKING_PREFIX}${thinking}` }], null, ctx.usage);
     ctx.push(record);
     return;

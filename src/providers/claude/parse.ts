@@ -85,7 +85,7 @@ export async function parseClaudeSession(ref: SessionRef): Promise<UnifiedTurn[]
 
     const timestamp = typeof r.timestamp === 'string' ? r.timestamp : '';
     const content = (r.message as Record<string, unknown> | undefined)?.content;
-    const extracted = extractRich(content, timestamp, type);
+    const extracted = extractRich(content, timestamp, type, r.watchGeneratedThinking === true);
     if (!extracted) continue;
     const { text, onlyToolResult, events } = extracted;
 
@@ -261,6 +261,7 @@ function extractRich(
   content: unknown,
   timestamp: string,
   role: 'user' | 'assistant',
+  watchGeneratedThinking = false,
 ): { text: string; onlyToolResult: boolean; events: ProcessEvent[] } | null {
   let blocks: unknown[];
   if (typeof content === 'string') {
@@ -288,9 +289,11 @@ function extractRich(
       case 'text':
         if (typeof b.text === 'string' && b.text !== '') {
           // build 把 thinking 写成 `[思考] <detail>` 文本（伪造 thinking 块缺 signature 会让
-          // `claude --resume` 报错）。这里按同一前缀还原为 thinking 事件，否则
-          // 「Claude → 其他 Agent」会静默丢掉思考内容。只认 assistant 侧，避免误判用户消息。
-          if (role === 'assistant' && b.text.startsWith(CLAUDE_THINKING_PREFIX)) {
+          // `claude --resume` 报错）。这里只还原 **带 `watchGeneratedThinking` 标记** 的记录，
+          // 否则「Claude → 其他 Agent」会静默丢掉思考内容；**不能只凭前缀**：原生助手正文
+          // 完全可能以 `[思考] ` 开头，那种回复会被误判成 thinking 事件、正文随之改变。
+          // 旧版 Watch 写出的无标记记录按普通文本保留（内容不丢，只是不再还原成 thinking）。
+          if (role === 'assistant' && watchGeneratedThinking && b.text.startsWith(CLAUDE_THINKING_PREFIX)) {
             const thinking = b.text.slice(CLAUDE_THINKING_PREFIX.length).trim();
             if (thinking) {
               sawVisible = true;
