@@ -570,17 +570,26 @@ export async function openSession(
       // 目标中，无需并入」——看着像一次真的并入，实际来源的历史早就没了。
       const sourceZeroByte = srcTurns.length === 0 ? await zeroByteSessionReason(source.found.ref) : null;
       const targetZeroByte = dstTurns.length === 0 ? await zeroByteSessionReason(target.found.ref) : null;
-      if (sourceZeroByte) {
+      if (sourceZeroByte && targetZeroByte) {
+        // 两条独立的「0 字节」警告会自相矛盾：一边说目标未被改动、没有可并入的内容，
+        // 一边说「本次并入的只有来源的内容」——而来源同样是空的，实际什么都没写。
         warnings.push(
-          `来源会话 ${source.found.ref.sessionId}（${source.adapter.displayName}）的${sourceZeroByte}；` +
-            `这次没有任何可并入的内容，目标会话 ${escapeControlChars(targetId)} 未被改动——如果这条会话本该有内容，先从备份恢复该文件再重试（Watch 不会替你重建历史）`,
+          `来源会话 ${source.found.ref.sessionId}（${source.adapter.displayName}）与目标会话 ${escapeControlChars(targetId)}（${target.adapter.displayName}）` +
+            `的文件都是空的（内容已丢失）：这次没有任何可并入的内容，目标也不会被写入——两条会话的历史都需要从各自的备份恢复（Watch 不会替你们重建）`,
         );
-      }
-      if (targetZeroByte) {
-        warnings.push(
-          `目标会话 ${escapeControlChars(targetId)}（${target.adapter.displayName}）的${targetZeroByte}；` +
-            `它原有的历史已经没了，本次并入的只有来源的内容——如果目标会话本该有内容，先从备份恢复该文件再重试（Watch 不会替你重建历史）`,
-        );
+      } else {
+        if (sourceZeroByte) {
+          warnings.push(
+            `来源会话 ${source.found.ref.sessionId}（${source.adapter.displayName}）的${sourceZeroByte}；` +
+              `这次没有任何可并入的内容，目标会话 ${escapeControlChars(targetId)} 未被改动——如果这条会话本该有内容，先从备份恢复该文件再重试（Watch 不会替你重建历史）`,
+          );
+        }
+        if (targetZeroByte) {
+          warnings.push(
+            `目标会话 ${escapeControlChars(targetId)}（${target.adapter.displayName}）的${targetZeroByte}；` +
+              `它原有的历史已经没了，本次并入的只有来源的内容——如果目标会话本该有内容，先从备份恢复该文件再重试（Watch 不会替你重建历史）`,
+          );
+        }
       }
       warnUnfinishedTurns(
         srcTurns,
@@ -967,6 +976,10 @@ async function planOpenInProvider(
     // `diagnostics` 同时喂给预检与写入，所以 `--check` 也会提前说。
     try {
       const ownTurns = await source.adapter.parse(sourceRef);
+      // 上下文完整性（被转入后台 / Pi context_edit / Codex compacted）是整份日志的差异，
+      // 单开 `open <id>` 会披露，这条「来源即目标」的快路径同样不能省——resume 的就是它。
+      const ownContext = findContextDisclosure(ownTurns);
+      if (ownContext) diagnostics?.push(ownContext.summary);
       // 这条快路径要 resume 的就是来源会话自己：0 轮时同样探一次，否则一条 0 字节的会话
       // 会得到「来源即目标，直接恢复原会话」而没有任何「内容已丢失」的说明
       if (ownTurns.length === 0) {
@@ -1044,18 +1057,28 @@ async function planOpenInProvider(
   const chainPaired = mapping ? findChainPaired(mapping, sourceProvider, sourceId, providerId, cwd) : null;
   if (chainPaired) {
     let pairTurns: UnifiedTurn[] | null = null;
-    try {
-      pairTurns = await target.parse(chainPaired);
-    } catch (error) {
-      // 链上配对会话的文件可能已被删掉或截断（doctor 的 brokenTips 报的正是这种情况）：
-      // 退回内容匹配 / 新建，并把原因写进 notes，而不是让整个转入抛出去。
-      // 原因按 errno 说清楚：权限问题会被「已不存在」引去白换一次绑定。
+    // 0 字节的配对目标 parse 会返回 0 轮，delta 等于全部来源轮次，于是静默落进内容复用/新建：
+    // 用户只看到「已转入新会话」，不知道链上原本那一条的历史已经没了、链绑定仍指向它。
+    const pairedEmpty = await zeroByteSessionReason(chainPaired);
+    if (pairedEmpty) {
       diagnostics?.push(
-        `链上 ${target.displayName} 会话 ${chainPaired.sessionId} 本次不沿用：${describeSessionReadFailure(
-          chainPaired.filePath,
-          error,
-        )}（改用内容匹配或新建）`,
+        `链上 ${target.displayName} 会话 ${chainPaired.sessionId} 的${pairedEmpty}；这次不沿用这条空会话（改用内容匹配或新建），` +
+          `但链绑定仍指向它——若它本该有内容，先从备份恢复该文件，否则之后的 switch 还会落回这条空会话`,
       );
+    } else {
+      try {
+        pairTurns = await target.parse(chainPaired);
+      } catch (error) {
+        // 链上配对会话的文件可能已被删掉或截断（doctor 的 brokenTips 报的正是这种情况）：
+        // 退回内容匹配 / 新建，并把原因写进 notes，而不是让整个转入抛出去。
+        // 原因按 errno 说清楚：权限问题会被「已不存在」引去白换一次绑定。
+        diagnostics?.push(
+          `链上 ${target.displayName} 会话 ${chainPaired.sessionId} 本次不沿用：${describeSessionReadFailure(
+            chainPaired.filePath,
+            error,
+          )}（改用内容匹配或新建）`,
+        );
+      }
     }
     if (pairTurns) {
       const delta = dedupeCallEvents(diffTurns(turns, pairTurns));
@@ -1069,6 +1092,8 @@ async function planOpenInProvider(
           delta.length,
           (msg) => diagnostics?.push(msg),
         );
+        const pairContext = findContextDisclosure(pairTurns);
+        if (pairContext) diagnostics?.push(pairContext.summary);
         const snapshot = (await target.contentFingerprint?.(chainPaired)) ?? null;
         return {
           ...base,
