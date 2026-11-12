@@ -28,12 +28,15 @@ export async function claudeSessionUsage(ref: SessionRef): Promise<TokenUsage | 
   const bestByMessageId = new Map<string, TokenUsage>();
   for (const line of raw.split('\n')) {
     if (!line.trim()) continue;
-    let rec: Record<string, unknown>;
+    let parsed: unknown;
     try {
-      rec = JSON.parse(line) as Record<string, unknown>;
+      parsed = JSON.parse(line);
     } catch {
       continue;
     }
+    // 非对象只跳过该行，其余有效用量继续统计；入口按共用坏行计数披露下界。
+    if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) continue;
+    const rec = parsed as Record<string, unknown>;
     const message = rec.message as Record<string, unknown> | undefined;
     const u = pick(rec.usage) ?? pick(message?.usage);
     if (!u) continue;

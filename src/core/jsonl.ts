@@ -24,7 +24,7 @@ export async function countUnparsableJsonLines(filePath: string): Promise<number
     if (!trimmed) continue;
     try {
       const parsed: unknown = JSON.parse(trimmed);
-      if (!parsed || typeof parsed !== 'object') bad++;
+      if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) bad++;
     } catch {
       bad++;
     }
