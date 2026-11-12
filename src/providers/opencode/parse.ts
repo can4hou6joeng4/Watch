@@ -496,6 +496,11 @@ function v2AssistantTurn(
 ): UnifiedTurn | null {
   const time = typeof data.time?.created === 'number' ? data.time.created : row.time_created;
   const timestamp = isoFromEpochMs(time);
+  // content 只接受字符串或数组；对象 / 数字 / null 以前会被折成空数组并按空回复跳过，
+  // 整段内容静默消失。数组里逐项的非对象由下面的 items 循环计数。
+  if (data.content !== undefined && typeof data.content !== 'string' && !Array.isArray(data.content)) {
+    bumpCount(unknown, 'assistant（content 不是数组或字符串）');
+  }
   const inline: V2ContentItem[] =
     typeof data.content === 'string' ? [{ type: 'text', text: data.content }] : Array.isArray(data.content) ? data.content : [];
   // 与上游 withParts() 同一顺序：session_part 行（按 ordinal）在前，旧构建写在行内的 content 在后
@@ -667,8 +672,11 @@ function parseOpencodeV2Turns(db: DatabaseSync, sessionId: string): UnifiedTurn[
   for (const row of rows) {
     const data = parseJson<V2MessageData>(row.data);
     const time = typeof data?.time?.created === 'number' ? data.time.created : row.time_created;
-    if (!data) {
-      bumpCount(unknown, `${row.type || '（空类型）'}（data 无法解析）`);
+    // 坏 JSON 与合法但非对象的 JSON（null / [] / 42 / "str"）都不是消息。以前后者会被
+    // 当成「这条消息没有字段」继续处理：user 记成「无文本」、assistant 直接返回 null，
+    // 内容静默消失且类型归属还是错的。两者都按「data 不是对象」计数。
+    if (typeof data !== 'object' || data === null || Array.isArray(data)) {
+      bumpCount(unknown, `${row.type || '（空类型）'}（data 不是对象）`);
       continue;
     }
 
