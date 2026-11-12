@@ -39,7 +39,7 @@ export async function parseClaudeSession(ref: SessionRef): Promise<UnifiedTurn[]
   // 用户中途发来的消息（顶层 attachment / queued_command）：当场插成用户轮，之后到达的助手记录
   // 经 `ensureAssistant()` 另起一轮，就是这条插话的续写。推迟到循环结束后再插会排到续写**之后**
   // （错序），末轮还会变成没有回复的用户消息，`describeUnansweredTail()` 据此误报「没人答」。
-  // 紧随其后的 `tool_result` 靠 `mountTargetForToolResult()` 仍挂回上一轮助手，不会丢。
+  // 紧随其后的 `tool_result` 靠 `toolResultMountTarget()` 仍挂回上一轮助手，不会丢。
   const queued: { turn: UnifiedTurn; sourceUuid: string | null }[] = [];
   const openQueuedTurns = new Set<UnifiedTurn>();
   const userUuids = new Set<string>();
@@ -80,7 +80,6 @@ export async function parseClaudeSession(ref: SessionRef): Promise<UnifiedTurn[]
     if (typeof record !== 'object' || record === null) continue;
     const r = record as Record<string, unknown>;
     const type = r.type;
-    if (type === 'user' && typeof r.uuid === 'string') userUuids.add(r.uuid);
     if (type !== 'user' && type !== 'assistant') continue;
     if (r.isMeta === true || r.isSidechain === true) continue;
 
@@ -98,6 +97,8 @@ export async function parseClaudeSession(ref: SessionRef): Promise<UnifiedTurn[]
         continue;
       }
       sawUser = true;
+      // 只有实际保留为主线用户轮的记录才能替代排队消息；被过滤的记录不能让用户发言消失。
+      if (typeof r.uuid === 'string') userUuids.add(r.uuid);
       // 压缩摘要不是用户说的话，但它在记录里就是一条 role=user 的行。前缀必须跟着文本走：
       // prompt 文档会被复制走、转入目标会话的也是这段文本，元信息到不了读者那里。
       const userText = unwrapUserQuery(text);
@@ -131,12 +132,13 @@ export async function parseClaudeSession(ref: SessionRef): Promise<UnifiedTurn[]
       if (usage) last.usage = usage;
     }
   }
+  // 先去重并合并助手轮，再只移除合并后的最终正文事件；此前各段正文仍需保留为过程文本。
+  dropDuplicatedQueuedTurns(turns, queued, userUuids, lastTextEvents);
   for (const [turn, finalEvent] of lastTextEvents) {
     if (!finalEvent.summary.startsWith(WATCH_CONTEXT_DISCLOSURE_PREFIX)) {
       turn.events = turn.events?.filter((event) => event !== finalEvent);
     }
   }
-  dropDuplicatedQueuedTurns(turns, queued, userUuids);
   const stripped = stripEmptyEvents(turns);
   const detected = await probeClaudeContinuation(continuation, ref.filePath);
   if (detected && stripped.length > 0) {
@@ -164,17 +166,17 @@ function toolResultMountTarget(turns: UnifiedTurn[], openQueuedTurns: Set<Unifie
 }
 
 /**
- * 中途消息的去重：日志里已有 `uuid == source_uuid` 的 user 记录时，SDK 同样跳过这条附件
- * （Heeler 记录的 SDK 规则）；这里照同一口径，否则同一条消息会出现两次。
+ * 中途消息的去重：只有日志中实际形成主线用户轮的 `uuid == source_uuid` 记录才能替代附件。
+ * 分支、meta、无法解析或纯工具结果的 user 记录没有保留用户发言，不能据此移除插话。
  *
- * 插入是在日志原位当场做的（不能推迟，见主循环注释），所以去重只能事后移除；移除后可能出现
- * 两条相邻的助手轮（插话的续写与它前面那轮），按主循环合并助手记录的同一语义并回一轮，
- * 不让下游看到 parse 平时不会产出的形状。
+ * 插入是在日志原位当场做的，去重时移除冗余用户轮，再按主循环语义合并相邻助手轮。
+ * 合并前不得移除各段的最终文本事件；更新最终正文的事件引用后，统一清理，才能保留中间说明。
  */
 function dropDuplicatedQueuedTurns(
   turns: UnifiedTurn[],
   queued: { turn: UnifiedTurn; sourceUuid: string | null }[],
   userUuids: Set<string>,
+  lastTextEvents: Map<UnifiedTurn, ProcessEvent>,
 ): void {
   for (const item of queued) {
     if (!item.sourceUuid || !userUuids.has(item.sourceUuid)) continue;
@@ -186,6 +188,9 @@ function dropDuplicatedQueuedTurns(
     if (prev?.role === 'assistant' && next?.role === 'assistant') {
       for (const ev of next.events ?? []) pushEvent(prev, ev);
       if (next.text.trim()) prev.text = next.text;
+      const finalEvent = lastTextEvents.get(next);
+      if (finalEvent) lastTextEvents.set(prev, finalEvent);
+      lastTextEvents.delete(next);
       if (next.timestamp) prev.timestamp = next.timestamp;
       if (next.usage) prev.usage = next.usage;
       if (next.incomplete) prev.incomplete = true;
