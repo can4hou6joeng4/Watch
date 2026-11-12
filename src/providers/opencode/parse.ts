@@ -388,11 +388,13 @@ function messageToTurn(
 /**
  * 2.x 的 `session_message` 是事件日志：一行一个 `type`，内容整段放在 `data` JSON 里。
  *
- * 类型集合来自第三方转换器 cross_agent_session_resumer 的 2.x 测试样本
- * （`tests/opencode_v2_test.rs`，session_v2 / session_message 列定义与插入语句它都记了）：
- * user / assistant 是对话，assistant 的 `content` 数组里是 text / reasoning / tool；
- * shell / synthetic / system / compaction / model-switched 是事件。本机没有原生 2.x 样本，
- * 所以只映射这些见过形状的类型，其余原样跳过并把条数写进内容（不猜含义）。
+ * 类型语义对齐上游 v2.2.7（`fedc6f208aa2bd54c1019227214568083f6380ad`）的
+ * `packages/core/src/session/runner/to-llm-message.ts`：user / assistant 是对话
+ * （assistant 的 `content` 数组里是 text / reasoning / tool）；shell / synthetic /
+ * system / compaction / model-switched / location-switched / skill 是模型可见事件；
+ * agent-switched / idle 是纯记账（`V2_IGNORED_MESSAGE_TYPES`）。本机没有原生 2.x
+ * 样本，旧构建的形状兼容保留（user.content 字符串回退、无 status 的 compaction），
+ * 其余原样跳过并把条数写进内容（不猜含义）。
  */
 type V2MessageRow = { id: string; type: string; seq: number; time_created: number; data: string };
 
@@ -430,7 +432,20 @@ type V2MessageData = {
   recent?: string;
   reason?: string;
   model?: { providerID?: string; id?: string; modelID?: string };
+  /** location-switched 的 Location.Ref：directory 是 AbsolutePath 字符串 */
+  location?: { directory?: unknown };
+  /** skill 的必填字段：skill 是 ID、name 是 Name、text 是技能正文 */
+  skill?: string;
+  name?: string;
+  error?: { message?: string };
 };
+
+/**
+ * 2.x 里「不承载对话内容」的记账类型。上游 v2.2.7 的 `to-llm-message.ts` 对
+ * `agent-switched` / `idle` 直接 `return []`（idle 每个回合结束都会写一条），
+ * 把它们计成「未识别事件」会让任何健康的 v2 会话都冒假披露。
+ */
+const V2_IGNORED_MESSAGE_TYPES = new Set(['agent-switched', 'idle']);
 
 function bumpCount(map: Map<string, number>, key: string): void {
   const k = key.trim() || '（空类型）';
@@ -565,8 +580,13 @@ function v2AssistantTurn(
   return turn;
 }
 
-/** 非对话事件 → ProcessEvent[]；返回 null 表示这个 type 不在已记录的样本里 */
-function v2AuxEvents(type: string, data: V2MessageData, time: number): ProcessEvent[] | null {
+/** 非对话事件 → ProcessEvent[]；空数组 = 已识别但无内容（形状异常已按原因计数）；null = 类型未知 */
+function v2AuxEvents(
+  type: string,
+  data: V2MessageData,
+  time: number,
+  unknown: Map<string, number>,
+): ProcessEvent[] | null {
   const timestamp = isoFromEpochMs(time);
   switch (type) {
     case 'shell': {
@@ -591,14 +611,78 @@ function v2AuxEvents(type: string, data: V2MessageData, time: number): ProcessEv
       return events;
     }
     case 'compaction': {
-      const summary = typeof data.summary === 'string' ? data.summary : '';
-      const recent = typeof data.recent === 'string' ? data.recent : '';
+      // 上游 v2.2.7 只有 status === 'completed' 的压缩才替换上下文（to-llm-message.ts：
+      // `if (message.status !== "completed") return []`）；running / failed 的压缩没有生效，
+      // 挂上摘要前缀会让 --since-compact 以「未生效的压缩」为边界裁掉更早的轮次，
+      // 而 failed 连 summary 都没有（只有 error），裁掉后摘要正文是空的。
+      // 第三方旧样本没有 status 字段：保持按 completed 处理（同一形状兼容）。
+      const status = typeof data.status === 'string' ? data.status : 'completed';
+      if (status === 'completed') {
+        const summary = typeof data.summary === 'string' ? data.summary : '';
+        const recent = typeof data.recent === 'string' ? data.recent : '';
+        return [
+          {
+            kind: 'text',
+            timestamp,
+            summary: OPENCODE_COMPACTION_SUMMARY_PREFIX,
+            detail: [summary, recent ? `（最近对话：${recent}）` : ''].filter(Boolean).join('\n'),
+            provider: 'opencode',
+          },
+        ];
+      }
+      // 与 1.x 的未生效分支同一句：真原因在前（状态），兜底建议在后。
+      const reason =
+        status === 'failed'
+          ? typeof data.error?.message === 'string' && data.error.message
+            ? `（失败原因：${data.error.message}）`
+            : '（失败原因读不出来）'
+          : '（尚未完成）';
       return [
         {
           kind: 'text',
           timestamp,
-          summary: OPENCODE_COMPACTION_SUMMARY_PREFIX,
-          detail: [summary, recent ? `（最近对话：${recent}）` : ''].filter(Boolean).join('\n'),
+          summary: `[OpenCode 压缩摘要未生效（状态 ${status}），上下文未被替换]`,
+          detail: `${reason}；${typeof data.summary === 'string' ? data.summary : ''}`.trim(),
+          provider: 'opencode',
+        },
+      ];
+    }
+    case 'location-switched': {
+      // 上游把它作为模型可见的 user 消息送入上下文（The working directory has been
+      // changed to <directory>）；丢掉它，交接后的助手会在旧目录里继续动手。
+      const hasLocation = data.location !== undefined && data.location !== null && typeof data.location === 'object';
+      const directory = hasLocation && typeof data.location!.directory === 'string' ? data.location!.directory : '';
+      if (!directory) {
+        // 上游 Location.Ref.directory 是必填的绝对路径字符串；形状异常不能只计类型名（看不出是坏了）。
+        bumpCount(unknown, hasLocation ? 'location-switched（directory 不是字符串）' : 'location-switched（无 location）');
+        return [];
+      }
+      return [
+        {
+          kind: 'text',
+          timestamp,
+          summary: `[工作目录已切换] ${directory.slice(0, 200)}`,
+          detail: `工作目录已切换到 ${directory}。`,
+          provider: 'opencode',
+        },
+      ];
+    }
+    case 'skill': {
+      // 上游把技能正文作为 user 角色文本送入模型（技能 = 会话内生效的指令），name 用于辨识。
+      if (typeof data.name !== 'string' || !data.name) {
+        bumpCount(unknown, data.name === undefined ? 'skill（无 name）' : 'skill（name 不是字符串）');
+        return [];
+      }
+      if (typeof data.text !== 'string') {
+        bumpCount(unknown, 'skill（text 不是字符串）');
+        return [];
+      }
+      return [
+        {
+          kind: 'text',
+          timestamp,
+          summary: `[技能已激活：${data.name}] ${data.text.slice(0, 160)}`.trim(),
+          detail: data.text,
           provider: 'opencode',
         },
       ];
@@ -723,9 +807,11 @@ function parseOpencodeV2Turns(db: DatabaseSync, sessionId: string): UnifiedTurn[
       continue;
     }
 
-    const aux = v2AuxEvents(row.type, data, time);
-    if (aux === null) bumpCount(unknown, row.type || '（空类型）');
-    else attach(aux);
+    const aux = v2AuxEvents(row.type, data, time, unknown);
+    if (aux === null) {
+      // 记账类型（agent-switched / idle）上游不进模型上下文，正常会话不该因此冒披露。
+      if (!V2_IGNORED_MESSAGE_TYPES.has(row.type)) bumpCount(unknown, row.type || '（空类型）');
+    } else attach(aux);
   }
 
   // 会话以非对话事件收尾时（后面没有 assistant 了），挂到最后一条 turn 上，别让它们消失
@@ -741,7 +827,7 @@ function parseOpencodeV2Turns(db: DatabaseSync, sessionId: string): UnifiedTurn[
     appendUnknownDisclosure(
       turns,
       `OpenCode 2.x 有 ${total} 条未识别事件，未并入对话`,
-      `${describeCounts(unknown)}；Watch 只按第三方记录的 2.x 测试样本识别 user / assistant / shell / system / synthetic / compaction / model-switched，其余原样跳过，不猜含义`,
+      `${describeCounts(unknown)}；Watch 按上游 v2.2.7 的会话消息语义识别 user / assistant / shell / system / synthetic / compaction / model-switched / location-switched / skill，其余原样跳过，不猜含义`,
     );
   }
   return turns;
