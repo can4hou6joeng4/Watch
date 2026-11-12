@@ -30,6 +30,17 @@ export const CLAUDE_COMPACT_SUMMARY_PREFIX = '[Claude Code 上下文压缩摘要
 export const OPENCODE_COMPACTION_SUMMARY_PREFIX = '[压缩摘要（由 OpenCode 生成，不是用户原话）]';
 
 /**
+ * OpenCode 1.x 的 `synthetic: true` 文本 part 是它自己注入的用户侧内容：MCP 资源展开、
+ * `Called the Read tool with the following input: …` 与读到的文件内容、压缩之后的
+ * auto-continue 指令（`Continue if you have next steps…`）等。上游 `message-v2.ts` 把它们
+ * 送进模型上下文，所以交接不能丢；但它们**不是用户原话**，原样并进 turn.text 会让
+ * `watch prompt` 与目标助手把机器注入当成用户指令（与 Claude 压缩摘要同一类误读）。
+ * 前缀写在文本里而不是元信息里：文档会被复制走、转入目标会话的也是这段文本本身。
+ * 连续的 synthetic 片段只标一次，避免同一段注入内容被前缀切碎。
+ */
+export const OPENCODE_SYNTHETIC_TEXT_PREFIX = '[OpenCode 注入内容（由 OpenCode 自动生成，不是用户原话）]';
+
+/**
  * Pi 的压缩摘要不是一条 message，而是会话文件里独立的 `type: "compaction"` 条目
  * （`summary` / `firstKeptEntryId` / `tokensBefore`），pi 自己会把它作为摘要消息注入上下文。
  * Watch 以前只解析 `type: "message"`，整段摘要无声消失——转入别家后，压缩前的原文还在，
@@ -91,6 +102,24 @@ export function unwrapUserQuery(text: string): string {
   const m = /^<user_query>([\s\S]*)<\/user_query>$/.exec(trimmed);
   const inner = m?.[1]?.trim();
   return inner ? inner : text;
+}
+
+/**
+ * 身份 / 配对比较用的正文：`unwrapUserQuery` 之后再去掉 synthetic 来源前缀行。
+ *
+ * 第六十二轮给 OpenCode 注入文本加前缀后，同一轮的正文比旧版多一行——
+ * `diffTurns` / `mergeTurns` 会把这轮当成新增，已经交接过一次的 OpenCode 会话
+ * 会被整段重放。前缀只标注「这段是谁生成的」，不改变「用户说了什么」，
+ * 所以对齐时两侧都剥掉（旧库里没有这行，剥完两版一致）。
+ */
+function comparableBody(text: string): string {
+  const unwrapped = unwrapUserQuery(text);
+  if (!unwrapped.includes(OPENCODE_SYNTHETIC_TEXT_PREFIX)) return unwrapped.trim();
+  return unwrapped
+    .split('\n')
+    .filter((line) => line !== OPENCODE_SYNTHETIC_TEXT_PREFIX)
+    .join('\n')
+    .trim();
 }
 
 /** 判断是否为系统提醒消息（Kimi/Codex 会把 system-reminder 塞进 user prompt） */
@@ -170,8 +199,8 @@ function isMultisetSubset(subset: string[], superset: string[]): boolean {
  */
 export function turnsPair(a: UnifiedTurn, b: UnifiedTurn): boolean {
   if (a.role !== b.role) return false;
-  const aBody = unwrapUserQuery(a.text).trim();
-  const bBody = unwrapUserQuery(b.text).trim();
+  const aBody = comparableBody(a.text);
+  const bBody = comparableBody(b.text);
   if (aBody !== bBody) return false;
   if (!aBody) {
     const aAtt = attachmentIdentities(a);
@@ -191,14 +220,14 @@ export function turnsPair(a: UnifiedTurn, b: UnifiedTurn): boolean {
  * 纯附件轮没有正文，必须把附件内容纳入身份，否则不同图片会被当成同一轮。
  */
 export function turnIdentityKey(t: UnifiedTurn): string {
-  const body = unwrapUserQuery(t.text).trim();
+  const body = comparableBody(t.text);
   const calls = callEventIdentities(t).sort();
   const attachments = body ? [] : attachmentIdentities(t);
   return JSON.stringify([t.role, body, calls, attachments]);
 }
 
 export function textKey(t: UnifiedTurn): string {
-  const body = unwrapUserQuery(t.text).trim();
+  const body = comparableBody(t.text);
   // 空正文轮如果只按 role+text 匹配，所有工具轮 / 纯附件轮都会撞成同一把键；
   // 有正文的轮仍保留「缺事件侧照文本补全」语义（turnsPair 负责子集判断）。
   if (!body) {

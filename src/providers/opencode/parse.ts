@@ -1,5 +1,5 @@
 import { DatabaseSync } from 'node:sqlite';
-import { normalizeUserText, OPENCODE_COMPACTION_SUMMARY_PREFIX } from '../../core/rich.js';
+import { normalizeUserText, OPENCODE_COMPACTION_SUMMARY_PREFIX, OPENCODE_SYNTHETIC_TEXT_PREFIX, WATCH_CONTEXT_DISCLOSURE_PREFIX } from '../../core/rich.js';
 import { isoFromEpochMs } from '../../core/time.js';
 import type { ProcessEvent, SessionRef, TokenUsage, UnifiedTurn } from '../../core/types.js';
 import { detectOpencodeLayout, opencodeDbPath, opencodeDbSqliteError, probeOpencodeDbFile } from './paths.js';
@@ -52,7 +52,7 @@ type OpencodeToolState = {
 };
 
 type OpencodePartData =
-  | { type: 'text'; text?: string; time?: { start?: number; end?: number } }
+  | { type: 'text'; text?: string; synthetic?: unknown; ignored?: unknown; time?: { start?: number; end?: number } }
   | { type: 'reasoning'; text?: string }
   | {
       type: 'tool';
@@ -63,7 +63,7 @@ type OpencodePartData =
   | { type: 'file'; mime?: unknown; url?: unknown; filename?: unknown; path?: unknown }
   | { type: string };
 
-function isTextPart(part: OpencodePartData): part is { type: 'text'; text?: string } {
+function isTextPart(part: OpencodePartData): part is { type: 'text'; text?: string; synthetic?: unknown; ignored?: unknown } {
   return (part as { type: string }).type === 'text';
 }
 
@@ -212,11 +212,15 @@ function partToEvents(part: OpencodePartData, baseTime: number): ProcessEvent[] 
  */
 const V1_IGNORED_PART_TYPES = new Set(['step-start', 'step-finish', 'patch', 'snapshot']);
 
+/** 1.x 解析期间跨消息累计的计数（ignored 文本的披露要按整条会话汇总） */
+type V1ParseStats = { ignoredTexts: number };
+
 function messageToTurn(
   msg: MessageRow,
   parts: PartRow[],
   prevTurn: UnifiedTurn | null,
   unknown: Map<string, number>,
+  stats: V1ParseStats,
 ): UnifiedTurn | null {
   const data = parseJson<OpencodeMessageData>(msg.data);
   // 坏 JSON / 非对象 JSON 以前让整条消息连同 parts 一起消失；坏 role 同理。
@@ -237,6 +241,7 @@ function messageToTurn(
   const textParts: string[] = [];
   const events: ProcessEvent[] = [];
   let hasToolEvents = false;
+  let prevSynthetic = false;
 
   for (const partRow of parts) {
     const part = parseJson<OpencodePartData>(partRow.data);
@@ -256,7 +261,22 @@ function messageToTurn(
     if (partType === 'compaction') continue;
     const partTime = partRow.time_created;
     if (isTextPart(part)) {
-      if (part.text) textParts.push(part.text);
+      if (part.text) {
+        // `ignored: true` 的文本上游不送进模型上下文（message-v2 的 toModelMessages 跳过），
+        // 并进正文会让目标看到来源模型从未见过的内容；条数在整条会话上汇总后披露。
+        if (part.ignored === true) {
+          stats.ignoredTexts += 1;
+          continue;
+        }
+        // `synthetic: true` 是 OpenCode 注入的用户侧内容（MCP / Read 展开、auto-continue 指令，
+        // 上游写入点全在 prompt.ts 的 user 消息里），属于模型上下文但不是用户原话：
+        // 保留内容，只在每段连续注入前标一次来源。**只标 user 侧**——前缀文案说的是
+        // 「不是用户原话」，而助手侧的 synthetic 是 Watch 官方导出写出的过程文本
+        // （official-export.ts 的 eventParts），标成「OpenCode 注入」是反向误标。
+        const synthetic = role === 'user' && part.synthetic === true;
+        textParts.push(synthetic && !prevSynthetic ? `${OPENCODE_SYNTHETIC_TEXT_PREFIX}\n${part.text}` : part.text);
+        prevSynthetic = synthetic;
+      }
     } else if (isReasoningPart(part) || isToolPart(part) || isFilePart(part)) {
       if (isToolPart(part)) hasToolEvents = true;
       const partEvent = filePartToEvent(part, partTime);
@@ -711,12 +731,29 @@ export async function parseOpencodeSession(ref: SessionRef): Promise<UnifiedTurn
     }
 
     const unknown = new Map<string, number>();
+    const stats: V1ParseStats = { ignoredTexts: 0 };
     const turns: UnifiedTurn[] = [];
     let lastTime = 0;
     for (const msg of messages) {
       if (msg.time_created > lastTime) lastTime = msg.time_created;
-      const turn = messageToTurn(msg, partsByMessage.get(msg.id) ?? [], turns.at(-1) ?? null, unknown);
+      const turn = messageToTurn(msg, partsByMessage.get(msg.id) ?? [], turns.at(-1) ?? null, unknown, stats);
       if (turn) turns.push(turn);
+    }
+    // ignored 文本是「来源自己没送进模型上下文」的数据：不并入对话，但也不能无声消失。
+    // 与 pi / kimi / claude 的上下文披露同一载体（WATCH_CONTEXT_DISCLOSURE_PREFIX 事件），
+    // 进 prompt 头部「上下文完整性」、handoff warnings 与 open warnings。
+    if (stats.ignoredTexts > 0) {
+      const carrier = [...turns].reverse().find((turn) => turn.role === 'user' || turn.text.trim());
+      if (carrier) {
+        const text =
+          `${WATCH_CONTEXT_DISCLOSURE_PREFIX}OpenCode 日志里有 ${stats.ignoredTexts} 段被原生标记为 ignored 的文本没有并入对话；` +
+          '上游 OpenCode 不把这类文本送进模型上下文（message-v2 的 toModelMessages 会跳过），Watch 照同一口径处理，' +
+          '原文仍保留在 OpenCode 库里，需要时请在原生客户端核对]';
+        carrier.events = [
+          ...(carrier.events ?? []),
+          { kind: 'text', summary: text, detail: text, timestamp: carrier.timestamp, provider: 'opencode' },
+        ];
+      }
     }
     // 与 2.x 同一披露面：坏 JSON / 未知类型不能静默消失，把条数与类型写进最后一条 turn。
     // 没有任何可搬运的对话时无处承载（返回 [] 会让调用方按「0 轮」拒绝或披露），这一档
