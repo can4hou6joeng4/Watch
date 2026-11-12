@@ -63,11 +63,21 @@ async function readCodexDesktopState(codexHome: string): Promise<Record<string, 
   return state;
 }
 
+/** 状态文件里某个结构键缺失 / 形状不对时收窄成对象；`asRecord()` 的「响应结构不符合预期」是 app-server 的说法，用在这里会把人引去查 codex 连接 */
+function optionalRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
+}
+
 export async function inspectCodexDesktopProject(codexHome: string, cwd: string): Promise<CodexDesktopProject> {
   const state = await readCodexDesktopState(codexHome);
-  const projects = asRecord(state['local-projects']);
+  // 键缺失最常见的原因就是「还没在桌面端添加过任何项目」——下一步是去添加，不是查 Codex 版本或连接。
+  // 以前这里直接 `asRecord(state['local-projects'])`，缺键会抛 app-server 的那句
+  // 「Codex 返回的响应结构不符合预期」，与本文件的其它错误（都给下一步）完全两档。
+  const projects = optionalRecord(state['local-projects']);
   const matches = Object.entries(projects).flatMap(([key, value]) => {
-    const project = asRecord(value);
+    // 单条项目不是对象时按「这个目录没匹配上」处理，而不是整份状态报错——
+    // 一条坏记录不该让其它正常项目也预览不了
+    const project = optionalRecord(value);
     const rootPaths = Array.isArray(project.rootPaths)
       ? project.rootPaths.filter((root): root is string => typeof root === 'string')
       : [];
@@ -77,11 +87,11 @@ export async function inspectCodexDesktopProject(codexHome: string, cwd: string)
     return UUID.test(id) && name.length > 0 ? [{ legacyProjectId: id, name, rootPaths }] : [];
   });
   if (matches.length !== 1) {
-    throw new Error('导入前，该目录必须恰好匹配一个已有的 Codex Desktop 项目');
+    throw new Error('导入前，该目录必须恰好匹配一个已有的 Codex Desktop 项目；请先在桌面端把这个目录添加为项目，再导入');
   }
 
   const identity = `local:${codexHome}`;
-  const mappings = asRecord(asRecord(state['app-server-project-id-by-legacy-project-id-by-host'])[identity]);
+  const mappings = optionalRecord(optionalRecord(state['app-server-project-id-by-legacy-project-id-by-host'])[identity]);
   const match = matches[0]!;
   const nativeProjectId = mappings[match.legacyProjectId];
   if (typeof nativeProjectId !== 'string' || !UUID.test(nativeProjectId)) {
