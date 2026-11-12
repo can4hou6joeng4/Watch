@@ -34,10 +34,13 @@ export function assertRoundTrip(input: UnifiedTurn[], parsed: UnifiedTurn[], pro
   }
 }
 
-/** 不支持附件块、只能把用户轮附件降级成正文占位的目标共用的 round-trip 期望变换 */
+/**
+ * 不支持附件块、只能把附件降级成正文占位的目标（pi / kimi / grok 只搬正文）共用的
+ * round-trip 期望变换。**两个角色都要变换**：用户轮附件写进正文早已如此；助手轮的
+ * 纯附件轮以前被 build 写成空内容，占位与原始数据一起消失，现在同样落进正文。
+ */
 export function expectAttachmentPlaceholders(turns: UnifiedTurn[]): UnifiedTurn[] {
   return turns.map((t) => {
-    if (t.role !== 'user') return t;
     const text = userTurnTextForWrite(t);
     return text === t.text ? t : { ...t, text };
   });

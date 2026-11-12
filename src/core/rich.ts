@@ -591,12 +591,19 @@ export function attachmentPlaceholders(turn: UnifiedTurn): string[] {
   return out;
 }
 
-/** 用户轮写进目标正文的实际文本：原正文 + 附件占位（没有附件时就是原正文） */
+/** 只搬正文的目标写进会话的实际文本：原正文 + 附件占位（没有附件时就是原正文） */
 export function userTurnTextForWrite(turn: UnifiedTurn): string {
   const places = attachmentPlaceholders(turn);
   if (places.length === 0) return turn.text;
   return [turn.text.trim(), ...places].filter(Boolean).join('\n\n');
 }
+
+/**
+ * 助手轮同一投影。pi / kimi / grok 的 build 只搬 `turn.text`，纯附件助手轮
+ * （例如 opencode 的 file part）以前写成空内容：`describeAttachmentLoss()` 承诺的
+ * 「只留占位文本」在助手侧没有落地，grok 甚至因整轮不写而 round-trip 拒绝。
+ */
+export const assistantTurnTextForWrite = userTurnTextForWrite;
 
 /**
  * 只有助手轮、没有用户轮的增量：pi / kimi / grok 的格式把助手回复挂在用户提问下，
