@@ -285,13 +285,27 @@ export function describeStoreOpenFailure(dbPath: string, error: unknown): string
 }
 
 /**
+ * 用来认领「这是 Watch 的库」的表名。`sessions` / `turns` / `chains` 是通用名字，
+ * 别的应用撞上其中一张很常见；只凭一张同名表就接管，会把 Watch 的表建进别人的库、
+ * 再把迁移失败讲成「Watch 的库只迁移了一半」并建议删除对方的文件。
+ */
+const WATCH_MARKER_TABLES = ['turn_events', 'switch_events', 'messages_fts', 'search_index', 'session_locations'] as const;
+
+function looksLikeWatchStore(tables: readonly string[]): boolean {
+  const has = (name: string): boolean => tables.includes(name);
+  if (WATCH_MARKER_TABLES.some(has)) return true;
+  // 半途建库可能只落下最初的几张表：三张同时出现才认领，单张 `sessions` 不够
+  return has('sessions') && has('turns') && has('chains');
+}
+
+/**
  * 打开前先看一眼目标文件是不是「自己的库」。
  *
  * SQLite 有两种静默接管：
  * - 不足 100 字节的文件被当成空库，原内容直接被建库覆盖（1 字节的文件实测会被写成 118KB 的库）；
- * - 别的程序的 SQLite 库（user_version=0、页数>0）会被 Watch 在里面建出七张表并把
- *   user_version 改成 6，对方按版本号做的迁移就此错位。
- * 两种以前都是 `已创建链: a` 静默成功。这里只读文件头，不打开 SQLite、不产生 -wal / -shm。
+ * - 别的程序的 SQLite 库会被 Watch 在里面建出自己的表并把 user_version 改成当前版本，
+ *   对方按版本号做的迁移就此错位——**不论对方的 user_version 是 0 还是更高**。
+ * 两种以前都是 `已创建链: a` 静默成功。这里只读文件头与表名，不打开可写连接、不产生 -wal / -shm。
  */
 function assertUsableStoreFile(dbPath: string): void {
   if (dbPath === ':memory:') return;
@@ -307,27 +321,35 @@ function assertUsableStoreFile(dbPath: string): void {
       { code: 'EWATCHNOTSQLITE' },
     );
   }
-  // user_version 为 0 有两种可能，光看头分不清：别的程序的库，或 Watch 自己第一次建库时被杀在半路。
-  // 只有这一档才去只读打开看表名。
-  if (head.userVersion !== 0 || head.pageCount === 0) return;
 
   const probe = probeSqliteTables(dbPath);
-  const tables = 'tables' in probe ? probe.tables : [];
-  // 半途建库的 Watch 库至少已经落下部分表；一张 Watch 的表都没有才判成别人的库
-  const known = tables.filter((t) => (REQUIRED_TABLES as readonly string[]).includes(t));
-  if ('error' in probe || known.length === 0) {
-    const detail =
-      'error' in probe
-        ? `表结构读不出来：${describeStoreErrorReason(probe.error)}`
-        : `表: ${tables.slice(0, 5).join(' / ') || '（没有任何表）'}`;
+  if ('error' in probe) {
+    // 「读不出来」不等于「不是我们的库」：Watch 自己的库损坏时也会走到这里。
+    // 以前统一断言成别人的库，首选建议「改用另一个 WATCH_DB」等于让用户丢掉全部链记录。
     throw Object.assign(
       new Error(
-        `本地库路径上已有一个不是 Watch 的 SQLite 数据库：${escapeControlChars(dbPath)}（user_version=0，${detail}）。` +
-          `为避免把 Watch 的表写进别人的库、改掉它的 user_version，本次未写入任何内容；` +
-          `请改用另一个 WATCH_DB（默认 ~/.watch/watch.db）；如果这其实是 Watch 的库损坏了，先备份，再删掉 watch.db / watch.db-wal / watch.db-shm 让它重建`,
+        `本地库路径上已有一个 SQLite 数据库，但无法确认它是不是 Watch 的：${escapeControlChars(dbPath)}` +
+          `（user_version=${head.userVersion}，表结构读不出来：${describeStoreErrorReason(probe.error)}）。` +
+          '为避免误改别人的库，本次未写入任何内容；如果这其实是 Watch 的库损坏了，先备份 watch.db / watch.db-wal / watch.db-shm 再处理；如果路径指错了，改用另一个 WATCH_DB',
+      ),
+      { code: 'EWATCHUNVERIFIABLE' },
+    );
+  }
+  const tables = probe.tables;
+  if (!looksLikeWatchStore(tables)) {
+    throw Object.assign(
+      new Error(
+        `本地库路径上已有一个不是 Watch 的 SQLite 数据库：${escapeControlChars(dbPath)}` +
+          `（user_version=${head.userVersion}，表: ${tables.slice(0, 5).map((t) => escapeControlChars(t)).join(' / ') || '（没有任何表）'}）。` +
+          '为避免把 Watch 的表写进别人的库、改掉它的 user_version，本次未写入任何内容；' +
+          '请改用另一个 WATCH_DB（默认 ~/.watch/watch.db）；如果这其实是 Watch 首次建库被中断留下的空库，先备份并挪走 watch.db / watch.db-wal / watch.db-shm 让它重建',
       ),
       { code: 'EWATCHFOREIGN' },
     );
+  }
+  // 版本比本程序新：必须在 journal_mode / 迁移之前拒绝——只读打开也会写 WAL 头。
+  if (head.userVersion > SCHEMA_VERSION) {
+    throw new Error(`本地库 schema 版本 ${head.userVersion} 比本程序支持的 ${SCHEMA_VERSION} 更新（多半是装过更新版本的 Watch）`);
   }
 }
 
@@ -463,10 +485,16 @@ export class Store {
     `);
     this.db.exec(`
       INSERT INTO chains (id, cwd, name, status, last_used_at, created_at)
-      SELECT id, cwd, '默认', 'active', updated_at, created_at
-      FROM sessions
-      WHERE title = '${CHAIN_SESSION_TITLE}'
-        AND id NOT IN (SELECT id FROM chains)
+      SELECT id, cwd,
+             CASE WHEN rn = 1 THEN '默认' ELSE '默认 (' || rn || ')' END,
+             'active', updated_at, created_at
+      FROM (
+        SELECT id, cwd, updated_at, created_at,
+               ROW_NUMBER() OVER (PARTITION BY cwd ORDER BY created_at ASC, id ASC) AS rn
+        FROM sessions
+        WHERE title = '${CHAIN_SESSION_TITLE}'
+          AND id NOT IN (SELECT id FROM chains)
+      )
     `);
   }
 
@@ -522,6 +550,10 @@ export class Store {
     if (!cols.some((c) => c.name === 'bad_lines')) {
       this.db.exec('ALTER TABLE search_index ADD COLUMN bad_lines INTEGER NOT NULL DEFAULT 0');
     }
+    // 旧游标是 v7 之前写的，没有 bad_lines 信息；保留它们会让「升级前已索引、文件又没变」的
+    // 会话永远复用 0，坏行披露（v7 的全部意义）对这批会话永久失效。清空派生缓存让下一轮重建一次。
+    // 迁移步骤只会执行一次；中途崩溃重跑时再清一次也无副作用（search_index 是可重建的缓存）。
+    this.db.exec('DELETE FROM search_index');
   }
 
   private migrateV3(): void {
@@ -763,11 +795,16 @@ export class Store {
 
   /** 某 provider/cwd 已建索引的会话及其原生文件路径（用于核对文件是否还在） */
   indexedSessions(cwd: string, provider: string): { sessionId: string; filePath: string }[] {
+    // 只查 messages_fts 会漏掉「只有游标、没有 FTS 行」的会话：0 字节会话是合法状态，
+    // 索引后没有文本行，文件删掉后游标永远不进清理清单，id 前缀搜索还会命中它。
+    // 两侧取并集：游标缺失但有 FTS 行的残缺状态同样要能清掉。
     const rows = this.db
       .prepare(
-        'SELECT session_id, MIN(file_path) AS file_path FROM messages_fts WHERE cwd=? AND provider=? GROUP BY session_id',
+        `SELECT session_id, file_path FROM search_index WHERE cwd=? AND provider=?
+         UNION
+         SELECT session_id, MIN(file_path) AS file_path FROM messages_fts WHERE cwd=? AND provider=? GROUP BY session_id`,
       )
-      .all(this.normCwd(cwd), provider) as { session_id: string; file_path: string }[];
+      .all(this.normCwd(cwd), provider, this.normCwd(cwd), provider) as { session_id: string; file_path: string }[];
     return rows.map((row) => ({ sessionId: row.session_id, filePath: row.file_path }));
   }
 
@@ -878,8 +915,13 @@ export class Store {
     cwd = cwd ? this.normCwd(cwd) : undefined;
     const q = normalizeQueryWhitespace(query);
     if (!q) return { hits: [], saturated: false };
-    // trigram 分词最短要 3 个字符；更短的查询（中文两字词如「登录」）退化为 LIKE 子串匹配
-    if ([...q].length < 3) return { hits: this.searchShort(q, cwd), saturated: false };
+    // trigram 分词最短要 3 个字符；更短的查询（中文两字词如「登录」）退化为 LIKE 子串匹配。
+    // LIKE 同样是 LIMIT 200 的候选集，撞满时必须声明饱和——否则一个话多的会话占满候选后，
+    // 其它会话的命中静默消失，而输出看起来像「就这些」。
+    if ([...q].length < 3) {
+      const hits = this.searchShort(q, cwd);
+      return { hits, saturated: hits.length >= SCAN_LIMIT };
+    }
     // 索引写入时正文被 `\s+` 折成单个空格；查询侧不做同样的归一，「按原文粘贴」的多行
     // 片段（`foo\n  bar`）会被当成一个含换行的短语，命中 0 条——而正文里明明有 `foo bar`。
     // 归一必须在包引号**之前**做，且保留用户自己的引号语义（内部引号仍按原有规则换成空格）。
