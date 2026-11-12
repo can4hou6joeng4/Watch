@@ -5,7 +5,8 @@ import { randomBytes, randomUUID } from 'node:crypto';
 import { writeFileAtomic } from '../../core/atomic.js';
 import { parseJsonObject } from '../../core/jsonl.js';
 import { readTextOrEmpty } from '../../core/read-text.js';
-import { verifyWrittenTurns } from '../../core/verify.js';
+import { assistantOnlyIncrementReason, userTurnTextForWrite } from '../../core/rich.js';
+import { expectAttachmentPlaceholders, verifyWrittenTurns } from '../../core/verify.js';
 import { parsePiSession } from './parse.js';
 import type { ImportTurnsOpts } from '../adapter.js';
 import type { ProcessEvent, SessionRef, TokenUsage, UnifiedTurn } from '../../core/types.js';
@@ -31,7 +32,11 @@ export async function importTurnsToPi(
   opts?: ImportTurnsOpts,
   sessionsRoot?: string,
 ): Promise<SessionRef> {
-  if (!turns.some((t) => t.role === 'user' && t.text.trim())) {
+  if (into && !opts?.replace) {
+    const reason = assistantOnlyIncrementReason(turns);
+    if (reason) throw new Error(reason);
+  }
+  if (!turns.some((t) => t.role === 'user' && userTurnTextForWrite(t).trim())) {
     throw new Error('没有可迁移的用户消息');
   }
   const root = sessionsRoot ?? piSessionsRoot();
@@ -82,7 +87,7 @@ export async function importTurnsToPi(
 
   for (const turn of turns) {
     if (turn.role === 'user') {
-      parentId = pushMessage(pieces, parentId, 'user', turn.timestamp, [{ type: 'text', text: turn.text }]);
+      parentId = pushMessage(pieces, parentId, 'user', turn.timestamp, [{ type: 'text', text: userTurnTextForWrite(turn) }]);
       continue;
     }
     const content: unknown[] = [];
@@ -131,6 +136,7 @@ export async function importTurnsToPi(
         filePath: tmp,
         turns,
         provider: 'pi',
+        expect: expectAttachmentPlaceholders,
       }),
   });
   return { provider: 'pi', sessionId, filePath, cwd };
