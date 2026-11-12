@@ -298,14 +298,33 @@ export function buildCodexLines(
       }
       let lastCallId: string | undefined;
       const finalText = t.text.trim();
+      // 助手侧附件没有原生块可写（`input_image` 只在 user content 里成立），只能落占位文本。
+      // 纯图片助手轮如果只写 commentary，parse 会把占位当成 turn.text，而 round-trip 期望
+      // 仍是空正文——导入直接失败。让最后一个附件占位成为终稿，正文口径才两边一致。
+      const assistantAttachments = (t.events ?? []).filter((ev) => ev.kind === 'text' && ev.attachment);
+      const placeholderFinal = !finalText && assistantAttachments.length > 0 ? assistantAttachments.at(-1)! : null;
       for (const ev of t.events ?? []) {
         if (ev.kind === 'text' && (ev.detail ?? ev.summary).trim() === finalText) continue;
+        if (placeholderFinal && ev === placeholderFinal) continue;
         emitCodexEvent(ev, push, lastCallId, (id) => {
           lastCallId = id;
         }, cwd, turn.turnId);
         responseItemBytes += Buffer.byteLength(ev.detail ?? ev.summary);
       }
-      if (finalText) {
+      if (placeholderFinal) {
+        const text = (placeholderFinal.detail ?? placeholderFinal.summary).trim();
+        responseItemBytes += Buffer.byteLength(text);
+        lastModelVisibleTokens = Math.floor(responseItemBytes / 4);
+        push('event_msg', { type: 'agent_message', message: text, phase: 'final_answer' });
+        push('response_item', {
+          type: 'message',
+          id: `msg_${randomUUID()}`,
+          role: 'assistant',
+          phase: 'final_answer',
+          content: [{ type: 'output_text', text }],
+          internal_chat_message_metadata_passthrough: { turn_id: turn.turnId },
+        });
+      } else if (finalText) {
         responseItemBytes += Buffer.byteLength(t.text);
         lastModelVisibleTokens = Math.floor(responseItemBytes / 4);
         const phase = turnIncomplete ? 'partial_answer' : 'final_answer';
@@ -417,14 +436,22 @@ function emitCodexEvent(
 }
 
 /**
- * 写出侧的受控降级（round-trip 校验的期望模型）：与 `buildCodexLines` 共用
- * `codexUserTurnContent()`——写出侧写入的 `input_text` 会按 `\n\n` 拼回正文，
- * 媒体块反解成带 attachment 的事件（不进正文）。期望文本因此与真读回来的完全一致，
- * 若两边写法分叉（例如只改一侧的占位），round-trip 会当场失败而不是静默通过。
+ * 写出侧的受控降级（round-trip 校验的期望模型）：用户轮与 `codexUserTurnContent()` 共用，
+ * 助手轮的纯附件轮补上终稿占位。写出侧写入的 `input_text` 会按 `\n\n` 拼回正文，媒体块反解成
+ * 带 attachment 的事件（不进正文）。期望文本因此与真读回来的完全一致，若两边写法分叉
+ * （例如只改一侧的占位），round-trip 会当场失败而不是静默通过。
  */
 function expectCodexRoundTrip(turns: UnifiedTurn[]): UnifiedTurn[] {
   return turns.map((turn) => {
-    if (turn.role !== 'user') return turn;
+    if (turn.role !== 'user') {
+      // 纯附件助手轮：build 把最后一个附件占位写成 final_answer，parse 会把它当正文
+      if (!turn.text.trim()) {
+        const last = (turn.events ?? []).filter((e) => e.kind === 'text' && e.attachment).at(-1);
+        const text = last ? (last.detail ?? last.summary).trim() : '';
+        if (text) return { ...turn, text };
+      }
+      return turn;
+    }
     const { texts } = codexUserTurnContent(turn);
     if (texts.length === 0) return turn;
     return { ...turn, text: texts.join('\n\n') };

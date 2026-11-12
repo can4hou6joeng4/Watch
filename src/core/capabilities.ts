@@ -28,7 +28,7 @@ export type ProviderCapability = {
   /** 写入前有目标级检查（Codex 的 per-thread writer 锁） */
   preflight: boolean;
   /** 写入侧能还原的附件：`none` = 一律只留占位文本（交接时据此披露原始数据丢失） */
-  attachments: 'none' | 'images' | 'all';
+  attachments: 'none' | 'images' | 'user-images' | 'all';
   /** 无附件的独立过程文本：`assistant` = 仅助手轮，`none` = 不保留；正文不受此项影响 */
   textEvents: 'none' | 'assistant';
   /** 能原子取协作写锁，收窄「探测 → 写入」的竞态窗口 */
@@ -103,7 +103,7 @@ export function formatCapabilities(rows: ProviderCapability[]): string {
     );
     const aux = [
       `写入前置检查 ${mark(row.preflight)}`,
-      `附件 ${row.attachments === 'all' ? '图片与文件' : row.attachments === 'images' ? '仅图片' : '仅占位'}`,
+      `附件 ${row.attachments === 'all' ? '图片与文件' : row.attachments === 'images' ? '仅图片' : row.attachments === 'user-images' ? '仅用户侧图片' : '仅占位'}`,
       `过程文本 ${row.textEvents === 'assistant' ? '仅助手侧' : '不保留'}`,
       `协作写锁 ${mark(row.writeLock)}`,
       `归属统计 ${mark(row.unattributable)}`,

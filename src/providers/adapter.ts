@@ -165,11 +165,12 @@ export interface ProviderAdapter {
    * 可选：写入侧能还原哪些附件（`ProcessEvent.attachment` 的原始数据）。
    *
    * 缺省 = 一律降级为占位文本（`[图片：image/png，1234B]` 这类），原始数据不落盘。
-   * `images` = 只有图片块能还原，文件类附件仍是占位；`all` = 图片与文件都能带。
+   * `images` = 两侧的图片块都能还原，文件类附件仍是占位；`user-images` = 只有**用户轮**的
+   * 图片能还原（Codex 的 `input_image` 只在 user content 里成立）；`all` = 图片与文件都能带。
    * 判据放在适配器上、由转入路径统一比对来源事件：`assertRoundTrip` 不查 text 事件里的
    * attachment，写坏 / 丢掉在 round-trip 里看不出来，只能靠这份声明主动披露。
    */
-  attachmentSupport?: 'images' | 'all';
+  attachmentSupport?: 'images' | 'user-images' | 'all';
 
   /**
    * 可选：写入侧能保留哪些无附件的 text 事件。缺省 = 不保留；`assistant` = 仅助手轮。

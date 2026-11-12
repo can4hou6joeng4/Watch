@@ -413,16 +413,19 @@ export function assistantOnlyIncrementReason(turns: UnifiedTurn[]): string | nul
  */
 export function describeAttachmentLoss(
   turns: UnifiedTurn[],
-  target: { displayName: string; attachmentSupport?: 'images' | 'all' },
+  target: { displayName: string; attachmentSupport?: 'images' | 'user-images' | 'all' },
 ): string | null {
   const support = target.attachmentSupport ?? 'none';
   if (support === 'all') return null;
-  const lost = turns
-    .flatMap((t) => t.events ?? [])
-    .filter((e) => {
+  const lost = turns.flatMap((t) =>
+    (t.events ?? []).filter((e) => {
       if (!e.attachment) return false;
-      return !(support === 'images' && e.attachment.kind === 'image');
-    });
+      // `images` = 图片块能还原、文件类附件不能；`user-images` 再收窄到用户轮
+      if (support === 'images') return e.attachment.kind !== 'image';
+      if (support === 'user-images') return !(t.role === 'user' && e.attachment.kind === 'image');
+      return true;
+    }),
+  );
   if (lost.length === 0) return null;
   const images = lost.filter((e) => e.attachment?.kind === 'image').length;
   const files = lost.length - images;
@@ -430,7 +433,9 @@ export function describeAttachmentLoss(
   const keptNote =
     support === 'images'
       ? `${target.displayName} 只还原图片块，文件类附件只留占位文本`
-      : `${target.displayName} 的写入侧不还原附件的原始数据，只留占位文本`;
+      : support === 'user-images'
+        ? `${target.displayName} 只还原用户轮的图片块，助手轮图片与文件类附件只留占位文本`
+        : `${target.displayName} 的写入侧不还原附件的原始数据，只留占位文本`;
   return (
     `来源会话有 ${lost.length} 个附件（${kinds}）不会随这次交接保留：${keptNote}（如「[图片：image/png，1234B]」），` +
     `原始数据不落盘，也无法从目标会话里恢复；需要这些附件时先在来源里另存，或转到 OpenCode（图片与文件都能带）`
