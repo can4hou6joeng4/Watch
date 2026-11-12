@@ -437,7 +437,8 @@ type V2MessageData = {
   /** skill 的必填字段：skill 是 ID、name 是 Name、text 是技能正文 */
   skill?: string;
   name?: string;
-  error?: { message?: string };
+  /** SessionError.Error（assistant / compaction.failed / tool.state.error 共用形状） */
+  error?: { type?: string; message?: string };
   /** user 的附件与技能（上游 Prompt.files / Prompt.skills），形状在解析处逐项收窄 */
   files?: unknown;
   skills?: unknown;
@@ -636,6 +637,38 @@ function v2UserTurn(row: V2MessageRow, data: V2MessageData, unknown: Map<string,
   return turn;
 }
 
+/**
+ * assistant 消息的错误（上游 `Assistant.error: SessionError.Error`，请求失败时仍写一条
+ * assistant 消息）。以前不看它：content 为空的失败轮直接返回 null，整轮消失，下游
+ * `describeUnansweredTail` 把「模型调用失败」讲成「用户问了没人答」。
+ * 失败是降级事实，走统一上下文披露（`WATCH_CONTEXT_DISCLOSURE_PREFIX`），进 prompt 头部与
+ * open / handoff warnings；形状异常按原因计数。
+ */
+function v2AssistantErrorEvent(
+  raw: unknown,
+  timestamp: string,
+  unknown: Map<string, number>,
+): ProcessEvent | null {
+  if (raw === undefined) return null;
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+    bumpCount(unknown, 'assistant（error 不是对象）');
+    return null;
+  }
+  const err = raw as { type?: unknown; message?: unknown };
+  if (typeof err.message !== 'string' || !err.message) {
+    bumpCount(unknown, 'assistant（error 缺少 message）');
+    return null;
+  }
+  const label = typeof err.type === 'string' && err.type ? `（${err.type}）` : '';
+  return {
+    kind: 'text',
+    timestamp,
+    summary: `${WATCH_CONTEXT_DISCLOSURE_PREFIX}助手请求失败${label}：${err.message.slice(0, 120)}]`,
+    detail: `${WATCH_CONTEXT_DISCLOSURE_PREFIX}助手请求失败${label}：${err.message}]`,
+    provider: 'opencode',
+  };
+}
+
 function v2AssistantTurn(
   row: V2MessageRow,
   data: V2MessageData,
@@ -695,6 +728,11 @@ function v2AssistantTurn(
       bumpCount(unknown, `content:${item.type ?? '（空类型）'}`);
     }
   }
+
+  // 失败轮即使没有正文、没有过程事件也要保留：否则下游看到「用户问了没人答」，
+  // 而真实原因是模型调用失败（错误原因已在事件里）。
+  const errorEvent = v2AssistantErrorEvent(data.error, timestamp, unknown);
+  if (errorEvent) events.push(errorEvent);
 
   const text = texts.join('\n\n');
   if (!text.trim() && events.length === 0) return null;
