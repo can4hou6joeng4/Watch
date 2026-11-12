@@ -39,6 +39,10 @@ export async function parseKimiSession(ref: SessionRef): Promise<UnifiedTurn[]> 
   let unmatchedLegacyUsers = 0;
   // content.part 里认不出的片段类型按 turn 计数，循环结束后统一写进正文（见下方注释）
   const unknownParts = new Map<UnifiedTurn, Map<string, number>>();
+  // 认不出的 loop 事件类型（以及 tool.call / tool.result 的坏形状）按类型聚合一次。
+  // 不能逐条计数：流式 delta 也走 context.append_loop_event，正常会话会被刷满；
+  // 也正因如此以前完全不计——新出现的内容类事件就连痕迹都没有。聚合后一条披露。
+  const unknownLoopEvents = new Map<string, number>();
 
   for (const line of raw.split('\n')) {
     const trimmed = line.trim();
@@ -116,7 +120,11 @@ export async function parseKimiSession(ref: SessionRef): Promise<UnifiedTurn[]> 
 
     if (type === 'context.append_loop_event') {
       const event = asRecord(r.event);
-      if (!event) continue;
+      if (!event) {
+        // 合法 JSON 但不是对象：这条 loop 事件无法读取，不能连计数都没有。
+        unknownLoopEvents.set('（event 非对象）', (unknownLoopEvents.get('（event 非对象）') ?? 0) + 1);
+        continue;
+      }
 
       // loop 事件属于 assistant turn；若当前刚进入 user，则创建 assistant
       if (state === 'user' || state === 'idle') {
@@ -125,11 +133,17 @@ export async function parseKimiSession(ref: SessionRef): Promise<UnifiedTurn[]> 
       if (state !== 'assistant') continue;
 
       const last = ensureAssistant(turns, timestamp, 'kimi');
-      processLoopEvent(event, last, timestamp, (partType) => {
-        const counts = unknownParts.get(last) ?? new Map<string, number>();
-        counts.set(partType, (counts.get(partType) ?? 0) + 1);
-        unknownParts.set(last, counts);
-      });
+      processLoopEvent(
+        event,
+        last,
+        timestamp,
+        (partType) => {
+          const counts = unknownParts.get(last) ?? new Map<string, number>();
+          counts.set(partType, (counts.get(partType) ?? 0) + 1);
+          unknownParts.set(last, counts);
+        },
+        (key) => unknownLoopEvents.set(key, (unknownLoopEvents.get(key) ?? 0) + 1),
+      );
       if (event.type === 'content.part' && asRecord(event.part)?.type === 'text') loopTextTurns.add(last);
       continue;
     }
@@ -173,6 +187,15 @@ export async function parseKimiSession(ref: SessionRef): Promise<UnifiedTurn[]> 
     const shown = [...counts.entries()].map(([t, n]) => (n > 1 ? `${t}×${n}` : t)).join('、');
     const note = `[Kimi 记录里有 ${total} 个未识别的消息片段（${shown}），Watch 暂不解析：这部分原始内容没有并入交接，需要时请在原生 Kimi 里查看]`;
     turn.text = [turn.text, note].filter((s) => s.trim()).join('\n\n');
+  }
+  if (unknownLoopEvents.size > 0) {
+    const carrier = [...turns].reverse().find((turn) => turn.role === 'user' || turn.text.trim());
+    if (carrier) {
+      const total = [...unknownLoopEvents.values()].reduce((a, b) => a + b, 0);
+      const shown = [...unknownLoopEvents.entries()].map(([t, n]) => (n > 1 ? `${t} × ${n}` : `${t} × 1`)).join('、');
+      const text = `${WATCH_CONTEXT_DISCLOSURE_PREFIX}Kimi 日志里有 ${total} 个未识别或无法解析的 loop 事件（${shown}），Watch 暂不解析：其中的内容没有并入交接，需要时请在原生 Kimi 中查看]`;
+      pushEvent(carrier, { kind: 'text', summary: text, detail: text, timestamp: carrier.timestamp, provider: 'kimi' });
+    }
   }
   if (unreadableCompactions > 0) {
     const carrier = [...turns].reverse().find((turn) => turn.role === 'user' || turn.text.trim());
@@ -339,14 +362,27 @@ function extractUserInput(
   return parts.length > 0 ? { text: parts.join('\n'), events } : null;
 }
 
+/**
+ * 已知但不需要搬运的 loop 事件族：llm.* 是模型流式增量、permission / plugin /
+ * token_counting / interaction 是客户端内部状态，逐条计数会在每个正常会话上产生假披露。
+ * step.begin 是 Watch 自己写出的步骤标记（step.end 由下面读取用量）。其余类型一律进入
+ * 一次性聚合披露；新增已知内部类型时在这里补，不要靠“反正也没人看”静默跳过。
+ */
+const IGNORED_LOOP_EVENT = /^(?:llm|permission|plugin|token_counting|interaction)\./;
+
 function processLoopEvent(
   event: Record<string, unknown>,
   turn: UnifiedTurn,
   timestamp: string,
   onUnknownPart: (partType: string) => void,
+  onUnknownEvent: (key: string) => void,
 ): void {
   const loopType = asString(event.type);
-  if (!loopType) return;
+  if (!loopType) {
+    onUnknownEvent('（空类型）');
+    return;
+  }
+  if (loopType === 'step.begin' || IGNORED_LOOP_EVENT.test(loopType)) return;
   const base = { timestamp, provider: 'kimi' as const };
 
   // 我们 build 把用量写在 step.end 的 usage 字段（最后一个 step 覆盖前一个）
@@ -380,8 +416,7 @@ function processLoopEvent(
       return;
     }
     // 认不出的片段类型（图片等）以前在这里直接 return：内容连同原始数据无声消失。
-    // 只把 `content.part` 的**片段类型**计数写进正文；未知的 loop 事件类型不计数——
-    // 流式增量（delta）也走 `context.append_loop_event`，逐条计数会把正常会话刷满占位。
+    // 只把 `content.part` 的**片段类型**计数写进正文；未知的 loop 事件类型聚合到另一条披露。
     onUnknownPart(partType ?? '（空类型）');
     return;
   }
@@ -389,7 +424,12 @@ function processLoopEvent(
   if (loopType === 'tool.call') {
     const name = asString(event.name);
     const callId = asString(event.toolCallId) ?? asString(event.uuid);
-    if (!name || !callId) return;
+    if (!name || !callId) {
+      // 缺 name 只是显示降级，缺 callId 则无法与结果配对；两者都不该整条消失。
+      const missing = [!name ? 'name' : '', !callId ? 'callId' : ''].filter(Boolean).join(' / ');
+      onUnknownEvent(`tool.call（缺少 ${missing}）`);
+      return;
+    }
     pushEvent(turn, {
       ...base,
       kind: 'tool_call',
@@ -404,7 +444,10 @@ function processLoopEvent(
 
   if (loopType === 'tool.result') {
     const callId = asString(event.toolCallId) ?? asString(event.parentUuid);
-    if (!callId) return;
+    if (!callId) {
+      onUnknownEvent('tool.result（缺少 callId）');
+      return;
+    }
     const result = asRecord(event.result);
     const output = result?.output ?? '';
     const detail = typeof output === 'string' ? output : JSON.stringify(output);
@@ -417,4 +460,7 @@ function processLoopEvent(
     });
     return;
   }
+
+  // 未知事件类型：内容可能承载了计划、文件编辑或新工具状态，不能静默丢。
+  onUnknownEvent(loopType);
 }
