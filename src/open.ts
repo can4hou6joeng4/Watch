@@ -574,6 +574,13 @@ export async function openSession(
           error: `目标会话 ${target.found.ref.sessionId}（${target.adapter.displayName}）读取失败：${describeReadFailureOrSelf(error)}；本次未写入任何内容`,
         };
       }
+      // 目标自身的上下文差异（OpenCode 回退标记 / Pi context_edit / Codex compacted 等）不在
+      // 增量里：零增量时结论会变成「内容已全部包含」，不单独读一遍就会把目标的差异盖掉。
+      // 两侧同文（同一家、同计数的整份日志披露）只留一条，避免 warnings 里整段重复。
+      const targetContextDisclosure = findContextDisclosure(dstTurns);
+      if (targetContextDisclosure && !warnings.includes(targetContextDisclosure.summary)) {
+        warnings.push(targetContextDisclosure.summary);
+      }
       // 解析出 0 轮不代表「这条会话本来就没有内容」：grok / kimi 这类 cwd 不来自文件内容的
       // 适配器会带着一条 0 字节的文件一路走到这里。以前 0 字节来源只得到一句「内容已全部包含在
       // 目标中，无需并入」——看着像一次真的并入，实际来源的历史早就没了。
@@ -1195,6 +1202,10 @@ async function planOpenInProvider(
     await warnTargetBadLines(reuse, target, diagnostics);
     warnPairedMissingEvents(turns, destinationTurns, reuse, target, sourceId, diagnostics);
     const delta = dedupeCallEvents(diffTurns(turns, destinationTurns));
+    // 复用后 resume 的就是这条会话：目标自己的上下文差异（OpenCode 回退标记等）不属于增量，
+    // 零增量时同样要说，否则「内容已全部包含」会成为唯一结论；与来源同文时只留一条。
+    const reuseContext = findContextDisclosure(destinationTurns);
+    if (reuseContext && !(diagnostics ?? []).includes(reuseContext.summary)) diagnostics?.push(reuseContext.summary);
     // 复用后 resume 的就是这条会话：它自己的断点要披露，与来源那一侧分开说
     warnResumeTargetUnfinished(destinationTurns, `目标会话 ${reuse.sessionId}（${target.displayName}）`, delta.length, (msg) =>
       diagnostics?.push(msg),
