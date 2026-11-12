@@ -1,7 +1,6 @@
 import { execFile } from 'node:child_process';
 import { describeBrokenCommandStart, resolveCli } from '../../core/platform.js';
 import { escapeControlChars } from '../../core/display.js';
-import { readFileSync } from 'node:fs';
 import type { Dirent } from 'node:fs';
 import { readFile, readdir, stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
@@ -323,7 +322,16 @@ async function truncateToHeader(filePath: string): Promise<void> {
 
 /** wire.jsonl 的非空行（保持原顺序，含头部与历史事件）；文件缺失时按裸 ENOENT 抛出 */
 async function readWireLines(filePath: string): Promise<string[]> {
-  const raw = await readFile(filePath, 'utf8');
+  let raw: string;
+  try {
+    raw = await readFile(filePath, 'utf8');
+  } catch (error) {
+    // 追加 / replace 都要先读既有 wire：读不出来就整次拒绝，绝不能用「只有新内容」覆盖历史。
+    // 与 pi / grok 的 readTextOrEmpty 同一套中文分档，不能把裸 EISDIR / EACCES 抛给用户
+    throw new Error(
+      `读取既有 Kimi 会话文件失败：${describePathReadFailureReason(error)}（${escapeControlChars(filePath)}）；未写入，避免用空内容覆盖既有历史`,
+    );
+  }
   return raw.split('\n').filter((line) => line.trim() !== '');
 }
 
@@ -332,21 +340,23 @@ function isHeaderLine(line: string): boolean {
   return event !== null && HEADER_TYPES.has(typeof event.type === 'string' ? event.type : '');
 }
 
-function nextTurnId(filePath: string): number {
+/**
+ * 追加时从**已经读进内存的**既有行里取下一个 turn id。
+ *
+ * 以前这里自己再 `readFileSync` 一次并 `catch { ignore }`：既多读一遍，又在两次读取之间
+ * 文件被删 / 权限变化时静默退回 0——新 turn 的 id 会与内存里那份前缀撞车。直接用 existingLines，
+ * 与真正写出的前缀永远是同一份内容；坏行跳过（`parseJsonObject` 返回 null），不退回 0。
+ */
+function nextTurnId(lines: string[]): number {
   let maxTurn = -1;
-  try {
-    const raw = readFileSync(filePath, 'utf8');
-    for (const line of raw.split('\n')) {
-      if (!line.trim()) continue;
-      const event = parseJsonObject(line);
-      if (!event) continue;
-      if (event.type === 'turn.ended') {
-        const turnId = typeof event.turnId === 'number' ? event.turnId : -1;
-        if (turnId > maxTurn) maxTurn = turnId;
-      }
+  for (const line of lines) {
+    if (!line.trim()) continue;
+    const event = parseJsonObject(line);
+    if (!event) continue;
+    if (event.type === 'turn.ended') {
+      const turnId = typeof event.turnId === 'number' ? event.turnId : -1;
+      if (turnId > maxTurn) maxTurn = turnId;
     }
-  } catch {
-    // ignore
   }
   return maxTurn + 1;
 }
@@ -616,7 +626,7 @@ export async function importTurnsToKimi(
   }
 
   const existingLines = await readWireLines(filePath);
-  const startTurnId = opts?.replace ? 0 : nextTurnId(filePath);
+  const startTurnId = opts?.replace ? 0 : nextTurnId(existingLines);
 
   // replace：保留已有头部、用 turns 重写整段历史。
   // 追加：必须保留既有 wire 行再写增量；只写头部+增量会让 Kimi 丢掉全部旧历史。
