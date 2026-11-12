@@ -5,7 +5,7 @@ import { randomBytes, randomUUID } from 'node:crypto';
 import { writeFileAtomic } from '../../core/atomic.js';
 import { parseJsonObject } from '../../core/jsonl.js';
 import { readTextOrEmpty } from '../../core/read-text.js';
-import { assistantOnlyIncrementReason, userTurnTextForWrite } from '../../core/rich.js';
+import { assistantOnlyIncrementReason, assistantTurnTextForWrite, userTurnTextForWrite } from '../../core/rich.js';
 import { expectAttachmentPlaceholders, verifyWrittenTurns } from '../../core/verify.js';
 import { parsePiSession } from './parse.js';
 import type { ImportTurnsOpts } from '../adapter.js';
@@ -91,6 +91,8 @@ export async function importTurnsToPi(
       continue;
     }
     const content: unknown[] = [];
+    // 只搬正文：纯附件助手轮用占位文本兜底，否则这一轮写出空内容、原始数据也一并消失
+    const bodyText = assistantTurnTextForWrite(turn);
     const hasToolEvents = turn.events?.some((e) => e.kind === 'tool_call' || e.kind === 'tool_result') ?? false;
     for (const ev of turn.events ?? []) {
       if (ev.kind === 'thinking') {
@@ -107,7 +109,7 @@ export async function importTurnsToPi(
     // 没有工具调用时，把 final text 直接放在 assistant 消息里；
     // 有工具调用时，为了避免 Pi TUI 把 final text 显示在 toolResult 消息之前，
     // 先只发 thinking/toolCall，再把 final text 作为一条独立 assistant 消息跟在 toolResult 后面。
-    if (!hasToolEvents && turn.text.trim()) content.push({ type: 'text', text: turn.text });
+    if (!hasToolEvents && bodyText.trim()) content.push({ type: 'text', text: bodyText });
     const assistantMsgId = pushMessage(pieces, parentId, 'assistant', turn.timestamp, content, undefined, turn.usage);
     parentId = assistantMsgId;
     let toolResultIndex = 0;
@@ -121,9 +123,9 @@ export async function importTurnsToPi(
         { type: 'text', text: ev.detail ?? ev.summary },
       ], ev);
     }
-    if (hasToolEvents && turn.text.trim()) {
+    if (hasToolEvents && bodyText.trim()) {
       const finalTs = new Date((Date.parse(turn.timestamp) || Date.now()) + 2000 + toolResultIndex * 100).toISOString();
-      parentId = pushMessage(pieces, parentId, 'assistant', finalTs, [{ type: 'text', text: turn.text }], undefined, turn.usage);
+      parentId = pushMessage(pieces, parentId, 'assistant', finalTs, [{ type: 'text', text: bodyText }], undefined, turn.usage);
     }
   }
 
