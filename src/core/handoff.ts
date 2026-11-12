@@ -405,6 +405,7 @@ export async function adoptIntoChain(
   }
 
   let history: SwitchRecord[] = [];
+  let historyFailed = false;
   if (!store) {
     // 库打不开时接入仍然完成，但没有链记录：下次 switch 不会认这条绑定，必须说明。
     // 原因同样要带出（`storeError` 来自 `cli-main.ts` 的 `lastStoreError`）：只说「库不可用」
@@ -419,8 +420,18 @@ export async function adoptIntoChain(
     } catch (error) {
       if (error instanceof Error && /找不到链|已归档/.test(error.message)) throw error;
       history = [];
+      historyFailed = true;
       warnings.push(`链历史读取失败，按无链处理：${describeStoreErrorReason(error)}`);
     }
+  }
+  // 历史读不出来时，`replaced` 必为 null，下面「自动挑的会话不得静默改绑」的守卫会失效：
+  // 链上原本绑着谁已无从得知，按 mtime 挑出来的会话可能属于另一条链或另一段工作。
+  // 显式给了 --session 才放行（那是用户自己的选择），并保留上面那条读取失败警告。
+  if (historyFailed && autoPicked) {
+    throw new Error(
+      `链历史读取失败，无法确认链上 ${providerId} 当前绑定的会话；未指定 --session 时不会按最新会话自动改绑（本次未写入任何内容）。` +
+        `请用 watch adopt ${providerId} --session <会话 id> 显式指定要接入的会话，或修好本地库后重试`,
+    );
   }
   // 「这家已经绑着这个会话」只看 `toRef` 是不够的：`switch codex` 之后 claude 的绑定留在
   // `fromRef` 上（链上每个 provider 只有一个会话），旧判据会把这种情况当成一次真的换绑，
@@ -493,8 +504,14 @@ export async function adoptIntoChain(
   if (store) {
     try {
       const id = store.getOrCreateChainSession(cwd, chainId);
-      if (!replaced && otherBound) replaced = otherBound;
-      store.recordSwitch(id, providerId, replaced, providerId, found.ref);
+      // `otherBound` 是另一家的会话：`fromProvider` 必须跟着 ref 走，否则会写下
+      // 「codex → codex、fromRef 却是 claude 会话」的自指记录，链配对从此对不上。
+      let replacedFrom = providerId;
+      if (!replaced && otherBound) {
+        replaced = otherBound;
+        replacedFrom = otherBound.provider;
+      }
+      store.recordSwitch(id, replacedFrom, replaced, providerId, found.ref);
     } catch (error) {
       console.error('[watch] 记录接入失败:', error);
       warnings.push(`链记录失败: ${describeStoreErrorReason(error)}`);
@@ -996,6 +1013,8 @@ export async function chainStatus(
    */
   unreadable: string[];
   history: SwitchRecord[];
+  /** 链历史读失败：`history` 为空不代表链真的没有记录，文本与 JSON 都不得把它讲成空链 */
+  historyFailed: boolean;
   chain: Chain | null;
   chains: Chain[];
   warnings: string[];
@@ -1004,6 +1023,7 @@ export async function chainStatus(
   const unreadable: string[] = [];
   const allTips = await collectTips(cwd, adapters, warnings, unreadable);
   let history: SwitchRecord[] = [];
+  let historyFailed = false;
   let chain: Chain | null = null;
   let chains: Chain[] = [];
   if (store) {
@@ -1024,6 +1044,7 @@ export async function chainStatus(
     } catch (error) {
       if (error instanceof Error && /找不到链/.test(error.message)) throw error;
       history = [];
+      historyFailed = true;
       warnings.push(`链历史读取失败，按无链处理：${describeStoreErrorReason(error)}`);
     }
   } else {
@@ -1102,7 +1123,7 @@ export async function chainStatus(
       ...(readProblem ? { unreadable: true } : {}),
     });
   }
-  return { tips, chainTip, chainTipUnusable, unreadable, history, chain, chains, warnings };
+  return { tips, chainTip, chainTipUnusable, unreadable, history, historyFailed, chain, chains, warnings };
 }
 
 /** 把链尾会话转换到 targetId，落 switch_events（store 可选）；opts.forceNew 强制新建目标会话（不追加既有配对） */
@@ -1248,6 +1269,10 @@ export async function handoff(
     warnings.push(
       ...describeResumeTargetUnfinished(resumeTurns, `目标会话 ${ref.sessionId}（${displayName}）`, merged),
     );
+    // 上下文完整性披露（转入后台 / context_edit / compacted）与 `open` 同一口径：
+    // 用户复制的是这条 resume 命令，而这份日志的差异不会出现在链记录或 resume 命令里。
+    const context = findContextDisclosure(resumeTurns);
+    if (context) warnings.push(context.summary);
   };
 
   let chainBoundToTarget = false;
