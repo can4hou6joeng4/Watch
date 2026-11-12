@@ -335,19 +335,59 @@ function claudeImageBlock(ev: ProcessEvent): Record<string, unknown> | null {
   return null;
 }
 
-async function lastClaudeUuid(filePath: string): Promise<string | null> {
+/**
+ * 追加前扫描目标：末条 uuid（作 parentUuid）与本文件已登记的调用 ID。
+ *
+ * 调用 ID 用来挡住「增量里又出现目标已有的调用」：来源在调用之后补到结果时，
+ * `turnKey` 里该助手轮的 callIds 会变化，`diffTurns` 会把整轮当作增量再给一次，
+ * 直接追加会让同一调用在目标里出现两遍、结果配对随之失真（同一文件里重复 ID 会被
+ * parse 判成歧义，后端校验的后缀回退还可能看不出问题）。这里只读、不改通用增量算法。
+ */
+async function scanClaudeTarget(filePath: string): Promise<{ lastUuid: string | null; callIds: Set<string> }> {
   const raw = await readFile(filePath, 'utf8');
-  let last: string | null = null;
+  let lastUuid: string | null = null;
+  const callIds = new Set<string>();
   for (const line of raw.split('\n')) {
     if (!line.trim()) continue;
+    let record: Record<string, unknown>;
     try {
-      const record = JSON.parse(line) as { uuid?: unknown };
-      if (typeof record.uuid === 'string') last = record.uuid;
+      record = JSON.parse(line) as Record<string, unknown>;
     } catch {
       continue;
     }
+    if (typeof record.uuid === 'string') lastUuid = record.uuid;
+    if (record.type !== 'assistant') continue;
+    const content = (record.message as Record<string, unknown> | undefined)?.content;
+    if (!Array.isArray(content)) continue;
+    for (const block of content) {
+      if (typeof block !== 'object' || block === null) continue;
+      const b = block as Record<string, unknown>;
+      if (b.type === 'tool_use' && typeof b.id === 'string') callIds.add(b.id);
+    }
   }
-  return last;
+  return { lastUuid, callIds };
+}
+
+/**
+ * 追加写入的写前拒绝：增量里的 tool_call 一旦重用目标已有的调用 ID 就整次拒绝。
+ * 不做 force 覆盖，也不替调用方重算增量——只保住目标文件，说清「本次未写入任何内容」。
+ */
+function assertNoReplayedCalls(turns: UnifiedTurn[], targetCallIds: Set<string>, filePath: string): void {
+  const repeated = new Set<string>();
+  for (const turn of turns) {
+    for (const event of turn.events ?? []) {
+      if (event.kind === 'tool_call' && event.callId && targetCallIds.has(event.callId)) repeated.add(event.callId);
+    }
+  }
+  if (repeated.size === 0) return;
+  const ids = [...repeated];
+  const shown = ids.slice(0, 3).map((id) => escapeControlChars(id)).join('、');
+  const more = ids.length > 3 ? ` 等 ${ids.length} 个` : '';
+  throw new Error(
+    `拒绝追加：目标会话 ${escapeControlChars(filePath)} 已包含相同的工具调用 ID（${shown}${more}）。` +
+      '这些调用已经在目标里出现过，直接追加会重放调用、让结果失去配对；本次未写入任何内容。' +
+      '如需确认这些调用在来源里的上下文，可用 watch prompt <来源会话 id> --profile full 查看；或另开一条新会话再交接。',
+  );
 }
 
 /** 统一时间线 → 原生会话：无 into 则新建；有 into 且文件在则追加；replace 则整文件重写 */
@@ -379,9 +419,10 @@ export async function importTurnsToClaude(
     try {
       await access(into.filePath);
       if (turns.length === 0) return into;
-      const parentUuid = await lastClaudeUuid(into.filePath);
+      const target = await scanClaudeTarget(into.filePath);
+      assertNoReplayedCalls(turns, target.callIds, into.filePath);
       const lines = buildClaudeLines(turns, into.sessionId, cwd, identity, {
-        parentUuid,
+        parentUuid: target.lastUuid,
         requireUser: false,
       });
       if (lines.length === 0) return into;

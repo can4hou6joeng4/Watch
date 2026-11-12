@@ -18,7 +18,7 @@ import { describeQueuedImages, readQueuedUserPrompt } from './queued.js';
 /**
  * Claude JSONL → 统一时间线（Rich）：
  * - 跳过 isMeta/isSidechain、custom-title/ai-title、未知 type、坏行
- * - thinking / tool_use / tool_result 挂到当前 assistant.events
+ * - thinking / tool_use 挂到当前助手轮；tool_result 按调用 ID 回到对应助手轮，未配对结果保留并披露
  * - 仅含 tool_result 的 user 记录不当作用户消息
  * - 同一 user turn 内多条 assistant 合并：过程事件累积，文本留最后一条非空
  * - assistant 的 `[思考] …` 记录（build 的 thinking 降级形态）还原成 thinking 事件
@@ -27,7 +27,7 @@ import { describeQueuedImages, readQueuedUserPrompt } from './queued.js';
  * - `continued-in`（会话被转入后台）按整份日志计数，续接文件存在性分档披露，不静默换 id
  * - 顶层 `attachment` 里的 `queued_command`（用户中途发来的消息）**当场**还原成用户轮：
  *   它没有对应的 user 记录，丢掉会让助手回复看起来在回答一个没人问过的问题；
- *   插在日志里的原位置才能让「助手续写」成为它的回复（见 `toolResultMountTarget`）
+ *   插在日志里的原位置才能让「助手续写」成为它的回复；工具结果另按调用 ID 配对
  * - 丢弃首条 user 之前的记录
  */
 export async function parseClaudeSession(ref: SessionRef): Promise<UnifiedTurn[]> {
@@ -39,9 +39,10 @@ export async function parseClaudeSession(ref: SessionRef): Promise<UnifiedTurn[]
   // 用户中途发来的消息（顶层 attachment / queued_command）：当场插成用户轮，之后到达的助手记录
   // 经 `ensureAssistant()` 另起一轮，就是这条插话的续写。推迟到循环结束后再插会排到续写**之后**
   // （错序），末轮还会变成没有回复的用户消息，`describeUnansweredTail()` 据此误报「没人答」。
-  // 紧随其后的 `tool_result` 靠 `toolResultMountTarget()` 仍挂回上一轮助手，不会丢。
+  // 工具调用的归属独立于用户插话；null 表示未完成调用重复使用同一 ID，不能唯一配对。
+  const pendingCalls = new Map<string, UnifiedTurn | null>();
+  const unpaired: { event: ProcessEvent; reason: string }[] = [];
   const queued: { turn: UnifiedTurn; sourceUuid: string | null }[] = [];
-  const openQueuedTurns = new Set<UnifiedTurn>();
   const userUuids = new Set<string>();
 
   for (const line of raw.split('\n')) {
@@ -73,7 +74,6 @@ export async function parseClaudeSession(ref: SessionRef): Promise<UnifiedTurn[]
         : queuedPrompt.text;
       const queuedTurn: UnifiedTurn = { role: 'user', text: withImages, timestamp: queuedPrompt.timestamp };
       turns.push(queuedTurn);
-      openQueuedTurns.add(queuedTurn);
       queued.push({ turn: queuedTurn, sourceUuid: queuedPrompt.sourceUuid });
       continue;
     }
@@ -91,9 +91,8 @@ export async function parseClaudeSession(ref: SessionRef): Promise<UnifiedTurn[]
 
     if (type === 'user') {
       if (onlyToolResult) {
-        const target = toolResultMountTarget(turns, openQueuedTurns);
-        if (!sawUser || !target) continue;
-        for (const ev of events) pushEvent(target, ev);
+        if (!sawUser) continue; // 首条主线用户消息之前的记录仍跳过。
+        for (const event of events) mountToolResult(event, pendingCalls, unpaired);
         continue;
       }
       sawUser = true;
@@ -107,14 +106,22 @@ export async function parseClaudeSession(ref: SessionRef): Promise<UnifiedTurn[]
         text: r.isCompactSummary === true ? `${CLAUDE_COMPACT_SUMMARY_PREFIX}\n${userText}` : userText,
         timestamp,
       };
-      if (events.length) userTurn.events = events;
+      const userEvents = events.filter((event) => event.kind !== 'tool_result');
+      if (userEvents.length) userTurn.events = userEvents;
       turns.push(userTurn);
+      // 混有用户正文的记录也逐项配对工具结果，不能留在用户轮后被目标写入器忽略。
+      for (const event of events) {
+        if (event.kind === 'tool_result') mountToolResult(event, pendingCalls, unpaired);
+      }
     } else {
       if (!sawUser) continue;
       const last = ensureAssistant(turns, timestamp, 'claude');
-      // 已经出现助手续写，说明此前的排队消息不再「等待挂载」，之后的 tool_result 正常挂本 turn
-      openQueuedTurns.clear();
-      for (const ev of events) pushEvent(last, ev);
+      for (const event of events) {
+        pushEvent(last, event);
+        if (event.kind === 'tool_call' && event.callId) {
+          pendingCalls.set(event.callId, pendingCalls.has(event.callId) ? null : last);
+        }
+      }
       if (text.trim()) {
         const event: ProcessEvent = {
           kind: 'text',
@@ -140,29 +147,54 @@ export async function parseClaudeSession(ref: SessionRef): Promise<UnifiedTurn[]
     }
   }
   const stripped = stripEmptyEvents(turns);
+  const disclosureContext = [...stripped].reverse().find((turn) => turn.role === 'user' || turn.text.trim());
+  if (unpaired.length > 0 && disclosureContext) {
+    // 空正文助手轮写出 text 事件后，回读会把事件当正文；只挂到真实用户轮或非空助手轮。
+    for (const { event, reason } of unpaired) {
+      const summary = `[Claude 未配对工具结果：${reason}]`;
+      const id = event.callId ? `\n调用 ID：${JSON.stringify(event.callId)}` : '';
+      pushEvent(disclosureContext, {
+        kind: 'text', summary, detail: `${summary}${id}\n${event.detail ?? event.summary}`,
+        timestamp: event.timestamp, provider: event.provider,
+      });
+    }
+    const reasons = [
+      `缺少调用 ID ${unpaired.filter((item) => !item.event.callId).length} 条`,
+      `未找到未完成调用 ${unpaired.filter((item) => item.reason === '未找到对应的未完成调用').length} 条`,
+      `调用 ID 重复 ${unpaired.filter((item) => item.reason === '调用 ID 对应多个未完成调用').length} 条`,
+    ]
+      .filter((item) => !item.endsWith(' 0 条'))
+      .join('、');
+    const text = `${WATCH_CONTEXT_DISCLOSURE_PREFIX}Claude 日志中有 ${unpaired.length} 条工具结果无法确认调用归属（${reasons}），已作为带标记的过程文本保留，不计作已配对结果；可用 watch prompt <来源会话 id> --profile full 查看记录，完整原文请在来源文件或原生 Claude Code 中核对。]`;
+    pushEvent(disclosureContext, { kind: 'text', summary: text, detail: text, timestamp: disclosureContext.timestamp, provider: 'claude' });
+  }
   const detected = await probeClaudeContinuation(continuation, ref.filePath);
-  if (detected && stripped.length > 0) {
-    const last = stripped[stripped.length - 1]!;
+  if (detected && disclosureContext) {
     const text = describeClaudeContinuation(detected);
-    pushEvent(last, { kind: 'text', summary: text, detail: text, timestamp: last.timestamp, provider: 'claude' });
+    pushEvent(disclosureContext, { kind: 'text', summary: text, detail: text, timestamp: disclosureContext.timestamp, provider: 'claude' });
   }
   return stripped;
 }
 
-/**
- * `tool_result` 记录挂到哪一条助手轮上。
- *
- * 正常情况是「最后一条 turn 就是当前助手轮」。**中途消息插进来之后**，末尾可能是那条用户轮，
- * 紧随的工具结果仍属于它之前那一轮助手（日志里附件就写在工具结果旁边）；跳过排队消息找到
- * 前面的助手轮，而不是把工具结果丢掉。
- */
-function toolResultMountTarget(turns: UnifiedTurn[], openQueuedTurns: Set<UnifiedTurn>): UnifiedTurn | null {
-  for (let i = turns.length - 1; i >= 0; i--) {
-    const turn = turns[i]!;
-    if (openQueuedTurns.has(turn)) continue;
-    return turn.role === 'assistant' ? turn : null;
+/** 只按唯一的未完成调用配对；无法确认归属时暂存原文，结束后挂到可安全写回的轮次。 */
+function mountToolResult(
+  event: ProcessEvent,
+  pendingCalls: Map<string, UnifiedTurn | null>,
+  unpaired: { event: ProcessEvent; reason: string }[],
+): void {
+  let reason: string;
+  if (event.callId) {
+    const target = pendingCalls.get(event.callId);
+    pendingCalls.delete(event.callId);
+    if (target) {
+      pushEvent(target, event);
+      return;
+    }
+    reason = target === null ? '调用 ID 对应多个未完成调用' : '未找到对应的未完成调用';
+  } else {
+    reason = '缺少调用 ID';
   }
-  return null;
+  unpaired.push({ event, reason });
 }
 
 /**
