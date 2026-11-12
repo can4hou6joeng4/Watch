@@ -402,7 +402,8 @@ type V2PartRow = { message_id: string; ordinal: number; type: string; data: stri
 
 type V2ToolState = {
   status?: string;
-  input?: Record<string, unknown>;
+  /** streaming 状态是 partial JSON 字符串，其余状态是对象（上游 ToolState 联合） */
+  input?: unknown;
   output?: unknown;
   content?: unknown;
   error?: { message?: string };
@@ -669,6 +670,28 @@ function v2AssistantErrorEvent(
   };
 }
 
+/**
+ * 工具调用入参。上游 v2.2.7 的 `toolInput()`：streaming 状态的 `input` 是 partial JSON
+ * 字符串，先尝试按 JSON 解码、失败保留字符串；其余状态是对象。以前把字符串原样当对象传，
+ * summary 被 `JSON.stringify` 双重转义、目标 writer 拿到非对象（claude 会兜底成
+ * `{input: <截断的转义串>}`）。这里对任何字符串都尝试解码（坏数据也能尽力恢复），
+ * 无法恢复 / 解出来不是对象时按原因计数披露，不伪造形状。
+ */
+function v2ToolInput(state: V2ToolState | undefined, unknown: Map<string, number>): unknown {
+  const raw = state?.input;
+  if (raw === undefined || raw === null) return {};
+  if (typeof raw !== 'string') return raw;
+  try {
+    const decoded: unknown = JSON.parse(raw);
+    if (decoded && typeof decoded === 'object' && !Array.isArray(decoded)) return decoded;
+    bumpCount(unknown, 'content:tool（input 不是对象）');
+    return decoded;
+  } catch {
+    bumpCount(unknown, 'content:tool（input 无法解析为对象）');
+    return raw;
+  }
+}
+
 function v2AssistantTurn(
   row: V2MessageRow,
   data: V2MessageData,
@@ -710,14 +733,16 @@ function v2AssistantTurn(
       }
     } else if (item.type === 'tool') {
       const callId = item.id ?? `oc-${crypto.randomUUID()}`;
-      const input = item.state?.input ?? {};
+      const input = v2ToolInput(item.state, unknown);
+      // summary 直接展示字符串原文，避免 JSON.stringify 对半截 JSON 再加一层转义。
+      const inputText = typeof input === 'string' ? input : JSON.stringify(input);
       events.push({
         kind: 'tool_call',
         timestamp,
         name: item.name ?? 'tool',
         callId,
         input,
-        summary: `${item.name ?? 'tool'} ${JSON.stringify(input).slice(0, 200)}`,
+        summary: `${item.name ?? 'tool'} ${inputText.slice(0, 200)}`,
         provider: 'opencode',
       });
       const output = v2ToolResultText(item.state, unknown);
