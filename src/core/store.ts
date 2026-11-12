@@ -95,6 +95,8 @@ export const SEARCH_MAX_HITS = MAX_HITS;
 const MAX_PER_SESSION = 3;
 /** SQL 先多取一些再按会话截断，否则 LIMIT 会在截断前就把其它会话切掉 */
 const SCAN_LIMIT = 200;
+/** 候选扫描上限；`candidatesSaturated` 披露的正是这个数字（CLI 提示文案直接引用） */
+export const SEARCH_SCAN_LIMIT = SCAN_LIMIT;
 
 export type SearchHit = {
   sessionId: string;
@@ -153,6 +155,15 @@ export type SearchResult = {
   perSessionCapped: boolean;
   /** 查询像 session id 时，前缀命中触碰 LIMIT 10 */
   idPrefixCapped: boolean;
+  /**
+   * 候选集撞上 `SCAN_LIMIT` 且**其它会话的命中进不来**（一个话多的会话占满了候选）。
+   *
+   * `truncated` 只说明「按结果上限截掉了」，`perSessionCapped` 只说「某个会话超过 3 条」——
+   * 两种都不覆盖这一档：FTS 只取前 200 行，某个索引了很多工具输出的会话可以全部占满，
+   * 另一个只有一条命中的会话根本没被看到；而最终 hits 只有 3 条、两个标志都是 false，
+   * 输出看着像「就这些」。一旦候选饱和，就必须告诉调用方结果不完整。
+   */
+  candidatesSaturated?: boolean;
 };
 
 export type Chain = {
@@ -460,8 +471,14 @@ export class Store {
   }
 
   private migrateV4(): void {
-    // v4: switch_events 标记 Watch 写出版本（对原生工具零副作用，仅存 Watch 侧）
-    this.db.exec("ALTER TABLE switch_events ADD COLUMN schema_version TEXT NOT NULL DEFAULT 'v1'");
+    // v4: switch_events 标记 Watch 写出版本（对原生工具零副作用，仅存 Watch 侧）。
+    // 必须先查列再加：`PRAGMA user_version` 在每步之后才写，ALTER 成功、版本号没落盘时
+    // （进程被杀 / 库被别的工具抬过一次）下次打开会重跑这一步，裸 ALTER 直接抛
+    // `duplicate column name`——整个本地库从此打不开。与 migrateV7 同一守卫。
+    const cols = this.db.prepare('PRAGMA table_info(switch_events)').all() as { name: string }[];
+    if (!cols.some((c) => c.name === 'schema_version')) {
+      this.db.exec("ALTER TABLE switch_events ADD COLUMN schema_version TEXT NOT NULL DEFAULT 'v1'");
+    }
   }
 
   private migrateV5(): void {
@@ -770,13 +787,21 @@ export class Store {
    * 全局 40 条、单会话 3 条、session id 前缀 10 条都是硬上限，消费方不能把截断当成全部。
    */
   searchMessagesWithMeta(query: string, cwd?: string): SearchResult {
-    const q = query.trim();
+    const q = normalizeQueryWhitespace(query);
     if (!q) return { hits: [], truncated: false, perSessionCapped: false, idPrefixCapped: false };
     const normalized = cwd ? this.normCwd(cwd) : undefined;
     // 顺手支持按原生 session id（或其前缀）找会话：用户手里常只有 id，正文里搜不到
     const byId = this.searchSessionIdPrefix(q, normalized);
-    const capped = capPerSession([...byId.hits, ...this.searchIndexText(q, normalized)]);
-    return { hits: capped.hits, truncated: capped.truncated, perSessionCapped: capped.perSessionCapped, idPrefixCapped: byId.capped };
+    const text = this.searchIndexText(q, normalized);
+    const capped = capPerSession([...byId.hits, ...text.hits]);
+    return {
+      hits: capped.hits,
+      truncated: capped.truncated,
+      perSessionCapped: capped.perSessionCapped,
+      idPrefixCapped: byId.capped,
+      // 候选集撞上 SCAN_LIMIT：可能还有别的会话命中没被读到（见 SearchResult.candidatesSaturated）
+      ...(text.saturated ? { candidatesSaturated: true } : {}),
+    };
   }
 
   /**
@@ -790,7 +815,9 @@ export class Store {
    * 只用来补一句说明：查不出来时调用方应当照常给结果，不能因为这条补充查询失败而遮住命中。
    */
   searchElsewhere(query: string, cwd: string): SearchElsewhere[] {
-    const q = query.trim();
+    // 与 searchMessagesWithMeta 同一套空白归一：两处口径不一致时，「本目录搜不到」的补充
+    // 查询会与主查询给出不同的结论（一个说别处有、一个说别处也没有）
+    const q = normalizeQueryWhitespace(query);
     if (!q) return [];
     const normalized = this.normCwd(cwd);
     const counts = new Map<string, number>();
@@ -806,7 +833,10 @@ export class Store {
           .all(normalized, `${q.toLowerCase()}%`) as { cwd: string }[],
       );
     }
-    const textRows = ([...q].length < 3
+    // 短语与主查询同一套构造（引号替换后再折叠空白），否则「本目录 0 条、别处有」的
+    // 补充说明会在带引号 / 空白的查询上与主查询给出不同结论
+    const phrase = [...q].length < 3 ? null : ftsPhrase(q);
+    const textRows = (phrase === null
       ? this.db
           .prepare(
             `SELECT cwd FROM messages_fts WHERE cwd<>? AND text LIKE ? ESCAPE '\\' LIMIT ${SCAN_LIMIT}`,
@@ -814,7 +844,7 @@ export class Store {
           .all(normalized, `%${q.replace(/[\\%_]/g, (c) => `\\${c}`)}%`)
       : this.db
           .prepare(`SELECT cwd FROM messages_fts WHERE cwd<>? AND messages_fts MATCH ? LIMIT ${SCAN_LIMIT}`)
-          .all(normalized, `"${q.replace(/"/g, ' ')}"`)) as { cwd: string }[];
+          .all(normalized, phrase)) as { cwd: string }[];
     bump(textRows);
     return [...counts.entries()]
       .map(([dir, hits]) => ({ cwd: dir, hits }))
@@ -844,13 +874,17 @@ export class Store {
     };
   }
 
-  private searchIndexText(query: string, cwd?: string): SearchHit[] {
+  private searchIndexText(query: string, cwd?: string): { hits: SearchHit[]; saturated: boolean } {
     cwd = cwd ? this.normCwd(cwd) : undefined;
-    const q = query.trim();
-    if (!q) return [];
+    const q = normalizeQueryWhitespace(query);
+    if (!q) return { hits: [], saturated: false };
     // trigram 分词最短要 3 个字符；更短的查询（中文两字词如「登录」）退化为 LIKE 子串匹配
-    if ([...q].length < 3) return this.searchShort(q, cwd);
-    const match = `"${q.replace(/"/g, ' ')}"`;
+    if ([...q].length < 3) return { hits: this.searchShort(q, cwd), saturated: false };
+    // 索引写入时正文被 `\s+` 折成单个空格；查询侧不做同样的归一，「按原文粘贴」的多行
+    // 片段（`foo\n  bar`）会被当成一个含换行的短语，命中 0 条——而正文里明明有 `foo bar`。
+    // 归一必须在包引号**之前**做，且保留用户自己的引号语义（内部引号仍按原有规则换成空格）。
+    const match = ftsPhrase(q);
+    if (match === null) return { hits: [], saturated: false };
     const sql = cwd
       ? `SELECT session_id, provider, cwd, file_path, snippet(messages_fts, 0, '[', ']', '…', 10) AS snippet
          FROM messages_fts WHERE messages_fts MATCH ? AND cwd=? LIMIT ${SCAN_LIMIT}`
@@ -865,14 +899,17 @@ export class Store {
       file_path: string;
       snippet: string;
     }[];
-    // 截断统一在 searchMessagesWithMeta 里做，这里只负责取候选
-    return rows.map((r) => ({
-      sessionId: r.session_id,
-      provider: r.provider,
-      cwd: r.cwd,
-      filePath: r.file_path,
-      snippet: r.snippet,
-    }));
+    // 截断统一在 searchMessagesWithMeta 里做，这里只负责取候选；撞上 LIMIT 说明候选可能不全
+    return {
+      hits: rows.map((r) => ({
+        sessionId: r.session_id,
+        provider: r.provider,
+        cwd: r.cwd,
+        filePath: r.file_path,
+        snippet: r.snippet,
+      })),
+      saturated: rows.length >= SCAN_LIMIT,
+    };
   }
 
   /** 不足 3 字符的查询：FTS5 trigram 无法命中，直接对索引文本做子串匹配 */
@@ -1437,11 +1474,42 @@ function capPerSession(hits: SearchHit[]): Pick<SearchResult, 'hits' | 'truncate
 }
 
 function excerpt(text: string, q: string): string {
-  const at = text.toLowerCase().indexOf(q.toLowerCase());
+  // 索引里的文本是折叠过空白的；查询同样归一后再找位置，否则多行片段永远对不上、只能退成
+  // 「取开头 80 字符」，高亮消失、片段看似无关
+  const needle = normalizeQueryWhitespace(q);
+  const hay = text.toLowerCase();
+  const at = hay.indexOf(needle.toLowerCase());
   if (at < 0) return text.slice(0, 80);
   const start = Math.max(0, at - 20);
-  const end = Math.min(text.length, at + q.length + 20);
-  return `${start > 0 ? '…' : ''}${text.slice(start, at)}[${text.slice(at, at + q.length)}]${text.slice(at + q.length, end)}${end < text.length ? '…' : ''}`;
+  const end = Math.min(text.length, at + needle.length + 20);
+  return `${start > 0 ? '…' : ''}${text.slice(start, at)}[${text.slice(at, at + needle.length)}]${text.slice(at + needle.length, end)}${end < text.length ? '…' : ''}`;
+}
+
+/**
+ * 查询侧与索引写入侧对齐的空白归一（2026-11-12，第五十三轮）。
+ *
+ * `reindexSession()` 写入时把正文 `\s+` 折成单个空格；查询侧以前只 `trim()`，
+ * 于是「按原文粘贴」的多行片段（`foo\n    bar`）会被当成含换行的短语去 MATCH，
+ * 命中 0 条——索引里明明白白存着 `foo bar`。`searchShort` 的 LIKE 与
+ * `excerpt()` 的高亮位置同理：不归一就永远对不上。
+ *
+ * 只折叠空白，不改其它字符：用户显式写的引号仍按原有规则（MATCH 路径把内部引号替换成空格），
+ * 单引号 / 反斜杠也不动——SQL 参数是绑定值，不需要转义。
+ */
+function normalizeQueryWhitespace(query: string): string {
+  return query.replace(/\s+/g, ' ').trim();
+}
+
+/**
+ * 把归一后的查询包成 FTS5 短语。引号先换成空格，否则 `"他说 "hello world""` 会在短语
+ * 内部再出现引号（`fts5: syntax error`）；替换完还要再归一一次，因为 `a" b` 换出的
+ * 连续空格会让短语变成 `"a  b"`——FTS5 短语按字面匹配，前导 / 尾随 / 连续空格都算字符，
+ * 实测 `" hello world "` 命中 0 条而 `"hello world"` 命中 1 条。折叠不出内容时返回 null
+ * （调用方按「无结果」处理，且不要拿空短语去 MATCH——`""` 是语法错误）。
+ */
+function ftsPhrase(query: string): string | null {
+  const inner = query.replace(/"/g, ' ').replace(/\s+/g, ' ').trim();
+  return inner ? `"${inner}"` : null;
 }
 
 type SessionLocationRow = {
