@@ -10,6 +10,7 @@ import {
   WATCH_CONTEXT_DISCLOSURE_PREFIX,
 } from '../../core/rich.js';
 import type { ProcessEvent, SessionRef, TokenUsage, UnifiedTurn } from '../../core/types.js';
+import { isoFromEpochMs } from '../../core/time.js';
 
 export async function parsePiSession(ref: SessionRef): Promise<UnifiedTurn[]> {
   const raw = await readFile(ref.filePath, 'utf8');
@@ -77,7 +78,8 @@ export async function parsePiSession(ref: SessionRef): Promise<UnifiedTurn[]> {
       typeof r.timestamp === 'string'
         ? r.timestamp
         : typeof msg.timestamp === 'number'
-          ? new Date(msg.timestamp).toISOString()
+          ? // 越界数值（1e30 / 单位写错）只让这一条消息失去时间戳，不能让整条会话解析抛错
+            isoFromEpochMs(msg.timestamp)
           : '';
     // pi 的 UserMessage.content 类型是 `string | (TextContent | ImageContent)[]`（pi-ai 的 types.ts），
     // 纯字符串以前被 `Array.isArray ? … : []` 折成空数组，整条用户消息连同内容消失。

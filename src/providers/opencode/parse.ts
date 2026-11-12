@@ -1,5 +1,6 @@
 import { DatabaseSync } from 'node:sqlite';
 import { normalizeUserText, OPENCODE_COMPACTION_SUMMARY_PREFIX } from '../../core/rich.js';
+import { isoFromEpochMs } from '../../core/time.js';
 import type { ProcessEvent, SessionRef, TokenUsage, UnifiedTurn } from '../../core/types.js';
 import { detectOpencodeLayout, opencodeDbPath, opencodeDbSqliteError, probeOpencodeDbFile } from './paths.js';
 
@@ -86,7 +87,7 @@ function filePartToEvent(part: OpencodePartData, time: number): ProcessEvent | n
   const placeholder = `[附件：${mime}${size}${name}]`;
   return {
     kind: 'text',
-    timestamp: new Date(time).toISOString(),
+    timestamp: isoFromEpochMs(time),
     summary: placeholder,
     detail: placeholder,
     provider: 'opencode',
@@ -149,7 +150,7 @@ function partToEvents(part: OpencodePartData, baseTime: number): ProcessEvent[] 
   if (isReasoningPart(part)) {
     events.push({
       kind: 'thinking',
-      timestamp: new Date(baseTime).toISOString(),
+      timestamp: isoFromEpochMs(baseTime),
       detail: part.text ?? '',
       summary: part.text ?? '',
       provider: 'opencode',
@@ -159,7 +160,7 @@ function partToEvents(part: OpencodePartData, baseTime: number): ProcessEvent[] 
     const input = part.state?.input ?? {};
     events.push({
       kind: 'tool_call',
-      timestamp: new Date(baseTime).toISOString(),
+      timestamp: isoFromEpochMs(baseTime),
       name: part.tool ?? 'tool',
       callId,
       input,
@@ -169,7 +170,7 @@ function partToEvents(part: OpencodePartData, baseTime: number): ProcessEvent[] 
     if (part.state?.output !== undefined) {
       events.push({
         kind: 'tool_result',
-        timestamp: new Date(baseTime).toISOString(),
+        timestamp: isoFromEpochMs(baseTime),
         callId,
         detail: typeof part.state.output === 'string' ? part.state.output : JSON.stringify(part.state.output),
         summary: typeof part.state.output === 'string' ? part.state.output : JSON.stringify(part.state.output).slice(0, 200),
@@ -190,7 +191,7 @@ function messageToTurn(
   if (role !== 'user' && role !== 'assistant') return null;
 
   const baseTime = data?.time?.created ?? msg.time_created;
-  const timestamp = new Date(baseTime).toISOString();
+  const timestamp = isoFromEpochMs(baseTime);
 
   const textParts: string[] = [];
   const events: ProcessEvent[] = [];
@@ -333,7 +334,7 @@ function v2UserTurn(row: V2MessageRow, data: V2MessageData): UnifiedTurn | null 
   const normalized = normalizeUserText(raw);
   if (!normalized) return null;
   const time = typeof data.time?.created === 'number' ? data.time.created : row.time_created;
-  return { role: 'user', text: normalized, timestamp: new Date(time).toISOString(), provider: 'opencode' };
+  return { role: 'user', text: normalized, timestamp: isoFromEpochMs(time), provider: 'opencode' };
 }
 
 function v2AssistantTurn(
@@ -342,7 +343,7 @@ function v2AssistantTurn(
   unknown: Map<string, number>,
 ): UnifiedTurn | null {
   const time = typeof data.time?.created === 'number' ? data.time.created : row.time_created;
-  const timestamp = new Date(time).toISOString();
+  const timestamp = isoFromEpochMs(time);
   const items: V2ContentItem[] =
     typeof data.content === 'string' ? [{ type: 'text', text: data.content }] : Array.isArray(data.content) ? data.content : [];
   const texts: string[] = [];
@@ -390,7 +391,7 @@ function v2AssistantTurn(
 
 /** 非对话事件 → ProcessEvent[]；返回 null 表示这个 type 不在已记录的样本里 */
 function v2AuxEvents(type: string, data: V2MessageData, time: number): ProcessEvent[] | null {
-  const timestamp = new Date(time).toISOString();
+  const timestamp = isoFromEpochMs(time);
   switch (type) {
     case 'shell': {
       const command = typeof data.command === 'string' ? data.command : '';
@@ -533,7 +534,7 @@ function parseOpencodeV2Turns(db: DatabaseSync, sessionId: string): UnifiedTurn[
       ...(last.events ?? []),
       {
         kind: 'text',
-        timestamp: new Date(lastTime || Date.now()).toISOString(),
+        timestamp: isoFromEpochMs(lastTime || Date.now()),
         summary: `[OpenCode 2.x 有 ${total} 条未识别事件，未并入对话]`,
         detail: `${describeCounts(unknown)}；Watch 只按第三方记录的 2.x 测试样本识别 user / assistant / shell / system / synthetic / compaction / model-switched，其余原样跳过，不猜含义`,
         provider: 'opencode',

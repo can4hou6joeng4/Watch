@@ -1,5 +1,6 @@
 import { readFile } from 'node:fs/promises';
 import { asJsonObject, parseJsonObject } from '../../core/jsonl.js';
+import { isoFromEpochMs } from '../../core/time.js';
 import { ensureAssistant, normalizeUserText, pushEvent, stripEmptyEvents, summarize } from '../../core/rich.js';
 import type { ProcessEvent, SessionRef, TokenUsage, UnifiedTurn } from '../../core/types.js';
 
@@ -32,7 +33,8 @@ export async function parseKimiSession(ref: SessionRef): Promise<UnifiedTurn[]> 
     if (!r) continue;
     const type = r.type;
     const time = typeof r.time === 'number' ? r.time : undefined;
-    const timestamp = time ? new Date(time).toISOString() : '';
+    // 越界数值（1e30 / 单位写错）只让这一条记录失去时间戳，不能让整条会话解析抛错
+    const timestamp = time ? isoFromEpochMs(time) : '';
 
     if (type === 'turn.prompt' || type === 'turn.steer') {
       const text = extractUserText(r);
