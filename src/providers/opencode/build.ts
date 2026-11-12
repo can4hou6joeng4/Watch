@@ -478,13 +478,17 @@ async function writeOpencodeTurns(
     }
     let lastUserMessageId = '';
     const existingUserIds: string[] = [];
+    let lastMessageTime = 0;
     if (into && !opts?.replace) {
-      const rows = db.prepare('SELECT id, data FROM message WHERE session_id = ? ORDER BY time_created, id').all(ref.sessionId) as { id: string; data: string }[];
+      const rows = db.prepare('SELECT id, time_created, data FROM message WHERE session_id = ? ORDER BY time_created, id').all(ref.sessionId) as { id: string; time_created: number; data: string }[];
       for (const r of rows) {
+        // 追加写入必须排在既有消息之后：来源增量即使来自更早创建的会话，也不能按旧时间戳插回目标历史前面
+        if (typeof r.time_created === 'number' && Number.isFinite(r.time_created) && r.time_created > lastMessageTime) {
+          lastMessageTime = r.time_created;
+        }
         try { if ((JSON.parse(r.data) as { role?: string }).role === 'user') existingUserIds.push(r.id); } catch { /* ignore */ }
       }
     }
-    let lastMessageTime = 0;
     let idSeq = 1;
     const nextId = (prefix: string, time: number) => sortableId(prefix, time, idSeq++);
 
