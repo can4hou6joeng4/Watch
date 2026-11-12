@@ -1,4 +1,5 @@
 import { DatabaseSync } from 'node:sqlite';
+import { escapeControlChars } from '../../core/display.js';
 import { normalizeUserText, OPENCODE_COMPACTION_SUMMARY_PREFIX, OPENCODE_SYNTHETIC_TEXT_PREFIX, WATCH_CONTEXT_DISCLOSURE_PREFIX } from '../../core/rich.js';
 import { isoFromEpochMs } from '../../core/time.js';
 import type { ProcessEvent, SessionRef, TokenUsage, UnifiedTurn } from '../../core/types.js';
@@ -303,8 +304,7 @@ function messageToTurn(
       if (partEvent) events.push(partEvent);
       events.push(...partToEvents(part, partTime));
     } else {
-      // text / reasoning / tool / file 之外的类型（subtask / agent / retry 等）不搬运内容，
-      // 但必须把类型与条数交给最后一条 turn 披露，不能让它看起来从未存在。
+      // 已知记账类型已在上方排除；其余未知类型不猜内容，按类型与条数汇入上下文披露。
       bumpCount(unknown, `part:${partType}`);
     }
   }
@@ -440,8 +440,25 @@ function bumpCount(map: Map<string, number>, key: string): void {
 function describeCounts(map: Map<string, number>): string {
   return [...map.entries()]
     .sort((a, b) => b[1] - a[1])
-    .map(([k, n]) => `${k} × ${n}`)
+    .map(([k, n]) => `${escapeControlChars(k)} × ${n}`)
     .join('、');
+}
+
+/** 未知数据通过统一上下文通道披露；不改正文，不让空正文工具助手轮承载文本。 */
+function appendUnknownDisclosure(turns: UnifiedTurn[], summary: string, detail: string): void {
+  const carrier = [...turns].reverse().find((turn) => turn.role === 'user' || turn.text.trim());
+  if (!carrier) return;
+  carrier.events = [
+    ...(carrier.events ?? []),
+    {
+      kind: 'text',
+      timestamp: carrier.timestamp,
+      summary: `${WATCH_CONTEXT_DISCLOSURE_PREFIX}${summary}]`,
+      // findContextDisclosure 优先消费带前缀的 detail，类型与计数也必须跟着进入 warnings / prompt。
+      detail: `${WATCH_CONTEXT_DISCLOSURE_PREFIX}${summary}；${detail}]`,
+      provider: 'opencode',
+    },
+  ];
 }
 
 function v2ToolResultText(state: V2ToolState | undefined): string | undefined {
@@ -627,7 +644,6 @@ function parseOpencodeV2Turns(db: DatabaseSync, sessionId: string): UnifiedTurn[
   const pending: ProcessEvent[] = [];
   const unknown = new Map<string, number>();
   const partsByMessage = readV2Parts(db, sessionId, unknown);
-  let lastTime = 0;
 
   // 事件属于「模型处理这一轮的过程」，优先挂到它之后的 assistant turn；
   // 上一条还是 user（或还没有 turn）时先暂存，别把工具过程挂到用户提问上。
@@ -651,7 +667,6 @@ function parseOpencodeV2Turns(db: DatabaseSync, sessionId: string): UnifiedTurn[
   for (const row of rows) {
     const data = parseJson<V2MessageData>(row.data);
     const time = typeof data?.time?.created === 'number' ? data.time.created : row.time_created;
-    if (time > lastTime) lastTime = time;
     if (!data) {
       bumpCount(unknown, `${row.type || '（空类型）'}（data 无法解析）`);
       continue;
@@ -698,21 +713,14 @@ function parseOpencodeV2Turns(db: DatabaseSync, sessionId: string): UnifiedTurn[
     pending.length = 0;
   }
 
-  // 未识别的事件类型不能静默消失：把条数与类型写进最后一条 turn 的事件里。
-  // 没有任何对话 turn 时无处承载（见边界说明），只能返回 []——这一档等同于「没有可搬运的对话」。
-  if (unknown.size > 0 && turns.length > 0) {
+  // 统一披露必须独立于过程记录展示与选窗；无安全载体时不造新轮次。
+  if (unknown.size > 0) {
     const total = [...unknown.values()].reduce((a, b) => a + b, 0);
-    const last = turns.at(-1)!;
-    last.events = [
-      ...(last.events ?? []),
-      {
-        kind: 'text',
-        timestamp: isoFromEpochMs(lastTime || Date.now()),
-        summary: `[OpenCode 2.x 有 ${total} 条未识别事件，未并入对话]`,
-        detail: `${describeCounts(unknown)}；Watch 只按第三方记录的 2.x 测试样本识别 user / assistant / shell / system / synthetic / compaction / model-switched，其余原样跳过，不猜含义`,
-        provider: 'opencode',
-      },
-    ];
+    appendUnknownDisclosure(
+      turns,
+      `OpenCode 2.x 有 ${total} 条未识别事件，未并入对话`,
+      `${describeCounts(unknown)}；Watch 只按第三方记录的 2.x 测试样本识别 user / assistant / shell / system / synthetic / compaction / model-switched，其余原样跳过，不猜含义`,
+    );
   }
   return turns;
 }
@@ -763,9 +771,7 @@ export async function parseOpencodeSession(ref: SessionRef): Promise<UnifiedTurn
       const unknown = new Map<string, number>();
       const stats: V1ParseStats = { ignoredTexts: 0 };
       const turns: UnifiedTurn[] = [];
-      let lastTime = 0;
       for (const msg of messages) {
-        if (msg.time_created > lastTime) lastTime = msg.time_created;
         const turn = messageToTurn(msg, partsByMessage.get(msg.id) ?? [], turns.at(-1) ?? null, unknown, stats);
         if (turn) turns.push(turn);
       }
@@ -796,24 +802,16 @@ export async function parseOpencodeSession(ref: SessionRef): Promise<UnifiedTurn
           ];
         }
       }
-      // 与 2.x 同一披露面：坏 JSON / 未知类型不能静默消失，把条数与类型写进最后一条 turn。
-      // 没有任何可搬运的对话时无处承载（返回 [] 会让调用方按「0 轮」拒绝或披露），这一档
-      // 等同于「没有可交接的内容」，边界与 v2 一致。
-      if (unknown.size > 0 && turns.length > 0) {
+      // 与 2.x 同一披露面：类型与条数进入 prompt 头部 / warnings，不依赖过程记录展开。
+      // 无安全载体时不凭空造 turn；零轮仍由调用方拒绝或披露。
+      if (unknown.size > 0) {
         const total = [...unknown.values()].reduce((a, b) => a + b, 0);
-        const last = turns.at(-1)!;
-        last.events = [
-          ...(last.events ?? []),
-          {
-            kind: 'text',
-            timestamp: isoFromEpochMs(lastTime || Date.now()),
-            summary: `[OpenCode 有 ${total} 处未识别或无法解析的数据，未并入对话]`,
-            detail:
-              `${describeCounts(unknown)}；Watch 只识别 user / assistant 消息与 text / reasoning / tool / file 内容，` +
-              'step-start / step-finish / patch / snapshot / agent / subtask / retry 是原生步骤、快照、子代理与重试记账，compaction 是压缩标记，都不并入对话；其余原样跳过，不猜含义',
-            provider: 'opencode',
-          },
-        ];
+        appendUnknownDisclosure(
+          turns,
+          `OpenCode 有 ${total} 处未识别或无法解析的数据，未并入对话`,
+          `${describeCounts(unknown)}；Watch 只识别 user / assistant 消息与 text / reasoning / tool / file 内容，` +
+            'step-start / step-finish / patch / snapshot / agent / subtask / retry 是原生步骤、快照、子代理与重试记账，compaction 是压缩标记，都不并入对话；其余原样跳过，不猜含义',
+        );
       }
       sealed = true;
       return turns;
