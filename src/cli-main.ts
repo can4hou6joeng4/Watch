@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { stat } from 'node:fs/promises';
 import path from 'node:path';
-import { chainsElsewhereHint, chainsSameDirectoryHint, isStoreError, SEARCH_MAX_HITS, searchElsewhereHint, searchSameDirectoryHint, Store, defaultDbPath, describeStoreErrorReason, describeStoreOpenFailure } from './core/store.js';
+import { chainsElsewhereHint, chainsSameDirectoryHint, isStoreError, SEARCH_MAX_HITS, SEARCH_SCAN_LIMIT, searchElsewhereHint, searchSameDirectoryHint, Store, defaultDbPath, describeStoreErrorReason, describeStoreOpenFailure } from './core/store.js';
 import type { Chain, ChainsElsewhere, SearchElsewhere } from './core/store.js';
 import { describeFindings } from './core/findings.js';
 import { adoptIntoChain, blockedHint, chainStatus, chainUsage, collectTips, createChainSession, currentChainShiftNote, describeSourceChangedDuringPrompt, emptyChainBindHint, handoff, HandoffBlockedError, notCurrentChainWarning, pickLatestTip, rebindHint, snapshotSourceState, storeUnavailableWarning } from './core/handoff.js';
@@ -2986,7 +2986,7 @@ async function cmdSearch(cwd: string, json: boolean, query: string, resetIndex =
     const unattributableStats = await collectUnattributable(listAdapters());
     for (const stat of unattributableStats) warnings.push(unattributableWarning(stat, cwd));
     // 三种上限各自独立：全局 40 条、单会话 3 条、session id 前缀 10 条；只说「truncated」会混淆是哪一种
-    const { hits, truncated, perSessionCapped, idPrefixCapped } = store.searchMessagesWithMeta(query, cwd);
+    const { hits, truncated, perSessionCapped, idPrefixCapped, candidatesSaturated } = store.searchMessagesWithMeta(query, cwd);
     // 零命中时先把「本目录之外的命中」查出来：它决定下一步给什么，也决定要不要再问 cwdAliasHint。
     // 同一个目录的另一种写法（软链、/var 与 /private/var 这类前缀）在索引里是另一个 cwd 字符串，
     // `searchElsewhere()` 会把它一起返回——那不能说成「其它目录」，而索引行自己的 cwd 就是可直接照抄的
@@ -3049,6 +3049,7 @@ async function cmdSearch(cwd: string, json: boolean, query: string, resetIndex =
         ...(truncated ? { truncated: true } : {}),
         ...(perSessionCapped ? { perSessionCapped: true } : {}),
         ...(idPrefixCapped ? { idPrefixCapped: true } : {}),
+        ...(candidatesSaturated ? { candidatesSaturated: true } : {}),
         ...(unavailable.length ? { unavailable } : {}),
         ...(unattributableStats.length ? { unattributable: unattributableJson(unattributableStats) } : {}),
         ...(emptied.length ? { emptied: emptiedJson(emptied) } : {}),
@@ -3086,6 +3087,13 @@ async function cmdSearch(cwd: string, json: boolean, query: string, resetIndex =
     }
     if (idPrefixCapped) {
       console.error('提示: session id 前缀命中超过 10 个，只列出前 10 个，可用更长的 id 前缀缩小范围');
+    }
+    if (candidatesSaturated) {
+      // 与前两条不同：前两条说的是「已取到的结果里截了多少」，这条说「候选集本身可能被别的会话占满了」，
+      // 另一些会话的命中压根没进候选，输出里看不到——不披露就会被读成「只在这些会话里出现过」
+      console.error(
+        `提示: 候选命中超过扫描上限 ${SEARCH_SCAN_LIMIT} 条，可能被单个会话占满，其它会话里的匹配没有进入结果；可用更具体的关键词缩小范围`,
+      );
     }
   } catch (error) {
     // 查询类命令同样会撞上坏库（`search_index` 缺列、`messages_fts` 缺表…）：
