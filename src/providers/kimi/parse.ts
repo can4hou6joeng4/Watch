@@ -1,7 +1,7 @@
 import { readFile } from 'node:fs/promises';
 import { asJsonObject, parseJsonObject } from '../../core/jsonl.js';
 import { isoFromEpochMs } from '../../core/time.js';
-import { ensureAssistant, normalizeUserText, pushEvent, stripEmptyEvents, summarize } from '../../core/rich.js';
+import { ensureAssistant, KIMI_COMPACTION_SUMMARY_PREFIX, normalizeUserText, pushEvent, stripEmptyEvents, summarize, WATCH_CONTEXT_DISCLOSURE_PREFIX } from '../../core/rich.js';
 import type { ProcessEvent, SessionRef, TokenUsage, UnifiedTurn } from '../../core/types.js';
 
 /**
@@ -16,13 +16,27 @@ import type { ProcessEvent, SessionRef, TokenUsage, UnifiedTurn } from '../../co
  *   - tool.result → tool_result event
  * - turn.ended → assistant turn 结束
  *
- * 跳过：context.append_message（与 turn.prompt 重复）、llm.*、usage.*、
- * permission.*、plugin.*、token_counting.*、interaction.* 等内部事件。
+ * - context.append_message → 旧格式消息回退；现代用户回声以已接受的 turn.prompt 为准
+ * - context.apply_compaction → 有可读摘要时还原带来源前缀的用户轮，否则只披露、不设裁剪边界
+ *
+ * 跳过：llm.*、permission.*、plugin.*、token_counting.*、interaction.* 等内部事件。
  */
 export async function parseKimiSession(ref: SessionRef): Promise<UnifiedTurn[]> {
   const raw = await readFile(ref.filePath, 'utf8');
   const turns: UnifiedTurn[] = [];
   let state: 'idle' | 'user' | 'assistant' = 'idle';
+  // 1.4 的 turn.prompt 才是用户输入的权威记录；出现之后，append_message 里的用户消息
+  // 只是同一句提问的回声（可能缺附件占位），再收一次就会变成连续两个用户轮。
+  let sawTurnPrompt = false;
+  const loopTextTurns = new Set<UnifiedTurn>();
+  let unreadableCompactions = 0;
+  // 旧格式（1.0）里 Watch 没有解析的记录：非 user / assistant 的消息，以及带 toolCalls 的助手消息。
+  // 这些记录里的工具调用不会进入交接，必须计数披露，不能让人以为旧日志已被完整还原。
+  let unsupportedLegacy = 0;
+  // 已接受的 turn.prompt 正文：用来判断 1.4 日志里被跳过的用户 append_message 是不是回声。
+  // 正常 1.4 日志里回声与 prompt 同文，不冒披露；对不上号的才说明「可能有用户消息没并入」。
+  const promptUserTexts = new Set<string>();
+  let unmatchedLegacyUsers = 0;
   // content.part 里认不出的片段类型按 turn 计数，循环结束后统一写进正文（见下方注释）
   const unknownParts = new Map<UnifiedTurn, Map<string, number>>();
 
@@ -41,12 +55,61 @@ export async function parseKimiSession(ref: SessionRef): Promise<UnifiedTurn[]> 
       if (extracted === null) continue;
       const normalized = normalizeUserText(extracted.text);
       if (normalized === null) continue;
+      sawTurnPrompt = true;
+      promptUserTexts.add(normalized);
       turns.push({
         role: 'user',
         text: normalized,
         timestamp,
         ...(extracted.events.length ? { events: extracted.events } : {}),
       });
+      state = 'user';
+      continue;
+    }
+
+    if (type === 'context.append_message') {
+      // Kimi 1.0 的助手回复（以及迁移过来的旧日志）只有这条记录；1.4 把可见文本流成
+      // `context.append_loop_event`。以前这里一律当 turn.prompt 的重复跳过，于是 1.0 会话
+      // 只剩提问、模型看起来从没回答过（上游 catchup 明确写了 assistant records only
+      // occur on 1.0 logs）。助手消息作为回退读取；用户消息只在 origin 缺省（1.0）或
+      // origin.kind = "user" 时接受，并跳过系统注入 / system-reminder。
+      const message = asRecord(r.message);
+      const role = asString(message?.role);
+      if (role !== 'user' && role !== 'assistant') {
+        // 旧格式附录里还有 role 为 tool 之类的消息，Watch 没有解析它们——计数披露，
+        // 不能让人把「工具历史不在交接里」误当成「旧日志本来就没有工具调用」。
+        unsupportedLegacy += 1;
+        continue;
+      }
+      const legacyToolCalls = Array.isArray(message?.toolCalls)
+        ? message.toolCalls.length
+        : Array.isArray(message?.tool_calls)
+          ? message.tool_calls.length
+          : 0;
+      if (legacyToolCalls > 0) unsupportedLegacy += 1;
+      const extracted = extractAppendMessage(message);
+      const body = extracted.text.trim() ? extracted.text : '';
+      if (!body && extracted.unknown.size === 0) continue;
+      const text = [body, unknownBlockNote(extracted.unknown)].filter(Boolean).join('\n\n');
+      if (role === 'assistant') {
+        const last = ensureAssistant(turns, timestamp, 'kimi');
+        // 1.4 日志可能两者并存：同一段回答不能因回退读取再写一遍
+        if (loopTextTurns.has(last) && last.text === text) continue;
+        last.text = last.text ? `${last.text}\n\n${text}` : text;
+        state = 'assistant';
+        continue;
+      }
+      const origin = message?.origin ?? r.origin;
+      if (origin !== undefined && promptOriginKind(origin) !== 'user') continue;
+      // 1.4 的用户消息回声以 turn.prompt 为准（含图片占位）；不能因正文不完全同文就再收一轮。
+      if (sawTurnPrompt) {
+        const echo = body ? normalizeUserText(body) : null;
+        if (echo !== null && !promptUserTexts.has(echo)) unmatchedLegacyUsers += 1;
+        continue;
+      }
+      const normalized = normalizeUserText(text);
+      if (normalized === null) continue;
+      turns.push({ role: 'user', text: normalized, timestamp });
       state = 'user';
       continue;
     }
@@ -67,6 +130,26 @@ export async function parseKimiSession(ref: SessionRef): Promise<UnifiedTurn[]> 
         counts.set(partType, (counts.get(partType) ?? 0) + 1);
         unknownParts.set(last, counts);
       });
+      if (event.type === 'content.part' && asRecord(event.part)?.type === 'text') loopTextTurns.add(last);
+      continue;
+    }
+
+    if (type === 'context.apply_compaction') {
+      // 官方 contextEvents.ts 同时接受 summary / contextSummary 字符串与旧版消息对象。
+      // 只有可读摘要才能作 --since-compact 的起点；空摘要只披露，避免切掉仍可用的历史。
+      const message = extractAppendMessage(asRecord(r.summary));
+      const summary = [r.contextSummary, r.summary, message.text]
+        .find((value): value is string => typeof value === 'string' && value.trim().length > 0);
+      if (!summary) {
+        unreadableCompactions += 1;
+        continue;
+      }
+      turns.push({
+        role: 'user',
+        text: `${KIMI_COMPACTION_SUMMARY_PREFIX}\n${summary}${unknownBlockNote(message.unknown) ? `\n\n${unknownBlockNote(message.unknown)}` : ''}`,
+        timestamp,
+      });
+      state = 'user';
       continue;
     }
 
@@ -90,6 +173,27 @@ export async function parseKimiSession(ref: SessionRef): Promise<UnifiedTurn[]> 
     const shown = [...counts.entries()].map(([t, n]) => (n > 1 ? `${t}×${n}` : t)).join('、');
     const note = `[Kimi 记录里有 ${total} 个未识别的消息片段（${shown}），Watch 暂不解析：这部分原始内容没有并入交接，需要时请在原生 Kimi 里查看]`;
     turn.text = [turn.text, note].filter((s) => s.trim()).join('\n\n');
+  }
+  if (unreadableCompactions > 0) {
+    const carrier = [...turns].reverse().find((turn) => turn.role === 'user' || turn.text.trim());
+    if (carrier) {
+      const text = `${WATCH_CONTEXT_DISCLOSURE_PREFIX}Kimi 有 ${unreadableCompactions} 条 context.apply_compaction 记录没有可读摘要；这部分摘要未并入交接，也不作为 --since-compact 的裁剪边界，请在原生 Kimi 中核对。]`;
+      pushEvent(carrier, { kind: 'text', summary: text, detail: text, timestamp: carrier.timestamp, provider: 'kimi' });
+    }
+  }
+  if (unsupportedLegacy > 0) {
+    const carrier = [...turns].reverse().find((turn) => turn.role === 'user' || turn.text.trim());
+    if (carrier) {
+      const text = `${WATCH_CONTEXT_DISCLOSURE_PREFIX}Kimi 旧格式日志里有 ${unsupportedLegacy} 条 context.append_message 记录 Watch 暂不解析（非 user / assistant 消息，或带工具调用的助手消息）；这些记录里的工具调用没有并入交接，需要时请在原生 Kimi 中核对。]`;
+      pushEvent(carrier, { kind: 'text', summary: text, detail: text, timestamp: carrier.timestamp, provider: 'kimi' });
+    }
+  }
+  if (unmatchedLegacyUsers > 0) {
+    const carrier = [...turns].reverse().find((turn) => turn.role === 'user' || turn.text.trim());
+    if (carrier) {
+      const text = `${WATCH_CONTEXT_DISCLOSURE_PREFIX}Kimi 日志里有 ${unmatchedLegacyUsers} 条旧格式用户消息（context.append_message）没能对应到任何 turn.prompt 记录，可能没有被并入交接；需要时请在原生 Kimi 中核对。]`;
+      pushEvent(carrier, { kind: 'text', summary: text, detail: text, timestamp: carrier.timestamp, provider: 'kimi' });
+    }
   }
   return stripEmptyEvents(turns);
 }
@@ -115,8 +219,45 @@ function asRecord(value: unknown): Record<string, unknown> | null {
   return asJsonObject(value);
 }
 
+/** `context.append_message.message`（1.0 / 迁移日志）的 content 块 → 文本与未识别块计数 */
+function extractAppendMessage(message: Record<string, unknown> | null): {
+  text: string;
+  unknown: Map<string, number>;
+} {
+  const unknown = new Map<string, number>();
+  const blocks = Array.isArray(message?.content) ? message.content : [];
+  const parts: string[] = [];
+  for (const block of blocks) {
+    const b = asRecord(block);
+    if (!b) {
+      unknown.set('（非对象内容块）', (unknown.get('（非对象内容块）') ?? 0) + 1);
+      continue;
+    }
+    if (b.type === 'text') {
+      const text = asString(b.text);
+      if (text) parts.push(text);
+      continue;
+    }
+    const key = asString(b.type) ?? '（空类型）';
+    unknown.set(key, (unknown.get(key) ?? 0) + 1);
+  }
+  return { text: parts.join('\n'), unknown };
+}
+
+function unknownBlockNote(counts: Map<string, number>): string {
+  if (counts.size === 0) return '';
+  const total = [...counts.values()].reduce((a, b) => a + b, 0);
+  const shown = [...counts.entries()].map(([t, n]) => (n > 1 ? `${t}×${n}` : t)).join('、');
+  return `[Kimi 记录里有 ${total} 个未识别的消息块（${shown}），Watch 暂不解析：这部分原始内容没有并入交接，需要时请在原生 Kimi 里查看]`;
+}
+
 function asString(value: unknown): string | null {
   return typeof value === 'string' && value.length > 0 ? value : null;
+}
+
+/** 官方当前协议用字符串 origin，旧版协议用 { kind }；两者都只接受显式 user。 */
+function promptOriginKind(origin: unknown): string | null {
+  return typeof origin === 'string' ? origin : asString(asRecord(origin)?.kind);
 }
 
 function asStringArray(value: unknown): string[] {
@@ -139,8 +280,7 @@ function extractUserInput(
   r: Record<string, unknown>,
   timestamp: string,
 ): { text: string; events: ProcessEvent[] } | null {
-  const origin = asRecord(r.origin);
-  if (asString(origin?.kind) !== 'user') return null;
+  if (promptOriginKind(r.origin) !== 'user') return null;
   const input = r.input;
   if (!Array.isArray(input)) return null;
   const parts: string[] = [];
