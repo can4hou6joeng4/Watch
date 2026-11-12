@@ -1,3 +1,4 @@
+import { asJsonObject, parseJsonObject } from '../../core/jsonl.js';
 import type { ProcessEvent } from '../../core/types.js';
 
 const MAX_DETAIL = 500;
@@ -29,10 +30,10 @@ function blockText(content: unknown): string {
   if (typeof content === 'string') return content;
   if (Array.isArray(content)) {
     return content
-      .map((b) => (typeof b === 'object' && b !== null && typeof (b as Record<string, unknown>).text === 'string'
-        ? (b as Record<string, unknown>).text as string
-        : ''))
-      .filter(Boolean)
+      .map((b) => asJsonObject(b))
+      .filter((b): b is Record<string, unknown> => b !== null)
+      .filter((b) => typeof b.text === 'string')
+      .map((b) => b.text as string)
       .join('\n');
   }
   return '';
@@ -45,20 +46,17 @@ function blockText(content: unknown): string {
  * - system（hook / thinking_tokens / init）与 result 行不产事件
  */
 export function claudeLineToProcessEvents(line: string): ProcessEvent[] {
-  let e: Record<string, unknown>;
-  try {
-    e = JSON.parse(line);
-  } catch {
-    return [];
-  }
-  if (e.type !== 'assistant' && e.type !== 'user') return [];
-  const content = (e.message as Record<string, unknown> | undefined)?.content;
+  // `null` / `[]` / 标量也是合法 JSON：以前在 try 之外读 `e.type`，流事件遇到 `'null'`
+  // 会抛未捕获 TypeError 中断整条流回调。
+  const e = parseJsonObject(line);
+  if (!e || (e.type !== 'assistant' && e.type !== 'user')) return [];
+  const content = asJsonObject(e.message)?.content;
   if (!Array.isArray(content)) return [];
 
   const events: ProcessEvent[] = [];
   for (const block of content) {
-    if (typeof block !== 'object' || block === null) continue;
-    const b = block as Record<string, unknown>;
+    const b = asJsonObject(block);
+    if (!b) continue;
     const base = { timestamp: stamp(), provider: 'claude' };
     switch (b.type) {
       case 'thinking': {
@@ -101,12 +99,8 @@ export function claudeResultFromStream(stdout: string): Record<string, unknown> 
   for (const line of stdout.split('\n')) {
     const trimmed = line.trim();
     if (!trimmed) continue;
-    try {
-      const e = JSON.parse(trimmed) as Record<string, unknown>;
-      if (e.type === 'result') result = e;
-    } catch {
-      continue;
-    }
+    const e = parseJsonObject(trimmed);
+    if (e?.type === 'result') result = e;
   }
   return result;
 }

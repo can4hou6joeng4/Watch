@@ -6,6 +6,7 @@ import { promisify } from 'node:util';
 import { digestFile } from '../../core/atomic.js';
 import type { FileDigest } from '../../core/atomic.js';
 import { describeEmptySessionFile, describePathReadFailureReason, isMissingPathError } from '../../core/read-text.js';
+import { asJsonObject, parseJsonObject } from '../../core/jsonl.js';
 import { escapeControlChars } from '../../core/display.js';
 import { SessionLookupFailureError } from '../adapter.js';
 import type { ProviderAdapter } from '../adapter.js';
@@ -93,17 +94,13 @@ export async function claudeSessionCwd(filePath: string): Promise<string | null>
 function cwdFromClaudeRaw(raw: string): string | null {
   for (const line of raw.split('\n').slice(0, 60)) {
     if (!line.trim()) continue;
-    let rec: Record<string, unknown>;
-    try {
-      rec = JSON.parse(line);
-    } catch {
-      continue;
-    }
+    // 顶层 null / 数组 / 标量不是记录：以前直接把 JSON.parse 结果当对象读 `rec.cwd`，
+    // 首行是 `null` 时 TypeError 会被外层 catch 讲成「路径读不出来」，与真实原因无关。
+    const rec = parseJsonObject(line);
+    if (!rec) continue;
     if (typeof rec.cwd === 'string' && rec.cwd) return rec.cwd;
-    const msg = rec.message;
-    if (typeof msg === 'object' && msg !== null && typeof (msg as { cwd?: unknown }).cwd === 'string') {
-      return (msg as { cwd: string }).cwd;
-    }
+    const msg = asJsonObject(rec.message);
+    if (typeof msg?.cwd === 'string') return msg.cwd;
   }
   return null;
 }
@@ -242,24 +239,24 @@ async function claudeFirstUserText(filePath: string): Promise<{ text: string | n
   if (content.length === 0) return { text: null, error: describeEmptySessionFile(filePath) };
   for (const line of content.split('\n')) {
     if (!line.trim()) continue;
-    try {
-      const record = JSON.parse(line) as Record<string, unknown>;
-      if (record.type !== 'user' || record.isMeta === true) continue;
-      const message = record.message as Record<string, unknown> | undefined;
-      const text =
-        typeof message?.content === 'string'
+    const record = parseJsonObject(line);
+    if (!record || record.type !== 'user' || record.isMeta === true) continue;
+    const message = asJsonObject(record.message);
+    // content 数组里可能有 null / 标量：逐项判对象，否则单个 null 元素会让整条
+    // 首条用户消息被 catch 吞掉，第二条消息错占预览。
+    const text =
+      typeof message?.content === 'string'
+        ? message.content
+        : Array.isArray(message?.content)
           ? message.content
-          : Array.isArray(message?.content)
-            ? (message.content as Record<string, unknown>[])
-                .filter((b) => b.type === 'text' && typeof b.text === 'string')
-                .map((b) => b.text as string)
-                .join(' ')
-            : '';
-      const clean = text.replace(/\s+/g, ' ').trim();
-      if (clean) return { text: clean.slice(0, 80) };
-    } catch {
-      continue;
-    }
+              .map((b) => asJsonObject(b))
+              .filter((b): b is Record<string, unknown> => b !== null)
+              .filter((b) => b.type === 'text' && typeof b.text === 'string')
+              .map((b) => b.text as string)
+              .join(' ')
+          : '';
+    const clean = text.replace(/\s+/g, ' ').trim();
+    if (clean) return { text: clean.slice(0, 80) };
   }
   return { text: null };
 }
