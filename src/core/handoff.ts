@@ -803,11 +803,11 @@ export async function chainUsage(
       provider: adapter.id,
       sessionId: ref.sessionId,
       usage,
-      // 只有数字存在时才说得上「这个数字偏少」：`usage` 为 null 的会话已经由上面几条
-      // 警告说清来源是读不出来还是原生没有用量，这里再挂一个行数只会提示一个不存在的数
-      ...(badUsage && usage ? { usageBadLines: badUsage.count } : {}),
+      // 即使当前一条都未读出有效数字（usage === null），只要文件里存在坏行也要保留行数，
+      // 否则消费方会把「全行损坏读不出」当成「原生无 usage 字段」
+      ...(badUsage ? { usageBadLines: badUsage.count } : {}),
     });
-    if (usage === null) totalMissingUsage += 1;
+    if (usage === null && !badUsage) totalMissingUsage += 1;
     if (usage) {
       total = {
         inputTokens: total.inputTokens + usage.inputTokens,
@@ -1250,6 +1250,7 @@ export async function handoff(
     );
   };
 
+  let chainBoundToTarget = false;
   if (history.length > 0) {
     // 链绑定：只认 switch_events 里绑定的会话对，同目录其它会话不串线
     let boundOther: SessionRef | null = null;
@@ -1274,12 +1275,18 @@ export async function handoff(
           );
         }
       }
+    } else if (pairedRef(history, targetId)) {
+      // 链上已显式绑定过 targetId（如 adopt / new 之后），且没有别的 provider 上链：
+      // 不能再落入同目录其它 provider 的 mtime 兜底，否则游离会话会覆盖或污染链上绑定
+      chainBoundToTarget = true;
     }
   }
 
   if (!sourceTip) {
-    const other = tips.find((t) => t.provider !== targetId);
-    sourceTip = mtimeTip.provider === targetId ? (other ?? null) : mtimeTip;
+    if (!chainBoundToTarget) {
+      const other = tips.find((t) => t.provider !== targetId);
+      sourceTip = mtimeTip.provider === targetId ? (other ?? null) : mtimeTip;
+    }
     // 自动挑来源时同样只能说「在能读出的那些里最新」：这一档的文件不属于任何目录，
     // `findLatestSession` 会跳过它们，而用户要交接的可能正是被跳过的那一条。
     // 只看**同一家**的统计：别家读不出归属的文件与这次交接无关，说出来只是噪音。
