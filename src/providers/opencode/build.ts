@@ -477,7 +477,6 @@ async function writeOpencodeTurns(
       db.prepare('DELETE FROM message WHERE session_id = ?').run(ref.sessionId);
     }
     let lastUserMessageId = '';
-    let userIndex = 0;
     const existingUserIds: string[] = [];
     if (into && !opts?.replace) {
       const rows = db.prepare('SELECT id, data FROM message WHERE session_id = ? ORDER BY time_created, id').all(ref.sessionId) as { id: string; data: string }[];
@@ -496,7 +495,6 @@ async function writeOpencodeTurns(
 
       if (turn.role === 'user') {
         const msgId = nextId('msg', messageTime);
-        userIndex += 1;
         lastUserMessageId = msgId;
         const msgData = buildUserMessageData({ time: messageTime, model: defaultModel(turn.provider) });
         db.prepare('INSERT INTO message (id, session_id, time_created, time_updated, data) VALUES (?, ?, ?, ?, ?)').run(msgId, ref.sessionId, messageTime, messageTime, msgData);
@@ -511,7 +509,11 @@ async function writeOpencodeTurns(
         continue;
       }
 
-      const parentId = lastUserMessageId || existingUserIds[userIndex - 1];
+      // 增量只含助手轮（来源只多出一条回复）时没有新的 user 轮可挂：
+      // 回退到目标既有最后一条 user 消息，否则 parentID 为空、official-export 会拒掉它。
+      // 原来的 `existingUserIds[userIndex - 1]` 永远取不到值——只要写过 user 轮，
+      // lastUserMessageId 就非空并先命中；批次以 assistant 开头时 userIndex 为 0，下标 -1 是 undefined。
+      const parentId = lastUserMessageId || existingUserIds[existingUserIds.length - 1];
       const model = defaultModel(turn.provider);
       const hasToolEvents = turn.events?.some((e) => e.kind === 'tool_call') ?? false;
       const hasText = turn.text.trim().length > 0;
