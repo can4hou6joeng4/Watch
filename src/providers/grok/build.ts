@@ -9,8 +9,8 @@ import path from 'node:path';
 import { writeFileAtomic } from '../../core/atomic.js';
 import { asJsonObject, parseJsonObject } from '../../core/jsonl.js';
 import { describePathReadFailureReason, emptySessionFileReasonFromStat, readTextOrEmpty } from '../../core/read-text.js';
-import { verifyWrittenTurns } from '../../core/verify.js';
-import { mergeConsecutiveAssistant } from '../../core/rich.js';
+import { verifyWrittenTurns, expectAttachmentPlaceholders } from '../../core/verify.js';
+import { assistantOnlyIncrementReason, mergeConsecutiveAssistant, userTurnTextForWrite } from '../../core/rich.js';
 import { parseGrokSession } from './parse.js';
 
 const execFileAsync = promisify(execFile);
@@ -103,17 +103,18 @@ function slugFromCwd(cwd: string): string {
   return `${base}-${hashCwd(cwd).slice(0, 8)}`;
 }
 
-async function readChatLines(filePath: string): Promise<ChatLine[]> {
+async function readRawChatLines(filePath: string): Promise<{ pieces: string[]; chatMsgCount: number }> {
   const raw = await readTextOrEmpty(filePath, ' chat_history.jsonl ');
-  const lines: ChatLine[] = [];
+  const pieces: string[] = [];
+  let chatMsgCount = 0;
   for (const line of raw.split('\n')) {
     if (!line.trim()) continue;
-    // 顶层 null / 数组 / 标量也是合法 JSON：以前照推，随后 `existing.find(l => l.type === 'system')`
-    // 与 chatMsgCount 的 filter 会以 TypeError 中断整次追加写入。
+    // 原文保留非空行：坏行（null / [] / 半截 JSON）不丢、不重写，只在末尾追加新行。
+    pieces.push(line);
     const rec = parseJsonObject(line);
-    if (rec) lines.push(rec as ChatLine);
+    if (rec && (rec.type === 'user' || rec.type === 'assistant')) chatMsgCount += 1;
   }
-  return lines;
+  return { pieces, chatMsgCount };
 }
 
 async function readSummary(filePath: string): Promise<Record<string, unknown> | null> {
@@ -567,7 +568,7 @@ export function buildGrokUpdateLines(
           sessionId,
           {
             sessionUpdate: 'user_message_chunk',
-            content: { type: 'text', text: turn.text },
+            content: { type: 'text', text: userTurnTextForWrite(turn) },
             _meta: { modelId, promptIndex },
           },
           ms,
@@ -660,7 +661,11 @@ export async function importTurnsToGrok(
   if (!path.isAbsolute(cwd)) {
     throw new Error(`cwd 必须是绝对路径: ${escapeControlChars(cwd)}`);
   }
-  if (!turns.some((t) => t.role === 'user' && t.text.trim())) {
+  if (into && !opts?.replace) {
+    const reason = assistantOnlyIncrementReason(turns);
+    if (reason) throw new Error(reason);
+  }
+  if (!turns.some((t) => t.role === 'user' && userTurnTextForWrite(t).trim())) {
     throw new Error('没有可迁移的用户消息');
   }
   // grok 格式无「连续 assistant 轮」概念（parse 的 ensureAssistant 会并回上一轮），
@@ -675,29 +680,26 @@ export async function importTurnsToGrok(
   const summaryPath = path.join(path.dirname(chatPath), 'summary.json');
   const modelId = identity.modelId;
 
-  let existing: ChatLine[] = [];
+  let pieces: string[] = [];
+  let chatMsgCount = 0;
   if (into && !opts?.replace) {
-    existing = await readChatLines(chatPath);
+    const existing = await readRawChatLines(chatPath);
+    pieces = existing.pieces;
+    chatMsgCount = existing.chatMsgCount;
   }
-  if (opts?.replace) {
-    existing = [systemLine()];
+  if (pieces.length === 0) {
+    pieces = [JSON.stringify(systemLine())];
   }
-  if (existing.length === 0) {
-    existing = [systemLine()];
-  }
-
-  const system = existing.find((l) => (l as { type?: string }).type === 'system') ?? systemLine();
-  const kept = opts?.replace ? [system] : existing;
-
-  const out: ChatLine[] = [...kept];
-  let chatMsgCount = out.filter((l) => ['user', 'assistant'].includes((l as { type?: string }).type || '')).length;
+  const pushLine = (line: ChatLine): void => {
+    pieces.push(JSON.stringify(line));
+  };
 
   for (const turn of turns) {
     // 全空 turn（无文本无事件）写回后会被 parse 与后继合并成非空轮，与 verify 的输入侧
     // 过滤不对称，round-trip 会误报——与 verifyWrittenTurns 的 wanted 过滤保持一致
     if (!turn.text.trim() && (turn.events?.length ?? 0) === 0) continue;
     if (turn.role === 'user') {
-      out.push({ type: 'user', content: [{ type: 'text', text: turn.text }] });
+      pushLine({ type: 'user', content: [{ type: 'text', text: userTurnTextForWrite(turn) }] });
       chatMsgCount += 1;
       continue;
     }
@@ -712,13 +714,13 @@ export async function importTurnsToGrok(
     }
 
     for (const ev of thinkingEvents) {
-      out.push(buildReasoningLine(ev));
+      pushLine(buildReasoningLine(ev));
     }
 
     if (toolCalls.length > 0) {
       // Grok TUI 期望 tool_calls 所在的 assistant 行 content 为空，
       // 最终文本单独作为下一条 assistant 行跟在 tool_result 后面。
-      out.push(buildAssistantLine('', toolCalls, modelId, identity));
+      pushLine(buildAssistantLine('', toolCalls, modelId, identity));
       chatMsgCount += 1;
 
       // tool_result 按 callId 紧随对应 tool_call 之后
@@ -729,26 +731,26 @@ export async function importTurnsToGrok(
       for (const ev of toolCalls) {
         const result = ev.callId ? resultByCallId.get(ev.callId) : undefined;
         if (result) {
-          out.push(buildToolResultLine(result));
+          pushLine(buildToolResultLine(result));
           resultByCallId.delete(ev.callId!);
         }
       }
       // 未配对的 tool_result 也补上，避免丢信息
       for (const ev of resultByCallId.values()) {
-        out.push(buildToolResultLine(ev));
+        pushLine(buildToolResultLine(ev));
       }
 
       if (turn.text.trim()) {
-        out.push(buildAssistantLine(turn.text, [], modelId, identity));
+        pushLine(buildAssistantLine(turn.text, [], modelId, identity));
         chatMsgCount += 1;
       }
     } else {
-      out.push(buildAssistantLine(turn.text, [], modelId, identity));
+      pushLine(buildAssistantLine(turn.text, [], modelId, identity));
       chatMsgCount += 1;
     }
   }
 
-  await writeFileAtomic(chatPath, out.map((l) => JSON.stringify(l)).join('\n') + '\n', {
+  await writeFileAtomic(chatPath, pieces.join('\n') + '\n', {
     backup: Boolean(into?.filePath),
     verify: async (tmp) =>
       verifyWrittenTurns({
@@ -756,6 +758,7 @@ export async function importTurnsToGrok(
         filePath: tmp,
         turns,
         provider: 'grok',
+        expect: expectAttachmentPlaceholders,
       }),
   });
 
@@ -777,7 +780,7 @@ export async function importTurnsToGrok(
   const now = isoNow();
   summary.updated_at = now;
   summary.last_active_at = now;
-  summary.num_messages = out.length;
+  summary.num_messages = pieces.length;
   summary.num_chat_messages = chatMsgCount;
   summary.current_model_id = modelId;
   summary.grok_home = path.join(homedir(), '.grok');
