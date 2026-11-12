@@ -199,19 +199,38 @@ function partToEvents(part: OpencodePartData, baseTime: number): ProcessEvent[] 
 }
 
 /**
- * 1.x 原生会写、但不承载对话内容的记账 part。
+ * 1.x 原生会写、但不承载对话内容的记账 / 身份 part。
  *
- * 依据上游 v1.18.29（16747470f976aca3d362ad730bcd3fe82ecc2c9a）的
- * `packages/opencode/src/session/processor.ts`：`step-start` / `step-finish` 是每个 step 的
- * 起止帧，`patch` 在每次改过文件的 step-finish 与 cleanup 之后写入（`snapshot.patch()` 有
- * 文件差异才写），`snapshot` 同属快照记账。第三方实现 catchup（8280337）与 CASR（fac8916）
- * 也显式忽略这四种。第五十八轮只排除了 step-start / step-finish，于是**任何改过文件的正常
- * 会话**都会带一条「有 N 处未识别」的假披露，还会被 claude / codex 写进目标会话。
+ * 依据上游 v1.18.29（16747470f976aca3d362ad730bcd3fe82ecc2c9a）：
+ * - `step-start` / `step-finish`：`processor.ts` 每个 step 的起止帧；
+ * - `patch` / `snapshot`：每次改过文件的 step-finish 与 cleanup 之后写入的变更 / 快照记账；
+ * - `agent`：用户选择子代理或命令模板引用产生的身份标记（`name` / `source`）。`prompt.ts`
+ *   只在调用模型时临时追加一条 synthetic 指令，日志里没有这段文本；实际委派另由 task
+ *   工具 part 记录，`name` 本身不是对话内容；
+ * - `subtask`：子代理任务描述符（`prompt` / `description` / `agent` / `model`）。上游在同一个
+ *   会话的主循环里取出它并执行，`message-v2` 只给模型一句固定占位；真正的 prompt 同时写在
+ *   紧随其后的 task 工具调用入参里，Watch 已按 tool part 保留，不重复搬运描述符；
+ * - `retry`：API 重试记账（`attempt` / `error` / `time`），上游不送进模型上下文。
+ *
+ * 第三方实现里，CASR（fac8916）把 agent 与其它 bookkeeping part 一并跳过，session-migrate
+ * （45351ff）把它们保留为 opaque 元信息而不并入对话；catchup（8280337）显式忽略
+ * patch / snapshot / step 帧，但 agent / subtask / retry 仍会进它的未知类型警告。这里的
+ * 判据是上游语义（不承载对话内容），不以某一家的未知类型表为准。第五十八轮只排除了
+ * step-start / step-finish，于是**任何改过文件或调用过子代理的正常会话**都会带一条
+ * 「有 N 处未识别」的假披露，还会被 claude / codex 写进目标会话。
  *
  * `compaction` 单独处理：它标记压缩点，正文由紧随其后的 `summary: true` 消息承载（见下方
  * 压缩摘要分支），不是丢失的数据。
  */
-const V1_IGNORED_PART_TYPES = new Set(['step-start', 'step-finish', 'patch', 'snapshot']);
+const V1_IGNORED_PART_TYPES = new Set([
+  'step-start',
+  'step-finish',
+  'patch',
+  'snapshot',
+  'agent',
+  'subtask',
+  'retry',
+]);
 
 /** 1.x 解析期间跨消息累计的计数（ignored 文本的披露要按整条会话汇总） */
 type V1ParseStats = { ignoredTexts: number };
@@ -791,7 +810,7 @@ export async function parseOpencodeSession(ref: SessionRef): Promise<UnifiedTurn
             summary: `[OpenCode 有 ${total} 处未识别或无法解析的数据，未并入对话]`,
             detail:
               `${describeCounts(unknown)}；Watch 只识别 user / assistant 消息与 text / reasoning / tool / file 内容，` +
-              'step-start / step-finish / patch / snapshot 是原生步骤与快照记账、compaction 是压缩标记，都不并入对话；其余原样跳过，不猜含义',
+              'step-start / step-finish / patch / snapshot / agent / subtask / retry 是原生步骤、快照、子代理与重试记账，compaction 是压缩标记，都不并入对话；其余原样跳过，不猜含义',
             provider: 'opencode',
           },
         ];
