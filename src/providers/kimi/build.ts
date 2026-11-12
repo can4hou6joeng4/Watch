@@ -12,7 +12,8 @@ import { writeFileAtomic } from '../../core/atomic.js';
 import { inspectCwd, type CwdInspection } from '../../core/cwd.js';
 import { parseJsonObject } from '../../core/jsonl.js';
 import { describePathReadFailureReason } from '../../core/read-text.js';
-import { verifyWrittenTurns } from '../../core/verify.js';
+import { assistantOnlyIncrementReason, userTurnTextForWrite } from '../../core/rich.js';
+import { expectAttachmentPlaceholders, verifyWrittenTurns } from '../../core/verify.js';
 import { parseKimiSession } from './parse.js';
 import type { ImportTurnsOpts } from '../adapter.js';
 import { cliDetectFailedBlock, cliMissingBlock, PreflightBlockedError } from '../adapter.js';
@@ -390,12 +391,13 @@ export function buildKimiWireLines(turns: UnifiedTurn[], startTurnId: number): s
     const t = turnTimes[i]!;
 
     if (turn.role === 'user') {
+      const userText = userTurnTextForWrite(turn);
       const msgId = `msg_${randomUUID().replace(/-/g, '').slice(0, 24)}`;
       lines.push(
         JSON.stringify({
           type: 'turn.prompt',
           agentId: 'main',
-          input: [{ type: 'text', text: turn.text }],
+          input: [{ type: 'text', text: userText }],
           origin: { kind: 'user' },
           time: t,
         }),
@@ -406,7 +408,7 @@ export function buildKimiWireLines(turns: UnifiedTurn[], startTurnId: number): s
           agentId: 'main',
           message: {
             role: 'user',
-            content: [{ type: 'text', text: turn.text }],
+            content: [{ type: 'text', text: userText }],
             toolCalls: [],
             origin: { kind: 'user' },
             id: msgId,
@@ -596,6 +598,10 @@ export async function importTurnsToKimi(
   if (!path.isAbsolute(cwd)) {
     throw new Error(`cwd 必须是绝对路径: ${escapeControlChars(cwd)}`);
   }
+  if (into && !opts?.replace) {
+    const reason = assistantOnlyIncrementReason(turns);
+    if (reason) throw new Error(reason);
+  }
 
   let filePath: string;
   let sessionId: string;
@@ -624,6 +630,7 @@ export async function importTurnsToKimi(
         filePath: tmp,
         turns,
         provider: 'kimi',
+        expect: expectAttachmentPlaceholders,
       }),
   });
 
