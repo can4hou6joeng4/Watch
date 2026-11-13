@@ -1,4 +1,5 @@
 import { readFile } from 'node:fs/promises';
+import { ToolResultPairing } from '../../core/tool-pairing.js';
 import { asJsonObject, parseJsonObject } from '../../core/jsonl.js';
 import { isoFromEpochMs } from '../../core/time.js';
 import { ensureAssistant, KIMI_COMPACTION_SUMMARY_PREFIX, normalizeUserText, pushEvent, stripEmptyEvents, summarize, WATCH_CONTEXT_DISCLOSURE_PREFIX } from '../../core/rich.js';
@@ -24,6 +25,7 @@ import type { ProcessEvent, SessionRef, TokenUsage, UnifiedTurn } from '../../co
 export async function parseKimiSession(ref: SessionRef): Promise<UnifiedTurn[]> {
   const raw = await readFile(ref.filePath, 'utf8');
   const turns: UnifiedTurn[] = [];
+  const pairing = new ToolResultPairing(turns, 'kimi', 'Kimi');
   let state: 'idle' | 'user' | 'assistant' = 'idle';
   // 1.4 的 turn.prompt 才是用户输入的权威记录；出现之后，append_message 里的用户消息
   // 只是同一句提问的回声（可能缺附件占位），再收一次就会变成连续两个用户轮。
@@ -126,6 +128,18 @@ export async function parseKimiSession(ref: SessionRef): Promise<UnifiedTurn[]> 
         continue;
       }
 
+      if (event.type === 'tool.result') {
+        const result = asRecord(event.result);
+        const output = result?.output ?? '';
+        const detail = typeof output === 'string' ? output : JSON.stringify(output);
+        pairing.result({
+          kind: 'tool_result', summary: detail ? summarize(detail, '工具返回') : '工具返回',
+          detail, timestamp, provider: 'kimi',
+          callId: asString(event.toolCallId) ?? asString(event.parentUuid) ?? undefined,
+          ...(result?.isError === true ? { failed: true } : {}),
+        });
+        continue;
+      }
       // loop 事件属于 assistant turn；若当前刚进入 user，则创建 assistant
       if (state === 'user' || state === 'idle') {
         state = 'assistant';
@@ -143,6 +157,7 @@ export async function parseKimiSession(ref: SessionRef): Promise<UnifiedTurn[]> 
           unknownParts.set(last, counts);
         },
         (key) => unknownLoopEvents.set(key, (unknownLoopEvents.get(key) ?? 0) + 1),
+        pairing,
       );
       if (event.type === 'content.part' && asRecord(event.part)?.type === 'text') loopTextTurns.add(last);
       continue;
@@ -218,6 +233,7 @@ export async function parseKimiSession(ref: SessionRef): Promise<UnifiedTurn[]> 
       pushEvent(carrier, { kind: 'text', summary: text, detail: text, timestamp: carrier.timestamp, provider: 'kimi' });
     }
   }
+  pairing.finish();
   return stripEmptyEvents(turns);
 }
 
@@ -376,6 +392,7 @@ function processLoopEvent(
   timestamp: string,
   onUnknownPart: (partType: string) => void,
   onUnknownEvent: (key: string) => void,
+  pairing: ToolResultPairing,
 ): void {
   const loopType = asString(event.type);
   if (!loopType) {
@@ -430,7 +447,7 @@ function processLoopEvent(
       onUnknownEvent(`tool.call（缺少 ${missing}）`);
       return;
     }
-    pushEvent(turn, {
+    pairing.call(turn, {
       ...base,
       kind: 'tool_call',
       summary: summarize(`${name}: ${JSON.stringify(event.args ?? {})}`, name),
@@ -438,26 +455,6 @@ function processLoopEvent(
       name,
       callId,
       input: event.args ?? {},
-    });
-    return;
-  }
-
-  if (loopType === 'tool.result') {
-    const callId = asString(event.toolCallId) ?? asString(event.parentUuid);
-    if (!callId) {
-      onUnknownEvent('tool.result（缺少 callId）');
-      return;
-    }
-    const result = asRecord(event.result);
-    const output = result?.output ?? '';
-    const detail = typeof output === 'string' ? output : JSON.stringify(output);
-    pushEvent(turn, {
-      ...base,
-      kind: 'tool_result',
-      summary: detail ? summarize(detail, '工具返回') : '工具返回',
-      detail,
-      callId,
-      ...(result?.isError === true ? { failed: true } : {}),
     });
     return;
   }

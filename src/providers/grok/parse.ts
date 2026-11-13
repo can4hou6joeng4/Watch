@@ -1,4 +1,5 @@
 import { readFile, stat } from 'node:fs/promises';
+import { ToolResultPairing } from '../../core/tool-pairing.js';
 import { dirname, join } from 'node:path';
 import { ensureAssistant, normalizeUserText, pushEvent, stripEmptyEvents, summarize, WATCH_CONTEXT_DISCLOSURE_PREFIX } from '../../core/rich.js';
 import { asJsonObject, parseJsonObject } from '../../core/jsonl.js';
@@ -89,6 +90,7 @@ function parseToolOutput(raw: unknown): string {
 export async function parseGrokSession(ref: SessionRef): Promise<UnifiedTurn[]> {
   const raw = await readFile(ref.filePath, 'utf8');
   const turns: UnifiedTurn[] = [];
+  const pairing = new ToolResultPairing(turns, 'grok', 'Grok');
   let sawUser = false;
   // 会话级按 callId 去重：CLI 会在行内重复登记调用，resume 重放还会让同一调用跨代再现，
   // 同一 callId 语义上就是一次调用，只保留首次
@@ -161,7 +163,7 @@ export async function parseGrokSession(ref: SessionRef): Promise<UnifiedTurn[]> 
         // 同一行里也可能重复登记同一调用（Grok CLI 的真实形态），只留首个
         if (callId && seenCallIds.has(callId)) continue;
         if (callId) seenCallIds.add(callId);
-        pushEvent(assistant, {
+        pairing.call(assistant, {
           kind: 'tool_call',
           name,
           callId,
@@ -180,18 +182,8 @@ export async function parseGrokSession(ref: SessionRef): Promise<UnifiedTurn[]> 
       const callId = typeof r.tool_call_id === 'string' ? r.tool_call_id : undefined;
       // 重放历史里同一调用的 result 也会跨代再现，同 id 只留首个
       if (callId && seenResultIds.has(callId)) continue;
-      // 结果按 callId 挂回真正发起调用的轮次：重放行被去重后，最后一条 assistant 可能
-      // 根本不含这个调用（甚至已被跳过而当前是 user 轮），挂上去就是一个孤儿结果。
-      const owner = callId
-        ? [...turns].reverse().find(
-            (t) => t.role === 'assistant' && (t.events ?? []).some((e) => e.kind === 'tool_call' && e.callId === callId),
-          )
-        : undefined;
-      const last = owner ?? (turns.at(-1)?.role === 'assistant' ? turns.at(-1) : undefined);
-      if (!last) continue;
-      if (callId) seenResultIds.add(callId);
       const output = parseToolOutput(r.content);
-      pushEvent(last, {
+      const paired = pairing.result({
         kind: 'tool_result',
         callId,
         summary: summarize(output, '工具返回'),
@@ -199,6 +191,8 @@ export async function parseGrokSession(ref: SessionRef): Promise<UnifiedTurn[]> 
         timestamp,
         provider: 'grok',
       });
+      // 只去重已配对结果的重放；早到的孤立结果不能遮住之后的真实返回。
+      if (paired && callId) seenResultIds.add(callId);
       continue;
     }
 
@@ -226,6 +220,7 @@ export async function parseGrokSession(ref: SessionRef): Promise<UnifiedTurn[]> 
     }
   }
 
+  pairing.finish();
   return attachGrokSidecars(ref.filePath, stripEmptyEvents(turns));
 }
 

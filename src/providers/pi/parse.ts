@@ -1,4 +1,5 @@
 import { readFile } from 'node:fs/promises';
+import { ToolResultPairing } from '../../core/tool-pairing.js';
 import {
   ensureAssistant,
   normalizeUserText,
@@ -16,6 +17,7 @@ import { createPiFailureCounts, piFailureDisclosure, readPiStopReason, type PiFa
 export async function parsePiSession(ref: SessionRef): Promise<UnifiedTurn[]> {
   const raw = await readFile(ref.filePath, 'utf8');
   const turns: UnifiedTurn[] = [];
+  const pairing = new ToolResultPairing(turns, 'pi', 'Pi');
   let sawUser = false;
   // 整份日志里 context_edit / custom_message 的计数（见循环里的注释）
   const contextEntries: PiContextEntryCounts = {
@@ -107,11 +109,10 @@ export async function parsePiSession(ref: SessionRef): Promise<UnifiedTurn[]> {
       continue;
     }
     if (role === 'toolResult') {
-      if (!sawUser || turns.at(-1)?.role !== 'assistant') continue;
-      const last = turns.at(-1)!;
+      if (!sawUser) continue;
       const callId = typeof msg.toolCallId === 'string' ? msg.toolCallId : undefined;
       const name = typeof msg.toolName === 'string' ? msg.toolName : undefined;
-      pushEvent(last, {
+      pairing.result({
         kind: 'tool_result',
         summary: extracted.text.slice(0, 80) || 'tool result',
         detail: extracted.text || undefined,
@@ -167,7 +168,10 @@ export async function parsePiSession(ref: SessionRef): Promise<UnifiedTurn[]> {
     }
 
     const last = ensureAssistant(turns, timestamp, 'pi');
-    for (const ev of extracted.events) pushEvent(last, ev);
+    for (const ev of extracted.events) {
+      if (ev.kind === 'tool_call') pairing.call(last, ev);
+      else pushEvent(last, ev);
+    }
     if (extracted.text.trim()) {
       // 同一助手轮里「说明文字 + 工具调用」之后又来了新的说明文字时，正文只会保留最后一段；
       // 被覆盖的中间说明以前直接从时间线消失（`watch prompt` 少一段、转入 claude / codex
@@ -188,6 +192,7 @@ export async function parsePiSession(ref: SessionRef): Promise<UnifiedTurn[]> {
     if (usage) last.usage = usage;
     tailFailure = failed;
   }
+  pairing.finish();
   // 尾部失败补一个空正文助手轮承载披露，理由与 Claude（r80）一致：不补轮时最后仍是用户轮，
   // `unansweredUserTail()` 会把「上游失败」讲成「可能被中断或还在生成」。**只在尾部补**：
   // 中途失败当场造轮的话，这一轮既无正文也无事件，写入侧 / round-trip 的 wanted 过滤都会

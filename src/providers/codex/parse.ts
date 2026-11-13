@@ -1,4 +1,6 @@
 import { readFile } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
+import { ToolResultPairing } from '../../core/tool-pairing.js';
 import { asJsonObject, parseJsonObject } from '../../core/jsonl.js';
 import {
   ENCRYPTED_THINKING,
@@ -53,6 +55,7 @@ export function isLegacyEventMsgRollout(raw: string): boolean {
 
 function parseCodexRaw(raw: string): { turns: UnifiedTurn[]; usesEventFallback: boolean } {
   const turns: UnifiedTurn[] = [];
+  const pairing = new ToolResultPairing(turns, 'codex', 'Codex');
   const fallback: UnifiedTurn[] = [];
   let sawUser = false;
   let sawFallbackUser = false;
@@ -98,7 +101,10 @@ function parseCodexRaw(raw: string): { turns: UnifiedTurn[]; usesEventFallback: 
     fallbackAtFirst: null,
   };
 
+  let lineIndex = 0;
+  let synthesizedInlineCalls = 0;
   for (const line of raw.split('\n')) {
+    lineIndex += 1;
     const trimmed = line.trim();
     if (!trimmed) continue;
     const r = parseJsonObject(trimmed);
@@ -128,8 +134,22 @@ function parseCodexRaw(raw: string): { turns: UnifiedTurn[]; usesEventFallback: 
       if (!sawUser) continue;
       const events = processItemToEvents(p, timestamp);
       if (!events.length) continue;
-      const last = ensureAssistant(turns, timestamp, 'codex');
-      for (const ev of events) pushEvent(last, ev);
+      // 同一原生记录直接拆出的 call/result 有明确归属。稳定补 ID，避免目标 writer
+      // 分别生成随机 ID 后失配；单独到达的无 ID output 仍按未配对结果处理。
+      if (events.length === 2 && events[0].kind === 'tool_call' && events[1].kind === 'tool_result' &&
+          !events[0].callId && !events[1].callId) {
+        const id = `watch-codex-inline-${createHash('sha256').update(`${lineIndex}\0${trimmed}`).digest('hex')}`;
+        for (const event of events) event.callId = id;
+        synthesizedInlineCalls += 1;
+      }
+      for (const ev of events) {
+        if (ev.kind === 'tool_result') pairing.result(ev);
+        else {
+          const last = ensureAssistant(turns, timestamp, 'codex');
+          if (ev.kind === 'tool_call') pairing.call(last, ev);
+          else pushEvent(last, ev);
+        }
+      }
       continue;
     }
 
@@ -207,7 +227,15 @@ function parseCodexRaw(raw: string): { turns: UnifiedTurn[]; usesEventFallback: 
       }
     }
   }
+  if (hasResponseMessages) pairing.finish();
   const active = hasResponseMessages ? turns : fallback;
+  if (hasResponseMessages && synthesizedInlineCalls > 0) {
+    const carrier = [...active].reverse().find((turn) => turn.role === 'user' || turn.text.trim());
+    if (carrier) {
+      const text = `${WATCH_CONTEXT_DISCLOSURE_PREFIX}Codex 有 ${synthesizedInlineCalls} 条原生记录在同一记录内包含工具调用和结果，但没有调用 ID；Watch 按记录位置与内容合成稳定 ID 以保留配对，这些 ID 不是原生 ID。]`;
+      pushEvent(carrier, { kind: 'text', summary: text, detail: text, timestamp: carrier.timestamp, provider: 'codex' });
+    }
+  }
   // 「压缩点之前有没有对话原文」只能按**最终活动的**时间线判断：混合 wire 时回退时间线会被
   // 整份丢弃，拿它算出来的「有原文」在返回值里并不成立。
   const sawConversationBefore = hasResponseMessages
