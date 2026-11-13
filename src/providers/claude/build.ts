@@ -5,7 +5,7 @@ import { randomUUID } from 'node:crypto';
 import { appendFileAtomic, writeFileAtomic } from '../../core/atomic.js';
 import { escapeControlChars } from '../../core/display.js';
 import { verifyWrittenTurns } from '../../core/verify.js';
-import { claudeBashInput, CLAUDE_THINKING_PREFIX, ENCRYPTED_THINKING, toClaudeToolName, turnHasContent } from '../../core/rich.js';
+import { claudeBashInput, CLAUDE_THINKING_PREFIX, ENCRYPTED_THINKING, toClaudeToolName, turnHasContent, WATCH_CONTEXT_DISCLOSURE_PREFIX } from '../../core/rich.js';
 import { parseClaudeSession } from './parse.js';
 import type { ProcessEvent, SessionRef, TokenUsage, UnifiedTurn } from '../../core/types.js';
 import type { ImportTurnsOpts } from '../adapter.js';
@@ -256,7 +256,7 @@ function expectClaudeRoundTrip(turns: UnifiedTurn[]): UnifiedTurn[] {
       const rows = (t.events ?? [])
         .filter((e) => e.kind === 'text' && !(e.attachment && e.attachment.kind === 'image'))
         .map((e) => (e.detail ?? e.summary ?? '').trim())
-        .filter(Boolean);
+        .filter((text) => text && !text.startsWith(WATCH_CONTEXT_DISCLOSURE_PREFIX));
       if (rows.length > 0) expectedText = rows.at(-1)!;
     }
     out.push({ ...t, text: expectedText, events });

@@ -131,8 +131,12 @@ export async function parseClaudeSession(ref: SessionRef): Promise<UnifiedTurn[]
           provider: 'claude',
         };
         pushEvent(last, event);
-        lastTextEvents.set(last, event);
-        last.text = text;
+        // Watch 披露只作上下文事件：空正文失败轮写回后不能变成助手答复，
+        // 也不能覆盖前面已有的正文，否则增量对齐会反复追加同一轮。
+        if (!text.startsWith(WATCH_CONTEXT_DISCLOSURE_PREFIX)) {
+          lastTextEvents.set(last, event);
+          last.text = text;
+        }
       }
       if (timestamp) last.timestamp = timestamp;
       const usage = readUsage(r.message);
