@@ -20,11 +20,13 @@ Watch 只做一件事：**把已保存的会话记录连同工作目录交到目
 
 它不提供模型、不绕过配额、不代替原生 Agent 聊天，也不默认搬迁权限、凭据或插件；接力的是已有记录，不是模型未记录的内部状态。当前实现以 CLI 会话与终端恢复为主，产品方向包含经过验证的桌面端入口，但**官方支持互通不等于 Watch 已经集成**。
 
-### 最新版本（[v0.1.2](https://github.com/can4hou6joeng4/Watch/releases/tag/v0.1.2)）
+### 最新版本（[v0.1.3](https://github.com/can4hou6joeng4/Watch/releases/tag/v0.1.3)）
 
-v0.1.2 汇总了自 v0.1.1 起的改动，重点补充请求失败、转换损失与裁剪的披露；具体情况通过 `error`、`warnings`、`findings` 或交接文档报告：
+v0.1.3 补齐 Grok 的失败 / 中止 / 重试披露，并修掉两处口径矛盾。此前 v0.1.2 汇总了请求失败、转换损失与裁剪的披露，具体情况通过 `error`、`warnings`、`findings` 或交接文档报告。
 
-- **失败记录单独披露**：识别 Claude Code 的 `system/api_error` 与 `isApiErrorMessage` 机器错误行、OpenCode 1.x/2.x 的 `Assistant.error`、Pi 的 `stopReason: "error" / "aborted"`。Claude Code / Pi 汇总失败分类与次数，不复制错误原文；OpenCode 保留错误类型及消息文本。机器错误行不冒充最终答复，失败前已有的真实输出仍保留。
+- **Grok 失败记录（v0.1.3）**：`updates.jsonl` 里 `turn_completed.stop_reason` 的 `error` / `cancelled` 与独立的 `retry_state`（含重试次数与是否耗尽）以前完全不读，现在按结构分类汇总成一条披露，**不复制上游错误原文**（那里的 `reason` 带完整上游 URL）。尾部失败会明确写成「以失败结束，不是仍在生成」，而不是笼统的「可能被中断」。
+- **逐轮用量不再静默丢弃（v0.1.3）**：Grok 日志的轮次结束记录、带用量的记录与解析出的助手轮数量对不上时，这次交接不挂逐轮用量，并在结果里说明原因，不再让目标会话全为 0/0 却只写一句「已在对账中携带」。
+- **失败记录单独披露**：识别 Claude Code 的 `system/api_error` 与 `isApiErrorMessage` 机器错误行、OpenCode 1.x/2.x 的 `Assistant.error`、Pi 的 `stopReason: "error" / "aborted"`、Grok 的 `stop_reason` 与 `retry_state`。Claude Code / Pi / Grok 汇总失败分类与次数，不复制错误原文；OpenCode 保留错误类型及消息文本。机器错误行不冒充最终答复，失败前已有的真实输出仍保留。
 - **摘要交接 `watch prompt`**：只读、不写任何文件，把会话渲染成可粘贴的 Markdown；支持 `--profile` 档位、`--last <n>`、`--since-compact`，省略 id 时自动挑本目录最新的可读会话。裁剪会计数，读取失败与已识别的降级会明确报告。
 - **诊断与检索**：新增 `watch doctor`（环境 / 本地库 / 索引 / 导入日志只读体检，硬失败退出码 1）、`watch capabilities`（读写能力矩阵）、`search --reset-index`，以及大量「读不出来 ≠ 没有」的降级披露。
 - **桌面端**：六张目标卡齐全（含 Grok），点击前预检、目标被占用时的占用者与重试入口、来源与记录页的警告通道均已接通。
