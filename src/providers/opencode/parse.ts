@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
 import { escapeControlChars } from '../../core/display.js';
 import { normalizeUserText, OPENCODE_COMPACTION_SUMMARY_PREFIX, OPENCODE_SYNTHETIC_TEXT_PREFIX, WATCH_CONTEXT_DISCLOSURE_PREFIX } from '../../core/rich.js';
@@ -158,7 +159,35 @@ function isToolPart(part: OpencodePartData): part is {
   return (part as { type: string }).type === 'tool';
 }
 
-function partToEvents(part: OpencodePartData, baseTime: number): ProcessEvent[] {
+type CallIdContext = { sessionId: string; synthesized: Map<string, number> };
+
+/** 缺失 / 损坏标识不能每次随机补齐，否则旧工具轮的增量键会随读取漂移。 */
+function opencodeCallId(
+  raw: unknown,
+  field: string,
+  recordKey: readonly (string | number)[],
+  context: CallIdContext,
+  nativePrefix = '',
+): string {
+  if (typeof raw === 'string' && raw.trim()) return `${nativePrefix}${raw}`;
+  const reason = raw === undefined ? '缺失' : typeof raw === 'string' ? '为空或仅空白' : '不是字符串';
+  bumpCount(context.synthesized, `${field} ${reason}`);
+  // 不依赖数据库路径、输入、输出或运行状态；同一持久记录的重复读取 / 状态更新保持同一 ID。
+  const hash = createHash('sha256').update(JSON.stringify([context.sessionId, ...recordKey])).digest('hex').slice(0, 32);
+  return `${nativePrefix || 'oc-'}watch-${hash}`;
+}
+
+function appendCallIdDisclosure(turns: UnifiedTurn[], context: CallIdContext, providerLabel: string): void {
+  if (context.synthesized.size === 0) return;
+  const count = [...context.synthesized.values()].reduce((sum, n) => sum + n, 0);
+  appendUnknownDisclosure(
+    turns,
+    `${providerLabel} 有 ${count} 个工具调用标识不可用，已按持久化记录位置合成稳定 ID`,
+    `${describeCounts(context.synthesized)}；调用及已记录结果仍保留并配对，合成 ID 不等于原生调用标识；未记录的结果不会因此补齐`,
+  );
+}
+
+function partToEvents(part: OpencodePartData, baseTime: number, recordKey: string[], callIds: CallIdContext): ProcessEvent[] {
   const events: ProcessEvent[] = [];
   if (isReasoningPart(part)) {
     events.push({
@@ -169,7 +198,7 @@ function partToEvents(part: OpencodePartData, baseTime: number): ProcessEvent[] 
       provider: 'opencode',
     });
   } else if (isToolPart(part)) {
-    const callId = part.callID ?? `oc-${crypto.randomUUID()}`;
+    const callId = opencodeCallId(part.callID, '1.x tool.callID', recordKey, callIds);
     const input = part.state?.input ?? {};
     // Watch 用合法 error 状态承载来源未记录结果的调用；它并非一次真实失败返回，不能伪造 tool_result。
     const unfinished = part.state?.status === 'error' && part.state.metadata?.watch_unfinished_tool === true;
@@ -234,7 +263,7 @@ const V1_IGNORED_PART_TYPES = new Set([
 ]);
 
 /** 1.x 解析期间跨消息累计的计数（ignored 文本的披露要按整条会话汇总） */
-type V1ParseStats = { ignoredTexts: number };
+type V1ParseStats = { ignoredTexts: number; callIds: CallIdContext };
 
 function messageToTurn(
   msg: MessageRow,
@@ -302,7 +331,7 @@ function messageToTurn(
       if (isToolPart(part)) hasToolEvents = true;
       const partEvent = filePartToEvent(part, partTime);
       if (partEvent) events.push(partEvent);
-      events.push(...partToEvents(part, partTime));
+      events.push(...partToEvents(part, partTime, ['v1', msg.id, partRow.id], stats.callIds));
     } else {
       // 已知记账类型已在上方排除；其余未知类型不猜内容，按类型与条数汇入上下文披露。
       bumpCount(unknown, `part:${partType}`);
@@ -950,6 +979,7 @@ function v2AssistantTurn(
   row: V2MessageRow,
   data: V2MessageData,
   unknown: Map<string, number>,
+  callIds: CallIdContext,
   parts?: V2ContentItem[],
 ): UnifiedTurn | null {
   const time = typeof data.time?.created === 'number' ? data.time.created : row.time_created;
@@ -966,7 +996,7 @@ function v2AssistantTurn(
   const texts: string[] = [];
   const events: ProcessEvent[] = [];
 
-  for (const item of items) {
+  for (const [index, item] of items.entries()) {
     if (!item || typeof item !== 'object') {
       bumpCount(unknown, 'content:（非对象）');
       continue;
@@ -986,7 +1016,7 @@ function v2AssistantTurn(
         events.push({ kind: 'thinking', timestamp, detail: item.text, summary: item.text, provider: 'opencode' });
       }
     } else if (item.type === 'tool') {
-      const callId = item.id ?? `oc-${crypto.randomUUID()}`;
+      const callId = opencodeCallId(item.id, '2.x tool.id', ['v2', row.id, index], callIds);
       const input = v2ToolInput(item.state, unknown);
       // summary 直接展示字符串原文，避免 JSON.stringify 对半截 JSON 再加一层转义。
       const inputText = typeof input === 'string' ? input : JSON.stringify(input);
@@ -1031,16 +1061,17 @@ type V2BackgroundShells = { count: number; samples: string[] };
 
 /** 非对话事件 → ProcessEvent[]；空数组 = 已识别但无内容（形状异常已按原因计数）；null = 类型未知 */
 function v2AuxEvents(
-  type: string,
+  row: V2MessageRow,
   data: V2MessageData,
   time: number,
   unknown: Map<string, number>,
+  callIds: CallIdContext,
   compactions: V2Compactions,
   backgroundShells: V2BackgroundShells,
   keptRecent: string,
 ): ProcessEvent[] | null {
   const timestamp = isoFromEpochMs(time);
-  switch (type) {
+  switch (row.type) {
     case 'shell': {
       const command = typeof data.command === 'string' ? data.command : '';
       // 上游 to-llm-message.ts：后台 shell 在完成前不进模型上下文（结果完成时另行投递）。
@@ -1053,8 +1084,7 @@ function v2AuxEvents(
         }
         return [];
       }
-      const callId =
-        typeof data.shellID === 'string' && data.shellID ? `oc-shell-${data.shellID}` : `oc-shell-${crypto.randomUUID()}`;
+      const callId = opencodeCallId(data.shellID, '2.x shell.shellID', ['v2-shell', row.id], callIds, 'oc-shell-');
       const events: ProcessEvent[] = [
         {
           kind: 'tool_call',
@@ -1179,7 +1209,7 @@ function v2AuxEvents(
     case 'system':
     case 'synthetic': {
       const text = typeof data.text === 'string' ? data.text : '';
-      const label = type === 'system' ? '系统事件' : '系统生成事件';
+      const label = row.type === 'system' ? '系统事件' : '系统生成事件';
       return [{ kind: 'text', timestamp, summary: `[${label}] ${text.slice(0, 160)}`.trim(), detail: text, provider: 'opencode' }];
     }
     default:
@@ -1236,6 +1266,7 @@ function parseOpencodeV2Turns(db: DatabaseSync, sessionId: string): UnifiedTurn[
   const unknown = new Map<string, number>();
   const compactions: V2Compactions = { native: { count: 0, messages: 0 }, unusableSummaries: new Map() };
   const backgroundShells: V2BackgroundShells = { count: 0, samples: [] };
+  const callIds: CallIdContext = { sessionId, synthesized: new Map() };
   const partsByMessage = readV2Parts(db, sessionId, unknown);
 
   // 事件属于「模型处理这一轮的过程」，优先挂到它之后的 assistant turn；
@@ -1285,7 +1316,7 @@ function parseOpencodeV2Turns(db: DatabaseSync, sessionId: string): UnifiedTurn[
     }
 
     if (row.type === 'assistant') {
-      const turn = v2AssistantTurn(row, data, unknown, partsByMessage.get(row.id));
+      const turn = v2AssistantTurn(row, data, unknown, callIds, partsByMessage.get(row.id));
       if (!turn) continue;
       // 与 1.x 相同的一档合并：纯文本的助手消息接在带工具调用的上一条之后，归回同一个 turn
       const prev = turns.at(-1) ?? null;
@@ -1303,10 +1334,11 @@ function parseOpencodeV2Turns(db: DatabaseSync, sessionId: string): UnifiedTurn[
     }
 
     const aux = v2AuxEvents(
-      row.type,
+      row,
       data,
       time,
       unknown,
+      callIds,
       compactions,
       backgroundShells,
       keptRecentByRow.get(row.id) ?? '',
@@ -1357,6 +1389,8 @@ function parseOpencodeV2Turns(db: DatabaseSync, sessionId: string): UnifiedTurn[
       }`,
     );
   }
+
+  appendCallIdDisclosure(turns, callIds, 'OpenCode 2.x');
 
   // 统一披露必须独立于过程记录展示与选窗；无安全载体时不造新轮次。
   if (unknown.size > 0) {
@@ -1414,7 +1448,7 @@ export async function parseOpencodeSession(ref: SessionRef): Promise<UnifiedTurn
       }
 
       const unknown = new Map<string, number>();
-      const stats: V1ParseStats = { ignoredTexts: 0 };
+      const stats: V1ParseStats = { ignoredTexts: 0, callIds: { sessionId: ref.sessionId, synthesized: new Map() } };
       const turns: UnifiedTurn[] = [];
       for (const msg of messages) {
         const turn = messageToTurn(msg, partsByMessage.get(msg.id) ?? [], turns.at(-1) ?? null, unknown, stats);
@@ -1447,6 +1481,8 @@ export async function parseOpencodeSession(ref: SessionRef): Promise<UnifiedTurn
           ];
         }
       }
+      appendCallIdDisclosure(turns, stats.callIds, 'OpenCode 1.x');
+
       // 与 2.x 同一披露面：类型与条数进入 prompt 头部 / warnings，不依赖过程记录展开。
       // 无安全载体时不凭空造 turn；零轮仍由调用方拒绝或披露。
       if (unknown.size > 0) {
