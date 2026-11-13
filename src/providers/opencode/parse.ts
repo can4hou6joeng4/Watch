@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
 import { escapeControlChars } from '../../core/display.js';
-import { normalizeUserText, OPENCODE_COMPACTION_SUMMARY_PREFIX, OPENCODE_SYNTHETIC_TEXT_PREFIX, WATCH_CONTEXT_DISCLOSURE_PREFIX } from '../../core/rich.js';
+import { normalizeUserText, OPENCODE_COMPACTION_SUMMARY_PREFIX, OPENCODE_SYNTHETIC_TEXT_PREFIX, OPENCODE_TOOL_FAILURE_PREFIX, WATCH_CONTEXT_DISCLOSURE_PREFIX } from '../../core/rich.js';
 import { isoFromEpochMs } from '../../core/time.js';
 import type { ProcessEvent, SessionRef, TokenUsage, UnifiedTurn } from '../../core/types.js';
 import { detectOpencodeLayout, opencodeDbPath, opencodeDbSqliteError, probeOpencodeDbFile } from './paths.js';
@@ -279,7 +279,7 @@ function partToEvents(part: OpencodePartData, baseTime: number, recordKey: strin
     });
     const errored = part.state?.status === 'error';
     const output = errored && typeof part.state?.error === 'string'
-      ? `[工具执行失败] ${part.state.error}`
+      ? `${OPENCODE_TOOL_FAILURE_PREFIX}${part.state.error}`
       : part.state?.output;
     if (!unfinished && output !== undefined) {
       events.push({

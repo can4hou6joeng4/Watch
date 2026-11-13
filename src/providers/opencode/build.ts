@@ -5,6 +5,7 @@ import type { ImportTurnsOpts } from '../adapter.js';
 import { SessionLookupFailureError } from '../adapter.js';
 import type { ProcessEvent, SessionRef, TokenUsage, UnifiedTurn } from '../../core/types.js';
 import { escapeControlChars } from '../../core/display.js';
+import { OPENCODE_TOOL_FAILURE_PREFIX } from '../../core/rich.js';
 import {
   assertUsableOpencodeDb,
   detectOpencodeLayout,
@@ -339,6 +340,21 @@ function buildStepFinishPartData(reason: string): string {
   return JSON.stringify({ type: 'step-finish', reason, tokens: { total: 0, input: 0, output: 0, reasoning: 0, cache: { write: 0, read: 0 } }, cost: 0 });
 }
 
+/**
+ * 剥掉读取侧加在失败原因前的 `[工具执行失败] ` 前缀。
+ *
+ * `parse.ts` 把 `state.error` 包成 `[工具执行失败] <原因>` 才能让正文读者看见；
+ * 写回时若原样存进 `state.error`，下一次读出来就会再包一层。只剥开头、连续几层一起剥，
+ * 正文里自身就以这串开头的错误信息（极少）会少一层——这个损失可以接受，累积前缀的噪声不能。
+ */
+function stripToolFailurePrefix(text: string): string {
+  let out = text.trim();
+  while (out.startsWith(OPENCODE_TOOL_FAILURE_PREFIX)) {
+    out = out.slice(OPENCODE_TOOL_FAILURE_PREFIX.length).trim();
+  }
+  return out;
+}
+
 function buildToolPartData(ev: ProcessEvent, fallbackCallId: string, time: number): string {
   // metadata 是 v1.18+ ToolStateCompleted 必填键（Record，可空对象），缺了整个 GET messages 会被 schema 校验拒掉
   const state: Record<string, unknown> = {
@@ -356,7 +372,7 @@ function buildToolPartData(ev: ProcessEvent, fallbackCallId: string, time: numbe
     // 以前一律写 completed：失败的编辑转进 opencode 后变成成功，再读回来失败事实已经没了。
     if (ev.failed === true) {
       state.status = 'error';
-      state.error = ev.detail ?? ev.summary ?? '工具执行失败';
+      state.error = stripToolFailurePrefix(ev.detail ?? ev.summary ?? '') || '工具执行失败';
     }
   }
   return JSON.stringify({ type: 'tool', callID: ev.callId || fallbackCallId, tool: ev.kind === 'tool_call' ? ev.name : 'tool', state });
@@ -584,10 +600,22 @@ async function writeOpencodeTurns(
               if (old) {
                 const parsed = JSON.parse(old.data);
                 parsed.state ??= {};
-                parsed.state.output = ev.detail ?? ev.summary ?? '';
-                parsed.state.status = 'completed';
-                delete parsed.state.error;
+                const output = ev.detail ?? ev.summary ?? '';
                 delete parsed.state.metadata?.watch_unfinished_tool;
+                if (ev.failed === true) {
+                  // 失败的写入必须保留失败事实：以前这里无条件写 completed，连
+                  // `buildToolPartData` 里补上的错误分支都被绕过——配对成功的调用占绝大多数，
+                  // 于是「失败的编辑」转入 OpenCode 后几乎总是变成成功。
+                  parsed.state.status = 'error';
+                  // 读取侧会给原因加一层 `[工具执行失败] ` 前缀；写回前剥掉，
+                  // 否则每次往返都再叠一层（本次回归的第二个用例守的就是这条）。
+                  parsed.state.error = stripToolFailurePrefix(output) || '工具执行失败';
+                  parsed.state.output = output;
+                } else {
+                  parsed.state.status = 'completed';
+                  parsed.state.output = output;
+                  delete parsed.state.error;
+                }
                 db.prepare('UPDATE part SET data = ? WHERE id = ?').run(JSON.stringify(parsed), pending.partId);
               }
               pendingTools.delete(callId);

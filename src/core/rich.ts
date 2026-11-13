@@ -41,6 +41,16 @@ export const OPENCODE_COMPACTION_SUMMARY_PREFIX = '[压缩摘要（由 OpenCode 
 export const OPENCODE_SYNTHETIC_TEXT_PREFIX = '[OpenCode 注入内容（由 OpenCode 自动生成，不是用户原话）]';
 
 /**
+ * OpenCode 工具失败结果在正文里的前缀。
+ *
+ * 原生把工具失败记成 `state.status === 'error'` + `state.error`（不是一条输出），
+ * `parse.ts` 为了不丢原因把它拼成 `[工具执行失败] <原因>`。写出侧必须**先把已经带上的
+ * 这层前缀剥掉**再写回 `state.error`，否则每次 OpenCode → 别家 → OpenCode 往返都会再叠一层，
+ * 目标里的失败原因变成 `[工具执行失败] [工具执行失败] …`。
+ */
+export const OPENCODE_TOOL_FAILURE_PREFIX = '[工具执行失败] ';
+
+/**
  * Pi 的压缩摘要不是一条 message，而是会话文件里独立的 `type: "compaction"` 条目
  * （`summary` / `firstKeptEntryId` / `tokensBefore`），pi 自己会把它作为摘要消息注入上下文。
  * Watch 以前只解析 `type: "message"`，整段摘要无声消失——转入别家后，压缩前的原文还在，
