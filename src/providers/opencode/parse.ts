@@ -443,7 +443,38 @@ type V2MessageData = {
   /** user 的附件与技能（上游 Prompt.files / Prompt.skills），形状在解析处逐项收窄 */
   files?: unknown;
   skills?: unknown;
+  /** CompactionCompleted：provider 原生压缩的替换窗口在 native.messages（形状由 provider 决定） */
+  native?: unknown;
+  /** pre-v2.1 的旧记录把同一个窗口存在 providerContext.messages（session-legacy.ts 迁移） */
+  providerContext?: unknown;
 };
+
+/**
+ * completed 压缩的 provider 原生替换窗口：返回窗口里的消息条数，没有窗口返回 null。
+ * 上游 v2.2.7 的 `compaction.ts` 在 provider 原生压缩成功时写 `text: ""`、窗口放进
+ * `native.messages`；`to-llm-message.ts` 用 `decodeNativeWindow` 重放它**而不是** summary，
+ * `history.ts` 明确原生窗口对本地转录（boundary "local"）从不作边界——只有生成它的
+ * provider / 模型能重放。Watch 只数条数，不复制窗口内容（可能含整段对话与 provider 私有数据）。
+ */
+function v2NativeWindow(data: V2MessageData, unknown: Map<string, number>): number | null {
+  const containers: { label: string; value: unknown }[] = [];
+  if (data.native !== undefined) containers.push({ label: 'native', value: data.native });
+  if (data.providerContext !== undefined) containers.push({ label: 'providerContext', value: data.providerContext });
+  for (const { label, value } of containers) {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) {
+      bumpCount(unknown, `compaction（${label} 不是对象）`);
+      continue;
+    }
+    const messages = (value as { messages?: unknown }).messages;
+    if (messages === undefined) continue;
+    if (!Array.isArray(messages)) {
+      bumpCount(unknown, `compaction（${label}.messages 不是数组）`);
+      continue;
+    }
+    return messages.length;
+  }
+  return null;
+}
 
 /**
  * 2.x 里「不承载对话内容」的记账类型。上游 v2.2.7 的 `to-llm-message.ts` 对
@@ -766,12 +797,16 @@ function v2AssistantTurn(
   return turn;
 }
 
+/** 整条会话里 provider 原生压缩的次数与替换窗口的消息条数（只计数，不复制内容） */
+type V2NativeCompactions = { count: number; messages: number };
+
 /** 非对话事件 → ProcessEvent[]；空数组 = 已识别但无内容（形状异常已按原因计数）；null = 类型未知 */
 function v2AuxEvents(
   type: string,
   data: V2MessageData,
   time: number,
   unknown: Map<string, number>,
+  nativeCompactions: V2NativeCompactions,
 ): ProcessEvent[] | null {
   const timestamp = isoFromEpochMs(time);
   switch (type) {
@@ -804,6 +839,16 @@ function v2AuxEvents(
       // 第三方旧样本没有 status 字段：保持按 completed 处理（同一形状兼容）。
       const status = typeof data.status === 'string' ? data.status : 'completed';
       if (status === 'completed') {
+        // provider 原生压缩：模型拿到的是 native.messages 窗口而不是 summary（上游写的
+        // summary 就是空串）。挂摘要前缀会让 --since-compact 把压缩前的轮次全裁掉，只留一行
+        // 没有正文的「压缩摘要」。原生窗口只有原 provider / 模型能重放，Watch 不重放、
+        // 不当边界，只在会话级披露里计数（与 Codex compacted 记录同一取舍）。
+        const windowSize = v2NativeWindow(data, unknown);
+        if (windowSize !== null) {
+          nativeCompactions.count += 1;
+          nativeCompactions.messages += windowSize;
+          return [];
+        }
         const summary = typeof data.summary === 'string' ? data.summary : '';
         const recent = typeof data.recent === 'string' ? data.recent : '';
         return [
@@ -935,6 +980,7 @@ function parseOpencodeV2Turns(db: DatabaseSync, sessionId: string): UnifiedTurn[
   // 非对话事件先挂到上一条 turn；上一条还没有时暂存，等下一轮对话出现再挂（不单独造 turn）
   const pending: ProcessEvent[] = [];
   const unknown = new Map<string, number>();
+  const nativeCompactions: V2NativeCompactions = { count: 0, messages: 0 };
   const partsByMessage = readV2Parts(db, sessionId, unknown);
 
   // 事件属于「模型处理这一轮的过程」，优先挂到它之后的 assistant turn；
@@ -993,7 +1039,7 @@ function parseOpencodeV2Turns(db: DatabaseSync, sessionId: string): UnifiedTurn[
       continue;
     }
 
-    const aux = v2AuxEvents(row.type, data, time, unknown);
+    const aux = v2AuxEvents(row.type, data, time, unknown, nativeCompactions);
     if (aux === null) {
       // 记账类型（agent-switched / idle）上游不进模型上下文，正常会话不该因此冒披露。
       if (!V2_IGNORED_MESSAGE_TYPES.has(row.type)) bumpCount(unknown, row.type || '（空类型）');
@@ -1005,6 +1051,17 @@ function parseOpencodeV2Turns(db: DatabaseSync, sessionId: string): UnifiedTurn[
     const last = turns.at(-1)!;
     last.events = [...(last.events ?? []), ...pending];
     pending.length = 0;
+  }
+
+  // provider 原生压缩：压缩前的原文还在这份日志里（上游的本地转录同样保留），所以交接内容
+  // 可能比 OpenCode 当前发给模型的更多；同时说明它不是 --since-compact 的边界，避免头部披露
+  // 与正文「没有可用摘要」互相矛盾。只报次数与条数，窗口内容不复制。
+  if (nativeCompactions.count > 0) {
+    appendUnknownDisclosure(
+      turns,
+      `OpenCode 2.x 有 ${nativeCompactions.count} 次 provider 原生压缩（替换窗口共 ${nativeCompactions.messages} 条消息），Watch 不重放原生窗口`,
+      '压缩前的对话原文仍保留在本次交接里，可能比 OpenCode 当前发给模型的上下文更多；原生窗口只有生成它的 provider / 模型能重放，这些压缩没有可读摘要，不作为 --since-compact 的边界',
+    );
   }
 
   // 统一披露必须独立于过程记录展示与选窗；无安全载体时不造新轮次。
