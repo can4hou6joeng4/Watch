@@ -51,7 +51,7 @@ export type WorkManifest = {
   omittedCommandCalls: number;
   /** 认得出是写入类工具、但参数里读不出文件路径的调用次数（清单可能不全） */
   unreadableWrites: number;
-  /** 执行失败、因而**没有改动任何字节**的文件写入调用次数（已从文件清单里排除） */
+  /** 明确失败的文件写入调用次数；不作为成功改动计入，仍可能已部分写入 */
   failedFileWrites: number;
   /** 确有路径 / 命令被记录、但因上限被截断时为 true */
   truncated: boolean;
@@ -116,24 +116,26 @@ function isKnownFileWriter(name: string): boolean {
   return KNOWN_FILE_WRITERS.has(name.toLowerCase());
 }
 
-/**
- * 会话里所有**失败**的工具调用 ID。
- *
- * `failed` 标记在 `tool_result` 事件上（调用事件的参数里没有结果），清单只看 `tool_call`，
- * 所以先把结果侧的失败 ID 收成一张表。两种形状都认：`failed: true`（解析器统一写法）
- * 与显式的 `failed: false`（成功，不进表）。没有 callId 的结果无法与调用配对——
- * 那种情况计数不会命中，失败写入仍会进清单，所以解析器必须尽量给出 callId。
- */
-function collectFailedCallIds(turns: UnifiedTurn[]): Set<string> {
-  const ids = new Set<string>();
+/** 按来源与 ID 匹配尚未完成的调用；完成后复用 ID 不继承前一次的失败状态。 */
+function collectFailedCalls(turns: UnifiedTurn[]): Set<ProcessEvent> {
+  const failed = new Set<ProcessEvent>();
+  const pending = new Map<string, { call?: ProcessEvent; remaining: number }>();
   for (const turn of turns) {
     for (const event of turn.events ?? []) {
-      if (event.kind !== 'tool_result') continue;
-      if (event.failed !== true) continue;
-      if (event.callId) ids.add(event.callId);
+      if (!event.callId) continue;
+      const key = JSON.stringify([event.provider, event.callId]);
+      const current = pending.get(key);
+      if (event.kind === 'tool_call') {
+        // 多个未完成调用撞 ID 时无法唯一配对，全部结果到齐前不重新启用这个 ID。
+        pending.set(key, current ? { remaining: current.remaining + 1 } : { call: event, remaining: 1 });
+      } else if (event.kind === 'tool_result' && current) {
+        if (current.call && event.failed === true) failed.add(current.call);
+        current.remaining -= 1;
+        if (current.remaining === 0) pending.delete(key);
+      }
     }
   }
-  return ids;
+  return failed;
 }
 
 /** 名字明显是执行器：入参是字符串时按命令处理（Codex 的 `exec`） */
@@ -293,32 +295,30 @@ export function collectWorkManifest(
       commandIndex.set(key, entry);
       commands.push(entry);
     }
-    // 命令里内嵌的补丁同样算改动：Codex 常把 `apply_patch` 写进 heredoc
-    for (const patchPath of extractPatchPaths(command)) addFile(patchPath, 'edit');
   };
 
-  // 先收集失败的工具调用：`failed` 挂在 `tool_result` 上（调用事件本身不知道结果），
-  // 而清单只读 `tool_call` 的参数。不先建这张表，失败的 Edit 就会与成功的编辑并列——
-  // 本机只读采样 60 条 Claude 会话：11715 条结果里 255 条 `is_error`（Bash 230 / Edit 14 /
-  // Read 10 / MCP 1），每条失败的 Edit 都会凭空多出一个「改过的文件」。
-  const failedCalls = collectFailedCallIds(turns);
+  const failedCalls = collectFailedCalls(turns);
 
   for (const turn of turns) {
     for (const event of turn.events ?? []) {
       const classified = classify(event);
       if (!classified) continue;
+      const failed = failedCalls.has(event);
       if (classified.kind === 'unreadable-write') {
-        unreadableWrites += 1;
+        if (failed) failedFileWrites += 1;
+        else unreadableWrites += 1;
         continue;
       }
       if (classified.kind === 'file') {
-        // 失败的文件写入没有改动任何字节：不进清单，只计数。命令不同——失败的命令确实
-        // 执行过（跑过测试但挂了，对手者来说仍要知道它被跑过），所以只按文件这一档过滤。
-        if (event.callId && failedCalls.has(event.callId)) failedFileWrites += 1;
+        if (failed) failedFileWrites += 1;
         else addFile(classified.path, classified.mode);
         continue;
       }
+      // 失败的命令仍运行过；内嵌补丁的文件则不能据此认定成功改动。
       addCommand(classified.command, classified.workdir);
+      const patchPaths = extractPatchPaths(classified.command);
+      if (failed && patchPaths.length > 0) failedFileWrites += 1;
+      else for (const patchPath of patchPaths) addFile(patchPath, 'edit');
     }
   }
 
@@ -428,13 +428,9 @@ export function renderWorkManifest(manifest: WorkManifest): string[] {
     lines.push('');
   }
   if (manifest.failedFileWrites > 0) {
-    // 失败的文件写入没有改变任何字节，所以不进「改动过的文件」；但也不能一句话不说——
-    // 否则读者会以为助手从没试过改那个文件（它试过，报错了，可能换了别的方式重试）。
-    // **不要写「原因见过程记录」**：默认两档 `eventsPerTurn = 0`，正文里根本没有过程记录，
-    // 这句话会把读者指向一个不存在的地方。要原因就让读者自己加 `--profile verbose`，
-    // 本文档不承诺它在这儿。
+    // 失败可能发生在部分写入之后；默认档位也没有过程记录可供跳转。
     lines.push(
-      `- 另有 ${manifest.failedFileWrites} 次文件写入 / 编辑执行失败（文件未改动），未计入上面的清单。`,
+      `- 另有 ${manifest.failedFileWrites} 次文件写入 / 编辑执行失败，未作为成功改动计入上面的清单；文件可能已部分改动，请核对实际内容。`,
     );
     lines.push('');
   }
