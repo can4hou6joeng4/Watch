@@ -429,8 +429,11 @@ export function renderWorkManifest(manifest: WorkManifest): string[] {
   if (manifest.failedFileWrites > 0) {
     // 失败的文件写入没有改变任何字节，所以不进「改动过的文件」；但也不能一句话不说——
     // 否则读者会以为助手从没试过改那个文件（它试过，报错了，可能换了别的方式重试）。
+    // **不要写「原因见过程记录」**：默认两档 `eventsPerTurn = 0`，正文里根本没有过程记录，
+    // 这句话会把读者指向一个不存在的地方。要原因就让读者自己加 `--profile verbose`，
+    // 本文档不承诺它在这儿。
     lines.push(
-      `- 另有 ${manifest.failedFileWrites} 次文件写入 / 编辑执行失败（文件未改动），未计入上面的清单；原因见过程记录。`,
+      `- 另有 ${manifest.failedFileWrites} 次文件写入 / 编辑执行失败（文件未改动），未计入上面的清单。`,
     );
     lines.push('');
   }
