@@ -159,6 +159,9 @@ function pushMessage(
   if (role === 'toolResult' && ev?.callId) {
     message.toolCallId = ev.callId;
     message.toolName = ev.name ?? 'tool';
+    // 失败标记必须写回：pi 原生每条 toolResult 都带 `isError`（本机 1571 条里 30 条为
+    // true），漏写会让失败结果在目标侧变成成功，再读回来时「哪次写入没生效」已经查不到。
+    if (ev.failed === true) message.isError = true;
   }
   if (role === 'assistant') {
     // pi TUI footer 要求 assistant 消息必须带 usage，否则渲染时 uncaughtException 退出；

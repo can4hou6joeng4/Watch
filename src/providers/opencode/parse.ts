@@ -277,7 +277,8 @@ function partToEvents(part: OpencodePartData, baseTime: number, recordKey: strin
       summary: `${unfinished ? '[未完成工具调用] ' : ''}${part.tool ?? 'tool'} ${JSON.stringify(input).slice(0, 200)}`,
       provider: 'opencode',
     });
-    const output = part.state?.status === 'error' && typeof part.state.error === 'string'
+    const errored = part.state?.status === 'error';
+    const output = errored && typeof part.state?.error === 'string'
       ? `[工具执行失败] ${part.state.error}`
       : part.state?.output;
     if (!unfinished && output !== undefined) {
@@ -288,6 +289,10 @@ function partToEvents(part: OpencodePartData, baseTime: number, recordKey: strin
         detail: typeof output === 'string' ? output : JSON.stringify(output),
         summary: typeof output === 'string' ? output : JSON.stringify(output).slice(0, 200),
         provider: 'opencode',
+        // 原生 `state.status === 'error'`：失败的文件写入不进「改动概览」。
+        // `unfinished`（Watch 自己写的「来源未记录结果」）不算失败——那条根本没执行，
+        // 由既有的未完成披露负责。
+        ...(errored && !unfinished ? { failed: true } : {}),
       });
     }
   }
@@ -1106,7 +1111,16 @@ function v2AssistantTurn(
       });
       const output = v2ToolResultText(item.state, unknown);
       if (output !== undefined) {
-        events.push({ kind: 'tool_result', timestamp, callId, detail: output, summary: output.slice(0, 200), provider: 'opencode' });
+        events.push({
+          kind: 'tool_result',
+          timestamp,
+          callId,
+          detail: output,
+          summary: output.slice(0, 200),
+          provider: 'opencode',
+          // 原生 `state.status === 'error'`：失败的文件写入不进「改动概览」。
+          ...(item.state?.status === 'error' ? { failed: true } : {}),
+        });
       }
     } else {
       bumpCount(unknown, `content:${item.type ?? '（空类型）'}`);

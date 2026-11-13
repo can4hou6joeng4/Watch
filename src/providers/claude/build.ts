@@ -321,7 +321,16 @@ function emitClaudeEvent(
     record.type = 'user';
     record.message = {
       role: 'user',
-      content: [{ type: 'tool_result', tool_use_id: callId, content: ev.detail ?? ev.summary, is_error: false }],
+      content: [
+        {
+          type: 'tool_result',
+          tool_use_id: callId,
+          content: ev.detail ?? ev.summary,
+          // 来源标注为失败的结果必须原样写成 `is_error`：以前一律写 false，于是
+          // 「失败的 Edit」转入 Claude 后变成成功结果，再读回来时失败事实已经消失。
+          is_error: ev.failed === true,
+        },
+      ],
     };
     ctx.push(record);
     return;

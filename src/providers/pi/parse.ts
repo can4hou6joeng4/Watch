@@ -119,6 +119,9 @@ export async function parsePiSession(ref: SessionRef): Promise<UnifiedTurn[]> {
         provider: 'pi',
         name,
         callId,
+        // 原生 `isError`：本机 10 条会话 1571 条 toolResult 里 30 条为 true。
+        // 失败的文件写入不得进「改动概览」，失败的命令仍算「运行过」。
+        ...(msg.isError === true ? { failed: true } : {}),
       });
       continue;
     }

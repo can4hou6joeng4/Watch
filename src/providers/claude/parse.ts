@@ -429,6 +429,10 @@ function extractRich(
           summary: '工具返回',
           detail,
           callId,
+          // 原生 `is_error`：失败结果必须留住这个事实，否则失败的文件写入会被
+          // 「改动概览」当成一次真实改动（本机 60 条会话里 255 条失败结果）。
+          // 只在明确为 true 时标记；缺省（老记录 / 非 Claude 记录）保持 undefined。
+          ...(b.is_error === true ? { failed: true } : {}),
         });
         break;
       }

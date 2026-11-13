@@ -350,7 +350,15 @@ function buildToolPartData(ev: ProcessEvent, fallbackCallId: string, time: numbe
   };
   // 调用先按明确失败保存，匹配到真实结果后才改成 completed；缺结果时也符合原生状态 schema。
   if (ev.kind === 'tool_call') state.error = '[未完成工具调用] 来源会话未记录工具结果，交接时按失败状态保存';
-  if (ev.kind === 'tool_result') state.output = ev.detail ?? ev.summary ?? '';
+  if (ev.kind === 'tool_result') {
+    state.output = ev.detail ?? ev.summary ?? '';
+    // 来源标注为失败的结果写回 `status: 'error'`（原生用这个状态表达工具失败）。
+    // 以前一律写 completed：失败的编辑转进 opencode 后变成成功，再读回来失败事实已经没了。
+    if (ev.failed === true) {
+      state.status = 'error';
+      state.error = ev.detail ?? ev.summary ?? '工具执行失败';
+    }
+  }
   return JSON.stringify({ type: 'tool', callID: ev.callId || fallbackCallId, tool: ev.kind === 'tool_call' ? ev.name : 'tool', state });
 }
 
