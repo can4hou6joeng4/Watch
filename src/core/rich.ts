@@ -744,7 +744,13 @@ export function describeUnansweredTail(
   if (!tail) return null;
   const full = tail.text.trim().replace(/\s+/g, ' ');
   const preview = full.length > 40 ? `${full.slice(0, 40)}…` : full;
-  return `${label}最后停在用户消息上（「${preview}」），没有对应的助手回复：这一轮可能被中断或还在生成，${next}`;
+  // 来源日志已经写明失败 / 中止时，不能再说「可能还在生成」——两句话并列会自相矛盾。
+  // 标记由解析器的失败披露事件携带（`ProcessEvent.tailFailure`），只改这一句，不压掉警告。
+  const confirmed = (tail.events ?? []).find((e) => e.kind === 'text' && e.tailFailure)?.tailFailure;
+  const reason = confirmed
+    ? `这一轮在来源日志里以${confirmed === 'cancelled' ? '中止' : '失败'}结束（不是仍在生成）`
+    : '这一轮可能被中断或还在生成';
+  return `${label}最后停在用户消息上（「${preview}」），没有对应的助手回复：${reason}，${next}`;
 }
 
 /**

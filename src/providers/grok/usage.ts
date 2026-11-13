@@ -3,6 +3,7 @@ import { dirname, join } from 'node:path';
 import type { SessionRef, TokenUsage } from '../../core/types.js';
 import { parseJsonObject } from '../../core/jsonl.js';
 import { describeSessionReadFailure, isMissingPathError } from '../../core/read-text.js';
+import { createGrokFailureCounts, readGrokRetryState, readGrokTurnCompleted, type GrokFailureCounts } from './failure.js';
 
 /**
  * 用量所在的旁路文件：与 `chat_history.jsonl` 同目录的 `updates.jsonl`。
@@ -65,13 +66,13 @@ export async function grokUpdateTurnUsages(updatesPath: string): Promise<TokenUs
 }
 
 /**
- * `updates.jsonl` 的单次扫描结果：逐轮用量 + 上下文压缩次数。
+ * `updates.jsonl` 的单次扫描结果：逐轮用量 + 上下文压缩次数 + 失败 / 重试计数。
  *
- * 搬运层需要两者（用量挂到 assistant 轮，压缩次数写成上下文披露），却只该读一遍文件：
- * 分开读会让同一条会话在大文件上多付一次 IO，也让「文件读不出来」出现两种处理方式。
+ * 搬运层需要三者（用量挂到 assistant 轮，压缩次数与失败计数写成上下文披露），却只该读一遍文件：
+ * 分开读会让同一条会话在大文件上多付一次 IO，也让「文件读不出来」出现多种处理方式。
  * 信息层仍只关心用量，经 `grokUpdateTurnUsages()` 取 `usages`。
  */
-export type GrokUpdateScan = { usages: TokenUsage[]; compactions: number; badLines: number };
+export type GrokUpdateScan = { usages: TokenUsage[]; compactions: number; badLines: number; failures: GrokFailureCounts };
 
 export async function grokUpdateScan(updatesPath: string): Promise<GrokUpdateScan | null> {
   let raw: string;
@@ -82,6 +83,7 @@ export async function grokUpdateScan(updatesPath: string): Promise<GrokUpdateSca
     throw new Error(describeSessionReadFailure(updatesPath, error));
   }
   const usages: TokenUsage[] = [];
+  const failures = createGrokFailureCounts();
   let compactions = 0;
   let badLines = 0;
   for (const line of raw.split('\n')) {
@@ -100,12 +102,20 @@ export async function grokUpdateScan(updatesPath: string): Promise<GrokUpdateSca
       compactions += 1;
       continue;
     }
+    if (update.sessionUpdate === 'retry_state') {
+      // 独立 update 类型（不是 turn_completed 的字段）；`reason` 带完整上游 URL，
+      // 只认 `error_type` 这个枚举（见 failure.ts）。
+      readGrokRetryState(update, failures);
+      continue;
+    }
     if (update.sessionUpdate !== 'turn_completed') continue;
+    // 结束原因与用量各读各的：失败轮可能没有 usage，有 usage 的轮次也可能以失败收尾
+    readGrokTurnCompleted(update, failures);
     const u = pick(update.usage);
     if (!u) continue;
     usages.push(u);
   }
-  return { usages, compactions, badLines };
+  return { usages, compactions, badLines, failures };
 }
 
 function pick(usage: unknown): TokenUsage | null {

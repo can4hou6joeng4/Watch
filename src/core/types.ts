@@ -61,4 +61,11 @@ export type ProcessEvent = {
     url?: string;
     filename?: string;
   };
+  /**
+   * 来源日志已确认这一轮是失败 / 中止收尾（不是「还在生成」）。
+   * 由解析器在失败披露事件上标记；`describeUnansweredTail()` 据此改写兜底句，
+   * 避免「日志说已失败」与「可能还在生成」两句话并列自相矛盾。
+   * 不参与 round-trip 校验，也不写入目标格式。
+   */
+  tailFailure?: 'error' | 'cancelled';
 };

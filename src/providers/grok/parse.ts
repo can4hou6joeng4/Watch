@@ -3,6 +3,7 @@ import { dirname, join } from 'node:path';
 import { ensureAssistant, normalizeUserText, pushEvent, stripEmptyEvents, summarize, WATCH_CONTEXT_DISCLOSURE_PREFIX } from '../../core/rich.js';
 import { asJsonObject, parseJsonObject } from '../../core/jsonl.js';
 import type { ProcessEvent, SessionRef, UnifiedTurn } from '../../core/types.js';
+import { grokFailureDisclosure, grokTailFailed } from './failure.js';
 import { grokUpdateScan } from './usage.js';
 
 type ChatLine =
@@ -268,10 +269,29 @@ async function attachGrokSidecars(chatPath: string, turns: UnifiedTurn[]): Promi
   if (!scan) return turns;
   if (scan.usages.length > 0) {
     const assistants = turns.filter((t) => t.role === 'assistant');
-    if (assistants.length === scan.usages.length) {
+    // 三份数量必须同时对齐才挂：结束记录、带用量的记录、助手轮。只要失败轮或空回复让其中
+    // 任何一个不等，按顺序套就会把第 N 轮的用量挂到别人头上。
+    const aligned =
+      scan.failures.turnCompletions === assistants.length && scan.usages.length === assistants.length;
+    if (aligned) {
       for (let i = 0; i < assistants.length; i++) assistants[i].usage = scan.usages[i];
+    } else {
+      // 对不上就不挂（见上方注释），但**不能不说**：目标会话里每轮都是 0/0，
+      // 而 `watch open` 的 note 还写着「来源 Grok 用量 …（已在对账中携带）」，
+      // 两处口径互相矛盾。失败轮没有 usage 时正好落进这一档。
+      disclose(
+        `Grok 日志里有 ${scan.failures.turnCompletions} 条轮次结束记录、${scan.usages.length} 条带用量，` +
+        `但只解析出 ${assistants.length} 个助手轮，数量对不上：逐轮用量无法对应，这次交接不携带逐轮用量` +
+        `（会话合计用量由 watch usage / open 单独列出）；不按顺序硬套是为了避免把某一轮的用量挂到另一轮头上。`,
+      );
     }
   }
+  // 尾部失败 + 解析停在用户轮：下游 `describeUnansweredTail` 会说「可能被中断或还在生成」，
+  // 这句在这里是**错的**（日志已明确写了 error / cancelled）。Grok 的 parse 必须跳过空助手行
+  // （重放去重依赖它），不能像 Claude / Pi 那样补空轮承载披露，所以在披露里点明真原因。
+  const tailUnanswered = grokTailFailed(scan.failures) && turns.at(-1)?.role === 'user';
+  const failureEvent = grokFailureDisclosure(scan.failures, carrier?.timestamp ?? '', tailUnanswered);
+  if (failureEvent && carrier) pushEvent(carrier, failureEvent);
   // 坏行本身已经由用量层（`usageBadLines`）在 prompt 头部 / open / handoff / usage 四处披露，
   // 这里不再单独重复一句；但坏行可能吞掉 compaction_checkpoint，压缩计数就只是下界——
   // 那句话必须挂在压缩披露里，不能把「读到 N 次」讲成「一共 N 次」。
