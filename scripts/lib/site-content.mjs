@@ -1,4 +1,4 @@
-export const siteDate = '2026-10-14';
+export const siteDate = '2026-11-13';
 export const siteUrl = 'https://relay.bobochang.cn';
 export const repo = 'https://github.com/can4hou6joeng4/Watch';
 export const maintainer = { name: 'can4hou6joeng4', url: 'https://bobochang.cn', github: 'https://github.com/can4hou6joeng4', locality: 'Guangzhou' };
