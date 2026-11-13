@@ -1906,6 +1906,16 @@ async function cmdPrompt(
       markdown: result.markdown,
       stats: result.stats,
       findings: result.findings,
+      // 脚本拿得到结构化的改动清单，不必去解析 Markdown 里的那一节
+      ...(result.manifest.files.length || result.manifest.commands.length ? {
+        manifest: {
+          files: result.manifest.files,
+          commands: result.manifest.commands,
+          ...(result.manifest.omittedFiles ? { omittedFiles: result.manifest.omittedFiles } : {}),
+          ...(result.manifest.omittedCommands ? { omittedCommands: result.manifest.omittedCommands } : {}),
+          ...(result.manifest.unreadableWrites ? { unreadableWrites: result.manifest.unreadableWrites } : {}),
+        },
+      } : {}),
       ...(warnings.length ? { warnings } : {}),
     }));
     return;
@@ -1914,6 +1924,14 @@ async function cmdPrompt(
   // 诊断一律走 stderr，否则重定向后的文件里会混进「警告: …」。
   for (const warning of warnings) console.error(`警告: ${warning}`);
   for (const line of describeFindings(result.findings)) console.error(`说明: ${line}`);
+  // 清单为空时提一句会被当成「这次没改文件」，而实际可能只是入参形状没识别——
+  // 所以只在**清单非空**时提示它有多少条，让用户知道正文里多了一节。
+  if (result.stats.manifestFiles > 0 || result.stats.manifestCommands > 0) {
+    console.error(
+      `说明: 正文「改动概览」列出 ${result.stats.manifestFiles} 个文件、${result.stats.manifestCommands} 条命令` +
+        `${result.manifest.truncated ? '（有截断，见该节）' : ''}；这份清单覆盖整条会话，不受档位裁剪影响`,
+    );
+  }
   if (result.stats.omittedTurns > 0 || result.stats.omittedEvents > 0) {
     console.error(
       `提示: 当前档位（${result.profile}）省略了 ${result.stats.omittedTurns} 轮 / ${result.stats.omittedEvents} 条过程记录；` +
