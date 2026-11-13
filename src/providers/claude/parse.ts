@@ -1,4 +1,3 @@
-import { readFile } from 'node:fs/promises';
 import {
   CLAUDE_COMPACT_SUMMARY_PREFIX,
   CLAUDE_THINKING_PREFIX,
@@ -11,6 +10,7 @@ import {
   unwrapUserQuery,
   WATCH_CONTEXT_DISCLOSURE_PREFIX,
 } from '../../core/rich.js';
+import { iterateFileLines } from '../../core/read-text.js';
 import type { ProcessEvent, SessionRef, TokenUsage, UnifiedTurn } from '../../core/types.js';
 import { describeClaudeContinuation, probeClaudeContinuation, readContinuedInRecord, type ClaudeContinuationCounts } from './continuation.js';
 import {
@@ -38,7 +38,6 @@ import { describeQueuedImages, readQueuedUserPrompt } from './queued.js';
  * - 丢弃首条 user 之前的记录
  */
 export async function parseClaudeSession(ref: SessionRef): Promise<UnifiedTurn[]> {
-  const raw = await readFile(ref.filePath, 'utf8');
   const turns: UnifiedTurn[] = [];
   let sawUser = false;
   const lastTextEvents = new Map<UnifiedTurn, ProcessEvent>();
@@ -60,7 +59,9 @@ export async function parseClaudeSession(ref: SessionRef): Promise<UnifiedTurn[]
   // 之后每次交接都重复报同一份增量（2026-11-13 合成复现）。
   let tailFailure = false;
 
-  for (const line of raw.split('\n')) {
+  // 逐行流式读取：真实会话可能超过 V8 的字符串上限（本机实测 695 MB），整份 readFile 会抛
+  // `Invalid string length`，一条完好的会话因此完全读不了。逐行读没有这个天花板。
+  for await (const line of iterateFileLines(ref.filePath)) {
     const trimmed = line.trim();
     if (!trimmed) continue;
     let record: unknown;

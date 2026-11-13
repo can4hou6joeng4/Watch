@@ -1,9 +1,10 @@
-import { access, mkdir, readdir, readFile, stat } from 'node:fs/promises';
+import { access, mkdir, readdir, stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { appendFileAtomic, writeFileAtomic } from '../../core/atomic.js';
 import { escapeControlChars } from '../../core/display.js';
+import { iterateFileLines } from '../../core/read-text.js';
 import { verifyWrittenTurns } from '../../core/verify.js';
 import { claudeBashInput, CLAUDE_THINKING_PREFIX, ENCRYPTED_THINKING, toClaudeToolName, turnHasContent, WATCH_CONTEXT_DISCLOSURE_PREFIX } from '../../core/rich.js';
 import { parseClaudeSession } from './parse.js';
@@ -28,31 +29,35 @@ async function detectClaudeIdentity(projectsDir: string): Promise<ClaudeIdentity
   const files = await newestJsonlPaths(projectsDir, 10);
   let detectedVersion: string | undefined;
   for (const file of files) {
-    let content: string;
+    let fileVersion: string | undefined;
     try {
-      content = await readFile(file, 'utf8');
+      // 只读前 200 行，而且是流式的：这里只为探测 model / version，目标目录里可能躺着
+      // 663 MB 的会话（本机实测），整份 readFile 会抛 `Invalid string length` 而被
+      // 静默跳过——探测不到身份就退回默认 model，写出的会话与原生不一致。
+      let seen = 0;
+      for await (const line of iterateFileLines(file)) {
+        if (seen >= 200) break;
+        seen += 1;
+        let parsed: unknown;
+        try {
+          parsed = JSON.parse(line);
+        } catch {
+          continue;
+        }
+        // JSON 值不一定是消息对象；与正文解析一致跳过，不能让 null 中断身份探测。
+        if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) continue;
+        const record = parsed as Record<string, unknown>;
+        fileVersion ??= typeof record.version === 'string' ? record.version : undefined;
+        if (record.type !== 'assistant') continue;
+        const message = record.message as Record<string, unknown> | undefined;
+        const model = typeof message?.model === 'string' ? message.model : undefined;
+        const messageId = typeof message?.id === 'string' ? message.id : '';
+        if (model?.startsWith('claude-') && !generatedOriginLabel(messageId)) {
+          return { model, version: fileVersion ?? detectedVersion };
+        }
+      }
     } catch {
       continue;
-    }
-    let fileVersion: string | undefined;
-    for (const line of content.split('\n').slice(0, 200)) {
-      let parsed: unknown;
-      try {
-        parsed = JSON.parse(line);
-      } catch {
-        continue;
-      }
-      // JSON 值不一定是消息对象；与正文解析一致跳过，不能让 null 中断身份探测。
-      if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) continue;
-      const record = parsed as Record<string, unknown>;
-      fileVersion ??= typeof record.version === 'string' ? record.version : undefined;
-      if (record.type !== 'assistant') continue;
-      const message = record.message as Record<string, unknown> | undefined;
-      const model = typeof message?.model === 'string' ? message.model : undefined;
-      const messageId = typeof message?.id === 'string' ? message.id : '';
-      if (model?.startsWith('claude-') && !generatedOriginLabel(messageId)) {
-        return { model, version: fileVersion ?? detectedVersion };
-      }
     }
     detectedVersion ??= fileVersion;
   }
@@ -364,10 +369,11 @@ function claudeImageBlock(ev: ProcessEvent): Record<string, unknown> | null {
  * parse 判成歧义，后端校验的后缀回退还可能看不出问题）。这里只读、不改通用增量算法。
  */
 async function scanClaudeTarget(filePath: string): Promise<{ lastUuid: string | null; callIds: Set<string> }> {
-  const raw = await readFile(filePath, 'utf8');
   let lastUuid: string | null = null;
   const callIds = new Set<string>();
-  for (const line of raw.split('\n')) {
+  // 流式逐行：目标可能是大会话（本机实测有 663 MB 的一条），整份 readFile 会抛
+  // `Invalid string length`——追加前的重复调用检查就会变成「目标读不出来」，写不进去。
+  for await (const line of iterateFileLines(filePath)) {
     if (!line.trim()) continue;
     let parsed: unknown;
     try {

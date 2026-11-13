@@ -1,11 +1,11 @@
 import { execFile } from 'node:child_process';
 import { describeDetectFailure, isCommandMissing, resolveCli } from '../../core/platform.js';
-import { readdir, readFile, stat } from 'node:fs/promises';
+import { readdir, stat } from 'node:fs/promises';
 import path from 'node:path';
 import { promisify } from 'node:util';
 import { digestFile } from '../../core/atomic.js';
 import type { FileDigest } from '../../core/atomic.js';
-import { describeEmptySessionFile, describePathReadFailureReason, isMissingPathError } from '../../core/read-text.js';
+import { describeEmptySessionFile, describePathReadFailureReason, isMissingPathError, iterateFileLines, readTextHead } from '../../core/read-text.js';
 import { asJsonObject, parseJsonObject } from '../../core/jsonl.js';
 import { escapeControlChars } from '../../core/display.js';
 import { SessionLookupFailureError } from '../adapter.js';
@@ -77,7 +77,10 @@ export async function claudeSessionCwdDetail(
 ): Promise<{ cwd: string | null; error?: string }> {
   let raw: string;
   try {
-    raw = await readFile(filePath, 'utf8');
+    // 只读头部：cwd 在记录的最前面几十行里，而真实会话可能大到超过 V8 的字符串上限
+    // （本机实测有一条 695 MB，`readFile(..., 'utf8')` 抛 `Invalid string length`，
+    // 被讲成「读不出工作目录，先修好这条会话」——文件其实完好，只是不该整份读进内存）。
+    raw = await readTextHead(filePath, CWD_HEAD_BYTES);
   } catch (error) {
     return { cwd: null, error: describePathReadFailureReason(error) };
   }
@@ -86,6 +89,12 @@ export async function claudeSessionCwdDetail(
   const cwd = cwdFromClaudeRaw(raw);
   return cwd ? { cwd } : { cwd: null, error: '前 60 行里没有 cwd 字段' };
 }
+
+/**
+ * cwd 探测读多少字节。Claude 的首条 user 记录通常在前几 KB 内，64 KB 足够覆盖 60 行
+ * （即使其中夹着很长的工具输出）；比上限更大的会话也不会因此读错——只是多读了点。
+ */
+const CWD_HEAD_BYTES = 64 * 1024;
 
 export async function claudeSessionCwd(filePath: string): Promise<string | null> {
   return (await claudeSessionCwdDetail(filePath)).cwd;
@@ -224,9 +233,11 @@ export async function listClaudeSessions(
 }
 
 async function claudeFirstUserText(filePath: string): Promise<{ text: string | null; error?: string }> {
-  let content: string;
+  // 0 字节要单独判：流式读取对空文件没有任何行，走到底会说「还没有用户消息」，
+  // 而这条文件其实是内容已丢失（open / switch 同样读不了它）。
+  let size: number;
   try {
-    content = await readFile(filePath, 'utf8');
+    size = (await stat(filePath)).size;
   } catch (error) {
     const code = (error as NodeJS.ErrnoException).code;
     // 列目录 / stat 到读文件之间被删掉算正常（列表本来就来自一次快照）；其余读不出来不能
@@ -236,27 +247,34 @@ async function claudeFirstUserText(filePath: string): Promise<{ text: string | n
     return { text: null, error: describePathReadFailureReason(error) };
   }
   // 0 字节不是「还没有用户消息」：内容已经没了，open / switch 同样读不了它
-  if (content.length === 0) return { text: null, error: describeEmptySessionFile(filePath) };
-  for (const line of content.split('\n')) {
-    if (!line.trim()) continue;
-    const record = parseJsonObject(line);
-    if (!record || record.type !== 'user' || record.isMeta === true) continue;
-    const message = asJsonObject(record.message);
-    // content 数组里可能有 null / 标量：逐项判对象，否则单个 null 元素会让整条
-    // 首条用户消息被 catch 吞掉，第二条消息错占预览。
-    const text =
-      typeof message?.content === 'string'
-        ? message.content
-        : Array.isArray(message?.content)
+  if (size === 0) return { text: null, error: describeEmptySessionFile(filePath) };
+  try {
+    // 逐行流式读取，命中首条用户消息就停：整份 readFile 在 >512 MB 的会话上抛
+    // `Invalid string length`（本机 663 MB 实测），而预览只需要最前面几条记录。
+    for await (const line of iterateFileLines(filePath)) {
+      if (!line.trim()) continue;
+      const record = parseJsonObject(line);
+      if (!record || record.type !== 'user' || record.isMeta === true) continue;
+      const message = asJsonObject(record.message);
+      // content 数组里可能有 null / 标量：逐项判对象，否则单个 null 元素会让整条
+      // 首条用户消息被 catch 吞掉，第二条消息错占预览。
+      const text =
+        typeof message?.content === 'string'
           ? message.content
-              .map((b) => asJsonObject(b))
-              .filter((b): b is Record<string, unknown> => b !== null)
-              .filter((b) => b.type === 'text' && typeof b.text === 'string')
-              .map((b) => b.text as string)
-              .join(' ')
-          : '';
-    const clean = text.replace(/\s+/g, ' ').trim();
-    if (clean) return { text: clean.slice(0, 80) };
+          : Array.isArray(message?.content)
+            ? message.content
+                .map((b) => asJsonObject(b))
+                .filter((b): b is Record<string, unknown> => b !== null)
+                .filter((b) => b.type === 'text' && typeof b.text === 'string')
+                .map((b) => b.text as string)
+                .join(' ')
+            : '';
+      const clean = text.replace(/\s+/g, ' ').trim();
+      if (clean) return { text: clean.slice(0, 80) };
+    }
+  } catch (error) {
+    // 上面 stat 成功后文件仍可能读不出来（权限、I/O、边读边删），照样不能讲成「没有预览」
+    return { text: null, error: describePathReadFailureReason(error) };
   }
   return { text: null };
 }

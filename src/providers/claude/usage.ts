@@ -1,15 +1,7 @@
-import { readFile } from 'node:fs/promises';
 import type { SessionRef, TokenUsage } from '../../core/types.js';
-import { describeSessionReadFailure } from '../../core/read-text.js';
+import { describeSessionReadFailure, iterateFileLines } from '../../core/read-text.js';
 
 export async function claudeSessionUsage(ref: SessionRef): Promise<TokenUsage | null> {
-  let raw: string;
-  try {
-    raw = await readFile(ref.filePath, 'utf8');
-  } catch (error) {
-    // 读不出来不等于「这家原生没有 usage 字段」：交给调用方按原因披露（chainUsage / open 都会写进 warnings）
-    throw new Error(describeSessionReadFailure(ref.filePath, error));
-  }
   let input = 0;
   let output = 0;
   let hit = false;
@@ -26,31 +18,39 @@ export async function claudeSessionUsage(ref: SessionRef): Promise<TokenUsage | 
   // 多行完全相同时取最大与取第一份结果一致，对现有数据零行为变化。
   // 没有 `message.id` 的记录（如顶层的 `result.usage`）照旧各自累加——那本来就是不同的计数。
   const bestByMessageId = new Map<string, TokenUsage>();
-  for (const line of raw.split('\n')) {
-    if (!line.trim()) continue;
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(line);
-    } catch {
-      continue;
-    }
-    // 非对象只跳过该行，其余有效用量继续统计；入口按共用坏行计数披露下界。
-    if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) continue;
-    const rec = parsed as Record<string, unknown>;
-    const message = rec.message as Record<string, unknown> | undefined;
-    const u = pick(rec.usage) ?? pick(message?.usage);
-    if (!u) continue;
-    const messageId = typeof message?.id === 'string' && message.id ? message.id : null;
-    if (messageId) {
-      const prev = bestByMessageId.get(messageId);
-      if (!prev || u.inputTokens + u.outputTokens > prev.inputTokens + prev.outputTokens) {
-        bestByMessageId.set(messageId, u);
+  try {
+    // 逐行流式读取：会话文件可能超过 V8 的字符串上限（本机实测 695 MB），整份 readFile
+    // 会抛 `Invalid string length`，于是一条完好的会话被报成「读不出来」。
+    for await (const line of iterateFileLines(ref.filePath)) {
+      if (!line.trim()) continue;
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(line);
+      } catch {
+        continue;
       }
-      continue;
+      // 非对象只跳过该行，其余有效用量继续统计；入口按共用坏行计数披露下界。
+      if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) continue;
+      const rec = parsed as Record<string, unknown>;
+      const message = rec.message as Record<string, unknown> | undefined;
+      const u = pick(rec.usage) ?? pick(message?.usage);
+      if (!u) continue;
+      const messageId = typeof message?.id === 'string' && message.id ? message.id : null;
+      if (messageId) {
+        const prev = bestByMessageId.get(messageId);
+        if (!prev || u.inputTokens + u.outputTokens > prev.inputTokens + prev.outputTokens) {
+          bestByMessageId.set(messageId, u);
+        }
+        continue;
+      }
+      hit = true;
+      input += u.inputTokens;
+      output += u.outputTokens;
     }
-    hit = true;
-    input += u.inputTokens;
-    output += u.outputTokens;
+  } catch (error) {
+    // 读不出来不等于「这家原生没有 usage 字段」：交给调用方按原因披露。
+    // 流式迭代可能读到一半才失败（磁盘 I/O、文件被删），所以不能只包住「打开」那一步。
+    throw new Error(describeSessionReadFailure(ref.filePath, error));
   }
   for (const u of bestByMessageId.values()) {
     hit = true;

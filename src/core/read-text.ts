@@ -1,4 +1,6 @@
+import { createReadStream } from 'node:fs';
 import { open, readFile, stat } from 'node:fs/promises';
+import { createInterface } from 'node:readline';
 import { escapeControlChars } from './display.js';
 
 /**
@@ -18,6 +20,79 @@ export async function readTextOrEmpty(filePath: string, label = '既有会话文
     throw new Error(
       `读取${label}失败：${describePathReadFailureReason(error)}（${escapeControlChars(filePath)}）；未写入，避免用空内容覆盖既有历史`,
     );
+  }
+}
+
+/**
+ * 只读文件头部，最多 `maxBytes` 字节；返回已按 UTF-8 解码的文本。
+ *
+ * 为什么需要它：会话文件可能大到超过 V8 的字符串上限（约 512 MB），`readFile(path, 'utf8')`
+ * 会抛 `Invalid string length`——错误里没有 code，被 `describePathReadFailureReason()` 原样
+ * 带出，于是「文件太大」被讲成「会话坏了，先修好它」。而「只要前几十行里的 cwd」这类需求
+ * 根本不需要读完：只读头部既避开上限，也把一次几百 MB 的读取变成几 KB。
+ *
+ * 不在字节中间截断 UTF-8 字符：`StringDecoder` 会缓冲不完整的多字节序列，末尾最多丢一个
+ * 字符——对「取 cwd 字段 / 判首行」这类用途无损。文件短于 `maxBytes` 时全部返回。
+ */
+export async function readTextHead(filePath: string, maxBytes: number): Promise<string> {
+  const handle = await open(filePath, 'r');
+  try {
+    const buffer = Buffer.allocUnsafe(Math.max(0, maxBytes));
+    let total = 0;
+    while (total < buffer.length) {
+      const { bytesRead } = await handle.read(buffer, total, buffer.length - total, total);
+      if (bytesRead === 0) break;
+      total += bytesRead;
+    }
+    return decodeUtf8Head(buffer.subarray(0, total));
+  } finally {
+    await handle.close().catch(() => {});
+  }
+}
+
+/** 解 UTF-8 头部；末尾可能被截断的多字节序列按丢弃处理，不产生替换字符。 */
+function decodeUtf8Head(bytes: Buffer): string {
+  // 从末尾往回数续字节，定位最后一个字符的起始位置。**扫描时不要移动截断点**：
+  // 先按续字节数把 end 减下去，再发现这个字符其实完整，就会把一个完整字符白白丢掉。
+  let cut = bytes.length;
+  let i = cut - 1;
+  let continuations = 0;
+  while (i >= 0 && continuations < 4 && (bytes[i] & 0b1100_0000) === 0b1000_0000) {
+    i -= 1;
+    continuations += 1;
+  }
+  if (i >= 0) {
+    const lead = bytes[i];
+    const needed = lead >= 0xf0 ? 4 : lead >= 0xe0 ? 3 : lead >= 0xc0 ? 2 : 1;
+    // 已经读到的字节不够组成一个字符：从它的起始字节起整体丢弃
+    if (cut - i < needed) cut = i;
+  }
+  return bytes.subarray(0, cut).toString('utf8');
+}
+
+/**
+ * 流式逐行读取文本文件（含最后一行不以换行结尾的情况）。
+ *
+ * 为什么需要它：会话文件可以大到超过 V8 的字符串上限（约 512 MB），`readFile(path, 'utf8')`
+ * 直接抛 `Invalid string length`——本机实测有一条 695 MB 的 Claude 会话，`parse` 因此
+ * 完全读不了它。逐行流式读取既没有整份字符串的天花板，也把峰值内存从「整个文件」
+ * 降到「一行」。
+ *
+ * 错误照原样抛出（保留 `ENOENT` / `EACCES` 等 code），调用方沿用既有的中文分档：
+ * 这里不替上层决定「读不出来」该怎么讲。`readline` 的 `'error'` 会经 async 迭代抛出，
+ * 不需要额外监听器（与 `createInterface` 同步用法不同）。
+ */
+export async function* iterateFileLines(filePath: string): AsyncGenerator<string> {
+  const stream = createReadStream(filePath, { encoding: 'utf8' });
+  const rl = createInterface({ input: stream, crlfDelay: Infinity });
+  try {
+    for await (const line of rl) {
+      // `crlfDelay: Infinity` 已把 `\r\n` 归一成 `\n`，这里只需去掉行尾可能残留的 `\r`
+      yield line.endsWith('\r') ? line.slice(0, -1) : line;
+    }
+  } finally {
+    rl.close();
+    stream.destroy();
   }
 }
 
