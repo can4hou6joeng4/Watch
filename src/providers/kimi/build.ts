@@ -591,7 +591,7 @@ function eventToWireLines(ev: ProcessEvent, turnId: string, stepUuid: string, ti
           step: 1,
           stepUuid,
           toolCallId: ev.callId ?? `call_${randomUUID().replace(/-/g, '').slice(0, 24)}`,
-          result: { output: ev.detail ?? ev.summary ?? '' },
+          result: { output: ev.detail ?? ev.summary ?? '', ...(ev.failed === true ? { isError: true } : {}) },
         },
         time: t,
       }),

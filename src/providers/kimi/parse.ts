@@ -457,6 +457,7 @@ function processLoopEvent(
       summary: detail ? summarize(detail, '工具返回') : '工具返回',
       detail,
       callId,
+      ...(result?.isError === true ? { failed: true } : {}),
     });
     return;
   }
