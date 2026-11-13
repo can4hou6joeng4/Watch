@@ -59,6 +59,11 @@ function parseCodexRaw(raw: string): { turns: UnifiedTurn[]; usesEventFallback: 
   let hasResponseMessages = false;
   const finalized = new WeakSet<UnifiedTurn>();
   const acceptAssistant = (turn: UnifiedTurn, text: string, timestamp: string, p: Record<string, unknown>): void => {
+    // Watch 披露不是助手答复或阶段回复；终稿之后也要保留，且不能改变正文 / incomplete。
+    if (text.startsWith(WATCH_CONTEXT_DISCLOSURE_PREFIX)) {
+      pushEvent(turn, { kind: 'text', summary: text, detail: text, timestamp, provider: 'codex' });
+      return;
+    }
     const isMidTurn = p.phase === 'commentary' || p.phase === 'partial_answer';
     if (isMidTurn && finalized.has(turn)) return;
     // 只跳过带 Watch 标记且与最近结构事件对应的回显；原生同文说明仍须保留。
