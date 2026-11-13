@@ -55,6 +55,10 @@ export async function parseClaudeSession(ref: SessionRef): Promise<UnifiedTurn[]
   // 逐条挂事件会让一个 146 次错误的会话刷满同一句话。
   const failures: ClaudeFailureCounts = createClaudeFailureCounts();
   let lastFailureTimestamp = '';
+  // 失败之后是否再没有产生轮次的记录。只有这种**尾部**失败才补空正文助手轮：
+  // 中途失败当场造轮时，写入侧会跳过「无正文且无事件」的轮次，目标永远比来源少一轮，
+  // 之后每次交接都重复报同一份增量（2026-11-13 合成复现）。
+  let tailFailure = false;
 
   for (const line of raw.split('\n')) {
     const trimmed = line.trim();
@@ -86,6 +90,7 @@ export async function parseClaudeSession(ref: SessionRef): Promise<UnifiedTurn[]
       const queuedTurn: UnifiedTurn = { role: 'user', text: withImages, timestamp: queuedPrompt.timestamp };
       turns.push(queuedTurn);
       queued.push({ turn: queuedTurn, sourceUuid: queuedPrompt.sourceUuid });
+      tailFailure = false;
       continue;
     }
     if (typeof record !== 'object' || record === null) continue;
@@ -105,19 +110,22 @@ export async function parseClaudeSession(ref: SessionRef): Promise<UnifiedTurn[]
         // 纯 `system/api_error` 收尾时日志里没有助手记录，轮次会停在用户轮上，
         // `unansweredUserTail()` 就会把「上游失败」讲成「可能被中断或还在生成」。
         // 与 OpenCode 失败轮同口径：造一个空正文助手轮承载失败事实，不伪造正文。
-        if (turns.at(-1)?.role === 'user') ensureAssistant(turns, timestamp, 'claude');
+        // 是否真的落在尾部要等循环结束才确定（后面可能还有别的助手记录），见 tailFailure。
+        tailFailure = true;
       }
       continue;
     }
     if (type === 'assistant' && r.isApiErrorMessage === true) {
       if (!sawUser) continue;
       // 失败轮只保留事实，**不写 turn.text**：正文那句 `API Error: …` 是机器生成的错误行，
-      // 写进目标会被接手的一侧当成助手的最终答复。`ensureAssistant` 复用已有助手轮，
-      // 所以真实回复在前时它不会被覆盖。
-      const last = ensureAssistant(turns, timestamp, 'claude');
+      // 写进目标会被接手的一侧当成助手的最终答复。
+      // **不在这里补轮**：中断前的真实回复已经建出助手轮时 `ensureAssistant` 复用它，
+      // 中途失败（后面还有真实回复）也不该留下一个空轮——写入侧不认全空轮，
+      // 目标会永远比来源少一轮，之后每次交接都重复报同一份增量（2026-11-13 合成复现）。
+      // 尾部失败由循环结束后的补轮处理。
       recordClaudeSyntheticError(r, failures);
-      if (timestamp) last.timestamp = timestamp;
       lastFailureTimestamp = timestamp || lastFailureTimestamp;
+      tailFailure = true;
       continue;
     }
     if (type !== 'user' && type !== 'assistant') continue;
@@ -148,12 +156,17 @@ export async function parseClaudeSession(ref: SessionRef): Promise<UnifiedTurn[]
       const userEvents = events.filter((event) => event.kind !== 'tool_result');
       if (userEvents.length) userTurn.events = userEvents;
       turns.push(userTurn);
+      // 新的提问把「尾部失败」推到中段：这一问之后的失败才会有新的记录，
+      // 没有记录时「可能被中断」才是正确说法。
+      tailFailure = false;
       // 混有用户正文的记录也逐项配对工具结果，不能留在用户轮后被目标写入器忽略。
       for (const event of events) {
         if (event.kind === 'tool_result') mountToolResult(event, pendingCalls, unpaired);
       }
     } else {
       if (!sawUser) continue;
+      // 真实助手记录到了：此前的失败已经被后续重试接上，「尾部失败」不再成立。
+      tailFailure = false;
       const last = ensureAssistant(turns, timestamp, 'claude');
       for (const event of events) {
         pushEvent(last, event);
@@ -190,9 +203,17 @@ export async function parseClaudeSession(ref: SessionRef): Promise<UnifiedTurn[]
     }
   }
   const stripped = stripEmptyEvents(turns);
-  // 失败记录挂在**最后一条轮次**上，而不是选一个「安全载体」：尾部失败轮是空正文助手轮时，
-  // 改写它的正文会让下一次交接对不上（r79 的教训），但挂事件是安全的——目标写入后回读仍
-  // 只保留为事件。会话末尾没有轮次（首条用户消息之前）时无处可挂，交给零轮拒绝路径。
+  // 失败记录挂在**最后一条轮次**上，而不是选一个「安全载体」：改写尾部用户轮的正文会让
+  // 下一次交接对不上（r79 的教训），但挂事件是安全的——目标写入后回读仍只保留为事件。
+  // 会话末尾没有轮次（首条用户消息之前）时无处可挂，交给零轮拒绝路径。
+  //
+  // **只在尾部补一个空正文助手轮**（2026-11-13）：这一轮落在尾部时，不补轮会让
+  // `unansweredUserTail()` 把「上游失败」讲成「可能被中断或还在生成」；但中途失败当场造轮时，
+  // 写入侧与 `assertRoundTrip` 都跳过「无正文且无事件」的轮次，目标永远比来源少一轮，
+  // 之后每次交接都重复报同一份增量（合成复现：期望 3 实得 4）。
+  if (tailFailure && stripped.at(-1)?.role === 'user') {
+    ensureAssistant(stripped, lastFailureTimestamp || stripped.at(-1)!.timestamp, 'claude');
+  }
   const failureTail = stripped.at(-1);
   const failureEvent = failureTail ? claudeFailureDisclosure(failures, lastFailureTimestamp || failureTail.timestamp) : null;
   if (failureEvent && failureTail) pushEvent(failureTail, failureEvent);
