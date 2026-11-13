@@ -62,6 +62,18 @@ export type ProcessEvent = {
     filename?: string;
   };
   /**
+   * 这次工具调用**失败**了（只对 `tool_result` 有意义）。
+   *
+   * 各家的原生标记：Claude `tool_result.is_error`、Pi `toolResult.isError`、
+   * OpenCode 1.x/2.x `state.status === 'error'`。以前一个都不读，于是失败的 `Edit`
+   * （「String to replace not found in file.」）与成功的编辑在「改动概览」里并列——
+   * 清单会凭空宣称某个文件被改过，而它一个字都没变。
+   *
+   * 失败的命令仍然算「运行过」（它确实执行了），失败的文件写入**不算改动**。
+   * 目标格式支持时写回（Claude `is_error` / Pi `isError`），其余四家丢弃并保持现状。
+   */
+  failed?: boolean;
+  /**
    * 来源日志已确认这一轮是失败 / 中止收尾（不是「还在生成」）。
    * 由解析器在失败披露事件上标记；`describeUnansweredTail()` 据此改写兜底句，
    * 避免「日志说已失败」与「可能还在生成」两句话并列自相矛盾。

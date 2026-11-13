@@ -1907,7 +1907,7 @@ async function cmdPrompt(
       stats: result.stats,
       findings: result.findings,
       // 脚本拿得到结构化的改动清单，不必去解析 Markdown 里的那一节
-      ...(result.manifest.files.length || result.manifest.commands.length ? {
+      ...(result.manifest.files.length || result.manifest.commands.length || result.manifest.failedFileWrites ? {
         manifest: {
           files: result.manifest.files,
           commands: result.manifest.commands,
@@ -1915,6 +1915,7 @@ async function cmdPrompt(
           ...(result.manifest.omittedCommands ? { omittedCommands: result.manifest.omittedCommands } : {}),
           ...(result.manifest.omittedCommandCalls ? { omittedCommandCalls: result.manifest.omittedCommandCalls } : {}),
           ...(result.manifest.unreadableWrites ? { unreadableWrites: result.manifest.unreadableWrites } : {}),
+          ...(result.manifest.failedFileWrites ? { failedFileWrites: result.manifest.failedFileWrites } : {}),
         },
       } : {}),
       ...(warnings.length ? { warnings } : {}),

@@ -530,6 +530,7 @@ export function buildHandoffPrompt(
   if (!isEmptyWorkManifest(manifest)) {
     if (manifest.truncated) addFinding(findings, 'prompt_manifest_truncated', 'degraded', manifest.omittedFiles + manifest.omittedCommands);
     if (manifest.unreadableWrites > 0) addFinding(findings, 'prompt_manifest_unreadable_writes', 'degraded', manifest.unreadableWrites);
+    if (manifest.failedFileWrites > 0) addFinding(findings, 'prompt_manifest_failed_writes', 'degraded', manifest.failedFileWrites);
   }
   stats.manifestFiles = manifest.files.length;
   stats.manifestCommands = manifest.commands.length;

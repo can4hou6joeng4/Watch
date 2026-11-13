@@ -50,6 +50,8 @@ export type WorkManifest = {
   omittedCommandCalls: number;
   /** 认得出是写入类工具、但参数里读不出文件路径的调用次数（清单可能不全） */
   unreadableWrites: number;
+  /** 执行失败、因而**没有改动任何字节**的文件写入调用次数（已从文件清单里排除） */
+  failedFileWrites: number;
   /** 确有路径 / 命令被记录、但因上限被截断时为 true */
   truncated: boolean;
 };
@@ -61,14 +63,28 @@ export type WorkManifestLimits = {
 
 export const DEFAULT_MANIFEST_LIMITS: WorkManifestLimits = { files: 40, commands: 30 };
 
-/** 明确的路径键。顺序即优先级：同一事件只取第一个命中的。 */
-const FILE_KEYS = ['file_path', 'path', 'target_file', 'notebook_path', 'file', 'filename'] as const;
+/**
+ * 明确的路径键。顺序即优先级：同一事件只取第一个命中的。
+ *
+ * **两种命名都要收**：Claude / Pi / Grok 用 snake_case（`file_path`），OpenCode / Cursor
+ * 一系的工具入参是 camelCase（`filePath` / `notebookPath`）。只认一种的后果不是「少列几个
+ * 文件」而是**静默误判**：OpenCode 的 `edit` 入参带 `filePath`，snake_case 匹配不上路径，
+ * 但 `WRITER_NAME` 认得 `edit`，于是每条真实编辑都被记成「读不出路径的写入」，
+ * 清单同时漏掉全部 OpenCode 文件改动并冒一条假降级披露。
+ */
+const FILE_KEYS = [
+  'file_path', 'path', 'target_file', 'notebook_path', 'file', 'filename',
+  'filePath', 'notebookPath', 'targetFile',
+] as const;
 
 /**
  * 表示「这是个写入 / 编辑」的值键。`content` 也可能是读取工具的入参（很少见），
  * 所以判定要与工具名结合，见 `classify`。
  */
-const WRITE_VALUE_KEYS = ['content', 'new_string', 'new_source', 'old_string', 'new_str', 'old_str', 'edits', 'replacement', 'text'] as const;
+const WRITE_VALUE_KEYS = [
+  'content', 'new_string', 'new_source', 'old_string', 'new_str', 'old_str', 'edits', 'replacement', 'text',
+  'newString', 'oldString', 'newSource', 'newStr', 'oldStr',
+] as const;
 
 const COMMAND_KEYS = ['command', 'cmd'] as const;
 
@@ -97,6 +113,26 @@ const KNOWN_FILE_WRITERS = new Set([
 /** 名字是否属于「已知会写文件」的工具（只用于「读不出路径」这一档）。 */
 function isKnownFileWriter(name: string): boolean {
   return KNOWN_FILE_WRITERS.has(name.toLowerCase());
+}
+
+/**
+ * 会话里所有**失败**的工具调用 ID。
+ *
+ * `failed` 标记在 `tool_result` 事件上（调用事件的参数里没有结果），清单只看 `tool_call`，
+ * 所以先把结果侧的失败 ID 收成一张表。两种形状都认：`failed: true`（解析器统一写法）
+ * 与显式的 `failed: false`（成功，不进表）。没有 callId 的结果无法与调用配对——
+ * 那种情况计数不会命中，失败写入仍会进清单，所以解析器必须尽量给出 callId。
+ */
+function collectFailedCallIds(turns: UnifiedTurn[]): Set<string> {
+  const ids = new Set<string>();
+  for (const turn of turns) {
+    for (const event of turn.events ?? []) {
+      if (event.kind !== 'tool_result') continue;
+      if (event.failed !== true) continue;
+      if (event.callId) ids.add(event.callId);
+    }
+  }
+  return ids;
 }
 
 /** 名字明显是执行器：入参是字符串时按命令处理（Codex 的 `exec`） */
@@ -192,11 +228,15 @@ function classify(event: ProcessEvent): Classified {
   const filePath = firstString(obj, FILE_KEYS);
   const writeValue = firstString(obj, WRITE_VALUE_KEYS);
   // `old_string` 单独出现也说明这是在改文件（replace 类工具的最小入参）
-  const hasOld = typeof obj.old_string === 'string' || typeof obj.old_str === 'string';
+  const hasOld =
+    typeof obj.old_string === 'string' ||
+    typeof obj.old_str === 'string' ||
+    typeof obj.oldString === 'string' ||
+    typeof obj.oldStr === 'string';
 
   if (filePath && (writeValue || hasOld)) {
     // 整文件写 vs 局部编辑：有 content / new_source 的算写，其余算编辑
-    const isWrite = typeof obj.content === 'string' || typeof obj.new_source === 'string';
+    const isWrite = typeof obj.content === 'string' || typeof obj.new_source === 'string' || typeof obj.newSource === 'string';
     return { kind: 'file', path: filePath, mode: isWrite ? 'write' : 'edit' };
   }
   if (filePath && WRITER_NAME.test(name)) return { kind: 'file', path: filePath, mode: 'edit' };
@@ -228,6 +268,7 @@ export function collectWorkManifest(
   const commands: WorkManifestCommand[] = [];
   const commandIndex = new Map<string, WorkManifestCommand>();
   let unreadableWrites = 0;
+  let failedFileWrites = 0;
 
   const addFile = (rawPath: string, mode: 'write' | 'edit'): void => {
     const key = normalizeManifestPath(rawPath, cwd);
@@ -255,6 +296,12 @@ export function collectWorkManifest(
     for (const patchPath of extractPatchPaths(command)) addFile(patchPath, 'edit');
   };
 
+  // 先收集失败的工具调用：`failed` 挂在 `tool_result` 上（调用事件本身不知道结果），
+  // 而清单只读 `tool_call` 的参数。不先建这张表，失败的 Edit 就会与成功的编辑并列——
+  // 本机只读采样 60 条 Claude 会话：11715 条结果里 255 条 `is_error`（Bash 230 / Edit 14 /
+  // Read 10 / MCP 1），每条失败的 Edit 都会凭空多出一个「改过的文件」。
+  const failedCalls = collectFailedCallIds(turns);
+
   for (const turn of turns) {
     for (const event of turn.events ?? []) {
       const classified = classify(event);
@@ -264,7 +311,10 @@ export function collectWorkManifest(
         continue;
       }
       if (classified.kind === 'file') {
-        addFile(classified.path, classified.mode);
+        // 失败的文件写入没有改动任何字节：不进清单，只计数。命令不同——失败的命令确实
+        // 执行过（跑过测试但挂了，对手者来说仍要知道它被跑过），所以只按文件这一档过滤。
+        if (event.callId && failedCalls.has(event.callId)) failedFileWrites += 1;
+        else addFile(classified.path, classified.mode);
         continue;
       }
       addCommand(classified.command, classified.workdir);
@@ -300,13 +350,19 @@ export function collectWorkManifest(
     omittedCommands,
     omittedCommandCalls,
     unreadableWrites,
+    failedFileWrites,
     truncated: omittedFiles > 0 || omittedCommands > 0,
   };
 }
 
 /** 清单是否真的空：空清单不该在正文里占一节，也不该产生「本次省略」之类的噪声。 */
 export function isEmptyWorkManifest(manifest: WorkManifest): boolean {
-  return manifest.files.length === 0 && manifest.commands.length === 0 && manifest.unreadableWrites === 0;
+  return (
+    manifest.files.length === 0 &&
+    manifest.commands.length === 0 &&
+    manifest.unreadableWrites === 0 &&
+    manifest.failedFileWrites === 0
+  );
 }
 
 /**
@@ -367,6 +423,14 @@ export function renderWorkManifest(manifest: WorkManifest): string[] {
   if (manifest.unreadableWrites > 0) {
     lines.push(
       `- 另有 ${manifest.unreadableWrites} 次写入类工具调用读不出文件路径，未计入上面的清单——这段改动可能不全。`,
+    );
+    lines.push('');
+  }
+  if (manifest.failedFileWrites > 0) {
+    // 失败的文件写入没有改变任何字节，所以不进「改动过的文件」；但也不能一句话不说——
+    // 否则读者会以为助手从没试过改那个文件（它试过，报错了，可能换了别的方式重试）。
+    lines.push(
+      `- 另有 ${manifest.failedFileWrites} 次文件写入 / 编辑执行失败（文件未改动），未计入上面的清单；原因见过程记录。`,
     );
     lines.push('');
   }
