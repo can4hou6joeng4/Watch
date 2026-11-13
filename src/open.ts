@@ -1,7 +1,7 @@
 import { stat } from 'node:fs/promises';
 import { describeWriteFailureReason, type FileDigest } from './core/atomic.js';
 import { assertTargetUnchanged, blockedHint, describeSourceChangedDuringHandoff, diffTurns, HandoffBlockedError, snapshotSourceState, type SourceStateSnapshot } from './core/handoff.js';
-import { describeAttachmentLoss, describeTextEventLoss, describeDanglingToolCalls, describeUnansweredTail, describeResumeTargetUnfinished, dedupeCallEvents, findContextDisclosure, countPairedTurnsMissingEvents } from './core/rich.js';
+import { describeAttachmentLoss, describeTextEventLoss, describeToolFailureLoss, describeDanglingToolCalls, describeUnansweredTail, describeResumeTargetUnfinished, dedupeCallEvents, findContextDisclosure, countPairedTurnsMissingEvents } from './core/rich.js';
 import { Store, defaultDbPath, describeStoreErrorReason, describeStoreOpenFailure } from './core/store.js';
 import { IS_WIN, normalizePath, stripDevicePrefix } from './core/platform.js';
 import { trimUserKey } from './core/cli-input.js';
@@ -656,8 +656,10 @@ export async function openSession(
         try {
           await assertTargetUnchanged(target.adapter, target.found.ref, dstDigest, '并入');
           const textLoss = describeTextEventLoss(dedup, target.adapter);
+          const failureLoss = describeToolFailureLoss(dedup, target.adapter);
           const newRef = await target.adapter.importTurns(dedup, target.found.ref.cwd, target.found.ref);
           if (textLoss) warnings.push(textLoss);
+          if (failureLoss) warnings.push(failureLoss);
           merged = dedup.length;
           notes.push(`已把 ${escapeControlChars(from)} 的 ${merged} 轮新内容并入 ${target.adapter.displayName} 会话 ${newRef.sessionId}`);
           // 两个会话记录的工作目录不同：内容来自另一个项目，却写进了这一侧的会话。
@@ -1375,6 +1377,8 @@ export async function openInProvider(
         ...(warnings.length ? { warnings } : {}),
       };
     }
+    const failureLoss = describeToolFailureLoss(plan.turns, target);
+    if (failureLoss) warnings.push(failureLoss);
     if (plan.note) notes.push(plan.note);
     // 真的转入了内容才谈得上「转过去的是哪一刻的」：resume 快路径在上面已经返回
     if (plan.turns.length > 0) {
@@ -1518,5 +1522,7 @@ export async function checkOpenInProvider(
   if (attachmentLoss) base.warnings = [...(base.warnings ?? []), attachmentLoss];
   const textLoss = describeTextEventLoss(plan.turns, target);
   if (textLoss) base.warnings = [...(base.warnings ?? []), textLoss];
+  const failureLoss = describeToolFailureLoss(plan.turns, target);
+  if (failureLoss) base.warnings = [...(base.warnings ?? []), failureLoss];
   return base;
 }

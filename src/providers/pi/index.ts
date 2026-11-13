@@ -217,6 +217,7 @@ async function piSessionUsage(ref: SessionRef): Promise<TokenUsage | null> {
 export const piAdapter: ProviderAdapter = {
   id: 'pi',
   displayName: 'Pi',
+  toolFailureSupport: 'assistant',
 
   async detect(): Promise<boolean> {
     try {

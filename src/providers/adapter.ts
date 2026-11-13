@@ -179,6 +179,9 @@ export interface ProviderAdapter {
    */
   textEventSupport?: 'assistant';
 
+  /** 助手轮的 tool_result.failed 能按原生字段写回；缺省不保留，交接时按实际载荷披露。 */
+  toolFailureSupport?: 'assistant';
+
   /** 可选（TUI 交接用）：找 cwd 下本 provider 最新的原生会话；没有返回 null */
   findLatestSession?(cwd: string): Promise<{ ref: SessionRef; updatedAt: number } | null>;
 

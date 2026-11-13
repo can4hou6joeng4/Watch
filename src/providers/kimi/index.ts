@@ -316,6 +316,7 @@ export async function kimiSessionUsage(ref: SessionRef): Promise<TokenUsage | nu
 export const kimiAdapter: ProviderAdapter = {
   id: 'kimi',
   displayName: 'Kimi',
+  toolFailureSupport: 'assistant',
 
   async detect(): Promise<boolean> {
     try {

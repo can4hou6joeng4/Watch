@@ -166,6 +166,7 @@ async function opencodePreflight(ctx?: PreflightContext): Promise<void> {
 export const opencodeAdapter: ProviderAdapter = {
   id: 'opencode',
   displayName: 'OpenCode',
+  toolFailureSupport: 'assistant',
 
   preflight: opencodePreflight,
   writeLimit: async (): Promise<WriteLimit | null> => opencodeWriteLimit(),

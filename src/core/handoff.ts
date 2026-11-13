@@ -3,7 +3,7 @@ import { stat } from 'node:fs/promises';
 import type { SessionRef, TokenUsage, UnifiedTurn } from './types.js';
 import { chainsElsewhereHint, chainsSameDirectoryHint, describeStoreErrorReason, emptyChainBindHint } from './store.js';
 import type { Chain, ChainsElsewhere, Store, SwitchRecord } from './store.js';
-import { dedupeCallEvents, describeAttachmentLoss, describeTextEventLoss, describeDanglingToolCalls, describeUnansweredTail, describeResumeTargetUnfinished, findContextDisclosure, mergeTurns, shouldReplacePairedSession, turnIdentityKey } from './rich.js';
+import { dedupeCallEvents, describeAttachmentLoss, describeTextEventLoss, describeToolFailureLoss, describeDanglingToolCalls, describeUnansweredTail, describeResumeTargetUnfinished, findContextDisclosure, mergeTurns, shouldReplacePairedSession, turnIdentityKey } from './rich.js';
 import { describeWriteFailureReason, type FileDigest } from './atomic.js';
 import { addFinding, type Finding } from './findings.js';
 import { escapeControlChars } from './display.js';
@@ -1457,8 +1457,10 @@ export async function handoff(
       try {
         // 按实际写入的内容计数，也覆盖零增量但整份重写目标的分支。
         const textLoss = describeTextEventLoss(turnsToWrite, target);
+        const failureLoss = describeToolFailureLoss(turnsToWrite, target);
         const written = await target.importTurns(turnsToWrite, cwd, into, opts);
         if (textLoss) warnings.push(textLoss);
+        if (failureLoss) warnings.push(failureLoss);
         return written;
       } catch (error) {
         // 写盘失败只有 Node 原文（`EACCES: permission denied, mkdir '…'`），cmdSwitch 会把它

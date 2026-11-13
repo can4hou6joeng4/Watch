@@ -1,4 +1,5 @@
 import type { ProcessEvent, UnifiedTurn } from './types.js';
+import { escapeControlChars } from './display.js';
 
 export const ENCRYPTED_THINKING = '思考中…（加密）';
 
@@ -732,6 +733,25 @@ export function describeTextEventLoss(
     ? `${target.displayName} 只保存助手侧的过程文本，这些用户侧记录不会写入`
     : `${target.displayName} 不保存这些独立的中间文本`;
   return `来源会话有 ${lost} 条过程文本不会随这次交接保留：${reason}；这些中间说明或压缩摘要无法从目标会话恢复，需要时请在来源会话里核对，或用 watch prompt <来源会话 id> --profile full 查看`;
+}
+
+/** 失败标记不参与 round-trip 对账；按实际写入载荷披露，不复制结果正文或猜测错误文字。 */
+export function describeToolFailureLoss(
+  turns: UnifiedTurn[],
+  target: { displayName: string; toolFailureSupport?: 'assistant' },
+): string | null {
+  let lost = 0;
+  for (const turn of turns) {
+    if (turn.role === 'assistant' && target.toolFailureSupport === 'assistant') continue;
+    for (const event of turn.events ?? []) {
+      if (event.kind === 'tool_result' && event.failed === true) lost += 1;
+    }
+  }
+  if (lost === 0) return null;
+  const reason = target.toolFailureSupport === 'assistant'
+    ? `${escapeControlChars(target.displayName)} 只保留助手轮工具结果的原生失败状态`
+    : `${escapeControlChars(target.displayName)} 的写入侧不保留工具结果的原生失败状态`;
+  return `这次交接有 ${lost} 条工具结果的失败标记不会在目标中保留：${reason}；不能仅凭目标记录判断这些调用是否成功，需要时请核对来源会话`;
 }
 
 /**

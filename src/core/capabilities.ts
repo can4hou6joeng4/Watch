@@ -31,6 +31,8 @@ export type ProviderCapability = {
   attachments: 'none' | 'images' | 'user-images' | 'all';
   /** 无附件的独立过程文本：`assistant` = 仅助手轮，`none` = 不保留；正文不受此项影响 */
   textEvents: 'none' | 'assistant';
+  /** 工具结果的结构化失败标记；与结果正文是否保留独立 */
+  toolFailures: 'none' | 'assistant';
   /** 能原子取协作写锁，收窄「探测 → 写入」的竞态窗口 */
   writeLock: boolean;
   /** 能扫 token 用量 */
@@ -55,6 +57,7 @@ export function describeProviderCapability(a: ProviderAdapter): ProviderCapabili
     preflight: typeof a.preflight === 'function',
     attachments: a.attachmentSupport ?? 'none',
     textEvents: a.textEventSupport ?? 'none',
+    toolFailures: a.toolFailureSupport ?? 'none',
     writeLock: typeof a.acquireWriteLock === 'function',
     sessionUsage: typeof a.sessionUsage === 'function',
     sessionUsageSidecar: typeof a.sessionUsagePath === 'function',
@@ -105,6 +108,7 @@ export function formatCapabilities(rows: ProviderCapability[]): string {
       `写入前置检查 ${mark(row.preflight)}`,
       `附件 ${row.attachments === 'all' ? '图片与文件' : row.attachments === 'images' ? '仅图片' : row.attachments === 'user-images' ? '仅用户侧图片' : '仅占位'}`,
       `过程文本 ${row.textEvents === 'assistant' ? '仅助手侧' : '不保留'}`,
+      `工具失败标记 ${row.toolFailures === 'assistant' ? '仅助手侧' : '不保留'}`,
       `协作写锁 ${mark(row.writeLock)}`,
       `归属统计 ${mark(row.unattributable)}`,
       row.listSessionsCap === undefined ? '列表不截断' : `列表上限 ${row.listSessionsCap}`,
