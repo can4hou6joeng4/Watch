@@ -599,7 +599,7 @@ export function buildHandoffPrompt(
   // 此时不能再说「正文包含全部轮次」——同一份文档里前后两句相反，读者会以为背景齐全。
   if (options.sinceCompact && compactAt < 0) {
     const unavailable =
-      '这条会话里没有 Watch 可用的压缩摘要（Claude Code 的压缩摘要记录、Pi 的 compaction 条目、Kimi 的 context.apply_compaction 或 OpenCode 的 compaction 事件；Codex 的 compacted 记录目前只披露、不并入摘要）';
+      '这条会话里没有 Watch 可用的压缩摘要（Claude Code 的压缩摘要记录、Pi 的 compaction 条目、Kimi 的 context.apply_compaction 或 OpenCode 的摘要型 compaction；Codex 的 compacted 记录与 OpenCode 的 provider 原生压缩目前只披露、不并入摘要）';
     lines.push(
       stats.omittedTurns > 0
         ? `- 指定了 --since-compact，但${unavailable}，未按 --since-compact 裁剪；正文仍按档位 / --last 省略了 ${stats.omittedTurns} 轮，并未包含全部轮次（见下方「本次省略」）`
