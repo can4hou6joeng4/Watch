@@ -92,6 +92,11 @@ export type PromptSessionMeta = {
    */
   sourceBadLines?: number;
   /**
+   * 坏行扫描本身没完成（文件读不出来）时的原因。与 `sourceBadLines` 可以同时出现：
+   * 出错前已确认若干坏行、后面的行没读到——两个事实都要说，不能因为读失败就当 0。
+   */
+  sourceBadLinesScanError?: string;
+  /**
    * `stats.turns === 0` 时正文那句结论要说清是哪一种「没有」：0 字节（内容已丢失），
    * 还是文件可读但解析出 0 轮（只有系统事件 / 元数据，或这一家的格式还没被识别）。
    * 缺省时退回三选一的兜底句——那时调用方没查过，不能替它断言是哪一种。
@@ -125,6 +130,11 @@ export type PromptSessionMeta = {
    * 由 `usageBadLinesDetail()` 同一判据给出；0 或缺省时不加任何括注。
    */
   usageBadLines?: number;
+  /**
+   * 用量数据源的坏行扫描没完成（文件读不出来）。与 `usageBadLines` 可以同时出现；
+   * 有它时用量行要说明「合计是下界且无法确认程度」，不能把没扫成写成 0 行。
+   */
+  usageBadLinesScanError?: string;
   /**
    * 会话是按修改时间自动挑的（命令没有显式给出 id）。
    * 文档头部的会话 ID 一行要写明这件事——文档会被复制走，「这条是谁挑的」属于读者需要的事实。
@@ -556,6 +566,15 @@ export function buildHandoffPrompt(
       `- 源文件另有 ${meta.sourceBadLines} 行无法解析（截断或损坏），正文可能缺少这些记录——需要完整内容请先恢复来源文件`,
     );
   }
+  // 数不出来不等于没有坏行：文档被复制走后，读者只能靠这一行知道「正文少没少、没人确认过」
+  if (meta.sourceBadLinesScanError) {
+    addFinding(findings, 'prompt_source_bad_lines_unscanned', 'degraded', 1);
+    const partial = meta.sourceBadLines && meta.sourceBadLines > 0 ? `（已确认的 ${meta.sourceBadLines} 行已跳过，其后未读完）` : '';
+    lines.push(
+      `- 源文件坏行数无法确认：${sanitizeBody(meta.sourceBadLinesScanError).text}${partial}` +
+        '；正文是否缺少记录无法确认——先确认该文件可读，需要完整内容请先恢复来源文件',
+    );
+  }
   lines.push(`- 工作目录：${sanitizeBody(meta.cwd).text}`);
   // 目录状态单独一行而不是塞进上一行括注：它说的是「现在」，上一行说的是「会话当初记录的是什么」，
   // 两者不一致时正是读者最需要看见差别的地方。
@@ -590,11 +609,15 @@ export function buildHandoffPrompt(
   lines.push(`- 轮次：${stats.turns} 轮（用户 ${stats.userTurns} / 助手 ${stats.assistantTurns}）`);
   const usageBadLines = meta.usageBadLines ?? 0;
   if (usageBadLines > 0) addFinding(findings, 'prompt_usage_bad_lines', 'degraded', usageBadLines);
+  if (meta.usageBadLinesScanError) addFinding(findings, 'prompt_usage_bad_lines_unscanned', 'degraded', 1);
   lines.push(
     `- 用量：${meta.usageNote
       ? sanitizeBody(meta.usageNote).text
       : formatUsage(meta.usage) ?? '来源会话没有可读的用量记录'}` +
-      (usageBadLines > 0 ? `（用量数据源有 ${usageBadLines} 行无法解析，这些行的用量没有计入，合计可能偏少）` : ''),
+      (usageBadLines > 0 ? `（用量数据源有 ${usageBadLines} 行无法解析，这些行的用量没有计入，合计可能偏少）` : '') +
+      (meta.usageBadLinesScanError
+        ? `（用量数据源的坏行无法统计：${sanitizeBody(meta.usageBadLinesScanError).text}；合计可能偏少且无法确认程度）`
+        : ''),
   );
   const fullHint = profile === 'full' ? '' : '；要更完整的内容，用 --profile full 重新生成';
   const lastHint = options.lastUserTurns !== undefined ? `，最近 ${options.lastUserTurns} 个用户轮（--last）` : '';

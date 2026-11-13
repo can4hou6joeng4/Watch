@@ -5,7 +5,7 @@ import type { UnifiedTurn } from './types.js';
 import type { ProviderAdapter } from '../providers/adapter.js';
 import type { EmptiedSession } from './session-coverage.js';
 import { escapeControlChars } from './display.js';
-import { countUnparsableJsonLines } from './jsonl.js';
+import { scanUnparsableJsonLines } from './jsonl.js';
 import {
   describePathReadFailureReason,
   describeSessionReadFailureReason,
@@ -94,6 +94,10 @@ export async function reindexCwd(
     let badLineSessions = 0;
     let badLines = 0;
     let firstBadLines = '';
+    // 与「文件里有坏行」分开：坏行数不出来时，索引里缺了哪些行是未知的，
+    // 不能因为 `bad === 0` 就把这一轮当作完整索引
+    let badScanFailed = 0;
+    let firstBadScanError = '';
     let unreadable = 0;
     let firstUnreadable = '';
     let occupied = 0;
@@ -140,8 +144,18 @@ export async function reindexCwd(
       try {
         const turns = await adapter.parse(s.ref);
         // `parse` 成功不代表内容齐全：半行 / 坏行被逐行跳过，这些轮次不进索引，搜不到。
-        // 判据与 `prompt` / `usage` 同源（`countUnparsableJsonLines()`；opencode 是 SQLite，返回 0）
-        const bad = await countUnparsableJsonLines(s.ref.filePath);
+        // 判据与 `prompt` / `usage` 同源（`scanUnparsableJsonLines()`；opencode 是 SQLite，返回 0）
+        const badScan = await scanUnparsableJsonLines(s.ref.filePath);
+        // 扫描读失败时 `badScan.count` 只是出错前已确认的部分：「内容完整」没有依据。
+        // 与 parse 失败同一处置——本轮不写游标、下轮重试；照常写索引会把「未知」缓存成
+        // `bad_lines = 0`，之后文件不变就再也不会重新披露，等于把「没扫成」永久讲成「没有坏行」。
+        if (badScan.error) {
+          badScanFailed += 1;
+          // `scanUnparsableJsonLines()` 的 error 已带转义后的路径，这里不再拼一次
+          firstBadScanError ||= badScan.error;
+          continue;
+        }
+        const bad = badScan.count;
         // 写索引与解析分开计：磁盘满 / 库只读时 `reindexSession` 会抛错，把它算进
         // 「解析失败」会让人去查会话文件，而会话文件一行都没坏——真问题在本地库这一侧
         try {
@@ -196,6 +210,12 @@ export async function reindexCwd(
           `可从备份恢复后重新 search`,
       );
     }
+    if (badScanFailed > 0) {
+      warnings?.push(
+        `${adapter.id} 有 ${badScanFailed} 个会话的坏行无法统计（文件读不出来），这些会话是否缺内容无法确认` +
+          `（首个：${firstBadScanError}）——先确认这些文件可读，修好后重新 search`,
+      );
+    }
     if (unreadable > 0) {
       warnings?.push(`${adapter.id} 有 ${unreadable} 个会话读不出文件状态，索引未更新（首个：${firstUnreadable}）`);
     }
@@ -204,7 +224,7 @@ export async function reindexCwd(
         `${adapter.id} 有 ${occupied} 个会话路径不是普通文件（被同名目录或设备文件占住了），本次未更新其索引（首个：${firstOccupied}）`,
       );
     }
-    if (failed > 0 || writeFailed > 0 || badLineSessions > 0 || unreadable > 0 || occupied > 0) {
+    if (failed > 0 || writeFailed > 0 || badLineSessions > 0 || badScanFailed > 0 || unreadable > 0 || occupied > 0) {
       coverage?.incomplete.push(adapter.id);
     }
     let keepFailed = 0;

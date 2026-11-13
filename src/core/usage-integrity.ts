@@ -1,6 +1,6 @@
 import type { ProviderAdapter } from '../providers/adapter.js';
 import { escapeControlChars } from './display.js';
-import { countUnparsableJsonLines } from './jsonl.js';
+import { scanUnparsableJsonLines } from './jsonl.js';
 import { emptySessionFileReasonFromStat, sessionFilePresence } from './read-text.js';
 import type { SessionRef } from './types.js';
 
@@ -13,11 +13,13 @@ import type { SessionRef } from './types.js';
  * 都分不出「少算了」与「本来就这么多」。
  *
  * 内容这一侧早已披露过：`handoff()`（来源 / 目标）、`planOpenInProvider`、`openSession --from`
- * 都用 `countUnparsableJsonLines()` 说过「有 N 行无法解析，交接内容可能不完整」。这里补的是同一条
+ * 都用 `scanUnparsableJsonLines()` 说过「有 N 行无法解析，交接内容可能不完整」。这里补的是同一条
  * 线上**最后没接上的一半**：内容披露了，用量没有。判据仍是那一个函数，不另写一套扫描。
  *
- * opencode 是 SQLite（非 `.jsonl`），`countUnparsableJsonLines()` 直接返回 0，不会冒这句；
- * 文件不存在 / 读不出来也返回 0——那一档由调用方的错分支与 0 字节检查各自说清，不在这里重复。
+ * opencode 是 SQLite（非 `.jsonl`），`scanUnparsableJsonLines()` 直接返回 0，不会冒这句；
+ * 文件不存在（grok 的 `updates.jsonl` 缺失）返回 0，那一档由 `usageSidecarProblem()` 说清。
+ * 但**读不出来不是「没有坏行」**（2026-11-14，第 88 轮）：扫描失败时同样给出一句披露，
+ * 说明合计可能偏少且无法确认程度，不能把「没扫成」静默成 0。
  */
 export async function usageBadLinesReason(
   adapter: ProviderAdapter,
@@ -32,15 +34,29 @@ export async function usageBadLinesReason(
  *
  * `watch prompt` 把用量数字写进会被复制走的文档，披露句要短（括注在数字后面），而 stderr 上的
  * 警告要完整（带路径与下一步）——同一份扫描喂两个形状，不能为了短句再扫一遍文件。
- * 判据仍只有 `countUnparsableJsonLines()` 一处。
+ * 判据仍只有 `scanUnparsableJsonLines()` 一处。
+ *
+ * 扫描失败也返回一项（`count` 是已确认的行数，可能为 0）：消费方据此在正文里写「无法确认」，
+ * 而不是把「没扫成」当成「没有坏行」。
  */
 export async function usageBadLinesDetail(
   adapter: ProviderAdapter,
   ref: SessionRef,
   label: string,
-): Promise<{ count: number; reason: string } | null> {
+): Promise<{ count: number; reason: string; scanFailed?: boolean; scanError?: string } | null> {
   const filePath = adapter.sessionUsagePath?.(ref) ?? ref.filePath;
-  const bad = await countUnparsableJsonLines(filePath);
+  const scan = await scanUnparsableJsonLines(filePath);
+  if (scan.error) {
+    return {
+      count: scan.count,
+      scanFailed: true,
+      scanError: scan.error,
+      reason:
+        `${label}的用量数据源 ${escapeControlChars(filePath)} 坏行无法统计：${scan.error}；` +
+        `合计可能偏少且无法确认程度——先确认该文件可读再重试，以原生 CLI 显示的用量为准`,
+    };
+  }
+  const bad = scan.count;
   if (bad === 0) return null;
   return {
     count: bad,

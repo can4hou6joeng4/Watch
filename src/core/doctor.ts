@@ -10,7 +10,7 @@ import type { SessionRef } from './types.js';
 import { readWatchVersion } from './watch-version.js';
 import { cwdProblem, splitElsewhereByDirectory } from './cwd.js';
 import { escapeControlChars } from './display.js';
-import { countUnparsableJsonLines } from './jsonl.js';
+import { describeBadLinesScanFailure, scanUnparsableJsonLines } from './jsonl.js';
 import { describeSessionReadFailureReason, isEmptySessionFileReason, isFileSystemErrorCode, probeSessionReadable } from './read-text.js';
 import { collectUnattributable, unattributableWarning } from './session-coverage.js';
 
@@ -503,20 +503,33 @@ export async function doctorReport(cwd: string, deps: DoctorDeps): Promise<Docto
         }
         // parse 对坏行一律跳过：两边都坏时 diffTurns 可能「看起来对齐」，实际上内容已经丢了，
         // 内容对账（只比解析结果）永远查不出来，只能在这里主动报
-        const [fromBad, toBad] = await Promise.all([
-          countUnparsableJsonLines(from.filePath),
-          countUnparsableJsonLines(to.filePath),
+        const [fromBadScan, toBadScan] = await Promise.all([
+          scanUnparsableJsonLines(from.filePath),
+          scanUnparsableJsonLines(to.filePath),
         ]);
-        if (fromBad > 0) {
+        if (fromBadScan.count > 0) {
           warnings.push(
-            `链「${escapeControlChars(chain.name)}」的来源会话 ${from.sessionId}（${from.provider}）有 ${fromBad} 行无法解析（截断或损坏）：切换时这些内容会被跳过`,
+            `链「${escapeControlChars(chain.name)}」的来源会话 ${from.sessionId}（${from.provider}）有 ${fromBadScan.count} 行无法解析（截断或损坏）：切换时这些内容会被跳过`,
           );
         }
-        if (toBad > 0) {
+        if (toBadScan.count > 0) {
           warnings.push(
-            `链「${escapeControlChars(chain.name)}」的链尾会话 ${to.sessionId}（${to.provider}）有 ${toBad} 行无法解析（截断或损坏）：内容对账与增量判定可能不准`,
+            `链「${escapeControlChars(chain.name)}」的链尾会话 ${to.sessionId}（${to.provider}）有 ${toBadScan.count} 行无法解析（截断或损坏）：内容对账与增量判定可能不准`,
           );
         }
+        // 坏行数不出来时，上面两句「有 N 行」都不成立，但也不能读成「没有坏行」
+        const fromBadFailure = describeBadLinesScanFailure(
+          fromBadScan,
+          `链「${escapeControlChars(chain.name)}」的来源会话 ${from.sessionId}（${from.provider}）`,
+          '内容对账与增量判定是否准确无法确认——先确认该文件可读再重跑 watch doctor',
+        );
+        if (fromBadFailure) warnings.push(fromBadFailure);
+        const toBadFailure = describeBadLinesScanFailure(
+          toBadScan,
+          `链「${escapeControlChars(chain.name)}」的链尾会话 ${to.sessionId}（${to.provider}）`,
+          '内容对账与增量判定是否准确无法确认——先确认该文件可读再重跑 watch doctor',
+        );
+        if (toBadFailure) warnings.push(toBadFailure);
         try {
           const [fromTurns, toTurns] = await Promise.all([fromAdapter.parse(from), toAdapter.parse(to)]);
           const missingTurns = diffTurns(fromTurns, toTurns).length;

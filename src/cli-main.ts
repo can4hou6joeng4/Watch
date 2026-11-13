@@ -34,7 +34,7 @@ import { collectUnattributable, emptiedJson, emptiedSearchNote, emptiedSessionsW
 import type { EmptiedSession } from './core/session-coverage.js';
 import { describeSpawnFailure } from './core/platform.js';
 import { usageBadLinesDetail, usageSidecarProblem } from './core/usage-integrity.js';
-import { countUnparsableJsonLines } from './core/jsonl.js';
+import { describeBadLinesScanFailure, scanUnparsableJsonLines } from './core/jsonl.js';
 import { readWatchVersion } from './core/watch-version.js';
 import { CAPABILITY_VERIFICATION_NOTE, describeCapabilities, formatCapabilities } from './core/capabilities.js';
 
@@ -1797,18 +1797,27 @@ async function cmdPrompt(
   let sessionUsage: TokenUsage | null = null;
   // 坏行被 `parse` 静默跳过：正文里的记录会缺一段，而读者看不出「少了」。文档要被复制走，
   // 所以这一档既进 warnings（终端里立刻能看到）也进正文（`sourceBadLines`）。
-  const badSourceLines = await countUnparsableJsonLines(foundRef.filePath);
+  const badSourceScan = await scanUnparsableJsonLines(foundRef.filePath);
+  const badSourceLines = badSourceScan.count;
   if (badSourceLines > 0) {
     warnings.push(
       `来源会话 ${foundRef.sessionId} 有 ${badSourceLines} 行无法解析（截断或损坏），已跳过；文档正文可能缺少这些记录`,
     );
   }
+  // 扫描没完成时「0 坏行」不是结论：正文同样要写明这次数不出来（文档脱离 Watch 后 stderr 不跟着走）
+  const badSourceScanFailure = describeBadLinesScanFailure(
+    badSourceScan,
+    `来源会话 ${foundRef.sessionId}`,
+    '正文是否缺少记录无法确认——先确认该文件可读，需要完整内容请先恢复来源文件',
+  );
+  if (badSourceScanFailure) warnings.push(badSourceScanFailure);
 
   // 用量这一行在「没有数字」之外还有两种来路，都必须写进文档：读不出来（`sessionUsage` 抛错），
   // 或用量数据源本身是空的（grok 的 `updates.jsonl` 被截成 0 字节，`sessionUsage` 安静返回 null）。
   // 只打在 stderr 不够——文档会被复制进别家助手，那里的读者会把「读不出来」当成「这家没有用量」。
   let usageNote: string | undefined;
   let usageBadLines = 0;
+  let usageBadLinesScanError: string | undefined;
   if (adapter.sessionUsage) {
     try {
       sessionUsage = await adapter.sessionUsage(foundRef);
@@ -1829,6 +1838,7 @@ async function cmdPrompt(
     const badUsage = await usageBadLinesDetail(adapter, foundRef, '来源会话');
     if (badUsage) {
       usageBadLines = badUsage.count;
+      if (badUsage.scanFailed) usageBadLinesScanError = badUsage.scanError;
       warnings.push(badUsage.reason);
     }
   }
@@ -1877,10 +1887,12 @@ async function cmdPrompt(
       // 逐轮时间戳是推定值时要说清来路：grok 的行内没有时间，读到的那个数字是锚点
       ...(adapter.timingNote ? { timeRangeNote: adapter.timingNote } : {}),
       ...(badSourceLines > 0 ? { sourceBadLines: badSourceLines } : {}),
+      ...(badSourceScan.error ? { sourceBadLinesScanError: badSourceScan.error } : {}),
       ...(emptySourceNote ? { emptySourceNote } : {}),
       usage: sessionUsage,
       ...(usageNote ? { usageNote } : {}),
       ...(usageBadLines > 0 ? { usageBadLines } : {}),
+      ...(usageBadLinesScanError ? { usageBadLinesScanError } : {}),
       // 文档会被复制走：这一条必须写在正文里，stderr 的警告不会跟着文档
       ...(autoPicked ? { autoPicked: true } : {}),
       // 文档会被复制走：这条也必须进正文，不能只留在 stderr
@@ -2944,6 +2956,11 @@ async function cmdUsage(cwd: string, json: boolean, chain?: string): Promise<voi
     if (badLineSessions) {
       console.log(`  注：${badLineSessions} 个会话的用量数据源有无法解析的行，这些行的用量没计入，合计是下界`);
     }
+    // 扫描本身失败是另一档：连「少算了多少」都数不出来，不能说成「没有坏行」
+    const badLineUnscanned = result.byProvider.filter((item) => item.usageBadLinesScanError).length;
+    if (badLineUnscanned) {
+      console.log(`  注：${badLineUnscanned} 个会话的用量数据源坏行无法统计（文件读不出来），合计是下界且程度未知——先确认这些文件可读再重试`);
+    }
     console.log('');
     console.log('按会话:');
     for (const item of result.byProvider) {
@@ -2951,10 +2968,13 @@ async function cmdUsage(cwd: string, json: boolean, chain?: string): Promise<voi
       // 用「；」拼接而不是嵌套括注：`（读取失败: …（…））` 读起来分不清哪层在解释哪层
       const notes: string[] = [];
       if (item.error) notes.push(`读取失败: ${item.error}`);
-      else if (item.usage === null && !item.usageBadLines) notes.push('无 usage 字段');
-      else if (item.usage === null && item.usageBadLines) notes.push('未读出有效用量');
+      else if (item.usage === null && !item.usageBadLines && !item.usageBadLinesScanError) notes.push('无 usage 字段');
+      else if (item.usage === null && (item.usageBadLines || item.usageBadLinesScanError)) notes.push('未读出有效用量');
       if (item.usageBadLines) {
         notes.push(`用量数据源另有 ${item.usageBadLines} 行无法解析，这些行没计入，这个数是下界`);
+      }
+      if (item.usageBadLinesScanError) {
+        notes.push(`用量数据源坏行无法统计（${item.usageBadLinesScanError}），这个数是下界且程度未知`);
       }
       const note = notes.length ? `（${notes.join('；')}）` : '';
       console.log(

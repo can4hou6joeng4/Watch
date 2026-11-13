@@ -10,7 +10,7 @@ import type { ProviderAdapter } from './providers/adapter.js';
 import { cliDetectFailedBlock, cliMissingBlock, PreflightBlockedError, SessionLookupFailureError } from './providers/adapter.js';
 import type { SessionLookupFailureKind } from './providers/adapter.js';
 import { getAdapter, listAdapters, unknownProviderMessage } from './providers/registry.js';
-import { countUnparsableJsonLines } from './core/jsonl.js';
+import { describeBadLinesScanFailure, scanUnparsableJsonLines } from './core/jsonl.js';
 import { usageBadLinesReason, usageSidecarProblem } from './core/usage-integrity.js';
 import { collectUnattributable, unattributablePickWarning } from './core/session-coverage.js';
 import {
@@ -559,12 +559,19 @@ export async function openSession(
       // 整份来源的上下文差异不随增量裁剪；即使没有新轮次，也不能丢掉这条声明。
       const contextDisclosure = findContextDisclosure(srcTurns);
       if (contextDisclosure) warnings.push(contextDisclosure.summary);
-      const badSrcLines = await countUnparsableJsonLines(source.found.ref.filePath);
-      if (badSrcLines > 0) {
+      const srcBadScan = await scanUnparsableJsonLines(source.found.ref.filePath);
+      if (srcBadScan.count > 0) {
         warnings.push(
-          `来源会话 ${source.found.ref.sessionId} 有 ${badSrcLines} 行无法解析（截断或损坏），已跳过；并入内容可能不完整`,
+          `来源会话 ${source.found.ref.sessionId} 有 ${srcBadScan.count} 行无法解析（截断或损坏），已跳过；并入内容可能不完整`,
         );
       }
+      // 辅助扫描读不出来不等于「没有坏行」：扫不成也要说，否则这句「内容完整」是猜的
+      const srcBadScanFailure = describeBadLinesScanFailure(
+        srcBadScan,
+        `来源会话 ${source.found.ref.sessionId}`,
+        '并入内容是否完整无法确认——先确认该文件可读再重试',
+      );
+      if (srcBadScanFailure) warnings.push(srcBadScanFailure);
       let dstTurns: UnifiedTurn[];
       try {
         dstTurns = await target.adapter.parse(target.found.ref);
@@ -612,12 +619,18 @@ export async function openSession(
         `来源会话 ${source.found.ref.sessionId}（${source.adapter.displayName}）`,
         (msg) => warnings.push(msg),
       );
-      const badDstLines = await countUnparsableJsonLines(target.found.ref.filePath);
-      if (badDstLines > 0) {
+      const dstBadScan = await scanUnparsableJsonLines(target.found.ref.filePath);
+      if (dstBadScan.count > 0) {
         warnings.push(
-          `目标会话 ${target.found.ref.sessionId} 有 ${badDstLines} 行无法解析（截断或损坏）：增量判定可能偏多，可能重复追加既有内容`,
+          `目标会话 ${target.found.ref.sessionId} 有 ${dstBadScan.count} 行无法解析（截断或损坏）：增量判定可能偏多，可能重复追加既有内容`,
         );
       }
+      const dstBadScanFailure = describeBadLinesScanFailure(
+        dstBadScan,
+        `目标会话 ${target.found.ref.sessionId}`,
+        '增量判定是否偏多无法确认——先确认该文件可读再重试',
+      );
+      if (dstBadScanFailure) warnings.push(dstBadScanFailure);
       // 写前快照：与 handoff 一致，写入前再比一次（目标被外部写入则中止）
       const dstDigest = (await target.adapter.contentFingerprint?.(target.found.ref)) ?? null;
       const outgoing = diffTurns(srcTurns, dstTurns);
@@ -907,12 +920,18 @@ async function warnTargetBadLines(
   target: ProviderAdapter,
   diagnostics?: string[],
 ): Promise<void> {
-  const bad = await countUnparsableJsonLines(ref.filePath);
-  if (bad > 0) {
+  const scan = await scanUnparsableJsonLines(ref.filePath);
+  if (scan.count > 0) {
     diagnostics?.push(
-      `目标会话 ${ref.sessionId}（${target.displayName}）有 ${bad} 行无法解析（截断或损坏）：增量判定可能偏多，可能重复追加既有内容`,
+      `目标会话 ${ref.sessionId}（${target.displayName}）有 ${scan.count} 行无法解析（截断或损坏）：增量判定可能偏多，可能重复追加既有内容`,
     );
   }
+  const scanFailure = describeBadLinesScanFailure(
+    scan,
+    `目标会话 ${ref.sessionId}（${target.displayName}）`,
+    '增量判定是否偏多无法确认——先确认该文件可读再重试',
+  );
+  if (scanFailure) diagnostics?.push(scanFailure);
 }
 
 /** 链上/复用配对后，提示目标会话同文本轮次里未携带的来源过程事件（与 `--from` 口径一致） */
@@ -1036,12 +1055,18 @@ async function planOpenInProvider(
   const contextDisclosure = findContextDisclosure(turns);
   if (contextDisclosure) diagnostics?.push(contextDisclosure.summary);
   // parse 跳过坏行不会报错，round-trip 也比的是解析结果：不扫一遍就会把「少了几轮」当完整转入
-  const badSourceLines = await countUnparsableJsonLines(sourceRef.filePath);
-  if (badSourceLines > 0) {
+  const badSourceScan = await scanUnparsableJsonLines(sourceRef.filePath);
+  if (badSourceScan.count > 0) {
     diagnostics?.push(
-      `来源会话 ${escapeControlChars(sourceId)} 有 ${badSourceLines} 行无法解析（截断或损坏），已跳过；转入内容可能不完整`,
+      `来源会话 ${escapeControlChars(sourceId)} 有 ${badSourceScan.count} 行无法解析（截断或损坏），已跳过；转入内容可能不完整`,
     );
   }
+  const badSourceScanFailure = describeBadLinesScanFailure(
+    badSourceScan,
+    `来源会话 ${escapeControlChars(sourceId)}`,
+    '转入内容是否完整无法确认——先确认该文件可读再重试',
+  );
+  if (badSourceScanFailure) diagnostics?.push(badSourceScanFailure);
   const outgoing = dedupeCallEvents(turns);
   // 来源停在做了一半的工具调用上：转入后目标会话在那一轮同样不完整，预检与写入都要说
   warnUnfinishedTurns(

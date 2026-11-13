@@ -7,7 +7,7 @@ import { dedupeCallEvents, describeAttachmentLoss, describeTextEventLoss, descri
 import { describeWriteFailureReason, type FileDigest } from './atomic.js';
 import { addFinding, type Finding } from './findings.js';
 import { escapeControlChars } from './display.js';
-import { countUnparsableJsonLines } from './jsonl.js';
+import { describeBadLinesScanFailure, scanUnparsableJsonLines } from './jsonl.js';
 import { usageBadLinesDetail, usageSidecarProblem } from './usage-integrity.js';
 import { cwdAliasHint, splitElsewhereByDirectory } from './cwd.js';
 import { describePathReadFailureReason, describeReadFailureOrSelf, emptySessionFileReasonFromStat, isEmptySessionFileReason, probeSessionReadable, sessionFilePresence } from './read-text.js';
@@ -683,6 +683,11 @@ export async function chainUsage(
      * 时带这项：用量本来就是 `null` 的会话，数字都不存在，谈不上「偏少」。
      */
     usageBadLines?: number;
+    /**
+     * 坏行扫描没完成（用量数据源读不出来）时的原因。与 `usageBadLines` 可以同时出现；
+     * 它说明「合计是下界」这件事本身都没确认，不能按「没有坏行」显示。
+     */
+    usageBadLinesScanError?: string;
   }[];
   /** 链上有绑定、但适配器根本不给用量（未实现 `sessionUsage`；当前六家都已实现，留给将来新增的适配器）：不列出来会被当成「这一家没有用量」 */
   unsupported: string[];
@@ -731,6 +736,7 @@ export async function chainUsage(
     usage: TokenUsage | null;
     error?: string;
     usageBadLines?: number;
+    usageBadLinesScanError?: string;
   }[] = [];
   let total = { ...empty };
   let totalExcluded = 0;
@@ -810,7 +816,7 @@ export async function chainUsage(
     }
     // 用量数据源里有坏行时，`sessionUsage` 一律 `continue` 跳过：合计静默偏少，而这份报告
     // 分不出「少算了」与「本来就这么多」。内容那一侧（`handoff()` / `open`）早已用
-    // `countUnparsableJsonLines()` 披露过，这里补的是同一条线上没接上的一半。
+    // `scanUnparsableJsonLines()` 披露过，这里补的是同一条线上没接上的一半。
     const badUsage = await usageBadLinesDetail(adapter, ref, `${adapter.id} 会话 ${ref.sessionId}`);
     if (badUsage) warnings.push(badUsage.reason);
     byProvider.push({
@@ -820,6 +826,7 @@ export async function chainUsage(
       // 即使当前一条都未读出有效数字（usage === null），只要文件里存在坏行也要保留行数，
       // 否则消费方会把「全行损坏读不出」当成「原生无 usage 字段」
       ...(badUsage ? { usageBadLines: badUsage.count } : {}),
+      ...(badUsage?.scanFailed ? { usageBadLinesScanError: badUsage.scanError } : {}),
     });
     if (usage === null && !badUsage) totalMissingUsage += 1;
     if (usage) {
@@ -1383,12 +1390,18 @@ export async function handoff(
 
   // 目标侧的坏行同样会让 diffTurns 把「已有但解析不出」的内容当缺失、重复追加一遍
   if (into) {
-    const badDestLines = await countUnparsableJsonLines(into.filePath);
-    if (badDestLines > 0) {
+    const destBadScan = await scanUnparsableJsonLines(into.filePath);
+    if (destBadScan.count > 0) {
       warnings.push(
-        `目标会话 ${into.sessionId}（${target.displayName}）有 ${badDestLines} 行无法解析（截断或损坏）：增量判定可能偏多，可能重复追加既有内容`,
+        `目标会话 ${into.sessionId}（${target.displayName}）有 ${destBadScan.count} 行无法解析（截断或损坏）：增量判定可能偏多，可能重复追加既有内容`,
       );
     }
+    const destBadScanFailure = describeBadLinesScanFailure(
+      destBadScan,
+      `目标会话 ${into.sessionId}（${target.displayName}）`,
+      '增量判定是否偏多无法确认——先确认该文件可读再重试',
+    );
+    if (destBadScanFailure) warnings.push(destBadScanFailure);
   }
 
   const source = resolve(sourceTip.provider);
@@ -1422,12 +1435,18 @@ export async function handoff(
   }
   // 各家 parse 对坏行一律跳过：跳过的内容既不在 turns 里，也不会被 round-trip 查出（两边都按解析结果比），
   // 不主动扫一遍就会把「少了几轮」当成完整交接
-  const badSourceLines = await countUnparsableJsonLines(sourceTip.ref.filePath);
-  if (badSourceLines > 0) {
+  const sourceBadScan = await scanUnparsableJsonLines(sourceTip.ref.filePath);
+  if (sourceBadScan.count > 0) {
     warnings.push(
-      `来源会话 ${sourceTip.ref.sessionId}（${source.displayName}）有 ${badSourceLines} 行无法解析（截断或损坏），已跳过；交接内容可能不完整，可在原生 CLI 里打开确认`,
+      `来源会话 ${sourceTip.ref.sessionId}（${source.displayName}）有 ${sourceBadScan.count} 行无法解析（截断或损坏），已跳过；交接内容可能不完整，可在原生 CLI 里打开确认`,
     );
   }
+  const sourceBadScanFailure = describeBadLinesScanFailure(
+    sourceBadScan,
+    `来源会话 ${sourceTip.ref.sessionId}（${source.displayName}）`,
+    '交接内容是否完整无法确认——先确认该文件可读再重试，可在原生 CLI 里打开确认',
+  );
+  if (sourceBadScanFailure) warnings.push(sourceBadScanFailure);
   // Pi 的上下文编辑 / 扩展消息、Codex 的压缩记录会造成来源上下文差异。
   // 披露事件可能随增量被裁掉，目标也不一定保留，必须单独进入 warnings。
   const contextDisclosure = findContextDisclosure(turns);
