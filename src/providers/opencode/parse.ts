@@ -1020,8 +1020,11 @@ function v2AssistantTurn(
   return turn;
 }
 
-/** 整条会话里 provider 原生压缩的次数与替换窗口的消息条数（只计数，不复制内容） */
-type V2NativeCompactions = { count: number; messages: number };
+/** 压缩的会话级披露：原生窗口只计数；摘要不可用时按原因计数，不作为裁剪边界。 */
+type V2Compactions = {
+  native: { count: number; messages: number };
+  unusableSummaries: Map<string, number>;
+};
 
 /** 后台 shell：上游 `to-llm-message.ts` 对 `metadata.background === true` 直接 `return []` */
 type V2BackgroundShells = { count: number; samples: string[] };
@@ -1032,7 +1035,7 @@ function v2AuxEvents(
   data: V2MessageData,
   time: number,
   unknown: Map<string, number>,
-  nativeCompactions: V2NativeCompactions,
+  compactions: V2Compactions,
   backgroundShells: V2BackgroundShells,
   keptRecent: string,
 ): ProcessEvent[] | null {
@@ -1083,8 +1086,8 @@ function v2AuxEvents(
         // 不当边界，只在会话级披露里计数（与 Codex compacted 记录同一取舍）。
         const windowSize = v2NativeWindow(data, unknown);
         if (windowSize !== null) {
-          nativeCompactions.count += 1;
-          nativeCompactions.messages += windowSize;
+          compactions.native.count += 1;
+          compactions.native.messages += windowSize;
           return [];
         }
         const summary = typeof data.summary === 'string' ? data.summary : '';
@@ -1097,12 +1100,21 @@ function v2AuxEvents(
         const storedRecent = typeof metadata?.recent === 'string' ? metadata.recent : '';
         const legacyRecent = typeof data.recent === 'string' ? data.recent : '';
         const recent = keptRecent || storedRecent || legacyRecent;
+        // completed 只证明原生压缩完成，不保证 Watch 拿到了可读摘要。空摘要或只有近期
+        // 原话都不足以替代更早的背景；不能写摘要前缀，否则 --since-compact 会误裁历史。
+        const usableSummary = summary.trim().length > 0;
+        if (!usableSummary) {
+          bumpCount(compactions.unusableSummaries, typeof data.summary === 'string' ? 'summary 为空或仅空白' : 'summary 不是字符串');
+          if (!recent.trim()) return [];
+        }
         return [
           {
             kind: 'text',
             timestamp,
-            summary: OPENCODE_COMPACTION_SUMMARY_PREFIX,
-            detail: [summary, recent ? `（最近对话：${recent}）` : ''].filter(Boolean).join('\n'),
+            summary: usableSummary
+              ? OPENCODE_COMPACTION_SUMMARY_PREFIX
+              : '[OpenCode 压缩记录的近期对话（摘要不可用，不作为裁剪边界）]',
+            detail: [usableSummary ? summary : '', recent ? `（最近对话：${recent}）` : ''].filter(Boolean).join('\n'),
             provider: 'opencode',
           },
         ];
@@ -1222,7 +1234,7 @@ function parseOpencodeV2Turns(db: DatabaseSync, sessionId: string): UnifiedTurn[
   // 非对话事件先挂到上一条 turn；上一条还没有时暂存，等下一轮对话出现再挂（不单独造 turn）
   const pending: ProcessEvent[] = [];
   const unknown = new Map<string, number>();
-  const nativeCompactions: V2NativeCompactions = { count: 0, messages: 0 };
+  const compactions: V2Compactions = { native: { count: 0, messages: 0 }, unusableSummaries: new Map() };
   const backgroundShells: V2BackgroundShells = { count: 0, samples: [] };
   const partsByMessage = readV2Parts(db, sessionId, unknown);
 
@@ -1295,7 +1307,7 @@ function parseOpencodeV2Turns(db: DatabaseSync, sessionId: string): UnifiedTurn[
       data,
       time,
       unknown,
-      nativeCompactions,
+      compactions,
       backgroundShells,
       keptRecentByRow.get(row.id) ?? '',
     );
@@ -1315,11 +1327,22 @@ function parseOpencodeV2Turns(db: DatabaseSync, sessionId: string): UnifiedTurn[
   // provider 原生压缩：压缩前的原文还在这份日志里（上游的本地转录同样保留），所以交接内容
   // 可能比 OpenCode 当前发给模型的更多；同时说明它不是 --since-compact 的边界，避免头部披露
   // 与正文「没有可用摘要」互相矛盾。只报次数与条数，窗口内容不复制。
-  if (nativeCompactions.count > 0) {
+  if (compactions.native.count > 0) {
     appendUnknownDisclosure(
       turns,
-      `OpenCode 2.x 有 ${nativeCompactions.count} 次 provider 原生压缩（替换窗口共 ${nativeCompactions.messages} 条消息），Watch 不重放原生窗口`,
+      `OpenCode 2.x 有 ${compactions.native.count} 次 provider 原生压缩（替换窗口共 ${compactions.native.messages} 条消息），Watch 不重放原生窗口`,
       '压缩前的对话原文仍保留在本次交接里，可能比 OpenCode 当前发给模型的上下文更多；原生窗口只有生成它的 provider / 模型能重放，这些压缩没有可读摘要，不作为 --since-compact 的边界',
+    );
+  }
+
+  // 空摘要不冒充成功边界，且降级必须在选窗前可见。只在统一披露里汇总原因与次数，
+  // 不改轮次正文或增量键；没有对话载体时仍返回 []，由入口的零轮检查处理。
+  if (compactions.unusableSummaries.size > 0) {
+    const count = [...compactions.unusableSummaries.values()].reduce((sum, n) => sum + n, 0);
+    appendUnknownDisclosure(
+      turns,
+      `OpenCode 2.x 有 ${count} 次已完成压缩没有可读摘要`,
+      `${describeCounts(compactions.unusableSummaries)}；这些记录不作为 --since-compact 的边界，仍按现存对话及其他选窗条件生成交接；近期对话不能替代缺失的历史摘要`,
     );
   }
 
