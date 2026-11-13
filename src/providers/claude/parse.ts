@@ -13,6 +13,13 @@ import {
 } from '../../core/rich.js';
 import type { ProcessEvent, SessionRef, TokenUsage, UnifiedTurn } from '../../core/types.js';
 import { describeClaudeContinuation, probeClaudeContinuation, readContinuedInRecord, type ClaudeContinuationCounts } from './continuation.js';
+import {
+  claudeFailureDisclosure,
+  createClaudeFailureCounts,
+  readClaudeSystemRecord,
+  recordClaudeSyntheticError,
+  type ClaudeFailureCounts,
+} from './failure.js';
 import { describeQueuedImages, readQueuedUserPrompt } from './queued.js';
 
 /**
@@ -44,6 +51,10 @@ export async function parseClaudeSession(ref: SessionRef): Promise<UnifiedTurn[]
   const unpaired: { event: ProcessEvent; reason: string }[] = [];
   const queued: { turn: UnifiedTurn; sourceUuid: string | null }[] = [];
   const userUuids = new Set<string>();
+  // 失败记录（system/api_error 与 isApiErrorMessage）只计数，循环结束后合成一条披露：
+  // 逐条挂事件会让一个 146 次错误的会话刷满同一句话。
+  const failures: ClaudeFailureCounts = createClaudeFailureCounts();
+  let lastFailureTimestamp = '';
 
   for (const line of raw.split('\n')) {
     const trimmed = line.trim();
@@ -80,10 +91,38 @@ export async function parseClaudeSession(ref: SessionRef): Promise<UnifiedTurn[]
     if (typeof record !== 'object' || record === null) continue;
     const r = record as Record<string, unknown>;
     const type = r.type;
+    const timestamp = typeof r.timestamp === 'string' ? r.timestamp : '';
+    // Claude Code 的失败记录有两族，都不能静默：
+    // ① 顶层 `system` + `subtype: "api_error"`：请求失败（429 / 503 等）与重试耗尽时写入，
+    //    本机 59 条里 49 条是 503 十次重试耗尽，44 条会话以「用户轮 + 尾部 api_error」收尾；
+    // ② `type: "assistant"` + `isApiErrorMessage: true`：`model: "<synthetic>"`、正文是
+    //    `API Error: …` 的机器错误行（本机 269 条，259 条后接下一轮提问、10 条在会话末尾）。
+    //    以前它被当作真实助手回复：236 轮里错误语句成了「最终答复」，29 轮还覆盖了真正的回复。
+    if (type === 'system') {
+      if (sawUser && readClaudeSystemRecord(r, failures)) {
+        // 只记事实，循环结束后统一合成一条披露：逐条挂事件会让一个 146 次错误的会话刷满同一句话。
+        lastFailureTimestamp = timestamp;
+        // 纯 `system/api_error` 收尾时日志里没有助手记录，轮次会停在用户轮上，
+        // `unansweredUserTail()` 就会把「上游失败」讲成「可能被中断或还在生成」。
+        // 与 OpenCode 失败轮同口径：造一个空正文助手轮承载失败事实，不伪造正文。
+        if (turns.at(-1)?.role === 'user') ensureAssistant(turns, timestamp, 'claude');
+      }
+      continue;
+    }
+    if (type === 'assistant' && r.isApiErrorMessage === true) {
+      if (!sawUser) continue;
+      // 失败轮只保留事实，**不写 turn.text**：正文那句 `API Error: …` 是机器生成的错误行，
+      // 写进目标会被接手的一侧当成助手的最终答复。`ensureAssistant` 复用已有助手轮，
+      // 所以真实回复在前时它不会被覆盖。
+      const last = ensureAssistant(turns, timestamp, 'claude');
+      recordClaudeSyntheticError(r, failures);
+      if (timestamp) last.timestamp = timestamp;
+      lastFailureTimestamp = timestamp || lastFailureTimestamp;
+      continue;
+    }
     if (type !== 'user' && type !== 'assistant') continue;
     if (r.isMeta === true || r.isSidechain === true) continue;
 
-    const timestamp = typeof r.timestamp === 'string' ? r.timestamp : '';
     const content = (r.message as Record<string, unknown> | undefined)?.content;
     const extracted = extractRich(content, timestamp, type, r.watchGeneratedThinking === true);
     if (!extracted) continue;
@@ -151,6 +190,12 @@ export async function parseClaudeSession(ref: SessionRef): Promise<UnifiedTurn[]
     }
   }
   const stripped = stripEmptyEvents(turns);
+  // 失败记录挂在**最后一条轮次**上，而不是选一个「安全载体」：尾部失败轮是空正文助手轮时，
+  // 改写它的正文会让下一次交接对不上（r79 的教训），但挂事件是安全的——目标写入后回读仍
+  // 只保留为事件。会话末尾没有轮次（首条用户消息之前）时无处可挂，交给零轮拒绝路径。
+  const failureTail = stripped.at(-1);
+  const failureEvent = failureTail ? claudeFailureDisclosure(failures, lastFailureTimestamp || failureTail.timestamp) : null;
+  if (failureEvent && failureTail) pushEvent(failureTail, failureEvent);
   const disclosureContext = [...stripped].reverse().find((turn) => turn.role === 'user' || turn.text.trim());
   if (unpaired.length > 0 && disclosureContext) {
     // 空正文助手轮写出 text 事件后，回读会把事件当正文；只挂到真实用户轮或非空助手轮。
