@@ -46,6 +46,8 @@ export type WorkManifest = {
   /** 因上限没列出的文件 / 命令条数 */
   omittedFiles: number;
   omittedCommands: number;
+  /** 被略去的命令**调用次数**（比条数更能说明清单少了多少） */
+  omittedCommandCalls: number;
   /** 认得出是写入类工具、但参数里读不出文件路径的调用次数（清单可能不全） */
   unreadableWrites: number;
   /** 确有路径 / 命令被记录、但因上限被截断时为 true */
@@ -272,16 +274,31 @@ export function collectWorkManifest(
   const sortedFiles = [...files.values()].sort(
     (a, b) => b.writes + b.edits - (a.writes + a.edits) || a.path.localeCompare(b.path),
   );
+  // 命令按**频次**排，不按首次出现排。真实会话里同一条 `npm test` / `npm run typecheck`
+  // 会重复几十次，而长会话的早期命令多半是一次性探查（`ls`、`cat 某个文件`），
+  // 对「接手后该跑什么来验证」几乎没有价值。本机只读实测（12 条真实 Claude 会话）：
+  // 589 轮那条共 3000+ 条命令，按首现截断只留最早 30 条、漏掉 6568 条。
+  // 频次相同时按首次出现顺序，保持输出稳定（同一输入永远同一输出）。
+  const sortedCommands = commands
+    .map((cmd, index) => ({ cmd, index }))
+    .sort((a, b) => b.cmd.count - a.cmd.count || a.index - b.index)
+    .map((entry) => entry.cmd);
   const keptFiles = sortedFiles.slice(0, Math.max(0, limits.files));
-  const keptCommands = commands.slice(0, Math.max(0, limits.commands));
+  const keptCommands = sortedCommands.slice(0, Math.max(0, limits.commands));
   const omittedFiles = sortedFiles.length - keptFiles.length;
-  const omittedCommands = commands.length - keptCommands.length;
+  const omittedCommands = sortedCommands.length - keptCommands.length;
+  // 被略去的**调用次数**比条数更能说明「这份清单少了多少」：漏 5 条各跑 1 次的命令
+  // 与漏 200 条共跑 6000 次的命令，后果差得远。
+  const omittedCommandCalls = sortedCommands
+    .slice(keptCommands.length)
+    .reduce((n, cmd) => n + cmd.count, 0);
 
   return {
     files: keptFiles,
     commands: keptCommands,
     omittedFiles,
     omittedCommands,
+    omittedCommandCalls,
     unreadableWrites,
     truncated: omittedFiles > 0 || omittedCommands > 0,
   };
@@ -341,7 +358,9 @@ export function renderWorkManifest(manifest: WorkManifest): string[] {
       }
     }
     if (manifest.omittedCommands > 0) {
-      lines.push(`- 另有 ${manifest.omittedCommands} 条命令未列出（超出本节上限）`);
+      lines.push(
+        `- 另有 ${manifest.omittedCommands} 条命令未列出（共执行 ${manifest.omittedCommandCalls} 次，超出本节上限）`,
+      );
     }
     lines.push('');
   }

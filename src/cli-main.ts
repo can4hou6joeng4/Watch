@@ -1913,6 +1913,7 @@ async function cmdPrompt(
           commands: result.manifest.commands,
           ...(result.manifest.omittedFiles ? { omittedFiles: result.manifest.omittedFiles } : {}),
           ...(result.manifest.omittedCommands ? { omittedCommands: result.manifest.omittedCommands } : {}),
+          ...(result.manifest.omittedCommandCalls ? { omittedCommandCalls: result.manifest.omittedCommandCalls } : {}),
           ...(result.manifest.unreadableWrites ? { unreadableWrites: result.manifest.unreadableWrites } : {}),
         },
       } : {}),
