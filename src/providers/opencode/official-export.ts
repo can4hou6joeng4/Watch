@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import path from 'node:path';
-import { dedupeCallEvents, mergeConsecutiveAssistant } from '../../core/rich.js';
+import { dedupeCallEvents, mergeConsecutiveAssistant, stripToolFailurePrefix } from '../../core/rich.js';
 import type { ProcessEvent, TokenUsage, UnifiedTurn } from '../../core/types.js';
 
 export const SUPPORTED_OPENCODE_EXPORT_VERSION = '1.18.29';
@@ -171,22 +171,22 @@ function eventParts(events: ProcessEvent[], baseTime: number): JsonRecord[] {
     }
 
     const matched = pending.get(callID);
+    const previous = matched?.state as JsonRecord | undefined;
+    const output = text(event.detail ?? event.summary);
+    const tool = typeof matched?.tool === 'string' ? matched.tool : event.name ?? 'tool';
+    const state: JsonRecord = {
+      input: previous?.input ?? {},
+      metadata: {},
+      time: { start: (previous?.time as JsonRecord | undefined)?.start ?? at, end: at + 1 },
+      ...(event.failed === true
+        ? { status: 'error', error: stripToolFailurePrefix(output) || '工具执行失败' }
+        : { status: 'completed', output, title: tool }),
+    };
     if (matched) {
-      const state = matched.state as JsonRecord;
-      matched.state = {
-        status: 'completed', input: state.input ?? {}, output: text(event.detail ?? event.summary),
-        title: typeof matched.tool === 'string' ? matched.tool : 'tool',
-        metadata: {}, time: { start: (state.time as JsonRecord | undefined)?.start ?? at, end: at + 1 },
-      };
+      matched.state = state;
       pending.delete(callID);
     } else {
-      parts.push({
-        type: 'tool', callID, tool: event.name ?? 'tool',
-        state: {
-          status: 'completed', input: {}, output: text(event.detail ?? event.summary),
-          title: event.name ?? 'tool', metadata: {}, time: { start: at, end: at + 1 },
-        },
-      });
+      parts.push({ type: 'tool', callID, tool, state });
     }
   }
   return parts;

@@ -5,7 +5,7 @@ import type { ImportTurnsOpts } from '../adapter.js';
 import { SessionLookupFailureError } from '../adapter.js';
 import type { ProcessEvent, SessionRef, TokenUsage, UnifiedTurn } from '../../core/types.js';
 import { escapeControlChars } from '../../core/display.js';
-import { OPENCODE_TOOL_FAILURE_PREFIX } from '../../core/rich.js';
+import { stripToolFailurePrefix } from '../../core/rich.js';
 import {
   assertUsableOpencodeDb,
   detectOpencodeLayout,
@@ -338,21 +338,6 @@ function buildStepStartPartData(): string {
 
 function buildStepFinishPartData(reason: string): string {
   return JSON.stringify({ type: 'step-finish', reason, tokens: { total: 0, input: 0, output: 0, reasoning: 0, cache: { write: 0, read: 0 } }, cost: 0 });
-}
-
-/**
- * 剥掉读取侧加在失败原因前的 `[工具执行失败] ` 前缀。
- *
- * `parse.ts` 把 `state.error` 包成 `[工具执行失败] <原因>` 才能让正文读者看见；
- * 写回时若原样存进 `state.error`，下一次读出来就会再包一层。只剥开头、连续几层一起剥，
- * 正文里自身就以这串开头的错误信息（极少）会少一层——这个损失可以接受，累积前缀的噪声不能。
- */
-function stripToolFailurePrefix(text: string): string {
-  let out = text.trim();
-  while (out.startsWith(OPENCODE_TOOL_FAILURE_PREFIX)) {
-    out = out.slice(OPENCODE_TOOL_FAILURE_PREFIX.length).trim();
-  }
-  return out;
 }
 
 function buildToolPartData(ev: ProcessEvent, fallbackCallId: string, time: number): string {

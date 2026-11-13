@@ -50,6 +50,15 @@ export const OPENCODE_SYNTHETIC_TEXT_PREFIX = '[OpenCode 注入内容（由 Open
  */
 export const OPENCODE_TOOL_FAILURE_PREFIX = '[工具执行失败] ';
 
+/** 两条 OpenCode 写出路径共用，避免把显示前缀重复写入原生 error 字段。 */
+export function stripToolFailurePrefix(text: string): string {
+  let out = text.trim();
+  while (out.startsWith(OPENCODE_TOOL_FAILURE_PREFIX)) {
+    out = out.slice(OPENCODE_TOOL_FAILURE_PREFIX.length).trim();
+  }
+  return out;
+}
+
 /**
  * Pi 的压缩摘要不是一条 message，而是会话文件里独立的 `type: "compaction"` 条目
  * （`summary` / `firstKeptEntryId` / `tokensBefore`），pi 自己会把它作为摘要消息注入上下文。
