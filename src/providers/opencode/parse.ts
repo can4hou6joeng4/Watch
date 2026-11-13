@@ -420,8 +420,19 @@ type V2ContentItem = {
   time?: { created?: number; completed?: number };
 };
 
+type V2MessageMetadata = {
+  /** 摘要型压缩逐字保留的近期消息起点（session_message.id） */
+  keepID?: unknown;
+  /** pre-v2.1 的摘要型压缩把保留文本存在这里（session-legacy.ts 从顶层 recent 迁移） */
+  recent?: unknown;
+  /** shell 的后台执行标记：上游 `metadata.background === true` 不进模型上下文 */
+  background?: unknown;
+};
+
 type V2MessageData = {
   text?: string;
+  /** compaction / shell 的元信息；形状在读取处逐个收窄 */
+  metadata?: V2MessageMetadata;
   time?: { created?: number; completed?: number };
   content?: V2ContentItem[] | string;
   command?: string;
@@ -448,6 +459,174 @@ type V2MessageData = {
   /** pre-v2.1 的旧记录把同一个窗口存在 providerContext.messages（session-legacy.ts 迁移） */
   providerContext?: unknown;
 };
+
+/**
+ * 上游 `recent-text.ts` 对保留窗口里单个工具输出的上限：1250 个码点，超出部分截断并标注。
+ * 按码点计数，避免把代理对切一半。
+ */
+const V2_RECENT_TOOL_OUTPUT_MAX_CHARS = 1250;
+
+function truncateV2RecentToolOutput(value: string): string {
+  if (value.length <= V2_RECENT_TOOL_OUTPUT_MAX_CHARS) return value;
+  let end = 0;
+  let kept = 0;
+  for (const char of value) {
+    if (kept === V2_RECENT_TOOL_OUTPUT_MAX_CHARS) break;
+    end += char.length;
+    kept++;
+  }
+  if (end === value.length) return value;
+  return `${value.slice(0, end)}\n[truncated]`;
+}
+
+/** 上游 `serializeToolContent()`：文本原样、文件只留 mime 与名字（不读附件字节）。 */
+function v2RecentToolContent(content: unknown): string {
+  if (typeof content === 'string') return content;
+  if (!Array.isArray(content)) return '';
+  const parts: string[] = [];
+  for (const item of content) {
+    if (!item || typeof item !== 'object') continue;
+    const entry = item as { type?: unknown; text?: unknown; mime?: unknown; name?: unknown };
+    if (entry.type === 'text') {
+      if (typeof entry.text === 'string') parts.push(entry.text);
+      continue;
+    }
+    if (entry.type !== 'file') continue;
+    const mime = typeof entry.mime === 'string' && entry.mime ? entry.mime : '未知类型';
+    const name = typeof entry.name === 'string' && entry.name ? `: ${entry.name}` : '';
+    parts.push(`[Attached ${mime}${name}]`);
+  }
+  return parts.join('\n');
+}
+
+/** assistant 消息按上游 `messageToText()`：文本 / 工具调用与结果入文本，reasoning 刻意不送。 */
+function v2RecentAssistantText(data: V2MessageData, parts?: V2ContentItem[]): string {
+  const inline: V2ContentItem[] =
+    typeof data.content === 'string' ? [{ type: 'text', text: data.content }] : Array.isArray(data.content) ? data.content : [];
+  // 与上游 withParts() 同一顺序：session_part 行在前，旧构建写在行内的 content 在后。
+  const items: V2ContentItem[] = parts?.length ? [...parts, ...inline] : inline;
+  const lines: string[] = [];
+  for (const item of items) {
+    if (!item || typeof item !== 'object') continue;
+    if (item.type === 'text') {
+      lines.push(`[Assistant]: ${typeof item.text === 'string' ? item.text : ''}`);
+      continue;
+    }
+    if (item.type === 'reasoning') continue;
+    if (item.type !== 'tool') continue;
+    const name = typeof item.name === 'string' && item.name ? item.name : 'tool';
+    const rawInput = item.state?.input;
+    const input = typeof rawInput === 'string' ? rawInput : JSON.stringify(rawInput);
+    lines.push(`[Assistant tool call]: ${name}(${input})`);
+    if (item.state?.status === 'completed') {
+      lines.push(`[Tool result]: ${truncateV2RecentToolOutput(v2RecentToolContent(item.state?.content))}`);
+    } else if (item.state?.status === 'error') {
+      lines.push(`[Tool error]: ${typeof item.state?.error?.message === 'string' ? item.state.error.message : ''}`);
+    }
+  }
+  return lines.join('\n');
+}
+
+/** 上游 `messageToText()` 的逐类型投影；未知类型与 compaction / system 一样不渲染（模型也看不到）。 */
+function v2RecentMessageText(row: V2MessageRow, data: V2MessageData | null, parts?: V2ContentItem[]): string {
+  if (!data) return '';
+  switch (row.type) {
+    case 'compaction':
+    case 'system':
+      return '';
+    case 'user': {
+      const skills: string[] = [];
+      if (Array.isArray(data.skills)) {
+        for (const raw of data.skills) {
+          if (!raw || typeof raw !== 'object') continue;
+          const skill = raw as { name?: unknown; text?: unknown };
+          if (typeof skill.name !== 'string' || typeof skill.text !== 'string') continue;
+          skills.push(`[Skill activated: ${skill.name}]\n${skill.text}`);
+        }
+      }
+      const files: string[] = [];
+      if (Array.isArray(data.files)) {
+        for (const raw of data.files) {
+          if (!raw || typeof raw !== 'object') continue;
+          const file = raw as { mime?: unknown; name?: unknown; source?: { type?: unknown; uri?: unknown } };
+          const mime = typeof file.mime === 'string' ? file.mime : '未知类型';
+          const fallback = file.source?.type === 'uri' && typeof file.source.uri === 'string' ? file.source.uri : 'inline attachment';
+          const name = typeof file.name === 'string' && file.name ? file.name : fallback;
+          files.push(`[Attached ${mime}: ${name}]`);
+        }
+      }
+      return [...skills, `[User]: ${typeof data.text === 'string' ? data.text : ''}`, ...files].join('\n');
+    }
+    case 'location-switched': {
+      const directory = data.location && typeof data.location === 'object' && typeof data.location.directory === 'string' ? data.location.directory : '';
+      return directory ? `[User]: The working directory has been changed to ${directory}.` : '';
+    }
+    case 'assistant':
+      return v2RecentAssistantText(data, parts);
+    case 'synthetic':
+      return `[Synthetic context]: ${typeof data.text === 'string' ? data.text : ''}`;
+    case 'skill': {
+      const name = typeof data.name === 'string' ? data.name : '';
+      const text = typeof data.text === 'string' ? data.text : '';
+      return `[Skill activated: ${name}]\n${text}`;
+    }
+    case 'shell': {
+      // 后台 shell 的结果由完成时的 inbox 项单独进入上下文，这里不重复（上游 messageToText 同判据）。
+      if (data.metadata?.background === true) return '';
+      const command = typeof data.command === 'string' ? data.command : '';
+      const output =
+        typeof data.output === 'string' ? data.output : typeof data.output?.output === 'string' ? data.output.output : '';
+      return `[Shell]: ${command}\n${truncateV2RecentToolOutput(output)}`;
+    }
+    default:
+      return '';
+  }
+}
+
+/**
+ * 摘要型压缩的「保留窗口」：`metadata.keepID` 指向第一条逐字保留的消息，上游
+ * `history.ts` 的 `withRecentText()` 从它到压缩记录之间重建文本放进 `<recent-context>`——
+ * 这些消息在压缩后**仍然进模型上下文**。不重建会让 `--since-compact` 把它们连同更早的
+ * 轮次一起裁掉。keepID 不存在 / 找不到时返回空串（上游同样不重建，模型也看不到）。
+ * 形状异常由主解析对同一条记录另行计数，这里不再重复。
+ */
+function v2KeptRecentTexts(
+  rows: V2MessageRow[],
+  parsed: (V2MessageData | null)[],
+  partsByMessage: Map<string, V2ContentItem[]>,
+  unknown: Map<string, number>,
+): Map<string, string> {
+  const out = new Map<string, string>();
+  const indexById = new Map<string, number>();
+  rows.forEach((row, index) => indexById.set(row.id, index));
+  for (let i = 0; i < rows.length; i++) {
+    const row = rows[i]!;
+    const data = parsed[i];
+    if (row.type !== 'compaction' || !data) continue;
+    const status = typeof data.status === 'string' ? data.status : 'completed';
+    if (status !== 'completed') continue;
+    const metadata = data.metadata;
+    if (metadata !== undefined && (!metadata || typeof metadata !== 'object' || Array.isArray(metadata))) {
+      bumpCount(unknown, 'compaction（metadata 不是对象）');
+      continue;
+    }
+    const keepID = metadata?.keepID;
+    if (keepID === undefined) continue;
+    if (typeof keepID !== 'string' || !keepID) {
+      bumpCount(unknown, 'compaction（keepID 不是字符串）');
+      continue;
+    }
+    const start = indexById.get(keepID);
+    if (start === undefined || start >= i) continue;
+    const pieces: string[] = [];
+    for (let j = start; j < i; j++) {
+      const text = v2RecentMessageText(rows[j]!, parsed[j] ?? null, partsByMessage.get(rows[j]!.id));
+      if (text) pieces.push(text);
+    }
+    out.set(row.id, pieces.join('\n\n'));
+  }
+  return out;
+}
 
 /**
  * completed 压缩的 provider 原生替换窗口：返回窗口里的消息条数，没有窗口返回 null。
@@ -807,6 +986,7 @@ function v2AuxEvents(
   time: number,
   unknown: Map<string, number>,
   nativeCompactions: V2NativeCompactions,
+  keptRecent: string,
 ): ProcessEvent[] | null {
   const timestamp = isoFromEpochMs(time);
   switch (type) {
@@ -850,7 +1030,15 @@ function v2AuxEvents(
           return [];
         }
         const summary = typeof data.summary === 'string' ? data.summary : '';
-        const recent = typeof data.recent === 'string' ? data.recent : '';
+        // 保留窗口的来源按上游优先级：keepID 重建 > metadata.recent（pre-v2.1 迁移）>
+        // 顶层 recent（更老的第三方样本）。三者都是模型压缩后仍能看到的内容。
+        const metadata = data.metadata;
+        if (metadata && typeof metadata === 'object' && !Array.isArray(metadata) && metadata.recent !== undefined) {
+          if (typeof metadata.recent !== 'string') bumpCount(unknown, 'compaction（metadata.recent 不是字符串）');
+        }
+        const storedRecent = typeof metadata?.recent === 'string' ? metadata.recent : '';
+        const legacyRecent = typeof data.recent === 'string' ? data.recent : '';
+        const recent = keptRecent || storedRecent || legacyRecent;
         return [
           {
             kind: 'text',
@@ -1002,16 +1190,24 @@ function parseOpencodeV2Turns(db: DatabaseSync, sessionId: string): UnifiedTurn[
     pending.length = 0;
   };
 
-  for (const row of rows) {
+  // 行只解析一次：保留窗口重建与主循环共用同一份结果（重复 JSON.parse 没有意义）。
+  // 坏 JSON 与合法但非对象的 JSON（null / [] / 42 / "str"）都不是消息。以前后者会被
+  // 当成「这条消息没有字段」继续处理：user 记成「无文本」、assistant 直接返回 null，
+  // 内容静默消失且类型归属还是错的。两者都按「data 不是对象」计数。
+  const parsed = rows.map((row) => {
     const data = parseJson<V2MessageData>(row.data);
-    const time = typeof data?.time?.created === 'number' ? data.time.created : row.time_created;
-    // 坏 JSON 与合法但非对象的 JSON（null / [] / 42 / "str"）都不是消息。以前后者会被
-    // 当成「这条消息没有字段」继续处理：user 记成「无文本」、assistant 直接返回 null，
-    // 内容静默消失且类型归属还是错的。两者都按「data 不是对象」计数。
-    if (typeof data !== 'object' || data === null || Array.isArray(data)) {
+    return typeof data === 'object' && data !== null && !Array.isArray(data) ? data : null;
+  });
+  const keptRecentByRow = v2KeptRecentTexts(rows, parsed, partsByMessage, unknown);
+
+  for (let i = 0; i < rows.length; i++) {
+    const row = rows[i]!;
+    const data = parsed[i];
+    if (!data) {
       bumpCount(unknown, `${row.type || '（空类型）'}（data 不是对象）`);
       continue;
     }
+    const time = typeof data.time?.created === 'number' ? data.time.created : row.time_created;
 
     if (row.type === 'user') {
       const turn = v2UserTurn(row, data, unknown);
@@ -1039,7 +1235,7 @@ function parseOpencodeV2Turns(db: DatabaseSync, sessionId: string): UnifiedTurn[
       continue;
     }
 
-    const aux = v2AuxEvents(row.type, data, time, unknown, nativeCompactions);
+    const aux = v2AuxEvents(row.type, data, time, unknown, nativeCompactions, keptRecentByRow.get(row.id) ?? '');
     if (aux === null) {
       // 记账类型（agent-switched / idle）上游不进模型上下文，正常会话不该因此冒披露。
       if (!V2_IGNORED_MESSAGE_TYPES.has(row.type)) bumpCount(unknown, row.type || '（空类型）');
