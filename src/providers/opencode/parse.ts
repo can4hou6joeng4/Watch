@@ -391,8 +391,8 @@ function messageToTurn(
  * 类型语义对齐上游 v2.2.7（`fedc6f208aa2bd54c1019227214568083f6380ad`）的
  * `packages/core/src/session/runner/to-llm-message.ts`：user / assistant 是对话
  * （assistant 的 `content` 数组里是 text / reasoning / tool）；shell / synthetic /
- * system / compaction / model-switched / location-switched / skill 是模型可见事件；
- * agent-switched / idle 是纯记账（`V2_IGNORED_MESSAGE_TYPES`）。本机没有原生 2.x
+ * system / compaction / location-switched / skill 是模型可见事件；
+ * agent-switched / idle / model-switched 是纯记账（`V2_IGNORED_MESSAGE_TYPES`）。本机没有原生 2.x
  * 样本，旧构建的形状兼容保留（user.content 字符串回退、无 status 的 compaction），
  * 其余原样跳过并把条数写进内容（不猜含义）。
  */
@@ -406,7 +406,8 @@ type V2ToolState = {
   input?: unknown;
   output?: unknown;
   content?: unknown;
-  error?: { message?: string };
+  /** 上游 `SessionError.Error`（type / message 必填）；形状在读取处逐项收窄 */
+  error?: unknown;
 };
 
 /** content 数组的一项：按 `type` 分支读字段；未知类型只用到 `type` */
@@ -443,7 +444,6 @@ type V2MessageData = {
   summary?: string;
   recent?: string;
   reason?: string;
-  model?: { providerID?: string; id?: string; modelID?: string };
   /** location-switched 的 Location.Ref：directory 是 AbsolutePath 字符串 */
   location?: { directory?: unknown };
   /** skill 的必填字段：skill 是 ID、name 是 Name、text 是技能正文 */
@@ -521,7 +521,8 @@ function v2RecentAssistantText(data: V2MessageData, parts?: V2ContentItem[]): st
     if (item.state?.status === 'completed') {
       lines.push(`[Tool result]: ${truncateV2RecentToolOutput(v2RecentToolContent(item.state?.content))}`);
     } else if (item.state?.status === 'error') {
-      lines.push(`[Tool error]: ${typeof item.state?.error?.message === 'string' ? item.state.error.message : ''}`);
+      // 与上游 recent-text.ts 同一投影：[Tool error] 只写 message，不并入 content。
+      lines.push(`[Tool error]: ${v2ToolErrorMessageRaw(item.state?.error) ?? ''}`);
     }
   }
   return lines.join('\n');
@@ -657,10 +658,14 @@ function v2NativeWindow(data: V2MessageData, unknown: Map<string, number>): numb
 
 /**
  * 2.x 里「不承载对话内容」的记账类型。上游 v2.2.7 的 `to-llm-message.ts` 对
- * `agent-switched` / `idle` 直接 `return []`（idle 每个回合结束都会写一条），
- * 把它们计成「未识别事件」会让任何健康的 v2 会话都冒假披露。
+ * `agent-switched` / `idle` 直接 `return []`（idle 每个回合结束都会写一条）；
+ * `model-switched` 只在「当前模型与自己记录的 previous 是同一个模型、且两侧 variant 都能
+ * 解析成 effort」时产出一条 **system 角色**的 `Message.effort` 标记（多数 provider 路由在
+ * 发送前还会把它丢掉），真正换了 provider / 模型时同样 `return []`——模型上下文里没有
+ * 「模型切换」这句话。把它们计成「未识别事件」会让任何健康的 v2 会话都冒假披露；把
+ * model-switched 写成助手侧文本更糟：交接时 claude / codex 目标会把它当成上一轮的发言。
  */
-const V2_IGNORED_MESSAGE_TYPES = new Set(['agent-switched', 'idle']);
+const V2_IGNORED_MESSAGE_TYPES = new Set(['agent-switched', 'idle', 'model-switched']);
 
 function bumpCount(map: Map<string, number>, key: string): void {
   const k = key.trim() || '（空类型）';
@@ -692,45 +697,84 @@ function appendUnknownDisclosure(turns: UnifiedTurn[], summary: string, detail: 
 }
 
 /**
- * 工具结果正文。上游 v2.2.7 的 `toolResult` 把 completed 状态的 `state.content`
- * （`Tool.Content` = text | file 的联合）整体传给模型；只认 text 项会让**纯 file 结果**
- * 整条 tool_result 消失，调用还会被下游报成「没有结果」。file 项只留可读占位，
- * `uri` 不复制（可能是 data URI，原始载荷会撑爆交接并泄漏进文本）。
+ * 工具结果的 `Tool.Content` 联合（text | file）→ 可读正文。
+ *
+ * 上游 v2.2.7 的 `toolResult` 把 completed 状态的 `state.content` 整体传给模型；只认
+ * text 项会让**纯 file 结果**整条 tool_result 消失，调用还会被下游报成「没有结果」。
+ * file 项只留可读占位，`uri` 不复制（可能是 data URI，原始载荷会撑爆交接并泄漏进文本）。
  * 形状异常按原因计数，与 content 区其它分支同一口径。
  */
-function v2ToolResultText(state: V2ToolState | undefined, unknown: Map<string, number>): string | undefined {
-  if (state?.error?.message) return state.error.message;
-  const content = state?.content;
+function v2ToolContentText(content: unknown, unknown: Map<string, number>): string | undefined {
   if (typeof content === 'string') return content;
-  if (Array.isArray(content)) {
-    const parts: string[] = [];
-    for (const item of content) {
-      if (!item || typeof item !== 'object') {
-        bumpCount(unknown, 'tool:content（非对象）');
-        continue;
-      }
-      const entry = item as { type?: unknown; text?: unknown; mime?: unknown; name?: unknown };
-      if (entry.type === 'text') {
-        if (typeof entry.text === 'string') {
-          if (entry.text) parts.push(entry.text);
-        } else {
-          bumpCount(unknown, 'tool:content:text（text 不是字符串）');
-        }
-        continue;
-      }
-      if (entry.type === 'file') {
-        if (typeof entry.mime !== 'string' || !entry.mime) {
-          bumpCount(unknown, 'tool:content:file（mime 不是字符串）');
-        }
-        const mime = typeof entry.mime === 'string' && entry.mime ? entry.mime : '未知类型';
-        const name = typeof entry.name === 'string' && entry.name ? `，${entry.name}` : '';
-        parts.push(`[文件附件：${mime}${name}]`);
-        continue;
-      }
-      bumpCount(unknown, `tool:content:${typeof entry.type === 'string' && entry.type ? entry.type : '（空类型）'}`);
-    }
-    if (parts.length) return parts.join('\n');
+  if (content !== undefined && !Array.isArray(content)) {
+    bumpCount(unknown, 'tool:content（不是数组或字符串）');
+    return undefined;
   }
+  if (!Array.isArray(content)) return undefined;
+  const parts: string[] = [];
+  for (const item of content) {
+    if (!item || typeof item !== 'object') {
+      bumpCount(unknown, 'tool:content（非对象）');
+      continue;
+    }
+    const entry = item as { type?: unknown; text?: unknown; mime?: unknown; name?: unknown };
+    if (entry.type === 'text') {
+      if (typeof entry.text === 'string') {
+        if (entry.text) parts.push(entry.text);
+      } else {
+        bumpCount(unknown, 'tool:content:text（text 不是字符串）');
+      }
+      continue;
+    }
+    if (entry.type === 'file') {
+      if (typeof entry.mime !== 'string' || !entry.mime) {
+        bumpCount(unknown, 'tool:content:file（mime 不是字符串）');
+      }
+      const mime = typeof entry.mime === 'string' && entry.mime ? entry.mime : '未知类型';
+      const name = typeof entry.name === 'string' && entry.name ? `，${entry.name}` : '';
+      parts.push(`[文件附件：${mime}${name}]`);
+      continue;
+    }
+    bumpCount(unknown, `tool:content:${typeof entry.type === 'string' && entry.type ? entry.type : '（空类型）'}`);
+  }
+  return parts.length ? parts.join('\n') : undefined;
+}
+
+/** 只取值、不计数：保留窗口投影（与上游 recent-text.ts 同形）不该产生披露条目。 */
+function v2ToolErrorMessageRaw(raw: unknown): string | undefined {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return undefined;
+  const message = (raw as { message?: unknown }).message;
+  return typeof message === 'string' && message ? message : undefined;
+}
+
+/** 上游 `SessionError.Error.message` 是必填字符串；形状异常按原因计数，不静默当没有。 */
+function v2ToolErrorMessage(raw: unknown, unknown: Map<string, number>): string | undefined {
+  if (raw === undefined) return undefined;
+  const message = v2ToolErrorMessageRaw(raw);
+  if (message) return message;
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+    bumpCount(unknown, 'tool:error（不是对象）');
+  } else if (typeof (raw as { message?: unknown }).message !== 'string') {
+    bumpCount(unknown, 'tool:error（message 不是字符串）');
+  } else {
+    bumpCount(unknown, 'tool:error（message 为空）');
+  }
+  return undefined;
+}
+
+/**
+ * 工具结果正文。error 状态在上游是
+ * `{ error: state.error, content: state.content ?? [] }`——错误信息与工具失败时已经产生的
+ * 输出**一起**进上下文（`ToolStateError.content` 是可选的非空数组）。以前只返回
+ * `error.message`，失败前的现场整段消失；现在错误在前、附带内容在后，completed 不变。
+ */
+function v2ToolResultText(state: V2ToolState | undefined, unknown: Map<string, number>): string | undefined {
+  const errorText = v2ToolErrorMessage(state?.error, unknown);
+  const contentText = v2ToolContentText(state?.content, unknown);
+  if (errorText) {
+    return contentText ? `${errorText}\n\n[工具错误附带内容]\n${contentText}` : errorText;
+  }
+  if (contentText) return contentText;
   if (typeof state?.output === 'string') return state.output;
   if (state?.output !== undefined) return JSON.stringify(state.output);
   return undefined;
@@ -1126,10 +1170,6 @@ function v2AuxEvents(
       const label = type === 'system' ? '系统事件' : '系统生成事件';
       return [{ kind: 'text', timestamp, summary: `[${label}] ${text.slice(0, 160)}`.trim(), detail: text, provider: 'opencode' }];
     }
-    case 'model-switched': {
-      const label = [data.model?.providerID, data.model?.id ?? data.model?.modelID].filter(Boolean).join('/');
-      return [{ kind: 'text', timestamp, summary: `[模型切换]${label ? ` ${label}` : ''}`, detail: label, provider: 'opencode' }];
-    }
     default:
       return null;
   }
@@ -1301,7 +1341,7 @@ function parseOpencodeV2Turns(db: DatabaseSync, sessionId: string): UnifiedTurn[
     appendUnknownDisclosure(
       turns,
       `OpenCode 2.x 有 ${total} 条未识别事件，未并入对话`,
-      `${describeCounts(unknown)}；Watch 按上游 v2.2.7 的会话消息语义识别 user / assistant / shell / system / synthetic / compaction / model-switched / location-switched / skill，其余原样跳过，不猜含义`,
+      `${describeCounts(unknown)}；Watch 按上游 v2.2.7 的会话消息语义识别 user / assistant / shell / system / synthetic / compaction / location-switched / skill（agent-switched / idle / model-switched 按上游记账忽略），其余原样跳过，不猜含义`,
     );
   }
   return turns;
