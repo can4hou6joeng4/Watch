@@ -18,8 +18,9 @@ import type { ProcessEvent, UnifiedTurn } from './types.js';
  *   固定前缀，Codex 用它表达改动）；命令必须来自明确的 `command` / `cmd` 键，
  *   或名字明显是执行器的工具。**不从 `summary` / `detail` 里抠路径**——那里是
  *   `Read a.ts` 这样的自由文本，抠出来会把「读过」当成「改过」。
- * - **不复制工具输出**：只用 `tool_call` 事件，`tool_result` 一律不看（输出可能很大，
- *   也可能含敏感内容）。
+ * - **不复制工具输出**：判断「改过什么」只读 `tool_call` 参数；`tool_result` 只读
+ *   `failed` 标记与 `callId`（用来把失败的写入排除掉），**不读 `detail` / `summary`**
+ *   ——输出可能很大，也可能含敏感内容。
  * - **成败都要披露**：认得出是写入类工具却拿不到路径时计数，让人知道清单可能不全。
  */
 
