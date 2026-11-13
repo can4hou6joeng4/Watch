@@ -979,6 +979,9 @@ function v2AssistantTurn(
 /** 整条会话里 provider 原生压缩的次数与替换窗口的消息条数（只计数，不复制内容） */
 type V2NativeCompactions = { count: number; messages: number };
 
+/** 后台 shell：上游 `to-llm-message.ts` 对 `metadata.background === true` 直接 `return []` */
+type V2BackgroundShells = { count: number; samples: string[] };
+
 /** 非对话事件 → ProcessEvent[]；空数组 = 已识别但无内容（形状异常已按原因计数）；null = 类型未知 */
 function v2AuxEvents(
   type: string,
@@ -986,12 +989,23 @@ function v2AuxEvents(
   time: number,
   unknown: Map<string, number>,
   nativeCompactions: V2NativeCompactions,
+  backgroundShells: V2BackgroundShells,
   keptRecent: string,
 ): ProcessEvent[] | null {
   const timestamp = isoFromEpochMs(time);
   switch (type) {
     case 'shell': {
       const command = typeof data.command === 'string' ? data.command : '';
+      // 上游 to-llm-message.ts：后台 shell 在完成前不进模型上下文（结果完成时另行投递）。
+      // 当成普通工具调用会让启动消息出现在对话里、还常因为没有 output 触发
+      // 「工具调用没有结果，可能在中断或仍在运行」的假警告。只计数与命令样本，不复制输出。
+      if (data.metadata?.background === true) {
+        backgroundShells.count += 1;
+        if (command && backgroundShells.samples.length < 3) {
+          backgroundShells.samples.push(escapeControlChars(command).slice(0, 80));
+        }
+        return [];
+      }
       const callId =
         typeof data.shellID === 'string' && data.shellID ? `oc-shell-${data.shellID}` : `oc-shell-${crypto.randomUUID()}`;
       const events: ProcessEvent[] = [
@@ -1169,6 +1183,7 @@ function parseOpencodeV2Turns(db: DatabaseSync, sessionId: string): UnifiedTurn[
   const pending: ProcessEvent[] = [];
   const unknown = new Map<string, number>();
   const nativeCompactions: V2NativeCompactions = { count: 0, messages: 0 };
+  const backgroundShells: V2BackgroundShells = { count: 0, samples: [] };
   const partsByMessage = readV2Parts(db, sessionId, unknown);
 
   // 事件属于「模型处理这一轮的过程」，优先挂到它之后的 assistant turn；
@@ -1235,7 +1250,15 @@ function parseOpencodeV2Turns(db: DatabaseSync, sessionId: string): UnifiedTurn[
       continue;
     }
 
-    const aux = v2AuxEvents(row.type, data, time, unknown, nativeCompactions, keptRecentByRow.get(row.id) ?? '');
+    const aux = v2AuxEvents(
+      row.type,
+      data,
+      time,
+      unknown,
+      nativeCompactions,
+      backgroundShells,
+      keptRecentByRow.get(row.id) ?? '',
+    );
     if (aux === null) {
       // 记账类型（agent-switched / idle）上游不进模型上下文，正常会话不该因此冒披露。
       if (!V2_IGNORED_MESSAGE_TYPES.has(row.type)) bumpCount(unknown, row.type || '（空类型）');
@@ -1257,6 +1280,18 @@ function parseOpencodeV2Turns(db: DatabaseSync, sessionId: string): UnifiedTurn[
       turns,
       `OpenCode 2.x 有 ${nativeCompactions.count} 次 provider 原生压缩（替换窗口共 ${nativeCompactions.messages} 条消息），Watch 不重放原生窗口`,
       '压缩前的对话原文仍保留在本次交接里，可能比 OpenCode 当前发给模型的上下文更多；原生窗口只有生成它的 provider / 模型能重放，这些压缩没有可读摘要，不作为 --since-compact 的边界',
+    );
+  }
+
+  // 后台 shell 不并入对话（上游在完成前同样不送模型上下文），但用户起过哪些后台命令
+  // 对接手的一侧有用：只报个数与前三条命令，不复制输出。正常前台 shell 不触发这条。
+  if (backgroundShells.count > 0) {
+    appendUnknownDisclosure(
+      turns,
+      `OpenCode 2.x 有 ${backgroundShells.count} 个后台 shell 命令未并入对话`,
+      `上游在命令完成前不把它们送进模型上下文（结果完成时另行投递）${
+        backgroundShells.samples.length ? `；命令：${backgroundShells.samples.join('、')}` : ''
+      }`,
     );
   }
 
