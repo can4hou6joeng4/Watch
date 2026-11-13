@@ -20,12 +20,12 @@ The steps are on the site [guides](https://relay.bobochang.cn/en/#guides): [Clau
 
 It does not provide models, bypass usage limits, replace native agent chat, or move permissions, credentials and plugins by default. What it transfers is the recorded session, not the model's unrecorded internal state. Today the implementation is centred on CLI sessions and terminal resume; the product direction includes validated desktop entry points, but **official interoperability does not mean Watch has integrated it**.
 
-### Latest release (v0.1.2)
+### Latest release ([v0.1.2](https://github.com/can4hou6joeng4/Watch/releases/tag/v0.1.2))
 
-The iterations since v0.1.1 focus on four things, all surfaced in `warnings` / `findings` or the prompt header — none of it is silent:
+v0.1.2 brings together the changes since v0.1.1, with a focus on disclosing request failures, conversion losses and trimming through `error`, `warnings`, `findings` or the handoff document:
 
-- **Failures are no longer treated as replies**: Claude Code's `system/api_error` and `isApiErrorMessage` machine error lines, OpenCode 1.x/2.x `Assistant.error`, and Pi's `stopReason: "error" / "aborted"` now keep only the fact that the turn failed plus a cause category (HTTP status, connection error, abort). Error payloads are never copied, and an error line can no longer become the assistant's final answer or overwrite a real reply.
-- **`watch prompt`, the summary handoff**: read-only, writes nothing, renders a session as paste-ready Markdown with `--profile`, `--last <n>` and `--since-compact`; with the id omitted it picks the newest readable session in the directory, and every trim or degradation is counted.
+- **Failure records get separate disclosures**: recognizes Claude Code's `system/api_error` and `isApiErrorMessage` machine error lines, OpenCode 1.x/2.x `Assistant.error`, and Pi's `stopReason: "error" / "aborted"`. Claude Code / Pi aggregate failure categories and counts without copying raw error text; OpenCode retains error types and message text. Machine error lines do not stand in for a final answer, and real output produced before a failure is preserved.
+- **`watch prompt`, the summary handoff**: read-only, writes nothing, renders a session as paste-ready Markdown with `--profile`, `--last <n>` and `--since-compact`; with the id omitted it picks the newest readable session in the directory. Trimming is counted, while read failures and recognized degradation are reported.
 - **Diagnostics and search**: new `watch doctor` (read-only checks of agents / local store / index / import journals, exit 1 on hard failures), `watch capabilities` (read-write matrix), `search --reset-index`, plus widespread "unreadable is not the same as absent" disclosures.
 - **Desktop**: all six target cards (including Grok), pre-write prechecks, holder details and retry when a target is busy, and warning channels on the source and history views.
 
@@ -79,7 +79,7 @@ The images below were generated from synthetic sessions in an isolated environme
 
 **Comparison with similar tools**
 
-Peer projects have different centres of gravity, worth comparing before choosing: `catchup` and `cross_agent_session_resumer` lean toward "read another agent's records and produce a handoff summary"; `session-migrate` leans toward migrating between native formats. Watch's difference is **three write entry points that never call each other** (launcher / chain / official Codex import), each guarded for its own risk surface, plus "degradation must be disclosed" as an invariant — what could not be read is never reported as "there was nothing". Failure-record handling was also compared against the same real shapes across those peers (see `docs/degradation.md`).
+[catchup](https://github.com/wilbeibi/catchup) focuses on transcript handoffs and also provides `fork` and `fork --into`; [cross_agent_session_resumer](https://github.com/Dicklesworthstone/cross_agent_session_resumer) and [session-migrate](https://github.com/xhluca/session-migrate) both provide native session format conversion. Watch offers separate launcher, chained handoff and official Codex import entry points, plus read-only Markdown export and route-specific write protection. Adapter coverage and native validation need to be checked for each tool; see Watch's [architecture](docs/ARCHITECTURE.md) for implementation boundaries and [compatibility records](docs/COMPATIBILITY.md) for direction and version limits.
 
 ## Install
 

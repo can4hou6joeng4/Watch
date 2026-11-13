@@ -20,12 +20,12 @@ Watch 只做一件事：**把已保存的会话记录连同工作目录交到目
 
 它不提供模型、不绕过配额、不代替原生 Agent 聊天，也不默认搬迁权限、凭据或插件；接力的是已有记录，不是模型未记录的内部状态。当前实现以 CLI 会话与终端恢复为主，产品方向包含经过验证的桌面端入口，但**官方支持互通不等于 Watch 已经集成**。
 
-### 最新版本（v0.1.2）
+### 最新版本（[v0.1.2](https://github.com/can4hou6joeng4/Watch/releases/tag/v0.1.2)）
 
-自 v0.1.1 起的 530 余个提交集中在四件事，都在 `warnings` / `findings` / prompt 头部可见，不静默：
+v0.1.2 汇总了自 v0.1.1 起的改动，重点补充请求失败、转换损失与裁剪的披露；具体情况通过 `error`、`warnings`、`findings` 或交接文档报告：
 
-- **失败不再被当成回复**：Claude Code 的 `system/api_error` 与 `isApiErrorMessage` 机器错误行、OpenCode 1.x/2.x 的 `Assistant.error`、Pi 的 `stopReason: "error" / "aborted"`，现在都只保留「这一轮失败了」这一事实与原因分类（HTTP 状态码 / 连接错误 / 中止），不复制错误原文，也不会写成助手的最终答复或覆盖真实回复。
-- **摘要交接 `watch prompt`**：只读、不写任何文件，把会话渲染成可粘贴的 Markdown；支持 `--profile` 档位、`--last <n>`、`--since-compact`，省略 id 时自动挑本目录最新的可读会话，裁剪与降级逐项计数。
+- **失败记录单独披露**：识别 Claude Code 的 `system/api_error` 与 `isApiErrorMessage` 机器错误行、OpenCode 1.x/2.x 的 `Assistant.error`、Pi 的 `stopReason: "error" / "aborted"`。Claude Code / Pi 汇总失败分类与次数，不复制错误原文；OpenCode 保留错误类型及消息文本。机器错误行不冒充最终答复，失败前已有的真实输出仍保留。
+- **摘要交接 `watch prompt`**：只读、不写任何文件，把会话渲染成可粘贴的 Markdown；支持 `--profile` 档位、`--last <n>`、`--since-compact`，省略 id 时自动挑本目录最新的可读会话。裁剪会计数，读取失败与已识别的降级会明确报告。
 - **诊断与检索**：新增 `watch doctor`（环境 / 本地库 / 索引 / 导入日志只读体检，硬失败退出码 1）、`watch capabilities`（读写能力矩阵）、`search --reset-index`，以及大量「读不出来 ≠ 没有」的降级披露。
 - **桌面端**：六张目标卡齐全（含 Grok），点击前预检、目标被占用时的占用者与重试入口、来源与记录页的警告通道均已接通。
 
@@ -77,9 +77,9 @@ Watch 只做一件事：**把已保存的会话记录连同工作目录交到目
 </tr>
 </table>
 
-**Drop-in / 同类工具对照**
+**同类工具对照**
 
-同类开源项目各有侧重，选之前值得对着看：`catchup` 与 `cross_agent_session_resumer` 偏「读别家记录、生成交接摘要」；`session-migrate` 偏「在原生格式之间迁移」；Watch 的差异在于**三条互不调用的写入口**（启动器 / 链 / Codex 官方导入）分别为不同风险面加防护，并且把「降级必须披露」当成不变量——读不出来的内容不会被讲成「没有」。各家对失败记录的处理也已经在同一批真实形态上比对过（见 `docs/degradation.md`）。
+[catchup](https://github.com/wilbeibi/catchup) 以转录文本交接为主，也提供 `fork` 与 `fork --into`；[cross_agent_session_resumer](https://github.com/Dicklesworthstone/cross_agent_session_resumer) 与 [session-migrate](https://github.com/xhluca/session-migrate) 都提供原生会话格式转换。Watch 提供启动器、链式交接、Codex 官方导入三条独立入口，以及只读摘要导出和路径级写入防护。不同工具的适配与验收范围需要逐项核对；Watch 的实现边界见[架构说明](docs/ARCHITECTURE.md)，方向与版本限制见[兼容性记录](docs/COMPATIBILITY.md)。
 
 ## 安装
 
