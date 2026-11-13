@@ -11,6 +11,7 @@ import {
 } from '../../core/rich.js';
 import type { ProcessEvent, SessionRef, TokenUsage, UnifiedTurn } from '../../core/types.js';
 import { isoFromEpochMs } from '../../core/time.js';
+import { createPiFailureCounts, piFailureDisclosure, readPiStopReason, type PiFailureCounts } from './failure.js';
 
 export async function parsePiSession(ref: SessionRef): Promise<UnifiedTurn[]> {
   const raw = await readFile(ref.filePath, 'utf8');
@@ -24,6 +25,11 @@ export async function parsePiSession(ref: SessionRef): Promise<UnifiedTurn[]> {
     customMessages: 0,
     customImages: 0,
   };
+  // 失败 / 中止记录只计数，循环结束后合成一条披露：逐条挂事件会让一个 217 次失败的会话
+  // 刷满同一句话。`tailFailure` 记录最后一次失败之后是否再没有出现真实回复。
+  const failures: PiFailureCounts = createPiFailureCounts();
+  let tailFailure = false;
+  let lastFailureTimestamp = '';
 
   for (const line of raw.split('\n')) {
     const trimmed = line.trim();
@@ -94,6 +100,8 @@ export async function parsePiSession(ref: SessionRef): Promise<UnifiedTurn[]> {
       const text = normalizeUserText(extracted.text);
       if (!text) continue;
       sawUser = true;
+      // 新的提问把上一轮失败推到中段：这一问之后若再没有记录，「可能被中断」才是正确说法。
+      tailFailure = false;
       // 图片块的 attachment 挂在这里，转入支持附件的目标（claude / opencode）时才带得过去。
       turns.push({ role: 'user', text, timestamp, ...(extracted.events.length ? { events: extracted.events } : {}) });
       continue;
@@ -118,6 +126,22 @@ export async function parsePiSession(ref: SessionRef): Promise<UnifiedTurn[]> {
     if (!sawUser) continue;
     const usage = readPiUsage(msg);
 
+    // 失败 / 中止记录：只计数，循环结束后统一披露（逐条建事件会让 217 次失败的会话刷满同一句）。
+    // **先判定再决定是否建轮**：失败记录带真实内容（thinking / text / toolCall）时仍按普通轮次
+    // 保留，只是补充披露；空 content 的失败记录不建轮——写入侧与 `assertRoundTrip` 都跳过
+    // 「无正文且无事件」的轮次，建出来就写不进目标，含失败记录的会话每次交接都重复报增量
+    // （2026-11-13 合成复现：期望 3 实得 4）。
+    const stop = msg.stopReason;
+    const failed = stop === 'error' || stop === 'aborted' || stop === 'length';
+    const hasContent = extracted.text.trim() !== '' || extracted.events.length > 0;
+    if (failed && !hasContent) {
+      readPiStopReason(msg, failures, false);
+      if (timestamp) lastFailureTimestamp = timestamp;
+      tailFailure = true;
+      continue;
+    }
+    readPiStopReason(msg, failures, hasContent);
+
     // Pi build 会把有 tool 的 assistant final text 拆成一条独立 message 跟在 toolResult 后面，
     // 解析时合并回同一个 UnifiedTurn，避免一个回合变成两个 assistant 回合。
     const prev = turns.at(-1);
@@ -135,6 +159,7 @@ export async function parsePiSession(ref: SessionRef): Promise<UnifiedTurn[]> {
       // 不会翻倍；原生多轮 API 调用时这条规则等价于「取最后一次调用的用量」，
       // 与 claude 的 parse 一致，不猜中间各次的分摊。
       if (usage) prev.usage = usage;
+      tailFailure = failed;
       continue;
     }
 
@@ -158,10 +183,25 @@ export async function parsePiSession(ref: SessionRef): Promise<UnifiedTurn[]> {
     }
     if (timestamp) last.timestamp = timestamp;
     if (usage) last.usage = usage;
+    tailFailure = failed;
   }
+  // 尾部失败补一个空正文助手轮承载披露，理由与 Claude（r80）一致：不补轮时最后仍是用户轮，
+  // `unansweredUserTail()` 会把「上游失败」讲成「可能被中断或还在生成」。**只在尾部补**：
+  // 中途失败当场造轮的话，这一轮既无正文也无事件，写入侧 / round-trip 的 wanted 过滤都会
+  // 跳过它，含失败记录的会话每次交接都重复报同一份增量（2026-11-13 合成复现）。
+  // 披露事件跟着这个轮次写进目标（pi 的 build 不搬 text 事件，但轮次本身在，正文仍为空）。
+  const stripped = stripEmptyEvents(turns);
+  if (tailFailure && stripped.at(-1)?.role === 'user') {
+    ensureAssistant(stripped, lastFailureTimestamp || stripped.at(-1)!.timestamp, 'pi');
+  }
+  const failureTail = stripped.at(-1);
+  const failureEvent = failureTail
+    ? piFailureDisclosure(failures, lastFailureTimestamp || failureTail.timestamp)
+    : null;
+  if (failureEvent && failureTail) pushEvent(failureTail, failureEvent);
   const disclosure = describePiContextEntries(contextEntries);
-  if (disclosure && turns.length > 0) {
-    const last = turns.at(-1)!;
+  if (disclosure && stripped.length > 0) {
+    const last = stripped.at(-1)!;
     pushEvent(last, {
       kind: 'text',
       summary: disclosure,
@@ -170,7 +210,7 @@ export async function parsePiSession(ref: SessionRef): Promise<UnifiedTurn[]> {
       provider: 'pi',
     });
   }
-  return stripEmptyEvents(turns);
+  return stripped;
 }
 
 type PiContextEntryCounts = {
