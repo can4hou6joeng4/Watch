@@ -156,11 +156,12 @@ function pushMessage(
   const id = nid();
   const ts = timestamp || new Date().toISOString();
   const message: Record<string, unknown> = { role, content, timestamp: Date.parse(ts) || Date.now() };
-  if (role === 'toolResult' && ev?.callId) {
-    message.toolCallId = ev.callId;
-    message.toolName = ev.name ?? 'tool';
-    // 失败标记必须写回：pi 原生每条 toolResult 都带 `isError`（本机 1571 条里 30 条为
-    // true），漏写会让失败结果在目标侧变成成功，再读回来时「哪次写入没生效」已经查不到。
+  if (role === 'toolResult' && ev) {
+    if (ev.callId) {
+      message.toolCallId = ev.callId;
+      message.toolName = ev.name ?? 'tool';
+    }
+    // 失败事实独立于调用身份；缺少 ID 的结果也必须保留明确的原生标记。
     if (ev.failed === true) message.isError = true;
   }
   if (role === 'assistant') {
