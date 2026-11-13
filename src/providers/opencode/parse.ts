@@ -187,6 +187,72 @@ function appendCallIdDisclosure(turns: UnifiedTurn[], context: CallIdContext, pr
   );
 }
 
+/**
+ * 1.x 助手消息的失败原因。上游 `Assistant.error` 是 NamedError union，持久化形状为
+ * `{ name, data: { message, ... } }`（`util/error.ts` 的 `toObject()`），不是 2.x 的
+ * `{ type, message }`：只认后者会把 1.x 的错误整段读丢。
+ * 返回值只读值、不计数；计数由 `v1AssistantErrorMessage()` 按原因归入统一披露。
+ */
+function v1AssistantErrorMessageRaw(raw: unknown): { label: string; message: string } | null {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  const err = raw as { name?: unknown; data?: unknown; message?: unknown; type?: unknown };
+  const name = typeof err.name === 'string' && err.name ? `（${err.name}）` : '';
+  const inner = err.data;
+  const nested =
+    inner && typeof inner === 'object' && !Array.isArray(inner) && typeof (inner as { message?: unknown }).message === 'string'
+      ? (inner as { message: string }).message
+      : '';
+  if (nested) return { label: name, message: nested };
+  // 兼容 2.x 形状的坏样本：`{ type, message }` 也能读出原因。
+  if (typeof err.message === 'string' && err.message) {
+    const type = typeof err.type === 'string' && err.type ? `（${err.type}）` : name;
+    return { label: type, message: err.message };
+  }
+  return null;
+}
+
+/** 压缩摘要的 detail 用：只取值不计数（主解析对同一条记录另行计数）。 */
+function describeV1AssistantError(raw: unknown): string {
+  const parsed = v1AssistantErrorMessageRaw(raw);
+  return parsed ? `（失败原因：${parsed.message}）` : '';
+}
+
+function v1AssistantErrorMessage(
+  raw: unknown,
+  unknown: Map<string, number>,
+): { label: string; message: string } | null {
+  if (raw === undefined) return null;
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+    bumpCount(unknown, 'assistant（error 不是对象）');
+    return null;
+  }
+  const parsed = v1AssistantErrorMessageRaw(raw);
+  if (parsed) return parsed;
+  const err = raw as { name?: unknown; message?: unknown; data?: unknown };
+  const hasName = typeof err.name === 'string' && Boolean(err.name);
+  const hasFlatMessage = typeof err.message === 'string' && Boolean(err.message);
+  if (hasFlatMessage) bumpCount(unknown, 'assistant（error 缺少 name）');
+  else if (hasName) bumpCount(unknown, 'assistant（error 缺少 message）');
+  else bumpCount(unknown, 'assistant（error 缺少 name 与 message）');
+  return null;
+}
+
+function v1AssistantErrorEvent(
+  raw: unknown,
+  timestamp: string,
+  unknown: Map<string, number>,
+): ProcessEvent | null {
+  const parsed = v1AssistantErrorMessage(raw, unknown);
+  if (!parsed) return null;
+  return {
+    kind: 'text',
+    timestamp,
+    summary: `${WATCH_CONTEXT_DISCLOSURE_PREFIX}助手请求失败${parsed.label}：${parsed.message.slice(0, 120)}]`,
+    detail: `${WATCH_CONTEXT_DISCLOSURE_PREFIX}助手请求失败${parsed.label}：${parsed.message}]`,
+    provider: 'opencode',
+  };
+}
+
 function partToEvents(part: OpencodePartData, baseTime: number, recordKey: string[], callIds: CallIdContext): ProcessEvent[] {
   const events: ProcessEvent[] = [];
   if (isReasoningPart(part)) {
@@ -352,6 +418,13 @@ function messageToTurn(
   }
   const text = textParts.join('\n\n');
 
+  // 1.x 的失败原因只在 `Assistant.error`（上游 processor.ts 的 halt 写入）。与 2.x 第
+  // 七十一轮同一口径：失败轮即使没有正文、没有过程事件也要保留，原因放进统一上下文
+  // 披露事件，**不写进 turn.text**——否则目标会把这句机器错误当成助手发言。
+  const assistantError =
+    role === 'assistant' && data.summary !== true ? v1AssistantErrorEvent(data.error, timestamp, unknown) : null;
+  if (assistantError) events.push(assistantError);
+
   // OpenCode 1.x 的压缩（compaction.ts 的 create / processCompaction）：先写一条只含
   // `compaction` part 的 user 消息，再写一条 `summary: true` 的 assistant 摘要消息。
   // 摘要不是助手对用户说的话——按普通回复处理时，前一轮带工具调用就会被并进那一轮正文
@@ -375,7 +448,9 @@ function messageToTurn(
           kind: 'text',
           timestamp,
           summary: '[OpenCode 压缩摘要未生效（未完成或出错），上下文未被替换]',
-          detail: text,
+          // 1.x 失败时的原因同样是 NamedError（`{ name, data: { message } }`），与 2.x 的
+          // `error.message` 不同；不读它，这一条就只剩「未生效」三个字。
+          detail: [text, describeV1AssistantError(data.error)].filter(Boolean).join('\n'),
           provider: 'opencode',
         };
     if (prevTurn) {
