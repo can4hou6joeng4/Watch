@@ -20,9 +20,14 @@ Watch 只做一件事：**把已保存的会话记录连同工作目录交到目
 
 它不提供模型、不绕过配额、不代替原生 Agent 聊天，也不默认搬迁权限、凭据或插件；接力的是已有记录，不是模型未记录的内部状态。当前实现以 CLI 会话与终端恢复为主，产品方向包含经过验证的桌面端入口，但**官方支持互通不等于 Watch 已经集成**。
 
-### 最新版本（[v0.1.27](https://github.com/can4hou6joeng4/Watch/releases/tag/v0.1.27)）
+### 最新版本（[v0.1.28](https://github.com/can4hou6joeng4/Watch/releases/tag/v0.1.28)）
 
-v0.1.27 修掉官网上写死的版本号。首页 hero、首页与指南页页脚、8 个指南页的「适用版本」、以及两张分享图都长期显示 `v0.1.1`，而 JSON-LD 里的 `softwareVersion` 早已跟随 `package.json`——同一份构建里出现两个版本。
+v0.1.28 修正官网 AI 阅读入口与分享图的发布一致性。v0.1.27 已让 HTML 跟随版本，但发布的 PNG 仍显示 v0.1.26：旧 `--check` 只验证了模板，没有验证产物。本版重新渲染图片，并让站点构建拒绝过期产物。
+
+- **分享图产物校验（v0.1.28）**：渲染后记录版本、模板与 PNG 的 SHA-256；`node scripts/media/render-og.mjs --check` 和 `site:build` 都核对这些记录，不启动浏览器。升版或改模板后先执行 `node scripts/media/render-og.mjs`。两张图片同步补齐 Grok。
+- **AI 阅读入口跟随版本（v0.1.28）**：`llms.txt` 源移至 `scripts/site-content/llms.txt`，构建注入版本与日期；它与 `llms-full.txt` 共用接力路径决策表，补齐导入命令的必需参数，区分 Watch 导入锁与原生 writer 锁，并按路线说明附件能力。
+- **公开来源链接（v0.1.28）**：指南改链到随仓库分发的架构文档；验收摘要指向兼容性文档，并说明原始 JSON 记录仅保存在本地。
+- **验证范围**：隔离回归、构建与站点产物校验；本版不增加原生客户端或模型继续验收结论。
 
 - **站点版本统一取自 package.json（v0.1.27）**：`scripts/build-site.mjs` 的三处硬编码改为使用已有的 `packageVersion`，影响 10 个页面。
 - **分享图改为模板渲染（v0.1.27）**：`scripts/media/og-*.html` 使用 `__WATCH_VERSION__` 占位符，新增 `node scripts/media/render-og.mjs` 从 `package.json` 取版本渲染 1200×630 PNG；`--check` 只校验不写产物。PNG 不会随构建更新，所以此前一直停在 v0.1.1。

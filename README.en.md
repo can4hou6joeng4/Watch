@@ -20,9 +20,14 @@ The steps are on the site [guides](https://relay.bobochang.cn/en/#guides): [Clau
 
 It does not provide models, bypass usage limits, replace native agent chat, or move permissions, credentials and plugins by default. What it transfers is the recorded session, not the model's unrecorded internal state. Today the implementation is centred on CLI sessions and terminal resume; the product direction includes validated desktop entry points, but **official interoperability does not mean Watch has integrated it**.
 
-### Latest release ([v0.1.27](https://github.com/can4hou6joeng4/Watch/releases/tag/v0.1.27))
+### Latest release ([v0.1.28](https://github.com/can4hou6joeng4/Watch/releases/tag/v0.1.28))
 
-v0.1.27 removes hard-coded versions from the website. The home hero, the home and guide footers, the "Applies to" line on all 8 guides, and both social share images had been showing `v0.1.1`, while the JSON-LD `softwareVersion` already followed `package.json` — two versions in one build.
+v0.1.28 fixes release consistency in the website's AI reading resources and social share images. v0.1.27 made the HTML follow the version, but the published PNGs still showed v0.1.26: the old `--check` validated templates without checking the generated files. This release re-renders the images and makes site builds reject stale assets.
+
+- **Share image checks (v0.1.28)**: rendering records the version and SHA-256 hashes of both templates and PNGs. `node scripts/media/render-og.mjs --check` and `site:build` verify those records without launching a browser. Run `node scripts/media/render-og.mjs` after changing the version or templates. Both images now include Grok.
+- **Versioned AI reading resources (v0.1.28)**: `llms.txt` moves to `scripts/site-content/llms.txt`, with version and date injected during the build. It shares a route decision table with `llms-full.txt`, supplies required import flags, distinguishes the Watch import lock from the native writer lock, and states attachment capabilities per route.
+- **Public source links (v0.1.28)**: guides link to the distributed architecture document; validation summaries link to the compatibility document, with an explanation that raw acceptance JSON records remain local.
+- **Validation scope**: isolated regression tests, builds and site asset checks. This release adds no native-client or model-continuation acceptance claim.
 
 - **Site versions come from package.json (v0.1.27)**: the three hard-coded spots in `scripts/build-site.mjs` now use the existing `packageVersion`, affecting 10 pages.
 - **Share images render from templates (v0.1.27)**: `scripts/media/og-*.html` use a `__WATCH_VERSION__` placeholder, and the new `node scripts/media/render-og.mjs` renders the 1200×630 PNGs from `package.json`; `--check` validates without writing. A PNG never updates with the build, which is why it had stayed at v0.1.1.
