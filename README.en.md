@@ -20,7 +20,13 @@ The steps are on the site [guides](https://relay.bobochang.cn/en/#guides): [Clau
 
 It does not provide models, bypass usage limits, replace native agent chat, or move permissions, credentials and plugins by default. What it transfers is the recorded session, not the model's unrecorded internal state. Today the implementation is centred on CLI sessions and terminal resume; the product direction includes validated desktop entry points, but **official interoperability does not mean Watch has integrated it**.
 
-### Latest release ([v0.1.47](https://github.com/can4hou6joeng4/Watch/releases/tag/v0.1.47))
+### Latest release ([v0.1.48](https://github.com/can4hou6joeng4/Watch/releases/tag/v0.1.48))
+
+v0.1.48 continues the Kimi session-creation fix: when the session file recorded in the index cannot be read (permissions, I/O) or the entry is stale (directory removed), the error now names that indexed path and the concrete reason instead of describing an unreadable entry as absent from both locations. The error also lists the rule-derived path, any index read failure, and every candidate entry the index held.
+
+- **Validation scope**: 2 new isolated checks (unreadable indexed path, stale index entry), both failing before the fix and passing after. Full isolated regression: 1893 passing, zero failures and zero skips. These are synthetic-file checks; the Kimi CLI and native client were not run.
+
+### Previous release ([v0.1.47](https://github.com/can4hou6joeng4/Watch/releases/tag/v0.1.47))
 
 v0.1.47 fixes Kimi workspace directory encoding: names such as `my_app`, `my project`, `--x--`, Windows backslash paths and paths with a trailing slash previously produced a different directory than Kimi Code, so a newly created session's `wire.jsonl` could not be found at the expected path. The encoding now follows the upstream rule (runs of special characters become one hyphen, leading and trailing hyphens are trimmed, and the hash covers the normalized path). After creating a session, Watch uses the `sessionDir` recorded in `session_index.jsonl` first, falls back to the rule-derived directory only when the index has no entry, and otherwise reports both paths instead of claiming success.
 
