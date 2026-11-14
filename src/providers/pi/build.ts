@@ -15,9 +15,9 @@ export function piSessionsRoot(): string {
   return join(homedir(), '.pi', 'agent', 'sessions');
 }
 
-/** `/Users/foo/bar` → `--Users-foo-bar--`（与本机 pi 目录一致） */
+/** 按 Pi 原生规则编码已解析的 cwd：移除首个分隔符，其余分隔符与冒号转为连字符。 */
 export function encodePiProjectDir(cwd: string): string {
-  const inner = cwd.replace(/^\//, '').replaceAll('/', '-');
+  const inner = cwd.replace(/^[/\\]/, '').replace(/[/\\:]/g, '-');
   return `--${inner}--`;
 }
 

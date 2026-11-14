@@ -39,7 +39,20 @@ export async function listPiSessions(
   sessionsRoot?: string,
 ): Promise<{ ref: SessionRef; updatedAt: number; preview?: string; previewError?: string }[]> {
   const root = sessionsRoot ?? piSessionsRoot();
-  const dir = path.join(root, encodePiProjectDir(cwd));
+  const names = new Set([encodePiProjectDir(cwd)]);
+  // 旧 Watch 在 POSIX 上可能写出含冒号或反斜杠的目录；继续读取，不移动或重写旧文件。
+  // Windows 不扫描旧编码：这些字符会变成非法目录名或额外路径层级。
+  if (process.platform !== 'win32') names.add(`--${cwd.replace(/^\//, '').replaceAll('/', '-')}--`);
+  const items: Awaited<ReturnType<typeof listPiSessionDirectory>> = [];
+  for (const name of names) items.push(...await listPiSessionDirectory(cwd, path.join(root, name)));
+  items.sort((a, b) => b.updatedAt - a.updatedAt);
+  return items;
+}
+
+async function listPiSessionDirectory(
+  cwd: string,
+  dir: string,
+): Promise<{ ref: SessionRef; updatedAt: number; previewError?: string }[]> {
   let entries: string[];
   try {
     entries = await readdir(dir);
@@ -78,7 +91,6 @@ export async function listPiSessions(
       );
     }
   }
-  items.sort((a, b) => b.updatedAt - a.updatedAt);
   return items;
 }
 
