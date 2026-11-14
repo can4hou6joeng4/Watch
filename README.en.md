@@ -20,7 +20,13 @@ The steps are on the site [guides](https://relay.bobochang.cn/en/#guides): [Clau
 
 It does not provide models, bypass usage limits, replace native agent chat, or move permissions, credentials and plugins by default. What it transfers is the recorded session, not the model's unrecorded internal state. Today the implementation is centred on CLI sessions and terminal resume; the product direction includes validated desktop entry points, but **official interoperability does not mean Watch has integrated it**.
 
-### Latest release ([v0.1.46](https://github.com/can4hou6joeng4/Watch/releases/tag/v0.1.46))
+### Latest release ([v0.1.47](https://github.com/can4hou6joeng4/Watch/releases/tag/v0.1.47))
+
+v0.1.47 fixes Kimi workspace directory encoding: names such as `my_app`, `my project`, `--x--`, Windows backslash paths and paths with a trailing slash previously produced a different directory than Kimi Code, so a newly created session's `wire.jsonl` could not be found at the expected path. The encoding now follows the upstream rule (runs of special characters become one hyphen, leading and trailing hyphens are trimmed, and the hash covers the normalized path). After creating a session, Watch uses the `sessionDir` recorded in `session_index.jsonl` first, falls back to the rule-derived directory only when the index has no entry, and otherwise reports both paths instead of claiming success.
+
+- **Validation scope**: the encoding assertions reproduce 8 of 11 sample failures against the old implementation; 6 new isolated checks cover normalization, index priority, missing index, both locations missing, and an unreadable index. Full isolated regression: 1891 passing, zero failures and zero skips. These are synthetic-file checks; the Kimi CLI and native client were not run.
+
+### Previous release ([v0.1.46](https://github.com/can4hou6joeng4/Watch/releases/tag/v0.1.46))
 
 v0.1.46 aligns Pi project directory encoding with its native rules, including backslashes and drive colons in Windows paths, and colons or backslashes in POSIX filenames. Previously, these paths could hide existing sessions from listings or place new sessions outside the directory used by the native client. New sessions use native directories; reading also supports directories created by older Watch versions on POSIX, while preserving the original working directory in the session header.
 
