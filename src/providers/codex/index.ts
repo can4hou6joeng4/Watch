@@ -11,7 +11,7 @@ import { promisify } from 'node:util';
 import { digestFile } from '../../core/atomic.js';
 import type { FileDigest } from '../../core/atomic.js';
 import { asJsonObject, parseJsonObject } from '../../core/jsonl.js';
-import { describePathReadFailureReason, iterateFileLines } from '../../core/read-text.js';
+import { describePathReadFailureReason, isMissingPathError, iterateFileLines } from '../../core/read-text.js';
 import type { ProviderAdapter, PreflightContext } from '../adapter.js';
 import { PreflightBlockedError, SessionLookupFailureError } from '../adapter.js';
 import { acquireThreadWriterLock, probeThreadWriterHolders, threadWriterLockPath, type WriterLockGuard } from './writer-lock.js';
@@ -24,7 +24,7 @@ import {
   codexDir,
   findRolloutBySessionId,
   importTurnsToCodex,
-  readModelProvider,
+  parseModelProvider,
   validateRolloutFilename,
 } from './build.js';
 import { codexLineToProcessEvents } from './events.js';
@@ -366,15 +366,24 @@ async function codexFirstUserText(filePath: string): Promise<{ text: string | nu
 
 type CodexProviderCredential = { apiKey?: string; baseUrl?: string };
 
-/** 解析 config.toml 里当前选用 provider 的 api_key/base_url（只做简单 key=value/section 解析） */
+/**
+ * 解析 config.toml 里当前选用 provider 的 api_key/base_url（只做简单 key=value/section 解析）。
+ *
+ * 只读一次文件并复用 `parseModelProvider()`（第一百二十二轮）：以前这里先 `readFile`
+ * 吞掉错误、再调一次 `readModelProvider()` 重新读同一份文件，两次读之间文件被改或删就会
+ * 出现「凭据按 A 段解析、provider 名来自 B 次读取」的错配。
+ * 只有 `ENOENT` / `ENOTDIR` 是「没有配置 → 用默认 openai」；其余读失败继续抛出，
+ * 由 `codexEnv()` 决定回落 auth.json。
+ */
 async function readProviderCredential(codexHome: string): Promise<CodexProviderCredential> {
   let raw: string;
   try {
     raw = await readFile(path.join(codexHome, 'config.toml'), 'utf8');
-  } catch {
-    return {};
+  } catch (error) {
+    if (isMissingPathError(error)) return {};
+    throw error;
   }
-  const provider = await readModelProvider(codexHome);
+  const provider = parseModelProvider(raw);
   const sectionPrefix = `[model_providers.${provider}]`;
   let inSection = false;
   let topLevelApiKey: string | undefined;

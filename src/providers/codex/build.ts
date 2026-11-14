@@ -117,14 +117,33 @@ function generatedOriginLabel(value: string): boolean {
   );
 }
 
-/** 读 config.toml 顶层 model_provider（只扫首个表头之前的行，避免 [model_providers.xxx] 子表误匹配） */
+/**
+ * 读 config.toml 顶层 model_provider（只扫首个表头之前的行，避免 [model_providers.xxx] 子表误匹配）。
+ *
+ * 只有「文件不存在」（`ENOENT` / `ENOTDIR`）才等于「没配 provider，Codex 自己按 openai 处理」；
+ * 其余读失败（`EACCES` / `EISDIR` / I/O）是「不知道配了什么」——第一百二十二轮修正：以前一律
+ * `catch { return DEFAULT_PROVIDER }`，写路径于是把 `openai` 写进新 rollout 的 `session_meta`，
+ * 而用户看到的是「转入成功」；与 r119 的 Grok 摘要覆盖同族（读不出来不许当成没有）。
+ * 读不出来的原因由调用方决定怎么披露（`codexEnv()` 会捕获后回落 auth.json；
+ * `importTurnsToCodex()` 的写路径直接 fail closed）。
+ */
 export async function readModelProvider(codexDirPath: string): Promise<string> {
+  const configPath = path.join(codexDirPath, 'config.toml');
   let raw: string;
   try {
-    raw = await readFile(path.join(codexDirPath, 'config.toml'), 'utf8');
-  } catch {
-    return DEFAULT_PROVIDER;
+    raw = await readFile(configPath, 'utf8');
+  } catch (error) {
+    if (isMissingPathError(error)) return DEFAULT_PROVIDER;
+    throw new Error(
+      `无法读取 Codex 配置 ${escapeControlChars(configPath)}：${describePathReadFailureReason(error)}；` +
+        '读不出当前配置的 model_provider，写出来的会话会与原生不一致——先修好该文件再重试，本次未写入任何内容',
+    );
   }
+  return parseModelProvider(raw);
+}
+
+/** 从 config.toml 原文取顶层 `model_provider`；已经读过文件的地方走它，避免二次 IO 与 TOCTOU。 */
+export function parseModelProvider(raw: string): string {
   const topLevel = raw.split(/^ *\[/m)[0] ?? '';
   const m = /^ *model_provider *= *"([^"]+)"/m.exec(topLevel);
   return m?.[1] ?? DEFAULT_PROVIDER;
