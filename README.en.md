@@ -20,11 +20,13 @@ The steps are on the site [guides](https://relay.bobochang.cn/en/#guides): [Clau
 
 It does not provide models, bypass usage limits, replace native agent chat, or move permissions, credentials and plugins by default. What it transfers is the recorded session, not the model's unrecorded internal state. Today the implementation is centred on CLI sessions and terminal resume; the product direction includes validated desktop entry points, but **official interoperability does not mean Watch has integrated it**.
 
-### Latest release ([v0.1.32](https://github.com/can4hou6joeng4/Watch/releases/tag/v0.1.32))
+### Latest release ([v0.1.33](https://github.com/can4hou6joeng4/Watch/releases/tag/v0.1.33))
+
+v0.1.33 extends the same fix to Pi: working-directory detection no longer reads the whole session file (62 MB at the largest local sample) and instead reads only the 64 KB head, avoiding the V8 string limit without reading an entire file for one field. Diagnostics follow the actual coverage as well: when the first record alone exceeds the window they say that only the 64 KB head was checked and the file continues beyond it, instead of claiming the first parsable record has no cwd field. A non-empty file that decodes to no characters is reported separately rather than as zero bytes.
+
+- **Validation scope**: five new synthetic-file regressions and the full isolated suite at 1814 passing. This patch changes no session conversion logic and adds no native-client or model-continuation acceptance claim.
 
 v0.1.32 corrects the diagnostics for Claude working-directory detection. Previously the code answered "no cwd field in the first 60 lines" whether the file had three lines or the 64 KB head window held a single line — reporting an unchecked range as a missing field. Diagnostics now follow the actual coverage: complete small files report their real line count, files longer than 60 lines state that the remainder was not parsed, truncated windows say the file is larger, and a first record exceeding the window is reported as having no complete line in it. The zero-byte check is also fixed: only a real zero-byte read is "content lost", while a non-empty file that decodes to nothing is reported separately instead of being called zero bytes. Codex official import now gives an actionable next step when the window did not cover the cwd.
-
-- **Validation scope**: seven new synthetic-file regressions and the full isolated suite at 1809 passing. This patch changes no session conversion logic and adds no native-client or model-continuation acceptance claim.
 
 The following guide corrections were introduced in v0.1.30:
 
