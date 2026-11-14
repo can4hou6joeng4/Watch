@@ -20,9 +20,14 @@ Watch 只做一件事：**把已保存的会话记录连同工作目录交到目
 
 它不提供模型、不绕过配额、不代替原生 Agent 聊天，也不默认搬迁权限、凭据或插件；接力的是已有记录，不是模型未记录的内部状态。当前实现以 CLI 会话与终端恢复为主，产品方向包含经过验证的桌面端入口，但**官方支持互通不等于 Watch 已经集成**。
 
-### 最新版本（[v0.1.26](https://github.com/can4hou6joeng4/Watch/releases/tag/v0.1.26)）
+### 最新版本（[v0.1.27](https://github.com/can4hou6joeng4/Watch/releases/tag/v0.1.27)）
 
-v0.1.26 修复 v0.1.25 的发布检查与打包版本信息。v0.1.25 补上了 Intel Mac 的 esbuild 依赖，但打包后检查指向了 Tauri 已清理的中间目录，导致 x64 构建失败、该版本没有产出安装包。另外发现安装包缺少 `package.json`，打包版 `watch --version` 与 `doctor` 只能显示「未知版本」。
+v0.1.27 修掉官网上写死的版本号。首页 hero、首页与指南页页脚、8 个指南页的「适用版本」、以及两张分享图都长期显示 `v0.1.1`，而 JSON-LD 里的 `softwareVersion` 早已跟随 `package.json`——同一份构建里出现两个版本。
+
+- **站点版本统一取自 package.json（v0.1.27）**：`scripts/build-site.mjs` 的三处硬编码改为使用已有的 `packageVersion`，影响 10 个页面。
+- **分享图改为模板渲染（v0.1.27）**：`scripts/media/og-*.html` 使用 `__WATCH_VERSION__` 占位符，新增 `node scripts/media/render-og.mjs` 从 `package.json` 取版本渲染 1200×630 PNG；`--check` 只校验不写产物。PNG 不会随构建更新，所以此前一直停在 v0.1.1。
+- **Trends 采集 UA 跟随版本（v0.1.27）**：`scripts/lib/google-trends-rss.mjs` 的 `User-Agent` 不再写死 `Watch/0.1.1`。
+- **回归**：站点测试新增 hero / 页脚 / 适用版本三处版本断言与分享图模板契约；Trends 测试断言请求 UA 与根 `package.json` 一致。
 
 - **打包后检查改为只读挂载 DMG（v0.1.26）**：Tauri 打完 DMG 会删除中间 `Watch.app`，v0.1.25 的检查因此 ENOENT。现在挂载 DMG 再检查包内 `watch-core`，x64 与 arm64 两个 macOS 构建都执行，并用同一个检查器核对目标架构。
 - **安装包补齐版本文件（v0.1.26）**：`bundle.resources` 增加 `package.json`。`watch --version` 与 `doctor` 的 `watchVersion` 都从 `src/core/../../package.json` 解析，此前打包版只能返回 null。检查器同时断言该文件存在且 `version` 是字符串。

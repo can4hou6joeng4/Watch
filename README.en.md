@@ -20,9 +20,14 @@ The steps are on the site [guides](https://relay.bobochang.cn/en/#guides): [Clau
 
 It does not provide models, bypass usage limits, replace native agent chat, or move permissions, credentials and plugins by default. What it transfers is the recorded session, not the model's unrecorded internal state. Today the implementation is centred on CLI sessions and terminal resume; the product direction includes validated desktop entry points, but **official interoperability does not mean Watch has integrated it**.
 
-### Latest release ([v0.1.26](https://github.com/can4hou6joeng4/Watch/releases/tag/v0.1.26))
+### Latest release ([v0.1.27](https://github.com/can4hou6joeng4/Watch/releases/tag/v0.1.27))
 
-v0.1.26 fixes the v0.1.25 release check and packaged version metadata. v0.1.25 added the Intel Mac esbuild dependency, but its post-packaging check pointed at an intermediate directory Tauri had already cleaned, so the x64 build failed and that release produced no installers. The installer was also missing `package.json`, so a packaged `watch --version` and `doctor` could only report an unknown version.
+v0.1.27 removes hard-coded versions from the website. The home hero, the home and guide footers, the "Applies to" line on all 8 guides, and both social share images had been showing `v0.1.1`, while the JSON-LD `softwareVersion` already followed `package.json` — two versions in one build.
+
+- **Site versions come from package.json (v0.1.27)**: the three hard-coded spots in `scripts/build-site.mjs` now use the existing `packageVersion`, affecting 10 pages.
+- **Share images render from templates (v0.1.27)**: `scripts/media/og-*.html` use a `__WATCH_VERSION__` placeholder, and the new `node scripts/media/render-og.mjs` renders the 1200×630 PNGs from `package.json`; `--check` validates without writing. A PNG never updates with the build, which is why it had stayed at v0.1.1.
+- **Trends collector UA follows the version (v0.1.27)**: the `User-Agent` in `scripts/lib/google-trends-rss.mjs` no longer hard-codes `Watch/0.1.1`.
+- **Regression**: the site tests assert the hero, footer and applies-to versions plus the share-image template contract; the Trends test asserts the request UA matches the root `package.json`.
 
 - **Post-packaging check mounts the DMG read-only (v0.1.26)**: Tauri deletes the intermediate `Watch.app` after building the DMG, which made the v0.1.25 check hit ENOENT. It now mounts the DMG and inspects the bundled `watch-core`. Both macOS builds run it, and the same checker verifies the target architecture.
 - **Installers carry the version file (v0.1.26)**: `bundle.resources` now includes `package.json`. `watch --version` and `doctor`'s `watchVersion` both resolve `src/core/../../package.json`, which previously returned null in a packaged app. The checker also asserts the file exists and that `version` is a string.
