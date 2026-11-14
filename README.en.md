@@ -20,7 +20,13 @@ The steps are on the site [guides](https://relay.bobochang.cn/en/#guides): [Clau
 
 It does not provide models, bypass usage limits, replace native agent chat, or move permissions, credentials and plugins by default. What it transfers is the recorded session, not the model's unrecorded internal state. Today the implementation is centred on CLI sessions and terminal resume; the product direction includes validated desktop entry points, but **official interoperability does not mean Watch has integrated it**.
 
-### Latest release ([v0.1.41](https://github.com/can4hou6joeng4/Watch/releases/tag/v0.1.41))
+### Latest release ([v0.1.42](https://github.com/can4hou6joeng4/Watch/releases/tag/v0.1.42))
+
+v0.1.42 fixes custom Codex providers being silently written as `openai`. Configuration now follows TOML semantics, including valid single-quoted and triple-quoted strings, escapes and quoted keys. Only the actual top-level `model_provider` is used; matching text inside multiline strings or nested tables cannot replace it. Invalid syntax, a wrong field type or an empty value makes preflight, `watch doctor` and writing report `codex_config_invalid` and refuse the write. Errors do not echo configuration contents. A missing config or an unset field in valid TOML still uses the default. Desktop installers include the pinned parser and its license, and bundle checks reject missing or mismatched dependencies.
+
+- **Validation scope**: six new configuration regressions and two packaging regressions reproduce the failures before the fixes. Resources copied according to the Tauri mapping start the CLI and parse TOML from an independent directory. Full isolated regression: 1851 passing; typecheck, desktop build, 14 site regressions and eight Rust tests on the local host pass. All checks use synthetic data and isolated environments; no native-client or model-continuation acceptance claim is added.
+
+### Previous release ([v0.1.41](https://github.com/can4hou6joeng4/Watch/releases/tag/v0.1.41))
 
 v0.1.41 makes `watch doctor` detect Codex configuration read failures before a handoff. When permissions or a path problem prevent reading `~/.codex/config.toml`, diagnostics now show the write restriction, its cause and a repair hint, and include the fault in `warnings`: ordinary mode exits 0, while `--strict` exits 1 so scripts can catch it. Diagnostics and handoff preflight share the same check; a readable or not-yet-created config does not raise a false alarm. OpenCode 2.x read-only support remains visible in the report without making strict mode fail for that known limitation.
 
