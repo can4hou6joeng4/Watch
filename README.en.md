@@ -20,9 +20,11 @@ The steps are on the site [guides](https://relay.bobochang.cn/en/#guides): [Clau
 
 It does not provide models, bypass usage limits, replace native agent chat, or move permissions, credentials and plugins by default. What it transfers is the recorded session, not the model's unrecorded internal state. Today the implementation is centred on CLI sessions and terminal resume; the product direction includes validated desktop entry points, but **official interoperability does not mean Watch has integrated it**.
 
-### Latest release ([v0.1.21](https://github.com/can4hou6joeng4/Watch/releases/tag/v0.1.21))
+### Latest release ([v0.1.22](https://github.com/can4hou6joeng4/Watch/releases/tag/v0.1.22))
 
-v0.1.21 hardens the session ID, source file and working directory in the `watch prompt` header. These fields previously entered Markdown directly, so newlines could start sections and links or backticks could become formatting. They now render as single-line code data using delimiters chosen from the content. The v0.1.20 resume-command quoting and earlier handoff document fence fixes remain in place.
+v0.1.22 completes quoting for curly single quotes in Windows PowerShell. PowerShell treats `‘ ’ ‚ ‛` as string quotes; previously only ASCII single quotes were doubled, so these characters in session IDs or directories could end an argument early. The CLI and desktop now double each character while preserving its original form. Earlier handoff header and fence fixes remain in place.
+
+- **PowerShell curly single quotes remain data (v0.1.22)**: covers session IDs in all six resume commands and working directories in CLI and desktop command groups. The character range and doubling semantics were checked against the official parser source; synthetic regressions check the original value and string endpoint. PowerShell is unavailable on the local host, so this release adds no native Windows terminal acceptance.
 
 - **Header IDs and paths render as data (v0.1.21)**: newlines in the three fields become a visible `\n`, and backticks use longer inline-code delimiters. Link syntax stays inside code rather than becoming a clickable field value. The automatic-selection notice remains outside the ID span. This changes only the document display of these three fields; raw JSON fields and the actual working directory retain their original values.
 
