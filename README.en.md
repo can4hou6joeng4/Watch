@@ -20,9 +20,11 @@ The steps are on the site [guides](https://relay.bobochang.cn/en/#guides): [Clau
 
 It does not provide models, bypass usage limits, replace native agent chat, or move permissions, credentials and plugins by default. What it transfers is the recorded session, not the model's unrecorded internal state. Today the implementation is centred on CLI sessions and terminal resume; the product direction includes validated desktop entry points, but **official interoperability does not mean Watch has integrated it**.
 
-### Latest release ([v0.1.30](https://github.com/can4hou6joeng4/Watch/releases/tag/v0.1.30))
+### Latest release ([v0.1.31](https://github.com/can4hou6joeng4/Watch/releases/tag/v0.1.31))
 
-v0.1.30 corrects commands and capability descriptions in the Chinese and English guides:
+v0.1.31 fixes site date validation across time zones and includes the guide corrections from v0.1.30. Site dates and the build date use `Asia/Shanghai`, preventing a false future-date rejection when local midnight precedes the CI host's next day. Actual future dates remain blocked. The v0.1.30 website deployed successfully, but its release gate failed on this date mismatch and produced no installers; its tag is preserved.
+
+The following guide corrections were introduced in v0.1.30:
 
 - **Official import steps**: confirmation examples include the required `--experimental` flag. `prepare` saves a local plan, `confirm` acquires the Watch target lock, and `status` reads the local journal. The project-first requirement is scoped to the `--desktop-project` route.
 - **OpenCode preflight and resume**: `--check` previews the destination and pending turns and applies layout and revert guards; it does not test write permissions or acquire a SQLite write lock. Verify and use the complete resume command, including its directory change. A cwd record is not a file-access sandbox, and SQLite transactions do not provide row-level write locks.
