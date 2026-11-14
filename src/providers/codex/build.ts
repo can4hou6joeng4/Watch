@@ -2,6 +2,7 @@ import { mkdir, readdir, readFile, stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
+import { parse as parseToml, type TomlTable } from 'smol-toml';
 import { appendFileAtomic, writeFileAtomic } from '../../core/atomic.js';
 import { escapeControlChars } from '../../core/display.js';
 import { asJsonObject, parseJsonObject } from '../../core/jsonl.js';
@@ -117,8 +118,16 @@ function generatedOriginLabel(value: string): boolean {
   );
 }
 
+/** 配置读取和语义错误分开编码；错误文案不得带 TOML 原文或解析器的输入片段。 */
+export class CodexConfigError extends Error {
+  constructor(readonly code: 'codex_config_unreadable' | 'codex_config_invalid', message: string) {
+    super(message);
+    this.name = 'CodexConfigError';
+  }
+}
+
 /**
- * 读 config.toml 顶层 model_provider（只扫首个表头之前的行，避免 [model_providers.xxx] 子表误匹配）。
+ * 读 config.toml 顶层 model_provider，按 TOML 语义解析，避免引号、转义与多行文本误判。
  *
  * 只有「文件不存在」（`ENOENT` / `ENOTDIR`）才等于「没配 provider，Codex 自己按 openai 处理」；
  * 其余读失败（`EACCES` / `EISDIR` / I/O）是「不知道配了什么」——第一百二十二轮修正：以前一律
@@ -134,19 +143,38 @@ export async function readModelProvider(codexDirPath: string): Promise<string> {
     raw = await readFile(configPath, 'utf8');
   } catch (error) {
     if (isMissingPathError(error)) return DEFAULT_PROVIDER;
-    throw new Error(
+    throw new CodexConfigError(
+      'codex_config_unreadable',
       `无法读取 Codex 配置 ${escapeControlChars(configPath)}：${describePathReadFailureReason(error)}；` +
         '读不出当前配置的 model_provider，写出来的会话会与原生不一致——先修好该文件再重试，本次未写入任何内容',
     );
   }
-  return parseModelProvider(raw);
+  try {
+    return parseModelProvider(raw);
+  } catch (error) {
+    if (!(error instanceof CodexConfigError)) throw error;
+    throw new CodexConfigError(
+      error.code,
+      `无法解析 Codex 配置 ${escapeControlChars(configPath)}：${error.message}；先修好该文件再重试，本次未写入任何内容`,
+    );
+  }
 }
 
-/** 从 config.toml 原文取顶层 `model_provider`；已经读过文件的地方走它，避免二次 IO 与 TOCTOU。 */
+/** 从 config.toml 原文取顶层 `model_provider`；已读过原文的调用方复用，不再读取文件。 */
 export function parseModelProvider(raw: string): string {
-  const topLevel = raw.split(/^ *\[/m)[0] ?? '';
-  const m = /^ *model_provider *= *"([^"]+)"/m.exec(topLevel);
-  return m?.[1] ?? DEFAULT_PROVIDER;
+  let config: TomlTable;
+  try {
+    config = parseToml(raw);
+  } catch {
+    // TOML 解析器的错误通常带输入片段，可能含 api_key；只给出不包含配置内容的原因。
+    throw new CodexConfigError('codex_config_invalid', 'TOML 语法不合法');
+  }
+  const provider = config.model_provider;
+  if (provider === undefined) return DEFAULT_PROVIDER;
+  if (typeof provider !== 'string' || !provider.trim()) {
+    throw new CodexConfigError('codex_config_invalid', '顶层 model_provider 必须是非空字符串');
+  }
+  return provider;
 }
 
 /** 按 session id 定位 rollout 文件（sessions/YYYY/MM/DD/rollout-*-<id>.jsonl），找不到返回 null。

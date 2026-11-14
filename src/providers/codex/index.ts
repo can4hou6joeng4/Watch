@@ -21,6 +21,7 @@ import { streamCommand } from '../../core/streamCommand.js';
 import { parseCodexSession } from './parse.js';
 import { codexSessionUsage } from './usage.js';
 import {
+  CodexConfigError,
   codexDir,
   findRolloutBySessionId,
   importTurnsToCodex,
@@ -423,7 +424,7 @@ async function readProviderCredential(codexHome: string): Promise<CodexProviderC
  * 预检用：`~/.codex/config.toml` 现在读得出来吗（读不出来就抛 `PreflightBlockedError`）。
  *
  * 只读一次 `readModelProvider()`——它就是写路径将要用的同一个事实来源（`model_provider`），
- * 所以预检与写入不会对「配置能不能读」给出相反结论。**不在这里缓存**：预检与写入之间
+ * 所以预检与写入不会对「配置能不能读取和解析」给出相反结论。**不在这里缓存**：预检与写入之间
  * 文件仍可能变化，这里只负责「此刻可以继续」，写入路径自己会再读一次（并同样 fail closed）。
  *
  * 文件不存在（`ENOENT` / `ENOTDIR`）由 `readModelProvider()` 返回默认 provider，不阻断——
@@ -435,13 +436,13 @@ async function assertCodexConfigReadable(): Promise<void> {
 }
 
 /**
- * 只读探测：Codex 配置是否存在阻止写入的读取故障（`null` = 未发现此类故障）。
+ * 只读探测：Codex 配置是否存在阻止写入的读取或解析故障（`null` = 未发现此类故障）。
  *
  * `preflight` 与 `writeLimit`（doctor 用）共用这一份判定——与 OpenCode 的
- * `opencodeWriteLimit()` 同一模式，同一件事不能有两条说法。判的只是「写路径读得到配置吗」：
+ * `opencodeWriteLimit()` 同一模式，同一件事不能有两条说法。判的只是「写路径能读取并解析配置吗」：
  * writer 锁 / Desktop 进程是**运行时状态**，不是存储属性，`watch doctor` 不该把它印成写入限制。
  *
- * 配置可读（含未显式写 `model_provider`）或文件不存在（`ENOENT` / `ENOTDIR`）时返回 `null`，
+ * 配置可读且合法（含未显式写 `model_provider`）或文件不存在（`ENOENT` / `ENOTDIR`）时返回 `null`，
  * 与写路径使用默认 provider 的约定一致；writer 锁、写权限等条件仍由后续步骤检查。
  */
 async function codexConfigWriteLimit(): Promise<WriteLimit | null> {
@@ -450,9 +451,9 @@ async function codexConfigWriteLimit(): Promise<WriteLimit | null> {
     return null;
   } catch (error) {
     return {
-      code: 'codex_config_unreadable',
+      code: error instanceof CodexConfigError ? error.code : 'codex_config_unreadable',
       reason: error instanceof Error ? error.message : String(error),
-      hint: '修好该文件（或让 Codex 自己重建一次配置）后重试；配置可读之前 Watch 不会写入 Codex 会话，确认零写入。',
+      hint: '修好该文件（或让 Codex 自己重建一次配置）后重试；配置可以读取并解析之前 Watch 不会写入 Codex 会话，确认零写入。',
       // 这是可修的故障，不是「Watch 主动只读」：doctor 要把它算进 warnings，--strict 也要能捕获
       kind: 'fault',
     };
