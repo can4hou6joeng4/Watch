@@ -143,7 +143,7 @@ const EXEC_NAME = /^(exec|exec_command|bash|shell|sh|run|run_command|run_termina
 
 /**
  * Codex 的补丁标记。Codex 把改动写成 git 风格的补丁（可能在 `apply_patch` 的入参里，
- * 也可能作为 heredoc 出现在 `exec_command` 的命令字符串里），三种前缀是固定格式，
+ * 也可能作为 heredoc 出现在 `exec_command` 的命令字符串里），这些前缀是固定格式，
  * 按行首匹配不会把普通文本里的同名字样当成补丁。
  */
 const PATCH_MARKERS = ['*** Update File: ', '*** Add File: ', '*** Delete File: ', '*** Move to: '] as const;
@@ -205,6 +205,7 @@ export function extractPatchPaths(command: string): string[] {
 /** 单条工具调用的归类结果。`null` = 这条调用不是文件写入也不是命令（搜索 / TODO / 子代理…）。 */
 type Classified =
   | { kind: 'file'; path: string; mode: 'write' | 'edit' }
+  | { kind: 'patch'; paths: string[] }
   | { kind: 'command'; command: string; workdir?: string }
   | { kind: 'unreadable-write' }
   | null;
@@ -221,8 +222,12 @@ function classify(event: ProcessEvent): Classified {
   const obj = inputRecord(event);
   const rawInput = typeof event.input === 'string' ? event.input.trim() : '';
 
-  // 纯字符串入参：只有名字明显是执行器时才算命令（Codex 的 exec 传的是脚本）
+  // Codex 的 freeform apply_patch 直接传补丁字符串；它不是 shell 命令。
   if (!obj) {
+    if (rawInput && name.toLowerCase() === 'apply_patch') {
+      const paths = extractPatchPaths(rawInput);
+      if (paths.length > 0) return { kind: 'patch', paths };
+    }
     if (rawInput && EXEC_NAME.test(name)) return { kind: 'command', command: rawInput };
     if (rawInput && isKnownFileWriter(name)) return { kind: 'unreadable-write' };
     return null;
@@ -312,6 +317,12 @@ export function collectWorkManifest(
       if (classified.kind === 'file') {
         if (failed) failedFileWrites += 1;
         else addFile(classified.path, classified.mode);
+        continue;
+      }
+      if (classified.kind === 'patch') {
+        // 多文件补丁仍是一次调用；失败时按调用计数，不把路径数当失败次数。
+        if (failed) failedFileWrites += 1;
+        else for (const patchPath of classified.paths) addFile(patchPath, 'edit');
         continue;
       }
       // 失败的命令仍运行过；内嵌补丁的文件则不能据此认定成功改动。
