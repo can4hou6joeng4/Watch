@@ -1,6 +1,6 @@
 import type { Finding } from './findings.js';
 import { addFinding } from './findings.js';
-import { codeFence } from './markdown.js';
+import { codeFence, inlineCode, singleLineText } from './markdown.js';
 import { CLAUDE_COMPACT_SUMMARY_PREFIX, findContextDisclosure, KIMI_COMPACTION_SUMMARY_PREFIX, OPENCODE_COMPACTION_SUMMARY_PREFIX, PI_COMPACTION_SUMMARY_PREFIX, WATCH_CONTEXT_DISCLOSURE_PREFIX } from './rich.js';
 import type { ProcessEvent, TokenUsage, UnifiedTurn } from './types.js';
 import { collectWorkManifest, isEmptyWorkManifest, renderWorkManifest, type WorkManifest } from './work-manifest.js';
@@ -548,6 +548,8 @@ export function buildHandoffPrompt(
   stats.manifestFiles = manifest.files.length;
   stats.manifestCommands = manifest.commands.length;
 
+  // ID 与路径是单行数据；正文的换行保留规则不适用于文档头部。
+  const metadataCode = (text: string): string => inlineCode(singleLineText(sanitizeBody(text).text));
   const lines: string[] = [];
   lines.push(`# 会话交接 · ${sanitizeBody(meta.providerName).text}`);
   lines.push('');
@@ -560,9 +562,9 @@ export function buildHandoffPrompt(
   lines.push('');
   lines.push(`- 来源助手：${sanitizeBody(meta.providerName).text}（${sanitizeBody(meta.providerId).text}）`);
   lines.push(
-    `- 会话 ID：${sanitizeBody(meta.sessionId).text}${meta.autoPicked ? '（自动挑选：本目录按修改时间最新的可读会话，可能不是你想要的另一条）' : ''}`,
+    `- 会话 ID：${metadataCode(meta.sessionId)}${meta.autoPicked ? '（自动挑选：本目录按修改时间最新的可读会话，可能不是你想要的另一条）' : ''}`,
   );
-  if (meta.sourcePath) lines.push(`- 源文件：${sanitizeBody(meta.sourcePath).text}`);
+  if (meta.sourcePath) lines.push(`- 源文件：${metadataCode(meta.sourcePath)}`);
   if (meta.sourceBadLines && meta.sourceBadLines > 0) {
     addFinding(findings, 'prompt_source_bad_lines', 'degraded', meta.sourceBadLines);
     lines.push(
@@ -578,7 +580,7 @@ export function buildHandoffPrompt(
         '；正文是否缺少记录无法确认——先确认该文件可读，需要完整内容请先恢复来源文件',
     );
   }
-  lines.push(`- 工作目录：${sanitizeBody(meta.cwd).text}`);
+  lines.push(`- 工作目录：${metadataCode(meta.cwd)}`);
   // 目录状态单独一行而不是塞进上一行括注：它说的是「现在」，上一行说的是「会话当初记录的是什么」，
   // 两者不一致时正是读者最需要看见差别的地方。
   if (meta.sourceCwdNote) {
