@@ -20,7 +20,13 @@ The steps are on the site [guides](https://relay.bobochang.cn/en/#guides): [Clau
 
 It does not provide models, bypass usage limits, replace native agent chat, or move permissions, credentials and plugins by default. What it transfers is the recorded session, not the model's unrecorded internal state. Today the implementation is centred on CLI sessions and terminal resume; the product direction includes validated desktop entry points, but **official interoperability does not mean Watch has integrated it**.
 
-### Latest release ([v0.1.43](https://github.com/can4hou6joeng4/Watch/releases/tag/v0.1.43))
+### Latest release ([v0.1.44](https://github.com/can4hou6joeng4/Watch/releases/tag/v0.1.44))
+
+v0.1.44 updates development, build and research tooling to address known advisories in the existing lockfiles: `fast-xml-parser` 5.12.1, `wrangler` 4.162.0, `vite` 7.3.8, and transitive `source-map-js` 1.2.2. Both dependency trees report zero advisories in this `npm audit` check. This reflects the advisory database at the time of checking and does not establish the absence of all vulnerabilities. The Node ≥ 22.13 requirement is unchanged.
+
+- **Validation scope**: full isolated regression: 1857 passing, zero failures and zero skips. All 21 focused RSS, keyword-research and packaging regressions, 14 site regressions, typecheck, desktop build and a Wrangler version launch without credentials pass. The locked core runtime entries for `smol-toml`, `tsx` and `esbuild` remain unchanged. No native-client or model-continuation acceptance claim is added.
+
+### Previous release ([v0.1.43](https://github.com/can4hou6joeng4/Watch/releases/tag/v0.1.43))
 
 v0.1.43 fixes credential selection for Codex execution subprocesses. The old line scanner treated `api_key` / `base_url` from unselected providers as top-level defaults and could read fake fields inside multiline text. Selection now reuses the same parsed TOML document, reads the actual selected provider table, and falls back only to actual top-level fields for older configs. Provider names containing dots, quoted table names, string escapes and comments follow TOML semantics; numbers and booleans are not coerced into environment variables. Existing environment variables retain their priority.
 
