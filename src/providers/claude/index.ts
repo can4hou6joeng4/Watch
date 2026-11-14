@@ -6,7 +6,8 @@ import path from 'node:path';
 import { promisify } from 'node:util';
 import { digestFile } from '../../core/atomic.js';
 import type { FileDigest } from '../../core/atomic.js';
-import { describeEmptySessionFile, describePathReadFailureReason, isMissingPathError, iterateFileLines, readTextHead } from '../../core/read-text.js';
+import { describeEmptySessionFile, describePathReadFailureReason, isMissingPathError, iterateFileLines, readTextHeadDetail } from '../../core/read-text.js';
+import type { TextHeadDetail } from '../../core/read-text.js';
 import { asJsonObject, parseJsonObject } from '../../core/jsonl.js';
 import { escapeControlChars } from '../../core/display.js';
 import { SessionLookupFailureError } from '../adapter.js';
@@ -71,38 +72,85 @@ export async function findLatestClaudeSession(
   };
 }
 
+export type ClaudeCwdDetail = {
+  cwd: string | null;
+  error?: string;
+  /** 没找到 cwd 时这次到底查了多少：`complete` = 整份文件，`window` = 只有头部窗口 */
+  scan?: 'complete' | 'window';
+};
+
 /** 读 jsonl 前若干行里 user 消息携带的 cwd（目录名编码不可逆，cwd 只能从文件内容拿）。
- * `error` 区分「文件读不出来」与「内容里就没有 cwd」——反查时前者不能说成「会话不存在」 */
-export async function claudeSessionCwdDetail(
-  filePath: string,
-): Promise<{ cwd: string | null; error?: string }> {
-  let raw: string;
+ * `error` 区分「文件读不出来」「文件里确实没有 cwd」与「只查了头部窗口、没覆盖到」——
+ * 反查 / 官方导入都靠它说话，不能把未检查的范围讲成字段不存在 */
+export async function claudeSessionCwdDetail(filePath: string): Promise<ClaudeCwdDetail> {
+  let head: TextHeadDetail;
   try {
     // 只读头部：cwd 在记录的最前面几十行里，而真实会话可能大到超过 V8 的字符串上限
     // （本机实测有一条 695 MB，`readFile(..., 'utf8')` 抛 `Invalid string length`，
     // 被讲成「读不出工作目录，先修好这条会话」——文件其实完好，只是不该整份读进内存）。
-    raw = await readTextHead(filePath, CWD_HEAD_BYTES);
+    head = await readTextHeadDetail(filePath, CWD_HEAD_BYTES);
   } catch (error) {
     return { cwd: null, error: describePathReadFailureReason(error) };
   }
-  // 0 字节文件里没有任何行：说「前 60 行里没有 cwd 字段」会让人以为文件有 60 行可查
-  if (raw.length === 0) return { cwd: null, error: describeEmptySessionFile(filePath) };
-  const cwd = cwdFromClaudeRaw(raw);
-  return cwd ? { cwd } : { cwd: null, error: '前 60 行里没有 cwd 字段' };
+  // 只有真读到 0 字节才是「内容已丢失」：文件非空却一个字符都解码不出来是另一档，
+  // 以前按解码后长度判 0 字节，一块坏字节就会被讲成「进程被杀、内容已丢失」
+  if (head.bytesRead === 0) return { cwd: null, error: describeEmptySessionFile(filePath) };
+  if (head.text.length === 0) {
+    return {
+      cwd: null,
+      error:
+        `会话文件不是可解码的 UTF-8 文本（已读到 ${head.bytesRead} 字节，解不出任何字符，` +
+        `不是 0 字节）：${escapeControlChars(filePath)}`,
+    };
+  }
+  // 只解析窗口里**完整**的行：窗口末尾半行既解析不了，也不能算「查过」
+  const segments = head.text.split('\n');
+  const endsWithNewline = head.text.endsWith('\n');
+  const completeLines = endsWithNewline || head.truncated ? segments.slice(0, -1) : segments;
+  const parsedLines = completeLines.slice(0, CWD_MAX_LINES);
+  const cwd = cwdFromClaudeLines(parsedLines);
+  if (cwd) return { cwd };
+  // 整份文件都读到了、且没有超过「只解析前 60 行」的上限：这才是「文件里确实没有」
+  const complete = !head.truncated && completeLines.length <= CWD_MAX_LINES;
+  return { cwd: null, error: describeMissingCwd(filePath, completeLines.length, head), scan: complete ? 'complete' : 'window' };
+}
+
+/** 没找到 cwd 时如实说明**实际检查了多少**：整份文件、前 60 行、还是只有头部窗口里那几行 */
+function describeMissingCwd(filePath: string, totalLines: number, head: TextHeadDetail): string {
+  if (head.truncated) {
+    if (totalLines === 0) {
+      return (
+        '文件头部 64 KB 里没有完整的一行（首条记录就超过读取窗口），无法判断有没有 cwd 字段；' +
+        '文件更大，窗口之外还有内容'
+      );
+    }
+    if (totalLines <= CWD_MAX_LINES) {
+      return `文件头部 64 KB（前 ${totalLines} 行）里没有 cwd 字段；文件更大，窗口之外还有内容`;
+    }
+    return (
+      `文件头部 64 KB 的前 ${CWD_MAX_LINES} 行里没有 cwd 字段（窗口内共 ${totalLines} 行）；` +
+      '文件更大，窗口之外还有内容'
+    );
+  }
+  if (totalLines <= CWD_MAX_LINES) return `文件共 ${totalLines} 行，没有 cwd 字段`;
+  return `文件共 ${totalLines} 行，前 ${CWD_MAX_LINES} 行里没有 cwd 字段（其余 ${totalLines - CWD_MAX_LINES} 行未解析）`;
 }
 
 /**
- * cwd 探测读多少字节。Claude 的首条 user 记录通常在前几 KB 内，64 KB 足够覆盖 60 行
- * （即使其中夹着很长的工具输出）；比上限更大的会话也不会因此读错——只是多读了点。
+ * cwd 探测读多少字节。Claude 的首条 user 记录通常在前几 KB 内，64 KB 一般足够；
+ * 但它**不保证**覆盖前 60 行——首条记录就超过窗口时只能如实说窗口内没有，不能声称查过 60 行。
  */
 const CWD_HEAD_BYTES = 64 * 1024;
+
+/** cwd 探测最多解析多少行（窗口覆盖更多行时也只解析这些） */
+const CWD_MAX_LINES = 60;
 
 export async function claudeSessionCwd(filePath: string): Promise<string | null> {
   return (await claudeSessionCwdDetail(filePath)).cwd;
 }
 
-function cwdFromClaudeRaw(raw: string): string | null {
-  for (const line of raw.split('\n').slice(0, 60)) {
+function cwdFromClaudeLines(lines: string[]): string | null {
+  for (const line of lines) {
     if (!line.trim()) continue;
     // 顶层 null / 数组 / 标量不是记录：以前直接把 JSON.parse 结果当对象读 `rec.cwd`，
     // 首行是 `null` 时 TypeError 会被外层 catch 讲成「路径读不出来」，与真实原因无关。

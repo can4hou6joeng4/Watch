@@ -562,9 +562,14 @@ export function createOfficialCodexImport(): OfficialCodexImport {
       // 下一步按档分开：0 字节是内容已经没了（只能从备份恢复），格式 / 权限问题才是「先修好再重试」。
       // `error` 在类型上是可选的（cwd 为 null 时它实际一定存在），兜底一句，免得把 `undefined` 拼进文案。
       const reason = detail.error ?? '读不出它的工作目录（原因未知）';
+      // 第一百一十五轮：窗口只覆盖头部一小段时，「先确认这个文件的内容可以读取」是错的方向——
+      // 文件读得好好的，只是 cwd 可能落在未检查的部分。只有 scan === 'complete'（整份都查过、
+      // 确实没有字段）才给「修文件内容」这类指引；其余如实说明只查了窗口并给可执行的下一步。
       const next = isEmptySessionFileReason(reason)
         ? '如果这条会话本该有内容，先从备份恢复该文件（Watch 不会替你重建历史）再重试——本次未写入任何内容'
-        : '先确认这个文件的内容可以读取再重试——本次未写入任何内容';
+        : detail.scan === 'window'
+          ? '这通常说明首条记录就超过了读取窗口（正常会话的 cwd 在前几行）；先确认该文件确实是 Claude Code 的会话记录，或改用 watch sessions --cwd 核对——本次未写入任何内容'
+          : '先确认这个文件的内容可以读取再重试——本次未写入任何内容';
       throw new Error(`无法读取来源会话 ${id} 的内容：${reason}；${next}`);
     },
     connect: (cwd, canonicalHome, profile) => connectImportRpc(executable, cwd, { ...env, CODEX_HOME: canonicalHome }, profile),

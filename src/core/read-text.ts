@@ -23,18 +23,31 @@ export async function readTextOrEmpty(filePath: string, label = '既有会话文
   }
 }
 
+export type TextHeadDetail = {
+  /** 已按 UTF-8 解码的头部文本（末尾不完整字符被丢弃） */
+  text: string;
+  /** 实际读到的字节数（未解码前的原始窗口大小） */
+  bytesRead: number;
+  /** 文件是否比窗口更长。true 时 `text` 只覆盖文件开头一段，末尾可能停在半行 */
+  truncated: boolean;
+};
+
 /**
- * 只读文件头部，最多 `maxBytes` 字节；返回已按 UTF-8 解码的文本。
+ * 只读文件头部，最多 `maxBytes` 字节；返回文本**以及这段文本到底覆盖了多少**。
  *
  * 为什么需要它：会话文件可能大到超过 V8 的字符串上限（约 512 MB），`readFile(path, 'utf8')`
  * 会抛 `Invalid string length`——错误里没有 code，被 `describePathReadFailureReason()` 原样
  * 带出，于是「文件太大」被讲成「会话坏了，先修好它」。而「只要前几十行里的 cwd」这类需求
  * 根本不需要读完：只读头部既避开上限，也把一次几百 MB 的读取变成几 KB。
  *
+ * `truncated` 是**诊断的依据**：没被截断才能断言「文件里就没有这个字段」；被截断时只能说
+ * 「窗口里没有」。调用方不能只拿 `text` 然后按固定行数去描述覆盖范围——那会把「只查了
+ * 窗口内 N 行」讲成「查过前 60 行」。
+ *
  * 不在字节中间截断 UTF-8 字符：`StringDecoder` 会缓冲不完整的多字节序列，末尾最多丢一个
  * 字符——对「取 cwd 字段 / 判首行」这类用途无损。文件短于 `maxBytes` 时全部返回。
  */
-export async function readTextHead(filePath: string, maxBytes: number): Promise<string> {
+export async function readTextHeadDetail(filePath: string, maxBytes: number): Promise<TextHeadDetail> {
   const handle = await open(filePath, 'r');
   try {
     const buffer = Buffer.allocUnsafe(Math.max(0, maxBytes));
@@ -44,10 +57,22 @@ export async function readTextHead(filePath: string, maxBytes: number): Promise<
       if (bytesRead === 0) break;
       total += bytesRead;
     }
-    return decodeUtf8Head(buffer.subarray(0, total));
+    // 读满窗口时再探一个字节：恰好等于上限但与文件等长的情形不能算截断
+    let truncated = false;
+    if (total === buffer.length && total > 0) {
+      const probe = Buffer.allocUnsafe(1);
+      const { bytesRead } = await handle.read(probe, 0, 1, total);
+      truncated = bytesRead > 0;
+    }
+    return { text: decodeUtf8Head(buffer.subarray(0, total)), bytesRead: total, truncated };
   } finally {
     await handle.close().catch(() => {});
   }
+}
+
+/** 只要文本时的兼容包装；需要判断覆盖范围（诊断文案）时用 `readTextHeadDetail()`。 */
+export async function readTextHead(filePath: string, maxBytes: number): Promise<string> {
+  return (await readTextHeadDetail(filePath, maxBytes)).text;
 }
 
 /** 解 UTF-8 头部；末尾可能被截断的多字节序列按丢弃处理，不产生替换字符。 */
