@@ -496,19 +496,27 @@ export async function importTurnsToCodex(
   }
 
   if (into?.filePath) {
-    let existingRaw: string | null = null;
+    // 追加前只需要两项事实：目标还在不在、是不是旧版 event_msg-only 时间线。这里流式扫一遍，
+    // 不把既有 rollout 留在内存里（第一百二十轮）：整份 `readFile` 在超过 V8 字符串上限
+    // （约 512 MB，与 r84 同族）时抛没有 `code` 的 `Invalid string length`，于是完好大会话
+    // 被讲成「读取既有 Codex 会话文件失败」而拒绝追加——而真正的写入（`appendFileAtomic`）
+    // 与 round-trip 校验本来就是流式的，整份读没有任何用处。
+    let existingExists = true;
+    let legacy = false;
     try {
-      existingRaw = await readFile(into.filePath, 'utf8');
+      legacy = await isLegacyEventMsgRollout(iterateFileLines(into.filePath));
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+        existingExists = false;
+      } else {
         throw new Error(
           `读取既有 Codex 会话文件失败：${describePathReadFailureReason(error)}（${escapeControlChars(into.filePath)}）；未写入，避免破坏既有历史`,
         );
       }
     }
-    if (existingRaw !== null) {
+    if (existingExists) {
       if (turns.length === 0) return into;
-      if (await isLegacyEventMsgRollout(existingRaw)) {
+      if (legacy) {
         throw new Error(
           `目标 Codex 会话是旧版 event_msg-only 格式，不支持直接追加现代 response_item 记录（${escapeControlChars(into.filePath)}）；追加会翻转解析时间线、让既有对话从 Watch 视图消失；本次未写入任何内容，请改用新建目标会话或以覆盖模式重建后再转入`,
         );

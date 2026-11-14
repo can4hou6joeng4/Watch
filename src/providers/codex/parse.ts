@@ -57,9 +57,17 @@ export async function parseCodexSession(ref: SessionRef): Promise<UnifiedTurn[]>
  * 判断既有 rollout 是否正在依靠 `event_msg` 回退时间线（整份文件没有有效 `response_item`
  * 对话消息，但有至少一条 `event_msg` 对话）。`importTurnsToCodex` 的追加分支用它做
  * fail-closed 拦截：直接追加 `response_item` 行会翻转 `hasResponseMessages`，让旧历史消失。
+ *
+ * 直接接受行迭代器（第一百二十轮）：追加分支只需要扫描一遍，不需要把既有 rollout 留在内存里；
+ * 整份 `readFile` 在超过 V8 字符串上限（约 512 MB）时抛 `Invalid string length`（无 `code`），
+ * 完好的大会话会被讲成「读取既有 Codex 会话文件失败」而拒绝追加。字符串形态保留给既有调用点。
  */
-export async function isLegacyEventMsgRollout(raw: string): Promise<boolean> {
-  return (await parseCodexLines(raw.split('\n'))).usesEventFallback;
+export async function isLegacyEventMsgRollout(
+  input: string | Iterable<string> | AsyncIterable<string>,
+): Promise<boolean> {
+  // `string` 自身也是 `Iterable<string>`（逐字符）：必须先按字符串分支切行，不能直接迭代
+  const lines = typeof input === 'string' ? input.split('\n') : input;
+  return (await parseCodexLines(lines)).usesEventFallback;
 }
 
 async function parseCodexLines(
