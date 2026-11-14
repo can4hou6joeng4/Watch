@@ -20,11 +20,13 @@ Watch 只做一件事：**把已保存的会话记录连同工作目录交到目
 
 它不提供模型、不绕过配额、不代替原生 Agent 聊天，也不默认搬迁权限、凭据或插件；接力的是已有记录，不是模型未记录的内部状态。当前实现以 CLI 会话与终端恢复为主，产品方向包含经过验证的桌面端入口，但**官方支持互通不等于 Watch 已经集成**。
 
-### 最新版本（[v0.1.25](https://github.com/can4hou6joeng4/Watch/releases/tag/v0.1.25)）
+### 最新版本（[v0.1.26](https://github.com/can4hou6joeng4/Watch/releases/tag/v0.1.26)）
 
-v0.1.25 修复 Intel Mac 安装包无法启动 esbuild 的问题。前两个版本在 Apple Silicon 构建机上交叉生成 x64 包，esbuild 按构建机架构只带了 arm64 二进制，Intel 机器上恢复会话时 `tsx` 会找不到可执行文件。现在 x64 构建会补装目标架构的 esbuild，发布流水线在打包后静态检查 bundle 内的运行期依赖。
+v0.1.26 修复 v0.1.25 的发布检查与打包版本信息。v0.1.25 补上了 Intel Mac 的 esbuild 依赖，但打包后检查指向了 Tauri 已清理的中间目录，导致 x64 构建失败、该版本没有产出安装包。另外发现安装包缺少 `package.json`，打包版 `watch --version` 与 `doctor` 只能显示「未知版本」。
 
-- **Intel Mac 包补齐 esbuild 二进制（v0.1.25）**：已发布 `Watch_0.1.24_x64.dmg` 的只读检查确认主程序为 x86_64、`watch-core` 内却只有 `@esbuild/darwin-arm64`。修复在 x64 构建中补装 `@esbuild/darwin-x64`，不改锁文件；新增 `scripts/verify-bundle-runtime.mjs` 与工作流步骤，在打包后按目标架构检查，缺失即失败。检查基于已发布安装包静态核对，不等同于 Intel Mac 原生运行验收。
+- **打包后检查改为只读挂载 DMG（v0.1.26）**：Tauri 打完 DMG 会删除中间 `Watch.app`，v0.1.25 的检查因此 ENOENT。现在挂载 DMG 再检查包内 `watch-core`，x64 与 arm64 两个 macOS 构建都执行，并用同一个检查器核对目标架构。
+- **安装包补齐版本文件（v0.1.26）**：`bundle.resources` 增加 `package.json`。`watch --version` 与 `doctor` 的 `watchVersion` 都从 `src/core/../../package.json` 解析，此前打包版只能返回 null。检查器同时断言该文件存在且 `version` 是字符串。
+- **Intel esbuild 依赖（v0.1.25 起）**：Intel 包只带 arm64 二进制的问题由 x64 构建补装 `@esbuild/darwin-x64` 解决；v0.1.25 未发布成功，修复随本版交付。
 
 - **含控制字符的恢复命令停止交付（v0.1.23）**：覆盖 C0、DEL 与 C1（包括换行、制表符、ESC），来源 ID / 目录、恢复命令复制、启动失败后的复制兜底及官方导入面板的复制按钮共用检查；原因持续显示。`open` / `switch` / `adopt` / `new` 的命令转义展示并在 warnings 中说明不能直接复制执行，JSON 原始字段不改。使用合成会话、隔离 PTY 与 Rust 单测验证；未启动原生终端 GUI，不增加原生客户端验收结论。
 
