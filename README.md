@@ -20,7 +20,11 @@ Watch 只做一件事：**把已保存的会话记录连同工作目录交到目
 
 它不提供模型、不绕过配额、不代替原生 Agent 聊天，也不默认搬迁权限、凭据或插件；接力的是已有记录，不是模型未记录的内部状态。当前实现以 CLI 会话与终端恢复为主，产品方向包含经过验证的桌面端入口，但**官方支持互通不等于 Watch 已经集成**。
 
-### 最新版本（[v0.1.36](https://github.com/can4hou6joeng4/Watch/releases/tag/v0.1.36)）
+### 最新版本（[v0.1.37](https://github.com/can4hou6joeng4/Watch/releases/tag/v0.1.37)）
+
+v0.1.37 让 Codex 的追加路径也不再整份读入既有 rollout。`importTurnsToCodex()` 追加前只需要两项事实——目标还在不在、是不是旧版 `event_msg`-only 时间线——旧实现为此把整条 rollout 读成一个字符串；超过 V8 字符串上限（约 512 MB，与本系列前几版同一族）时 `readFile` 抛**没有 `code`** 的 `Invalid string length`，完好的大会话被讲成「读取既有 Codex 会话文件失败」而拒绝追加。现在 `isLegacyEventMsgRollout()` 直接接受行迭代器，扫描与判定都是流式的；旧格式仍 fail closed 拒绝，读不出来的原因仍按 errno 分档并声明未写入。
+
+- **验证范围**：新增 3 项合成文件回归（1 MB 单行既有 rollout 仍正常追加且旧历史原样保留、迭代器与字符串入口判定一致、目标被同名目录占住时按中文分档拒绝且不留下 tmp / bak），完整隔离回归 1832 项通过；全部为合成文件，未启动原生 CLI 或模型。
 
 v0.1.36 修正 Grok 写路径的摘要覆盖：`readSummary()` 以前是 `readFile(...).catch(() => '')`，把「读不出来」（权限、路径被同名文件占住）与「没有摘要」压成同一个 `null`。`importTurnsToGrok()` 末尾拿 `null` 重建一份摘要再原子写覆盖——原生摘要里的 `generated_title`、`next_trace_turn`、创建时间等字段被静默替换，而 chat / updates 两条日志已经写好，用户只会看到「转入成功」。现在写路径只把 `ENOENT`（旧版会话目录本来就没有摘要）当成可以重建，其余读失败抛中文原因；而且既有摘要改成在**任何写入之前**读，读不出来整次拒绝，不会出现「chat 已变、摘要没变」的半写状态。
 
