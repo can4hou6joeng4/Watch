@@ -20,7 +20,13 @@ The steps are on the site [guides](https://relay.bobochang.cn/en/#guides): [Clau
 
 It does not provide models, bypass usage limits, replace native agent chat, or move permissions, credentials and plugins by default. What it transfers is the recorded session, not the model's unrecorded internal state. Today the implementation is centred on CLI sessions and terminal resume; the product direction includes validated desktop entry points, but **official interoperability does not mean Watch has integrated it**.
 
-### Latest release ([v0.1.48](https://github.com/can4hou6joeng4/Watch/releases/tag/v0.1.48))
+### Latest release ([v0.1.49](https://github.com/can4hou6joeng4/Watch/releases/tag/v0.1.49))
+
+v0.1.49 hardens the Kimi session-creation index lookup after an independent review: unparsable index lines are counted and disclosed, and only a readable index without bad lines may report that it has no record of the session. `sessionDir` must be absolute and free of NUL, so a damaged or hand-edited index cannot point the later truncation at a same-named file under the process cwd. An occupied rule-derived path now also reports the index read failure, and session ids in error messages are escaped.
+
+- **Validation scope**: 8 new isolated checks, 3 of which reproduce failures before the fix (undisclosed bad lines, relative-path/NUL acceptance, a lost index reason when the rule-derived path is occupied); 40-character truncation, UNC, root and empty-string encoding samples were added, and a fake `kimi` script on PATH covers the `start()` path for the first time. Full isolated regression: 1901 passing, zero failures and zero skips. These are synthetic-file checks; the real Kimi CLI and native client were not run.
+
+### Previous release ([v0.1.48](https://github.com/can4hou6joeng4/Watch/releases/tag/v0.1.48))
 
 v0.1.48 continues the Kimi session-creation fix: when the session file recorded in the index cannot be read (permissions, I/O) or the entry is stale (directory removed), the error now names that indexed path and the concrete reason instead of describing an unreadable entry as absent from both locations. The error also lists the rule-derived path, any index read failure, and every candidate entry the index held.
 
