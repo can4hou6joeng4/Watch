@@ -20,7 +20,13 @@ The steps are on the site [guides](https://relay.bobochang.cn/en/#guides): [Clau
 
 It does not provide models, bypass usage limits, replace native agent chat, or move permissions, credentials and plugins by default. What it transfers is the recorded session, not the model's unrecorded internal state. Today the implementation is centred on CLI sessions and terminal resume; the product direction includes validated desktop entry points, but **official interoperability does not mean Watch has integrated it**.
 
-### Latest release ([v0.1.45](https://github.com/can4hou6joeng4/Watch/releases/tag/v0.1.45))
+### Latest release ([v0.1.46](https://github.com/can4hou6joeng4/Watch/releases/tag/v0.1.46))
+
+v0.1.46 aligns Pi project directory encoding with its native rules, including backslashes and drive colons in Windows paths, and colons or backslashes in POSIX filenames. Previously, these paths could hide existing sessions from listings or place new sessions outside the directory used by the native client. New sessions use native directories; reading also supports directories created by older Watch versions on POSIX, while preserving the original working directory in the session header.
+
+- **Validation scope**: 15 new isolated checks; 11 reproduce failures in the old implementation and all pass after the fix. They cover drive letters, mixed separators, UNC paths, native-directory reading, new-session writing and legacy-directory compatibility, plus an exact check of a tool result longer than 10,000 characters. Full isolated regression: 1885 passing, zero failures and zero skips. These are local synthetic-file checks, not Windows or native Pi client acceptance.
+
+### Previous release ([v0.1.45](https://github.com/can4hou6joeng4/Watch/releases/tag/v0.1.45))
 
 v0.1.45 fixes backup-link overwrites during session writes. Copying directly to an existing `.bak` symbolic or hard link could overwrite an unrelated file; a dangling symbolic link could also create its referent unexpectedly. Replacement and append now share an independent temporary backup, sync it and replace the `.bak` directory entry, preserving the single-generation backup and source permission bits. A backup publication failure prevents replacement of the main session file.
 
