@@ -26,7 +26,7 @@ cargo test  --manifest-path desktop/src-tauri/Cargo.toml   # Rust 桥接单测
 
 仓库**没有 lint 脚本**（无 eslint / biome / prettier），代码风格靠约定与评审维护。
 
-官网文案源在 `scripts/lib/site-content.mjs`、`site-guides.mjs` 与 `scripts/site-content/llms.txt`；改源后运行 `npm run site:build`。升版或改分享图模板后，先运行 `node scripts/media/render-og.mjs`（默认使用 macOS Google Chrome，可用 `CHROME_PATH` 指定可执行文件），再构建站点。渲染器使用独立临时浏览器目录，记录版本及模板、PNG 的 SHA-256；`node scripts/media/render-og.mjs --check` 与站点构建不启动浏览器，发现过期或缺失产物会失败。`site/` 构建产物与渲染清单需要一同提交。
+官网文案源在 `scripts/lib/site-content.mjs`、`site-guides.mjs` 与 `scripts/site-content/llms.txt`；站点图标生成使用桌面依赖中的 React / React DOM / Lucide，先运行 `npm --prefix desktop ci`，改源后运行 `npm run site:build`。升版或改分享图模板后，先运行 `node scripts/media/render-og.mjs`（默认使用 macOS Google Chrome，可用 `CHROME_PATH` 指定可执行文件），再构建站点。渲染器使用独立临时浏览器目录，记录版本及模板、PNG 的 SHA-256；`node scripts/media/render-og.mjs --check` 与站点构建不启动浏览器，发现过期或缺失产物会失败。`site/` 构建产物与渲染清单需要一同提交。
 
 ## 目录结构
 

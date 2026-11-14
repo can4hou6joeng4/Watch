@@ -20,9 +20,11 @@ Watch 只做一件事：**把已保存的会话记录连同工作目录交到目
 
 它不提供模型、不绕过配额、不代替原生 Agent 聊天，也不默认搬迁权限、凭据或插件；接力的是已有记录，不是模型未记录的内部状态。当前实现以 CLI 会话与终端恢复为主，产品方向包含经过验证的桌面端入口，但**官方支持互通不等于 Watch 已经集成**。
 
-### 最新版本（[v0.1.28](https://github.com/can4hou6joeng4/Watch/releases/tag/v0.1.28)）
+### 最新版本（[v0.1.29](https://github.com/can4hou6joeng4/Watch/releases/tag/v0.1.29)）
 
-v0.1.28 修正官网 AI 阅读入口与分享图的发布一致性。v0.1.27 已让 HTML 跟随版本，但发布的 PNG 仍显示 v0.1.26：旧 `--check` 只验证了模板，没有验证产物。本版重新渲染图片，并让站点构建拒绝过期产物。
+v0.1.29 修正发布检查的依赖顺序：站点图标生成需要桌面端的 React、React DOM 与 Lucide，站点检查现在放在桌面依赖安装及前端构建之后。v0.1.28 因此处顺序错误未生成安装包；本版包含其 AI 阅读入口与分享图修复。
+
+v0.1.27 已让 HTML 跟随版本，但发布的 PNG 仍显示 v0.1.26：旧 `--check` 只验证了模板，没有验证产物。现在重新渲染图片，并让站点构建拒绝过期产物。
 
 - **分享图产物校验（v0.1.28）**：渲染后记录版本、模板与 PNG 的 SHA-256；`node scripts/media/render-og.mjs --check` 和 `site:build` 都核对这些记录，不启动浏览器。升版或改模板后先执行 `node scripts/media/render-og.mjs`。两张图片同步补齐 Grok。
 - **AI 阅读入口跟随版本（v0.1.28）**：`llms.txt` 源移至 `scripts/site-content/llms.txt`，构建注入版本与日期；它与 `llms-full.txt` 共用接力路径决策表，补齐导入命令的必需参数，区分 Watch 导入锁与原生 writer 锁，并按路线说明附件能力。
