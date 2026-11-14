@@ -1,10 +1,16 @@
+// 会话 id 来自文件名 / 索引等原生字符串，拼进命令前按目标终端引用一次。
+// 与 CLI 侧 `src/core/shell-quote.ts` 的 quoteCommandArg() 同规则。
+const quote = (value: string, windows: boolean): string => (
+  /^[A-Za-z0-9_.:/-]+$/.test(value) ? value : windows ? powershellQuote(value) : shellQuote(value)
+);
+
 export const AGENTS = [
-  { id: 'claude', label: 'Claude Code', command: (id: string) => `claude --resume ${id}`, yolo: '--dangerously-skip-permissions' },
-  { id: 'codex', label: 'OpenAI Codex', command: (id: string) => `codex resume ${id}`, yolo: '--dangerously-bypass-approvals-and-sandbox' },
-  { id: 'opencode', label: 'OpenCode', command: (id: string) => `opencode -s ${id}`, yolo: '--auto' },
-  { id: 'kimi', label: 'Kimi CLI', command: (id: string) => `kimi -r ${id}`, yolo: '--yolo' },
-  { id: 'pi', label: 'Pi', command: (id: string) => `pi --session ${id}`, yolo: undefined },
-  { id: 'grok', label: 'Grok CLI', command: (id: string) => `grok -r ${id}`, yolo: '--always-approve' },
+  { id: 'claude', label: 'Claude Code', command: (id: string, windows = false) => `claude --resume ${quote(id, windows)}`, yolo: '--dangerously-skip-permissions' },
+  { id: 'codex', label: 'OpenAI Codex', command: (id: string, windows = false) => `codex resume ${quote(id, windows)}`, yolo: '--dangerously-bypass-approvals-and-sandbox' },
+  { id: 'opencode', label: 'OpenCode', command: (id: string, windows = false) => `opencode -s ${quote(id, windows)}`, yolo: '--auto' },
+  { id: 'kimi', label: 'Kimi CLI', command: (id: string, windows = false) => `kimi -r ${quote(id, windows)}`, yolo: '--yolo' },
+  { id: 'pi', label: 'Pi', command: (id: string, windows = false) => `pi --session ${quote(id, windows)}`, yolo: undefined },
+  { id: 'grok', label: 'Grok CLI', command: (id: string, windows = false) => `grok -r ${quote(id, windows)}`, yolo: '--always-approve' },
 ];
 
 /**
@@ -239,11 +245,11 @@ export function recentStateFromError<T = never>(error: string): RecentState<T> {
   return { items: [], omitted: 0, warnings: [], error };
 }
 
-export function shellQuote(value: string) { return `'${value.replace(/'/g, `'\\''`)}'`; }export function powershellQuote(value: string) { return `'${value.replace(/'/g, `''`)}'`; }
+export function shellQuote(value: string) { return `'${value.replace(/'/g, `'\\''`)}'`; }
+export function powershellQuote(value: string) { return `'${value.replace(/'/g, `''`)}'`; }
 export function buildCommand(agent: Agent, id: string, cwd: string | undefined, yolo: boolean, windows = false) {
-  // Native IDs are arguments, not shell fragments. Keep ordinary IDs readable.
-  const argument = /^[a-zA-Z0-9_.:-]+$/.test(id) ? id : windows ? powershellQuote(id) : shellQuote(id);
-  let command = agent.command(argument);
+  // 卡片命令接收原始 id；这里先引用再传入会把引号本身变成参数内容。
+  let command = agent.command(id, windows);
   if (yolo && agent.yolo) command += ` ${agent.yolo}`;
   if (!cwd) return command;
   // Windows PowerShell 的 Set-Location 默认是 non-terminating error：cwd 不存在时后面的

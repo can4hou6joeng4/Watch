@@ -1,4 +1,5 @@
 import { execFile } from 'node:child_process';
+import { quoteCommandArg } from '../../core/shell-quote.js';
 import { describeDetectFailure, isCommandMissing, resolveCli } from '../../core/platform.js';
 import { readdir, readFile, stat } from 'node:fs/promises';
 import path from 'node:path';
@@ -256,8 +257,8 @@ export const piAdapter: ProviderAdapter = {
     throw new Error('pi 仅支持 TUI resume，请用 watch switch pi');
   },
 
-  resumeCommand(ref: SessionRef): string {
-    return `pi --session ${ref.sessionId}`;
+  resumeCommand(ref: SessionRef, windows?: boolean): string {
+    return `pi --session ${quoteCommandArg(ref.sessionId, windows)}`;
   },
 
   findById: findPiSessionById,

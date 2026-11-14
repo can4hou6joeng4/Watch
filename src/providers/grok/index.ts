@@ -1,4 +1,5 @@
 import { execFile } from 'node:child_process';
+import { quoteCommandArg } from '../../core/shell-quote.js';
 import { describeDetectFailure, isCommandMissing, resolveCli } from '../../core/platform.js';
 import { promisify } from 'node:util';
 import { digestFile } from '../../core/atomic.js';
@@ -66,8 +67,8 @@ export const grokAdapter: ProviderAdapter = {
 
   findById: findGrokSessionById,
 
-  resumeCommand(ref: SessionRef): string {
-    return `grok -r ${ref.sessionId}`;
+  resumeCommand(ref: SessionRef, windows?: boolean): string {
+    return `grok -r ${quoteCommandArg(ref.sessionId, windows)}`;
   },
 
   sessionUsage: grokSessionUsage,

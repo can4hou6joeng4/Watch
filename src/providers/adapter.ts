@@ -216,8 +216,8 @@ export interface ProviderAdapter {
    */
   acquireWriteLock?(ctx: { ref?: SessionRef }): Promise<{ release(): Promise<void>; holderPid?: number } | undefined>;
 
-  /** 展示用：回到原生 CLI 继续的命令，如 `claude --resume <id>` */
-  resumeCommand(ref: SessionRef): string;
+  /** 可复制的原生恢复命令；会话 id 必须引用。windows 缺省按宿主平台，true 使用 PowerShell。 */
+  resumeCommand(ref: SessionRef, windows?: boolean): string;
 
   /** 可选（`watch open` 用）：按原生 session id 全局反查会话（不限 cwd）；找不到返回 null */
   findById?(sessionId: string): Promise<{ ref: SessionRef; updatedAt: number } | null>;

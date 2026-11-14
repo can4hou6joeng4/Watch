@@ -23,6 +23,8 @@ import {
 } from './core/read-text.js';
 import { sessionCwdProblem } from './core/cwd.js';
 import { escapeControlChars } from './core/display.js';
+import { psQuote, shellQuote } from './core/shell-quote.js';
+export { psQuote, shellQuote };
 
 /**
  * 按 id 反查不到会话时的「下一步」，所有按 id 反查的路径共用
@@ -362,16 +364,6 @@ function idTypoHint(mapping: Store | null, raw: string): string | null {
 async function zeroByteSessionReason(ref: SessionRef): Promise<string | null> {
   const reason = await probeSessionReadable(ref.filePath);
   return reason && isEmptySessionFileReason(reason) ? reason : null;
-}
-
-/** POSIX 单引号包裹（含单引号转义），供拼接可复制的 cd / command */
-export function shellQuote(s: string): string {
-  return `'${s.replace(/'/g, `'\\''`)}'`;
-}
-
-/** PowerShell 单引号包裹（单引号双写转义），Windows 下拼接可复制的 cd */
-export function psQuote(s: string): string {
-  return `'${s.replace(/'/g, `''`)}'`;
 }
 
 /**

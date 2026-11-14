@@ -1,4 +1,5 @@
 import { execFile } from 'node:child_process';
+import { quoteCommandArg } from '../../core/shell-quote.js';
 import { describeDetectFailure, isCommandMissing, resolveCli } from '../../core/platform.js';
 import { readdir, stat } from 'node:fs/promises';
 import path from 'node:path';
@@ -384,8 +385,8 @@ export const claudeAdapter: ProviderAdapter = {
     return replyTurn(result.result as string);
   },
 
-  resumeCommand(ref: SessionRef): string {
-    return `claude --resume ${ref.sessionId}`;
+  resumeCommand(ref: SessionRef, windows?: boolean): string {
+    return `claude --resume ${quoteCommandArg(ref.sessionId, windows)}`;
   },
 
   findById: findClaudeSessionById,

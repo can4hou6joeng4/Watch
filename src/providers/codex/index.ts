@@ -1,4 +1,5 @@
 import { execFile } from 'node:child_process';
+import { quoteCommandArg } from '../../core/shell-quote.js';
 import { describeDetectFailure, isCommandMissing, resolveCli } from '../../core/platform.js';
 import { escapeControlChars } from '../../core/display.js';
 import { createReadStream } from 'node:fs';
@@ -702,8 +703,8 @@ export const codexAdapter: ProviderAdapter = {
     return replyTurn(replyText);
   },
 
-  resumeCommand(ref: SessionRef): string {
-    return `codex resume ${ref.sessionId}`;
+  resumeCommand(ref: SessionRef, windows?: boolean): string {
+    return `codex resume ${quoteCommandArg(ref.sessionId, windows)}`;
   },
 
   findById: findCodexSessionById,
