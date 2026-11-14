@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { copyFile, mkdir, open, readFile, rename, rm, stat } from 'node:fs/promises';
+import { constants } from 'node:fs';
+import { chmod, copyFile, mkdir, open, readFile, rename, rm, stat } from 'node:fs/promises';
 import path from 'node:path';
 import { escapeControlChars } from './display.js';
 import { isFileSystemErrorCode } from './read-text.js';
@@ -58,6 +59,35 @@ export async function digestFile(filePath: string): Promise<FileDigest | null> {
   return { sha256: createHash('sha256').update(raw).digest('hex'), sizeBytes: info.size };
 }
 
+/** 独占创建备份副本并同步后替换目录项，不沿已有 .bak 链接覆盖其它文件。 */
+async function backupFileAtomic(filePath: string): Promise<void> {
+  const backupPath = `${filePath}.bak`;
+  const tmpPath = path.join(path.dirname(filePath), `.watch-tmp-${randomUUID()}`);
+  // EXCL 防止临时名冲突时覆盖既有文件；复制失败后的清理由 copyFile 尝试完成。
+  try {
+    await copyFile(filePath, tmpPath, constants.COPYFILE_EXCL);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return; // 新文件没有旧内容可备份
+    throw error;
+  }
+  // 复制完成后的任何失败都必须抛出，不能把临时副本消失误当成新文件。
+  try {
+    const mode = (await stat(tmpPath)).mode & 0o777;
+    // Windows 同步需要写句柄；先给本次私有副本所有者读写权限，再恢复源权限位。
+    await chmod(tmpPath, mode | 0o600);
+    const handle = await open(tmpPath, 'r+');
+    try {
+      await chmod(tmpPath, mode);
+      await handle.sync();
+    } finally {
+      await handle.close();
+    }
+    await rename(tmpPath, backupPath);
+  } finally {
+    await rm(tmpPath, { force: true });
+  }
+}
+
 /**
  * 原子写文件：写同目录 tmp → fsync → verify 回调 → 可选 backup → rename。
  * 任一步失败都会清理 tmp 并重抛，原文件从未被触碰。
@@ -86,13 +116,7 @@ export async function writeFileAtomic(
       await handle.close();
     }
     if (opts?.verify) await opts.verify(tmpPath);
-    if (opts?.backup) {
-      try {
-        await copyFile(filePath, `${filePath}.bak`);
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
-      }
-    }
+    if (opts?.backup) await backupFileAtomic(filePath);
     await rename(tmpPath, filePath);
   } catch (error) {
     await rm(tmpPath, { force: true }).catch(() => {});
@@ -164,13 +188,7 @@ export async function appendFileAtomic(
     }
 
     if (opts?.verify) await opts.verify(tmpPath);
-    if (opts?.backup && originalExists) {
-      try {
-        await copyFile(filePath, `${filePath}.bak`);
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
-      }
-    }
+    if (opts?.backup && originalExists) await backupFileAtomic(filePath);
     await rename(tmpPath, filePath);
   } catch (error) {
     await rm(tmpPath, { force: true }).catch(() => {});
