@@ -20,11 +20,13 @@ Watch 只做一件事：**把已保存的会话记录连同工作目录交到目
 
 它不提供模型、不绕过配额、不代替原生 Agent 聊天，也不默认搬迁权限、凭据或插件；接力的是已有记录，不是模型未记录的内部状态。当前实现以 CLI 会话与终端恢复为主，产品方向包含经过验证的桌面端入口，但**官方支持互通不等于 Watch 已经集成**。
 
-### 最新版本（[v0.1.35](https://github.com/can4hou6joeng4/Watch/releases/tag/v0.1.35)）
+### 最新版本（[v0.1.36](https://github.com/can4hou6joeng4/Watch/releases/tag/v0.1.36)）
+
+v0.1.36 修正 Grok 写路径的摘要覆盖：`readSummary()` 以前是 `readFile(...).catch(() => '')`，把「读不出来」（权限、路径被同名文件占住）与「没有摘要」压成同一个 `null`。`importTurnsToGrok()` 末尾拿 `null` 重建一份摘要再原子写覆盖——原生摘要里的 `generated_title`、`next_trace_turn`、创建时间等字段被静默替换，而 chat / updates 两条日志已经写好，用户只会看到「转入成功」。现在写路径只把 `ENOENT`（旧版会话目录本来就没有摘要）当成可以重建，其余读失败抛中文原因；而且既有摘要改成在**任何写入之前**读，读不出来整次拒绝，不会出现「chat 已变、摘要没变」的半写状态。
+
+- **验证范围**：新增 3 项合成文件回归，完整隔离回归 1829 项通过；本版不增加原生客户端或模型继续验收结论。
 
 v0.1.35 补上同族最后两处「只为取头部字段却整份读会话文件」。Codex 身份探测（`detectCodexIdentity()`）为读最近 5 个 rollout 的头 20 行 `session_meta`，以前整份 `readFile` 再 `slice(0, 20)`；超过 V8 字符串上限时抛的 `Invalid string length` 没有 `code`，被 `catch { continue }` 静默跳过——身份退回默认 originator，写出的会话与原生 resume 选择器不一致，而整个过程看起来「成功」。现在逐行流式、扫满 20 行就停。官方导入的 `continued-in` 前置检查同理：来源是 Claude 会话文件（本机实测最大 695 MB），大会话会在**前置检查**阶段就被讲成「无法读取来源会话」，文件完好却让人去修路径；现在 `scanContinuedInRecords()` 改吃行迭代器，扫描仍只看转入后台记录本身、不解析对话。
-
-- **验证范围**：新增 3 项合成文件回归，完整隔离回归 1826 项通过；真正的 512 MB 场景不在回归里造（与 v0.1.32 同一取舍），本版不增加原生客户端或模型继续验收结论。
 
 v0.1.34 把「大会话不整份读入」延伸到其余四家：Pi、Grok、Codex、Kimi 的会话解析与用量读取全部改为逐行流式。此前它们都 `readFile` 整份读入再 `split('\n')`，超过 V8 字符串上限（约 512 MB）时抛 `Invalid string length`——该错误没有 `code`，完好的大会话会被讲成「读不出来」。现在峰值内存从「整个文件」降到「一行」；Kimi 的 wire.jsonl 连流式增量都逐条落盘，长会话可达数百 MB，这一档最现实。用量读取同样流式并把整个迭代包进 `try/catch`，读到一半失败仍按中文原因披露。列表预览（Kimi / Codex）命中首条用户消息就停，不再为 80 个字符读完整个文件；Kimi 的 0 字节会话仍按「内容已丢失」披露。Codex 旧格式追加守卫的 `isLegacyEventMsgRollout()` 随之改为 async，判据与 fail-closed 行为不变。
 
