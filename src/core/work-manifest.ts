@@ -411,6 +411,25 @@ export function isEmptyWorkManifest(manifest: WorkManifest): boolean {
 }
 
 /**
+ * 行内代码的安全包裹：路径 / 命令来自工具参数，可能含反引号。固定用一个反引号包会
+ * 让 `src/a`b.ts` 断成「代码 + 普通文本」，后面那段随即被当成 Markdown 解释。
+ * CommonMark 的规则是定界符串必须比内容里最长的连续反引号更长；内容含反引号时
+ * 还要在首尾补一个空格（渲染时会去掉），否则首尾的反引号会被并进定界符。
+ */
+function inlineCode(text: string): string {
+  const longest = Math.max(0, ...Array.from(text.matchAll(/`+/g), m => m[0].length));
+  if (longest === 0) return `\`${text}\``;
+  const fence = '`'.repeat(longest + 1);
+  const pad = text.startsWith('`') || text.endsWith('`') ? ' ' : '';
+  return `${fence}${pad}${text}${pad}${fence}`;
+}
+
+/** 单行条目里的换行折成可见占位：否则路径能另起一行伪造清单条目或小节。 */
+function singleLine(text: string): string {
+  return text.replace(/\r\n|\r|\n/g, '\\n');
+}
+
+/**
  * 把清单渲染成 Markdown 行（不含尾部空行）。调用方负责做转义与计数。
  *
  * 措辞必须点明两件事：① 这是从工具参数汇总的，不是从工具输出；② 它覆盖整条会话，
@@ -432,7 +451,7 @@ export function renderWorkManifest(manifest: WorkManifest): string[] {
       const parts: string[] = [];
       if (file.writes) parts.push(`写入 ${file.writes} 次`);
       if (file.edits) parts.push(`编辑 ${file.edits} 次`);
-      lines.push(`- \`${file.path}\`（${parts.join('，')}）`);
+      lines.push(`- ${inlineCode(singleLine(file.path))}（${parts.join('，')}）`);
     }
     if (manifest.omittedFiles > 0) {
       lines.push(`- 另有 ${manifest.omittedFiles} 个文件未列出（超出本节上限）`);
@@ -443,19 +462,23 @@ export function renderWorkManifest(manifest: WorkManifest): string[] {
     lines.push('### 运行过的命令');
     lines.push('');
     for (const cmd of manifest.commands) {
-      const suffix = [cmd.count > 1 ? `×${cmd.count}` : '', cmd.workdir ? `在 ${cmd.workdir} 下` : '']
+      // workdir 来自工具参数，同样可能含反引号 / 换行。
+      const suffix = [cmd.count > 1 ? `×${cmd.count}` : '', cmd.workdir ? `在 ${inlineCode(singleLine(cmd.workdir))} 下` : '']
         .filter(Boolean)
         .join('，');
       // 多行命令（heredoc / 链式脚本）放进行内代码会把 Markdown 结构撑破，
-      // 改成围栏块；它本来也是「一段脚本」，不是一句命令。
+      // 改成围栏块；它本来也是「一段脚本」，不是一句命令。围栏长度必须超过内容里
+      // 最长的反引号串，否则脚本里的 ``` 会提前闭合并把后面的内容漏成正文。
       if (cmd.command.includes('\n')) {
+        const longest = Math.max(0, ...Array.from(cmd.command.matchAll(/`+/g), m => m[0].length));
+        const fence = '`'.repeat(Math.max(3, longest + 1));
         lines.push(`- 多行命令${suffix ? `（${suffix}）` : ''}：`);
         lines.push('');
-        lines.push('  ```sh');
+        lines.push(`  ${fence}sh`);
         for (const line of cmd.command.split('\n')) lines.push(`  ${line}`);
-        lines.push('  ```');
+        lines.push(`  ${fence}`);
       } else {
-        lines.push(`- \`${cmd.command}\`${suffix ? `（${suffix}）` : ''}`);
+        lines.push(`- ${inlineCode(cmd.command)}${suffix ? `（${suffix}）` : ''}`);
       }
     }
     if (manifest.omittedCommands > 0) {
