@@ -20,9 +20,11 @@ The steps are on the site [guides](https://relay.bobochang.cn/en/#guides): [Clau
 
 It does not provide models, bypass usage limits, replace native agent chat, or move permissions, credentials and plugins by default. What it transfers is the recorded session, not the model's unrecorded internal state. Today the implementation is centred on CLI sessions and terminal resume; the product direction includes validated desktop entry points, but **official interoperability does not mean Watch has integrated it**.
 
-### Latest release ([v0.1.31](https://github.com/can4hou6joeng4/Watch/releases/tag/v0.1.31))
+### Latest release ([v0.1.32](https://github.com/can4hou6joeng4/Watch/releases/tag/v0.1.32))
 
-v0.1.31 fixes site date validation across time zones and includes the guide corrections from v0.1.30. Site dates and the build date use `Asia/Shanghai`, preventing a false future-date rejection when local midnight precedes the CI host's next day. Actual future dates remain blocked. The v0.1.30 website deployed successfully, but its release gate failed on this date mismatch and produced no installers; its tag is preserved.
+v0.1.32 corrects the diagnostics for Claude working-directory detection. Previously the code answered "no cwd field in the first 60 lines" whether the file had three lines or the 64 KB head window held a single line — reporting an unchecked range as a missing field. Diagnostics now follow the actual coverage: complete small files report their real line count, files longer than 60 lines state that the remainder was not parsed, truncated windows say the file is larger, and a first record exceeding the window is reported as having no complete line in it. The zero-byte check is also fixed: only a real zero-byte read is "content lost", while a non-empty file that decodes to nothing is reported separately instead of being called zero bytes. Codex official import now gives an actionable next step when the window did not cover the cwd.
+
+- **Validation scope**: seven new synthetic-file regressions and the full isolated suite at 1809 passing. This patch changes no session conversion logic and adds no native-client or model-continuation acceptance claim.
 
 The following guide corrections were introduced in v0.1.30:
 
@@ -32,6 +34,8 @@ The following guide corrections were introduced in v0.1.30:
 - **Validation scope**: guide command contracts, focused site regression and build checks. This patch changes no session conversion logic and adds no native-client or model-continuation acceptance claim.
 
 ### Previous release notes
+
+v0.1.31 fixes site date validation across time zones: site dates and the build date use `Asia/Shanghai`, preventing a false future-date rejection when local midnight precedes the CI host's next day. Actual future dates remain blocked. The v0.1.30 website deployed successfully, but its release gate failed on this date mismatch and produced no installers; its tag is preserved.
 
 v0.1.29 fixes the release check order: site icon generation needs React, React DOM and Lucide from the desktop dependencies, so the site check now runs after desktop dependency installation and frontend compilation. v0.1.28 produced no installers because of this ordering error; its AI reading resource and share-image fixes are included here.
 
