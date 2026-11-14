@@ -11,7 +11,7 @@ import { promisify } from 'node:util';
 import { digestFile } from '../../core/atomic.js';
 import type { FileDigest } from '../../core/atomic.js';
 import { asJsonObject, parseJsonObject } from '../../core/jsonl.js';
-import { describePathReadFailureReason } from '../../core/read-text.js';
+import { describePathReadFailureReason, iterateFileLines } from '../../core/read-text.js';
 import type { ProviderAdapter, PreflightContext } from '../adapter.js';
 import { PreflightBlockedError, SessionLookupFailureError } from '../adapter.js';
 import { acquireThreadWriterLock, probeThreadWriterHolders, threadWriterLockPath, type WriterLockGuard } from './writer-lock.js';
@@ -326,41 +326,40 @@ export async function findCodexSessionById(
 }
 
 async function codexFirstUserText(filePath: string): Promise<{ text: string | null; error?: string }> {
-  let content: string;
   try {
-    content = await readFile(filePath, 'utf8');
+    // 逐行流式读取、命中首条用户消息就停：rollout 会累积整条会话的全部事件，预览只需要最前面几条
+    for await (const line of iterateFileLines(filePath)) {
+      const trimmed = line.trim();
+      if (!trimmed) continue;
+      const record = parseJsonObject(trimmed);
+      if (!record) continue;
+      const payload = asJsonObject(record.payload);
+      if (!payload) continue;
+      let text = '';
+      if (record.type === 'event_msg' && payload.type === 'user_message' && typeof payload.message === 'string') {
+        text = payload.message;
+      } else if (record.type === 'response_item' && payload.type === 'message' && payload.role === 'user') {
+        const contentArr = payload.content;
+        if (Array.isArray(contentArr)) {
+          text = contentArr
+            .map((c) => {
+              const item = asJsonObject(c);
+              return typeof item?.text === 'string' ? item.text : null;
+            })
+            .filter((t): t is string => t !== null)
+            .join(' ');
+        }
+      }
+      const clean = text.replace(/\s+/g, ' ').trim();
+      if (clean && !clean.startsWith('<environment_context>') && !clean.startsWith('<user_instructions>')) {
+        return { text: clean.slice(0, 80) };
+      }
+    }
   } catch (error) {
     const code = (error as NodeJS.ErrnoException).code;
     // 刚被删掉算正常；其余读不出来不能当成「这条会话还没有内容」（理由同 claude 适配器）
     if (code === 'ENOENT' || code === 'ENOTDIR') return { text: null };
     return { text: null, error: describePathReadFailureReason(error) };
-  }
-  for (const line of content.split('\n')) {
-    const trimmed = line.trim();
-    if (!trimmed) continue;
-    const record = parseJsonObject(trimmed);
-    if (!record) continue;
-    const payload = asJsonObject(record.payload);
-    if (!payload) continue;
-    let text = '';
-    if (record.type === 'event_msg' && payload.type === 'user_message' && typeof payload.message === 'string') {
-      text = payload.message;
-    } else if (record.type === 'response_item' && payload.type === 'message' && payload.role === 'user') {
-      const contentArr = payload.content;
-      if (Array.isArray(contentArr)) {
-        text = contentArr
-          .map((c) => {
-            const item = asJsonObject(c);
-            return typeof item?.text === 'string' ? item.text : null;
-          })
-          .filter((t): t is string => t !== null)
-          .join(' ');
-      }
-    }
-    const clean = text.replace(/\s+/g, ' ').trim();
-    if (clean && !clean.startsWith('<environment_context>') && !clean.startsWith('<user_instructions>')) {
-      return { text: clean.slice(0, 80) };
-    }
   }
   return { text: null };
 }

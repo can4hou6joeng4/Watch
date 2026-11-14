@@ -1,5 +1,5 @@
-import { readFile } from 'node:fs/promises';
 import { ToolResultPairing } from '../../core/tool-pairing.js';
+import { iterateFileLines } from '../../core/read-text.js';
 import {
   ensureAssistant,
   normalizeUserText,
@@ -15,7 +15,6 @@ import { isoFromEpochMs } from '../../core/time.js';
 import { createPiFailureCounts, piFailureDisclosure, readPiStopReason, type PiFailureCounts } from './failure.js';
 
 export async function parsePiSession(ref: SessionRef): Promise<UnifiedTurn[]> {
-  const raw = await readFile(ref.filePath, 'utf8');
   const turns: UnifiedTurn[] = [];
   const pairing = new ToolResultPairing(turns, 'pi', 'Pi');
   let sawUser = false;
@@ -33,7 +32,9 @@ export async function parsePiSession(ref: SessionRef): Promise<UnifiedTurn[]> {
   let tailFailure = false;
   let lastFailureTimestamp = '';
 
-  for (const line of raw.split('\n')) {
+  // 逐行流式读取：本机会话最大 62 MB，整份 `readFile` 在超过 V8 字符串上限（约 512 MB）时
+  // 会抛 `Invalid string length`，把完好的大会话讲成「读不出来」
+  for await (const line of iterateFileLines(ref.filePath)) {
     const trimmed = line.trim();
     if (!trimmed) continue;
     let record: unknown;

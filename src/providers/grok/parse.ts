@@ -1,5 +1,6 @@
 import { readFile, stat } from 'node:fs/promises';
 import { ToolResultPairing } from '../../core/tool-pairing.js';
+import { iterateFileLines } from '../../core/read-text.js';
 import { dirname, join } from 'node:path';
 import { ensureAssistant, normalizeUserText, pushEvent, stripEmptyEvents, summarize, WATCH_CONTEXT_DISCLOSURE_PREFIX } from '../../core/rich.js';
 import { asJsonObject, parseJsonObject } from '../../core/jsonl.js';
@@ -88,7 +89,6 @@ function parseToolOutput(raw: unknown): string {
 }
 
 export async function parseGrokSession(ref: SessionRef): Promise<UnifiedTurn[]> {
-  const raw = await readFile(ref.filePath, 'utf8');
   const turns: UnifiedTurn[] = [];
   const pairing = new ToolResultPairing(turns, 'grok', 'Grok');
   let sawUser = false;
@@ -102,7 +102,9 @@ export async function parseGrokSession(ref: SessionRef): Promise<UnifiedTurn[]> 
   // 先把可解析的行收齐：锚点若来自文件 mtime，它代表「文件最后一次被写」——
   // 也就是**最后一条记录**的位置，必须知道行数才能把时间铺在它之前（见 grokAnchorMs）
   const records: Record<string, unknown>[] = [];
-  for (const line of raw.split('\n')) {
+  // 逐行流式读取：本机 chat_history 最大 32 MB，但格式没有上限，整份 `readFile` 在超过
+  // V8 字符串上限（约 512 MB）时会抛 `Invalid string length`，把完好的会话讲成读取失败
+  for await (const line of iterateFileLines(ref.filePath)) {
     if (!line.trim()) continue;
     const r = parseJsonObject(line);
     if (r) records.push(r);

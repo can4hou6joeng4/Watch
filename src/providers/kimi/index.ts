@@ -7,7 +7,12 @@ import path from 'node:path';
 import { digestFile } from '../../core/atomic.js';
 import type { FileDigest } from '../../core/atomic.js';
 import { asJsonObject, parseJsonObject } from '../../core/jsonl.js';
-import { describeEmptySessionFile, describePathReadFailureReason, isMissingPathError } from '../../core/read-text.js';
+import {
+  describePathReadFailureReason,
+  emptySessionFileReasonFromStat,
+  isMissingPathError,
+  iterateFileLines,
+} from '../../core/read-text.js';
 import { escapeControlChars } from '../../core/display.js';
 import { SessionLookupFailureError } from '../adapter.js';
 import type { ProviderAdapter } from '../adapter.js';
@@ -83,33 +88,42 @@ function refFromSessionId(sessionId: string, cwd: string): SessionRef {
   return { provider: 'kimi', sessionId, filePath, cwd };
 }
 
-/** 取 wire.jsonl 首条用户消息作为预览 */
+/** 取 wire.jsonl 首条用户消息作为预览（逐行流式读取，命中首条就停） */
 async function firstUserText(filePath: string): Promise<{ text: string | null; error?: string }> {
-  let raw: string;
+  // 0 字节要单独判：流式读取对空文件没有任何行，走到底会说「还没有用户消息」，
+  // 而这条文件其实是内容已丢失（open / switch 同样读不了它）。
+  let st;
   try {
-    raw = await readFile(filePath, 'utf8');
+    st = await stat(filePath);
   } catch (error) {
     const code = (error as NodeJS.ErrnoException).code;
     // 刚被删掉算正常；其余读不出来不能当成「这条会话还没有内容」（理由同 claude 适配器）
     if (code === 'ENOENT' || code === 'ENOTDIR') return { text: null };
     return { text: null, error: describePathReadFailureReason(error) };
   }
-  // 0 字节不是「还没有用户消息」：内容已经没了，open / switch 同样读不了它
-  if (raw.length === 0) return { text: null, error: describeEmptySessionFile(filePath) };
-  for (const line of raw.split('\n')) {
-    if (!line.trim()) continue;
-    const event = parseJsonObject(line);
-    if (!event || event.type !== 'turn.prompt') continue;
-    const input = event.input;
-    if (!Array.isArray(input)) continue;
-    for (const block of input) {
-      const b = asJsonObject(block);
-      if (b?.type === 'text') {
-        const text = typeof b.text === 'string' ? b.text : '';
-        const clean = text.replace(/\s+/g, ' ').trim();
-        if (clean) return { text: clean.slice(0, 80) };
+  const emptyReason = emptySessionFileReasonFromStat(st, filePath);
+  if (emptyReason) return { text: null, error: emptyReason };
+  try {
+    // wire.jsonl 连流式增量（`llm.*`）都逐条落盘，长会话可达数百 MB，而预览只要最前面几条记录；
+    // 整份 `readFile` 在超过 V8 字符串上限（约 512 MB）时还会抛 `Invalid string length`
+    for await (const line of iterateFileLines(filePath)) {
+      if (!line.trim()) continue;
+      const event = parseJsonObject(line);
+      if (!event || event.type !== 'turn.prompt') continue;
+      const input = event.input;
+      if (!Array.isArray(input)) continue;
+      for (const block of input) {
+        const b = asJsonObject(block);
+        if (b?.type === 'text') {
+          const text = typeof b.text === 'string' ? b.text : '';
+          const clean = text.replace(/\s+/g, ' ').trim();
+          if (clean) return { text: clean.slice(0, 80) };
+        }
       }
     }
+  } catch (error) {
+    // stat 成功后文件仍可能读不出来（权限、I/O、边读边删），照样不能讲成「没有预览」
+    return { text: null, error: describePathReadFailureReason(error) };
   }
   return { text: null };
 }
@@ -261,13 +275,6 @@ function toNum(v: unknown): number {
  * （写出侧把同一条 turn 的用量同时挂在多个 step 上，逐条累加会重复计入）。
  */
 export async function kimiSessionUsage(ref: SessionRef): Promise<TokenUsage | null> {
-  let raw: string;
-  try {
-    raw = await readFile(ref.filePath, 'utf8');
-  } catch (error) {
-    // 读不出来不等于「这家原生没有 usage 字段」：交给调用方按原因披露（chainUsage / open 都会写进 warnings）
-    throw new Error(describeSessionReadFailure(ref.filePath, error));
-  }
   let input = 0;
   let output = 0;
   let saw = false;
@@ -283,32 +290,39 @@ export async function kimiSessionUsage(ref: SessionRef): Promise<TokenUsage | nu
     turnHasRecord = false;
     pendingStepUsage = null;
   };
-  for (const line of raw.split('\n')) {
-    if (!line.trim()) continue;
-    const r = parseJsonObject(line);
-    if (!r) continue;
-    if (r.type === 'usage.record') {
-      // 原生还会按 step 记 usage（`usageScope: "step"`）。那些是同一轮拆出来的中间量，
-      // 计入就会翻倍：ccusage（ccusage/ccusage，19.4k stars）的 kimi 适配器只认
-      // `usageScope === "turn"` 的记录，其它一律跳过。这里同样只在「显式写了别的 scope」时跳过，
-      // 没有 `usageScope` 的记录照旧累加（历史文件与本地回归的既有形状）。
-      if (typeof r.usageScope === 'string' && r.usageScope !== 'turn') continue;
-      const usage = asJsonObject(r.usage);
-      if (!usage) continue;
-      input += toNum(usage.inputOther) + toNum(usage.inputCacheRead) + toNum(usage.inputCacheCreation);
-      output += toNum(usage.output);
-      saw = true;
-      turnHasRecord = true;
-      continue;
+  try {
+    // 逐行流式读取：整份 `readFile` 在超过 V8 字符串上限（约 512 MB）时抛 `Invalid string length`；
+    // 读不出来不等于「这家原生没有 usage 字段」，统一翻成读取失败交给调用方披露
+    for await (const line of iterateFileLines(ref.filePath)) {
+      if (!line.trim()) continue;
+      const r = parseJsonObject(line);
+      if (!r) continue;
+      if (r.type === 'usage.record') {
+        // 原生还会按 step 记 usage（`usageScope: "step"`）。那些是同一轮拆出来的中间量，
+        // 计入就会翻倍：ccusage（ccusage/ccusage，19.4k stars）的 kimi 适配器只认
+        // `usageScope === "turn"` 的记录，其它一律跳过。这里同样只在「显式写了别的 scope」时跳过，
+        // 没有 `usageScope` 的记录照旧累加（历史文件与本地回归的既有形状）。
+        if (typeof r.usageScope === 'string' && r.usageScope !== 'turn') continue;
+        const usage = asJsonObject(r.usage);
+        if (!usage) continue;
+        input += toNum(usage.inputOther) + toNum(usage.inputCacheRead) + toNum(usage.inputCacheCreation);
+        output += toNum(usage.output);
+        saw = true;
+        turnHasRecord = true;
+        continue;
+      }
+      if (r.type === 'context.append_loop_event') {
+        const e = asJsonObject(r.event);
+        if (!e || e.type !== 'step.end') continue;
+        const usage = usageFromRecord(asJsonObject(e.usage));
+        if (usage) pendingStepUsage = usage;
+        continue;
+      }
+      if (r.type === 'turn.ended' || r.type === 'turn.prompt' || r.type === 'turn.steer') flushTurn();
     }
-    if (r.type === 'context.append_loop_event') {
-      const e = asJsonObject(r.event);
-      if (!e || e.type !== 'step.end') continue;
-      const usage = usageFromRecord(asJsonObject(e.usage));
-      if (usage) pendingStepUsage = usage;
-      continue;
-    }
-    if (r.type === 'turn.ended' || r.type === 'turn.prompt' || r.type === 'turn.steer') flushTurn();
+  } catch (error) {
+    // 读不出来不等于「这家原生没有 usage 字段」：交给调用方按原因披露（chainUsage / open 都会写进 warnings）
+    throw new Error(describeSessionReadFailure(ref.filePath, error));
   }
   flushTurn();
   return saw ? { inputTokens: input, outputTokens: output } : null;

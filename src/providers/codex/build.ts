@@ -504,7 +504,7 @@ export async function importTurnsToCodex(
     }
     if (existingRaw !== null) {
       if (turns.length === 0) return into;
-      if (isLegacyEventMsgRollout(existingRaw)) {
+      if (await isLegacyEventMsgRollout(existingRaw)) {
         throw new Error(
           `目标 Codex 会话是旧版 event_msg-only 格式，不支持直接追加现代 response_item 记录（${escapeControlChars(into.filePath)}）；追加会翻转解析时间线、让既有对话从 Watch 视图消失；本次未写入任何内容，请改用新建目标会话或以覆盖模式重建后再转入`,
         );

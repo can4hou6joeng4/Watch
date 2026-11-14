@@ -1,4 +1,4 @@
-import { readFile } from 'node:fs/promises';
+import { iterateFileLines } from '../../core/read-text.js';
 import { dirname, join } from 'node:path';
 import type { SessionRef, TokenUsage } from '../../core/types.js';
 import { parseJsonObject } from '../../core/jsonl.js';
@@ -75,45 +75,46 @@ export async function grokUpdateTurnUsages(updatesPath: string): Promise<TokenUs
 export type GrokUpdateScan = { usages: TokenUsage[]; compactions: number; badLines: number; failures: GrokFailureCounts };
 
 export async function grokUpdateScan(updatesPath: string): Promise<GrokUpdateScan | null> {
-  let raw: string;
-  try {
-    raw = await readFile(updatesPath, 'utf8');
-  } catch (error) {
-    if (isMissingPathError(error)) return null;
-    throw new Error(describeSessionReadFailure(updatesPath, error));
-  }
   const usages: TokenUsage[] = [];
   const failures = createGrokFailureCounts();
   let compactions = 0;
   let badLines = 0;
-  for (const line of raw.split('\n')) {
-    if (!line.trim()) continue;
-    const rec = parseJsonObject(line);
-    if (!rec) {
-      badLines += 1;
-      continue;
+  try {
+    // 逐行流式读取：ACP `updates.jsonl` 连流式增量都逐条落盘，整份 `readFile` 在超过
+    // V8 字符串上限（约 512 MB）时抛 `Invalid string length`——那会被讲成「读取失败」，
+    // 而流式读取没有这个限制；缺失文件仍是「只有 chat 快照」这一档，返回 null
+    for await (const line of iterateFileLines(updatesPath)) {
+      if (!line.trim()) continue;
+      const rec = parseJsonObject(line);
+      if (!rec) {
+        badLines += 1;
+        continue;
+      }
+      const params = asRecord(rec.params);
+      const update = asRecord(params?.update) ?? asRecord(rec.update);
+      if (!update) continue;
+      if (update.sessionUpdate === 'compaction_checkpoint') {
+        // Grok 每次压缩上下文都写一条；摘要正文在会话目录的 compaction_checkpoints/ 旁路文件里，
+        // 格式未经验证，这里只计数、不读也不拼进交接（见 parseGrokSession 的披露）。
+        compactions += 1;
+        continue;
+      }
+      if (update.sessionUpdate === 'retry_state') {
+        // 独立 update 类型（不是 turn_completed 的字段）；`reason` 带完整上游 URL，
+        // 只认 `error_type` 这个枚举（见 failure.ts）。
+        readGrokRetryState(update, failures);
+        continue;
+      }
+      if (update.sessionUpdate !== 'turn_completed') continue;
+      // 结束原因与用量各读各的：失败轮可能没有 usage，有 usage 的轮次也可能以失败收尾
+      readGrokTurnCompleted(update, failures);
+      const u = pick(update.usage);
+      if (!u) continue;
+      usages.push(u);
     }
-    const params = asRecord(rec.params);
-    const update = asRecord(params?.update) ?? asRecord(rec.update);
-    if (!update) continue;
-    if (update.sessionUpdate === 'compaction_checkpoint') {
-      // Grok 每次压缩上下文都写一条；摘要正文在会话目录的 compaction_checkpoints/ 旁路文件里，
-      // 格式未经验证，这里只计数、不读也不拼进交接（见 parseGrokSession 的披露）。
-      compactions += 1;
-      continue;
-    }
-    if (update.sessionUpdate === 'retry_state') {
-      // 独立 update 类型（不是 turn_completed 的字段）；`reason` 带完整上游 URL，
-      // 只认 `error_type` 这个枚举（见 failure.ts）。
-      readGrokRetryState(update, failures);
-      continue;
-    }
-    if (update.sessionUpdate !== 'turn_completed') continue;
-    // 结束原因与用量各读各的：失败轮可能没有 usage，有 usage 的轮次也可能以失败收尾
-    readGrokTurnCompleted(update, failures);
-    const u = pick(update.usage);
-    if (!u) continue;
-    usages.push(u);
+  } catch (error) {
+    if (isMissingPathError(error)) return null;
+    throw new Error(describeSessionReadFailure(updatesPath, error));
   }
   return { usages, compactions, badLines, failures };
 }

@@ -1,5 +1,5 @@
-import { readFile } from 'node:fs/promises';
 import { ToolResultPairing } from '../../core/tool-pairing.js';
+import { iterateFileLines } from '../../core/read-text.js';
 import { asJsonObject, parseJsonObject } from '../../core/jsonl.js';
 import { isoFromEpochMs } from '../../core/time.js';
 import { ensureAssistant, KIMI_COMPACTION_SUMMARY_PREFIX, normalizeUserText, pushEvent, stripEmptyEvents, summarize, WATCH_CONTEXT_DISCLOSURE_PREFIX } from '../../core/rich.js';
@@ -21,9 +21,12 @@ import type { ProcessEvent, SessionRef, TokenUsage, UnifiedTurn } from '../../co
  * - context.apply_compaction → 有可读摘要时还原带来源前缀的用户轮，否则只披露、不设裁剪边界
  *
  * 跳过：llm.*、permission.*、plugin.*、token_counting.*、interaction.* 等内部事件。
+ *
+ * 逐行流式读取（`iterateFileLines()`），不整份 `readFile`：wire.jsonl 连流式增量（`llm.*`）
+ * 都逐条落盘，长会话可以超过 V8 字符串上限（约 512 MB），整份读取会抛 `Invalid string length`
+ * ——同一个文件流式却能正常解析（第八十四轮 Claude 大会话的同一形状）。
  */
 export async function parseKimiSession(ref: SessionRef): Promise<UnifiedTurn[]> {
-  const raw = await readFile(ref.filePath, 'utf8');
   const turns: UnifiedTurn[] = [];
   const pairing = new ToolResultPairing(turns, 'kimi', 'Kimi');
   let state: 'idle' | 'user' | 'assistant' = 'idle';
@@ -46,7 +49,7 @@ export async function parseKimiSession(ref: SessionRef): Promise<UnifiedTurn[]> 
   // 也正因如此以前完全不计——新出现的内容类事件就连痕迹都没有。聚合后一条披露。
   const unknownLoopEvents = new Map<string, number>();
 
-  for (const line of raw.split('\n')) {
+  for await (const line of iterateFileLines(ref.filePath)) {
     const trimmed = line.trim();
     if (!trimmed) continue;
     const r = parseJsonObject(trimmed);

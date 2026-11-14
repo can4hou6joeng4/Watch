@@ -1,6 +1,6 @@
-import { readFile } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import { ToolResultPairing } from '../../core/tool-pairing.js';
+import { iterateFileLines } from '../../core/read-text.js';
 import { asJsonObject, parseJsonObject } from '../../core/jsonl.js';
 import {
   ENCRYPTED_THINKING,
@@ -48,8 +48,9 @@ import {
  * 后者有内容也拿不到逐轮对应关系，无法安全合并，不做部分并入。
  */
 export async function parseCodexSession(ref: SessionRef): Promise<UnifiedTurn[]> {
-  const raw = await readFile(ref.filePath, 'utf8');
-  return parseCodexRaw(raw).turns;
+  // 逐行流式读取：rollout 会累积整条会话的全部事件，整份 `readFile` 在超过 V8 字符串上限
+  // （约 512 MB）时抛 `Invalid string length`，而流式读取没有这个限制
+  return (await parseCodexLines(iterateFileLines(ref.filePath))).turns;
 }
 
 /**
@@ -57,11 +58,13 @@ export async function parseCodexSession(ref: SessionRef): Promise<UnifiedTurn[]>
  * 对话消息，但有至少一条 `event_msg` 对话）。`importTurnsToCodex` 的追加分支用它做
  * fail-closed 拦截：直接追加 `response_item` 行会翻转 `hasResponseMessages`，让旧历史消失。
  */
-export function isLegacyEventMsgRollout(raw: string): boolean {
-  return parseCodexRaw(raw).usesEventFallback;
+export async function isLegacyEventMsgRollout(raw: string): Promise<boolean> {
+  return (await parseCodexLines(raw.split('\n'))).usesEventFallback;
 }
 
-function parseCodexRaw(raw: string): { turns: UnifiedTurn[]; usesEventFallback: boolean } {
+async function parseCodexLines(
+  lines: Iterable<string> | AsyncIterable<string>,
+): Promise<{ turns: UnifiedTurn[]; usesEventFallback: boolean }> {
   const turns: UnifiedTurn[] = [];
   const pairing = new ToolResultPairing(turns, 'codex', 'Codex');
   const notes = new CodexItemNotes(turns);
@@ -132,7 +135,7 @@ function parseCodexRaw(raw: string): { turns: UnifiedTurn[]; usesEventFallback: 
   let lineIndex = 0;
   let synthesizedInlineCalls = 0;
   let synthesizedCalls = 0;
-  for (const line of raw.split('\n')) {
+  for await (const line of lines) {
     lineIndex += 1;
     const trimmed = line.trim();
     if (!trimmed) continue;

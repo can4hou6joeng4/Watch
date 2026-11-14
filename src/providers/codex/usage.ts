@@ -1,35 +1,35 @@
-import { readFile } from 'node:fs/promises';
+import { iterateFileLines } from '../../core/read-text.js';
 import type { SessionRef, TokenUsage } from '../../core/types.js';
 import { describeSessionReadFailure } from '../../core/read-text.js';
 
 export async function codexSessionUsage(ref: SessionRef): Promise<TokenUsage | null> {
-  let raw: string;
+  let last: TokenUsage | null = null;
   try {
-    raw = await readFile(ref.filePath, 'utf8');
+    // 逐行流式读取：整份 `readFile` 在超过 V8 字符串上限（约 512 MB）时抛 `Invalid string length`，
+    // 那会把「读不出来」和「这家没有用量」混成一档（这里统一翻成读取失败，交给调用方披露）
+    for await (const line of iterateFileLines(ref.filePath)) {
+      if (!line.trim()) continue;
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(line);
+      } catch {
+        continue;
+      }
+      // JSON 语法有效不等于消息对象有效：顶层 null / 数组 / 标量只跳过该行，
+      // 其余有效累计继续读取；入口按共用坏行计数披露下界（与 Claude 用量同一档）。
+      if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) continue;
+      const rec = parsed as Record<string, unknown>;
+      const payload = rec.payload as Record<string, unknown> | undefined;
+      const kind = payload?.type ?? rec.type;
+      if (kind !== 'token_count') continue;
+      const info = (payload?.info ?? rec.info) as Record<string, unknown> | undefined;
+      const total = info?.total_token_usage ?? payload?.total_token_usage;
+      const u = pick(total);
+      if (u) last = u;
+    }
   } catch (error) {
     // 读不出来不等于「这家原生没有 usage 字段」：交给调用方按原因披露（chainUsage / open 都会写进 warnings）
     throw new Error(describeSessionReadFailure(ref.filePath, error));
-  }
-  let last: TokenUsage | null = null;
-  for (const line of raw.split('\n')) {
-    if (!line.trim()) continue;
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(line);
-    } catch {
-      continue;
-    }
-    // JSON 语法有效不等于消息对象有效：顶层 null / 数组 / 标量只跳过该行，
-    // 其余有效累计继续读取；入口按共用坏行计数披露下界（与 Claude 用量同一档）。
-    if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) continue;
-    const rec = parsed as Record<string, unknown>;
-    const payload = rec.payload as Record<string, unknown> | undefined;
-    const kind = payload?.type ?? rec.type;
-    if (kind !== 'token_count') continue;
-    const info = (payload?.info ?? rec.info) as Record<string, unknown> | undefined;
-    const total = info?.total_token_usage ?? payload?.total_token_usage;
-    const u = pick(total);
-    if (u) last = u;
   }
   return last;
 }
