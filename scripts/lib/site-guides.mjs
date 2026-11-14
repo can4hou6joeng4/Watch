@@ -32,11 +32,11 @@ export const guides = [
               },
               {
                 title: '步骤 2：在 OpenAI Codex 中预先建立项目',
-                body: '依据官方通用导入协议要求，目标项目必须已经存在于 Codex Desktop 中。如果尚未添加，请先在 Codex Desktop 中打开该目录并完成首次信任确认，确保 Codex 的项目数据库能识别该工作空间。',
+                body: '本指南使用 Watch 的 --desktop-project 路径，要求项目已在 Codex Desktop 中登记并同步到 app-server。请先在 Codex Desktop 中打开目标目录，再准备导入计划；这是该桌面接力路径的保护条件。',
               },
               {
                 title: '步骤 3：准备导入计划并核查字段（Prepare）',
-                body: '在 Watch 桌面端选择来源会话并点击 OpenAI Codex，或在终端执行 prepare 命令生成导入计划。此阶段仅建立计划并核验目标锁状态，不会向目标文件写入任何记录。',
+                body: '在 Watch 桌面端选择来源会话并点击 OpenAI Codex，或执行 prepare。Watch 核对来源、工作目录、目标与 Codex 版本，并保存本地导入计划；此时不提交会话导入，也不取得确认阶段的 Watch 目标锁。原生版本检查可能维护自身运行时文件，因此不能把这一步称为全流程零写入。',
               },
               {
                 title: '步骤 4：确认导入并核查降级项（Confirm）',
@@ -51,7 +51,7 @@ export const guides = [
           {
             type: 'code',
             language: 'sh',
-            code: '# 1. 准备导入计划（只读探测与生成计划）\nnpm run watch -- import-codex prepare <claude-id> --cwd /abs/project/path --desktop-project --experimental --json\n\n# 2. 明确确认并写入（使用计划返回的 planId）\nnpm run watch -- import-codex confirm <plan-id> --json\n\n# 3. 查看执行状态（发生异常时只读查询）\nnpm run watch -- import-codex status <plan-id> --json',
+            code: '# 1. 核对环境并保存本地计划（不提交会话导入）\nnpm run watch -- import-codex prepare <claude-id> --cwd /abs/project/path --desktop-project --experimental --json\n\n# 2. 明确确认并写入（使用计划返回的 planId）\nnpm run watch -- import-codex confirm <plan-id> --experimental --json\n\n# 3. 只读查询本地执行日志（不启动原生客户端）\nnpm run watch -- import-codex status <plan-id> --json',
           },
           {
             type: 'callout',
@@ -134,11 +134,11 @@ export const guides = [
               },
               {
                 title: 'Step 2: Ensure target project exists in Codex Desktop',
-                body: 'Under official external agent import requirements, the destination workspace must already be registered in Codex Desktop. Open the folder in Codex Desktop beforehand to establish local trust and project recognition.',
+                body: 'This guide uses Watch\'s --desktop-project route, which requires the project to be registered in Codex Desktop and synchronized with app-server. Open the destination directory in Codex Desktop before preparing the plan. This is a guard for this desktop handoff route.',
               },
               {
                 title: 'Step 3: Prepare the import plan (Prepare)',
-                body: 'In Watch Desktop, select the source session and click OpenAI Codex, or run the prepare CLI command. This stage performs read-only checks, verifies lock status, and establishes an execution journal without modifying target files.',
+                body: 'Select the source session and click OpenAI Codex in Watch Desktop, or run prepare. Watch checks the source, working directory, destination and Codex version, then saves a local import plan. It does not submit the session import or acquire the Watch target lock used during confirmation. The native version check may maintain its own runtime files, so this is not an entirely write-free operation.',
               },
               {
                 title: 'Step 4: Confirm import and review degradation items (Confirm)',
@@ -153,7 +153,7 @@ export const guides = [
           {
             type: 'code',
             language: 'sh',
-            code: '# 1. Prepare import plan (read-only probe and plan generation)\nnpm run watch -- import-codex prepare <claude-id> --cwd /abs/project/path --desktop-project --experimental --json\n\n# 2. Confirm and execute import (using planId from prepare output)\nnpm run watch -- import-codex confirm <plan-id> --json\n\n# 3. Check execution status (read-only probe if interrupted)\nnpm run watch -- import-codex status <plan-id> --json',
+            code: '# 1. Check the environment and save a local plan (no session import submitted)\nnpm run watch -- import-codex prepare <claude-id> --cwd /abs/project/path --desktop-project --experimental --json\n\n# 2. Confirm and execute import (using planId from prepare output)\nnpm run watch -- import-codex confirm <plan-id> --experimental --json\n\n# 3. Read the local execution journal (does not launch a native client)\nnpm run watch -- import-codex status <plan-id> --json',
           },
           {
             type: 'callout',
@@ -244,7 +244,7 @@ export const guides = [
               },
               {
                 title: '步骤 2：执行目标写入预检（Check）',
-                body: '在 Watch 终端使用 --check 参数探测目标数据库状态。Watch 会检查 ~/.local/share/opencode/opencode.db 的可写性与事务锁状态（如果配置了 WATCH_OPENCODE_DB 环境变量则优先检查自定义库），确保目标不存在并发写入冲突。',
+                body: '使用 --check 预览目标与待写轮次，并核对返回的 writable、blocked 和 warnings。规划出待写轮次时，OpenCode 预检检查存储布局与已有目标的 revert 状态；2.x 布局只读。它不向目标会话写入，也不测试写权限或取得 SQLite 写锁，不能保证稍后的写入没有并发冲突。',
               },
               {
                 title: '步骤 3：执行双向流转写入（Handoff）',
@@ -259,7 +259,7 @@ export const guides = [
           {
             type: 'code',
             language: 'sh',
-            code: '# 1. 预检：检查从 Claude Code 转入 OpenCode 的目标数据库写入状态\nnpm run watch -- open <claude-session-id> --to opencode --check --json\n\n# 2. 写入：将指定会话导入 OpenCode 本地 SQLite 数据库并输出恢复命令\nnpm run watch -- open <claude-session-id> --to opencode --json\n\n# 3. 反向接力：从 OpenCode 会话接力至 Claude Code 或 Codex\nnpm run watch -- open <opencode-session-id> --to claude --json',
+            code: '# 1. 预览目标与待写轮次，检查布局与 revert 守卫\nnpm run watch -- open <claude-session-id> --to opencode --check --json\n\n# 2. 写入：将指定会话导入 OpenCode 本地 SQLite 数据库并输出恢复命令\nnpm run watch -- open <claude-session-id> --to opencode --json\n\n# 3. 反向接力：从 OpenCode 会话接力至 Claude Code 或 Codex\nnpm run watch -- open <opencode-session-id> --to claude --json',
           },
           {
             type: 'callout',
@@ -277,7 +277,7 @@ export const guides = [
         faq: [
           {
             question: 'OpenCode 的本地 SQLite 存储相比 JSONL 有何优势？',
-            answer: 'SQLite 支持 ACID 事务与行级锁定，避免在多终端并发写入或非正常退出时发生 JSON 文件损坏或行截断。同时，通过环境变量 WATCH_OPENCODE_DB 可以轻松进行数据库切分与本地开发隔离。',
+            answer: 'SQLite 的事务可以让一次会话写入在提交时整体生效，失败时回滚；它不提供行级写锁，多个写入者仍可能争用数据库。WATCH_OPENCODE_DB 可将 Watch 的读写指向独立测试库；它不自动改变 OpenCode 原生客户端使用的数据库。',
           },
           {
             question: '反向转出时，OpenCode 中的自定义模型推理记录会丢失吗？',
@@ -285,7 +285,7 @@ export const guides = [
           },
           {
             question: '如何确认恢复时的工作目录没有错乱？',
-            answer: 'Watch 在写入 OpenCode 时严格绑定来源会话记录的绝对 cwd。当你在终端运行 opencode -s <session-id> 时，OpenCode 会自动锁定该项目目录，防止代码改写到错误仓库。',
+            answer: 'Watch 将选定的绝对 cwd 写入会话记录，并在完整恢复命令中先切换目录、再运行 opencode -s <session-id>。请核对返回的工作目录并使用完整命令；只运行 opencode -s 不包含 Watch 的切目录步骤。cwd 记录不是文件访问沙箱，仍需在目标工具中核对路径与权限。',
           },
         ],
         sources: [
@@ -338,7 +338,7 @@ export const guides = [
               },
               {
                 title: 'Step 2: Preflight target database status (Check)',
-                body: 'Run Watch CLI with --check to probe the target OpenCode database. Watch validates write permissions and locks on ~/.local/share/opencode/opencode.db (or the custom path specified by WATCH_OPENCODE_DB) to prevent concurrent write contention.',
+                body: 'Run --check to preview the destination and pending turns, then inspect writable, blocked and warnings. When pending turns exist, OpenCode preflight checks the storage layout and an existing target\'s revert state; 2.x layouts are read-only. It does not write the target session, test write permissions or acquire a SQLite write lock, and cannot guarantee that a later write will face no concurrent changes.',
               },
               {
                 title: 'Step 3: Execute bidirectional handoff (Handoff)',
@@ -353,7 +353,7 @@ export const guides = [
           {
             type: 'code',
             language: 'sh',
-            code: '# 1. Preflight: Verify target OpenCode database writability\nnpm run watch -- open <claude-session-id> --to opencode --check --json\n\n# 2. Handoff: Transfer session into OpenCode SQLite database\nnpm run watch -- open <claude-session-id> --to opencode --json\n\n# 3. Reverse handoff: Transfer from OpenCode back to Claude or Codex\nnpm run watch -- open <opencode-session-id> --to claude --json',
+            code: '# 1. Preview the destination and pending turns; check layout and revert guards\nnpm run watch -- open <claude-session-id> --to opencode --check --json\n\n# 2. Handoff: Transfer session into OpenCode SQLite database\nnpm run watch -- open <claude-session-id> --to opencode --json\n\n# 3. Reverse handoff: Transfer from OpenCode back to Claude or Codex\nnpm run watch -- open <opencode-session-id> --to claude --json',
           },
           {
             type: 'callout',
@@ -371,7 +371,7 @@ export const guides = [
         faq: [
           {
             question: 'What is the advantage of OpenCode\'s SQLite storage over JSONL?',
-            answer: 'SQLite provides ACID transactions and robust indexing, eliminating the risk of line truncation or file corruption during unexpected termination. The WATCH_OPENCODE_DB override also facilitates isolated test environments.',
+            answer: 'A SQLite transaction commits a session write as a unit and rolls it back on failure. SQLite does not provide row-level write locks; concurrent writers can still contend for the database. WATCH_OPENCODE_DB redirects Watch\'s reads and writes to a separate test database; it does not automatically change the database used by the native OpenCode client.',
           },
           {
             question: 'Are custom model reasoning thoughts retained when handing off out of OpenCode?',
@@ -379,7 +379,7 @@ export const guides = [
           },
           {
             question: 'How does Watch prevent working directory mismatch?',
-            answer: 'Watch strictly binds the source session\'s absolute cwd to the OpenCode session entry. When resuming via opencode -s <session-id>, OpenCode locks to that workspace, preventing accidental edits in the wrong directory.',
+            answer: 'Watch records the selected absolute cwd and returns a complete resume command that changes directory before running opencode -s <session-id>. Verify the working directory and use that complete command; opencode -s alone does not include Watch\'s directory change. A cwd record is not a file-access sandbox, so check paths and permissions in the destination tool as well.',
           },
         ],
         sources: [
@@ -481,11 +481,11 @@ export const guides = [
           },
           {
             question: '为什么账户限额到了之后，执行 /compact 仍然报错？',
-            answer: '因为 /compact 自身也需要调用大模型完成历史摘要提炼。如果你的账户已经处于限额状态（Usage Limit Exceeded），任何向模型发起的请求（包括压缩指令）都将被服务端拒绝。此时接力到其他有额度的 Agent 是唯一的继续途径。',
+            answer: '/compact 用于整理会话历史，不会恢复账户额度；额度耗尽时，生成摘要的请求也可能被限额阻止。你可以等待重置，或选择仍可用的工具，按已验证路径交接；也可用 watch prompt 导出裁剪后的交接文档再手动交给目标工具。Watch 不恢复或绕过额度。',
           },
           {
             question: '切换到 Codex 或 OpenCode 后，上下文是否会被重置？',
-            answer: '目标 Agent 会获得一个崭新的上下文窗口，并将前序 Agent 记录的指令与执行结果作为初始输入载入，从而使你摆脱了旧会话由于历史累积导致的上下文饱和。',
+            answer: '接力会把已保存且能转换的历史带入目标会话，这些历史仍占用目标模型的上下文。Watch 不扩大窗口，也不按目标 token 预算自动摘要，因此不能保证消除上下文饱和。需要缩短输入时，可使用目标工具的原生压缩，或通过 watch prompt 的档位与 --last 选项导出较短的交接文档，并核对省略项。',
           },
         ],
         sources: [
@@ -579,11 +579,11 @@ export const guides = [
           },
           {
             question: 'Why does /compact fail when hitting an account usage limit?',
-            answer: '/compact requires calling the underlying LLM to generate the conversation summary. When your account quota is exhausted, all API requests are blocked. In this scenario, switching to another agent via Watch is the only immediate continuation path.',
+            answer: '/compact organizes conversation history; it does not restore account quota, and a request to generate a summary may also be blocked by the limit. You can wait for the reset, choose another available tool and follow a validated handoff route, or export a shorter document with watch prompt for manual handoff. Watch does not restore or bypass quota.',
           },
           {
             question: 'Does handing off to Codex or OpenCode reset context?',
-            answer: 'The destination agent receives a fresh context window initialized with the preceding task summary and command outputs, resolving context saturation from the previous session.',
+            answer: 'Handoff carries saved history that can be converted into the destination session, where it still consumes context. Watch does not enlarge the window or automatically summarize to a target token budget, so it cannot guarantee that saturation is resolved. To shorten the input, use the destination tool\'s native compaction or export a shorter handoff document with watch prompt presets and --last, then review its omission disclosures.',
           },
         ],
         sources: [
