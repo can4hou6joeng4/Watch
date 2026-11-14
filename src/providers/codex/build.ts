@@ -162,6 +162,11 @@ export async function readModelProvider(codexDirPath: string): Promise<string> {
 
 /** 从 config.toml 原文取顶层 `model_provider`；已读过原文的调用方复用，不再读取文件。 */
 export function parseModelProvider(raw: string): string {
+  return parseCodexConfig(raw).provider;
+}
+
+/** 解析同一份配置并验证 provider；凭据选择复用结果，禁止记录或输出完整配置对象。 */
+export function parseCodexConfig(raw: string): { provider: string; config: TomlTable } {
   let config: TomlTable;
   try {
     config = parseToml(raw);
@@ -170,11 +175,10 @@ export function parseModelProvider(raw: string): string {
     throw new CodexConfigError('codex_config_invalid', 'TOML 语法不合法');
   }
   const provider = config.model_provider;
-  if (provider === undefined) return DEFAULT_PROVIDER;
-  if (typeof provider !== 'string' || !provider.trim()) {
+  if (provider !== undefined && (typeof provider !== 'string' || !provider.trim())) {
     throw new CodexConfigError('codex_config_invalid', '顶层 model_provider 必须是非空字符串');
   }
-  return provider;
+  return { provider: provider ?? DEFAULT_PROVIDER, config };
 }
 
 /** 按 session id 定位 rollout 文件（sessions/YYYY/MM/DD/rollout-*-<id>.jsonl），找不到返回 null。

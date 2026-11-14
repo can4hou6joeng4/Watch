@@ -25,7 +25,7 @@ import {
   codexDir,
   findRolloutBySessionId,
   importTurnsToCodex,
-  parseModelProvider,
+  parseCodexConfig,
   readModelProvider,
   validateRolloutFilename,
 } from './build.js';
@@ -369,12 +369,11 @@ async function codexFirstUserText(filePath: string): Promise<{ text: string | nu
 type CodexProviderCredential = { apiKey?: string; baseUrl?: string };
 
 /**
- * 解析 config.toml 里当前选用 provider 的 api_key/base_url（只做简单 key=value/section 解析）。
+ * 按 TOML 语义从当前 provider 表选择 api_key/base_url，仅实际顶层字段可作旧配置回退。
  *
- * 只读一次文件并复用 `parseModelProvider()`（第一百二十二轮）：以前这里先 `readFile`
- * 吞掉错误、再调一次 `readModelProvider()` 重新读同一份文件，两次读之间文件被改或删就会
- * 出现「凭据按 A 段解析、provider 名来自 B 次读取」的错配。
- * 只有 `ENOENT` / `ENOTDIR` 是「没有配置 → 用默认 openai」；其余读失败继续抛出，
+ * 只读一次文件并复用 `parseCodexConfig()` 的同一份文档与 provider 判定；不扫描文本行，
+ * 避免把别家 provider 或多行字符串正文当成凭据，也不把数字 / 布尔值强转成环境变量。
+ * 只有 `ENOENT` / `ENOTDIR` 是「没有配置」；其余读取或解析失败继续抛出，
  * 由 `codexEnv()` 决定回落 auth.json。
  */
 async function readProviderCredential(codexHome: string): Promise<CodexProviderCredential> {
@@ -385,38 +384,12 @@ async function readProviderCredential(codexHome: string): Promise<CodexProviderC
     if (isMissingPathError(error)) return {};
     throw error;
   }
-  const provider = parseModelProvider(raw);
-  const sectionPrefix = `[model_providers.${provider}]`;
-  let inSection = false;
-  let topLevelApiKey: string | undefined;
-  let topLevelBaseUrl: string | undefined;
-  let sectionApiKey: string | undefined;
-  let sectionBaseUrl: string | undefined;
-  for (const line of raw.split('\n')) {
-    const trimmed = line.trim();
-    if (!trimmed || trimmed.startsWith('#')) continue;
-    if (trimmed.startsWith('[')) {
-      inSection = trimmed === sectionPrefix;
-      continue;
-    }
-    const m = /^([A-Za-z0-9_]+)\s*=\s*(.+)$/.exec(trimmed);
-    if (!m) continue;
-    const key = m[1];
-    let value = m[2].trim();
-    if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) {
-      value = value.slice(1, -1);
-    }
-    if (inSection) {
-      if (key === 'api_key') sectionApiKey = value;
-      else if (key === 'base_url') sectionBaseUrl = value;
-    } else {
-      if (key === 'api_key') topLevelApiKey = value;
-      else if (key === 'base_url') topLevelBaseUrl = value;
-    }
-  }
+  const { provider, config } = parseCodexConfig(raw);
+  const selected = asJsonObject(asJsonObject(config.model_providers)?.[provider]);
+  const stringValue = (value: unknown): string | undefined => typeof value === 'string' ? value : undefined;
   return {
-    apiKey: sectionApiKey ?? topLevelApiKey,
-    baseUrl: sectionBaseUrl ?? topLevelBaseUrl,
+    apiKey: stringValue(selected?.api_key) ?? stringValue(config.api_key),
+    baseUrl: stringValue(selected?.base_url) ?? stringValue(config.base_url),
   };
 }
 
