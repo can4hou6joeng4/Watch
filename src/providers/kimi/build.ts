@@ -66,6 +66,7 @@ export async function resolveCreatedKimiWire(
   const computedWire = path.join(computedDir, 'agents', 'main', 'wire.jsonl');
   const indexPath = path.join(kimidir(), 'session_index.jsonl');
   let indexFailure: string | null = null;
+  const indexProblems: string[] = [];
   let raw: string | null = null;
   try {
     raw = await readFile(indexPath, 'utf8');
@@ -79,12 +80,21 @@ export async function resolveCreatedKimiWire(
       const rec = parseJsonObject(line);
       if (rec?.sessionId !== sessionId) continue;
       const sessionDir = typeof rec.sessionDir === 'string' ? rec.sessionDir : '';
-      if (!sessionDir) continue;
+      if (!sessionDir) {
+        indexProblems.push('索引里这条会话缺少 sessionDir');
+        continue;
+      }
       const wirePath = path.join(sessionDir, 'agents', 'main', 'wire.jsonl');
       try {
         if ((await stat(wirePath)).isFile()) return { sessionDir, wirePath };
-      } catch {
-        // 索引里的陈旧条目（目录已被删）继续看后面的记录；最终仍会走下面的兜底报错
+        indexProblems.push(`${escapeControlChars(wirePath)} 不是普通文件`);
+      } catch (error) {
+        // 读不出来不能讲成「没有」：把这条索引路径连同原因留到最终报错里
+        indexProblems.push(
+          isMissingPathError(error)
+            ? `${escapeControlChars(wirePath)} 不存在（索引条目可能已过期）`
+            : `${escapeControlChars(wirePath)}（${describePathReadFailureReason(error)}）`,
+        );
       }
     }
   }
@@ -97,6 +107,7 @@ export async function resolveCreatedKimiWire(
       `按规则推出的路径：${escapeControlChars(computedWire)}（${describePathReadFailureReason(error)}）`,
     ];
     if (indexFailure) reasons.push(`会话索引也没读出来（${indexFailure}），其中可能记录了另一个位置`);
+    if (indexProblems.length) reasons.push(`索引里的记录：${indexProblems.join('；')}`);
     throw new Error(reasons.join('；'));
   }
   if (computedIsFile) return { sessionDir: computedDir, wirePath: computedWire };
