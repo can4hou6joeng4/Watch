@@ -125,12 +125,18 @@ jobs:
           projectPath: desktop
           args: --bundles ${{ matrix.bundles }} ${{ matrix.rust-target && format('--target {0}', matrix.rust-target) || '' }}
 
-      # 静态检查 bundle 内 tsx/esbuild 的运行期依赖架构；不执行被打包的二进制。
+      # 静态检查 bundle 内 tsx/esbuild 的运行期依赖架构与 watch-core/package.json；不执行被打包的二进制。
+      # Tauri 打完 DMG 会清理中间 Watch.app（0.1.25 首次运行即因此失败），因此只读挂载 DMG 再查包内资源。
       - name: 检查打包运行期依赖
-        if: matrix.rust-target == 'x86_64-apple-darwin'
+        if: matrix.esbuild-arch
         run: |
-          app=desktop/src-tauri/target/${{ matrix.rust-target }}/release/bundle/macos/Watch.app
-          node scripts/verify-bundle-runtime.mjs "$app/Contents/Resources/watch-core" darwin/x64
+          dmg=desktop/src-tauri/target/${{ matrix.rust-target }}/release/bundle/dmg/Watch_*.dmg
+          mount=$(mktemp -d)
+          hdiutil attach -readonly -nobrowse -noautoopen -mountpoint "$mount" $dmg
+          trap 'hdiutil detach "$mount"' EXIT
+          app=$(find "$mount" -maxdepth 1 -name '*.app' -type d | head -1)
+          test -n "$app"
+          node scripts/verify-bundle-runtime.mjs "$app/Contents/Resources/watch-core" "darwin/${{ matrix.esbuild-arch }}"
 
       - name: 上传安装包
         uses: actions/upload-artifact@v4

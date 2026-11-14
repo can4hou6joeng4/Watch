@@ -38,6 +38,15 @@ async function exists(p) {
 try {
   const version = JSON.parse(await readFile(path.join(esbuildRoot, 'package.json'), 'utf8')).version;
   facts.esbuildVersion = version;
+  // `watch --version` / `doctor` 经 src/core/watch-version.ts 读 watch-core/package.json；
+  // 打包资源漏了它，安装包就只能报「未知版本」（0.1.26 修复）。
+  try {
+    const coreVersion = JSON.parse(await readFile(path.join(core, 'package.json'), 'utf8')).version;
+    facts.corePackageVersion = typeof coreVersion === 'string' ? coreVersion : null;
+    if (typeof coreVersion !== 'string') problems.push('watch-core/package.json 缺少 version 字段');
+  } catch (error) {
+    problems.push(`缺少 watch-core/package.json（运行期 --version / doctor 会报未知版本）：${error instanceof Error ? error.message : String(error)}`);
+  }
   const bins = await readdir(path.join(esbuildRoot, 'bin')).catch(() => []);
   facts.esbuildBinEntries = bins;
   const packages = await readdir(optionalRoot).catch(() => []);

@@ -37,6 +37,7 @@
     ],
     "resources": {
       "../../src": "watch-core/src",
+      "../../package.json": "watch-core/package.json",
       "../../node_modules/tsx": "watch-core/node_modules/tsx",
       "../../node_modules/esbuild": "watch-core/node_modules/esbuild",
       "../../node_modules/@esbuild": "watch-core/node_modules/@esbuild"
