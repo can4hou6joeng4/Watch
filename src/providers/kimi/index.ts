@@ -27,6 +27,7 @@ import {
   kimiSessionsRoot,
   kimiUntrackedSessions,
   listKimiSessionsByCwd,
+  resolveCreatedKimiWire,
 } from './build.js';
 import { describeSessionReadFailure } from '../../core/read-text.js';
 
@@ -82,10 +83,13 @@ async function runKimi(args: string[], cwd: string): Promise<{ stdout: string; t
   return { stdout, text: parsed.text };
 }
 
-function refFromSessionId(sessionId: string, cwd: string): SessionRef {
-  const workspaceId = encodeKimiWorkspaceDir(cwd);
-  const filePath = path.join(kimiSessionsRoot(), workspaceId, sessionId, 'agents', 'main', 'wire.jsonl');
-  return { provider: 'kimi', sessionId, filePath, cwd };
+function refFromSessionId(sessionId: string, cwd: string): Promise<SessionRef> {
+  return resolveCreatedKimiWire(sessionId, cwd).then(({ wirePath }) => ({
+    provider: 'kimi',
+    sessionId,
+    filePath: wirePath,
+    cwd,
+  }));
 }
 
 /** 取 wire.jsonl 首条用户消息作为预览（逐行流式读取，命中首条就停） */
@@ -375,7 +379,7 @@ export const kimiAdapter: ProviderAdapter = {
     if (onEvent) {
       // stream-json 当前不输出细粒度过程事件；如有需要后续可扩展
     }
-    return { ref: refFromSessionId(parsed.sessionId, cwd), turn: replyTurn(replyText) };
+    return { ref: await refFromSessionId(parsed.sessionId, cwd), turn: replyTurn(replyText) };
   },
 
   /** 在当前会话中发送一条消息 */

@@ -10,7 +10,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { writeFileAtomic } from '../../core/atomic.js';
 import { inspectCwd, type CwdInspection } from '../../core/cwd.js';
 import { parseJsonObject } from '../../core/jsonl.js';
-import { describePathReadFailureReason } from '../../core/read-text.js';
+import { describePathReadFailureReason, isMissingPathError } from '../../core/read-text.js';
 import { assistantOnlyIncrementReason, assistantTurnTextForWrite, userTurnTextForWrite } from '../../core/rich.js';
 import { expectAttachmentPlaceholders, verifyWrittenTurns } from '../../core/verify.js';
 import { parseKimiSession } from './parse.js';
@@ -26,20 +26,83 @@ export function kimiSessionsRoot(): string {
   return path.join(homedir(), '.kimi-code', 'sessions');
 }
 
-/** Kimi workspaceId：wd_<sanitized-name>_<sha256(cwd).slice(0,12)> */
+/**
+ * Kimi workspaceId：`wd_<slug>_<sha256(规范化 cwd) 前 12 位>`。
+ *
+ * 规则对齐上游 `packages/agent-core-v2/src/_base/utils/workdir-slug.ts`（MoonshotAI/kimi-code）：
+ * 反斜杠转正斜杠并去掉尾部斜杠，取末段，小写后把非 `[a-z0-9._-]` 的**连续片段转成一个** `-`，
+ * 去首尾 `-`、截 40 再去首尾 `-`；空 / `.` / `..` 记为 `workspace`。旧实现直接删掉这些字符，
+ * `my_app` / `my project` 会得到 `myapp` / `myproject`，与原生目录不一致。
+ */
 export function encodeKimiWorkspaceDir(cwd: string): string {
-  const base = path.basename(cwd);
-  let name = base
-    .replace(/[^a-zA-Z0-9.-]/g, '')
+  const normalized = cwd.replaceAll('\\', '/').replace(/\/+$/, '');
+  const base = normalized.split('/').pop() ?? normalized;
+  const slug = base
     .toLowerCase()
-    .slice(0, 40);
-  if (!name) name = 'workspace';
-  const hash = createHash('sha256').update(cwd).digest('hex').slice(0, 12);
+    .replace(/[^a-z0-9._-]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 40)
+    .replace(/^-+|-+$/g, '');
+  const name = slug === '' || slug === '.' || slug === '..' ? 'workspace' : slug;
+  const hash = createHash('sha256').update(normalized).digest('hex').slice(0, 12);
   return `wd_${name}_${hash}`;
 }
 
 export function kimidir(): string {
   return path.join(homedir(), '.kimi-code');
+}
+
+/**
+ * 新建会话后确定它 wire.jsonl 的真实位置：优先用 Kimi 自己写进 `session_index.jsonl` 的
+ * `sessionDir`，索引里还没有这条（写入滞后 / 索引不存在 / 读不出来）才退回按原生规则编码的目录。
+ * 两处都找不到时抛出并同时给出两条线索——不能因为编码曾与上游不一致，就把「找不到刚建的会话」
+ * 当成创建成功继续写。
+ */
+export async function resolveCreatedKimiWire(
+  sessionId: string,
+  cwd: string,
+): Promise<{ sessionDir: string; wirePath: string }> {
+  const computedDir = path.join(kimiSessionsRoot(), encodeKimiWorkspaceDir(cwd), sessionId);
+  const computedWire = path.join(computedDir, 'agents', 'main', 'wire.jsonl');
+  const indexPath = path.join(kimidir(), 'session_index.jsonl');
+  let indexFailure: string | null = null;
+  let raw: string | null = null;
+  try {
+    raw = await readFile(indexPath, 'utf8');
+  } catch (error) {
+    // 索引不存在 = 这台机器还没写过索引；其余读不出来只记录原因，不阻断下面的规则兜底
+    if (!isMissingPathError(error)) indexFailure = describePathReadFailureReason(error);
+  }
+  if (raw !== null) {
+    for (const line of raw.split('\n')) {
+      if (!line.trim()) continue;
+      const rec = parseJsonObject(line);
+      if (rec?.sessionId !== sessionId) continue;
+      const sessionDir = typeof rec.sessionDir === 'string' ? rec.sessionDir : '';
+      if (!sessionDir) continue;
+      const wirePath = path.join(sessionDir, 'agents', 'main', 'wire.jsonl');
+      try {
+        if ((await stat(wirePath)).isFile()) return { sessionDir, wirePath };
+      } catch {
+        // 索引里的陈旧条目（目录已被删）继续看后面的记录；最终仍会走下面的兜底报错
+      }
+    }
+  }
+  let computedIsFile = false;
+  try {
+    computedIsFile = (await stat(computedWire)).isFile();
+  } catch (error) {
+    const reasons = [
+      `kimi 报告创建了会话 ${sessionId}，但索引与按原生规则推出的目录里都没有它的 wire.jsonl`,
+      `按规则推出的路径：${escapeControlChars(computedWire)}（${describePathReadFailureReason(error)}）`,
+    ];
+    if (indexFailure) reasons.push(`会话索引也没读出来（${indexFailure}），其中可能记录了另一个位置`);
+    throw new Error(reasons.join('；'));
+  }
+  if (computedIsFile) return { sessionDir: computedDir, wirePath: computedWire };
+  throw new Error(
+    `kimi 报告创建了会话 ${sessionId}，但 ${escapeControlChars(computedWire)} 不是普通文件（被同名目录或设备文件占住了）`,
+  );
 }
 
 /**
@@ -49,7 +112,7 @@ export function kimidir(): string {
  * （会话目录还在，只是没人记得它们属于哪个目录）。读不出来的目录**不计入**——查不出来就不能
  * 反过来断言「磁盘上确实还有会话」。
  *
- * `workspaceId` 是 `wd_<name>_<sha256(cwd) 前 12 位>`，**不可逆**：从目录名推不回 cwd。
+ * `workspaceId` 是 `wd_<slug>_<sha256(规范化 cwd) 前 12 位>`，**不可逆**：从目录名推不回 cwd。
  * 所以这一档只能披露「有这些会话、但归属丢了」，不能替它们猜目录。
  */
 async function scanKimiSessionDirs(): Promise<{ sessionId: string; wirePath: string }[]> {
@@ -284,8 +347,7 @@ async function createRealKimiSession(cwd: string): Promise<{ sessionId: string; 
     throw new Error(`kimi 输出缺少 session.resume_hint: ${stdout.slice(0, 500)}`);
   }
 
-  const workspaceId = encodeKimiWorkspaceDir(cwd);
-  const filePath = path.join(kimiSessionsRoot(), workspaceId, sessionId, 'agents', 'main', 'wire.jsonl');
+  const { wirePath: filePath } = await resolveCreatedKimiWire(sessionId, cwd);
 
   // 截断到头部事件，去掉刚才的 dummy prompt 产生的对话
   await truncateToHeader(filePath);
