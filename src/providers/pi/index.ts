@@ -1,7 +1,7 @@
 import { execFile } from 'node:child_process';
 import { quoteCommandArg } from '../../core/shell-quote.js';
 import { describeDetectFailure, isCommandMissing, resolveCli } from '../../core/platform.js';
-import { readdir, readFile, stat } from 'node:fs/promises';
+import { readdir, stat } from 'node:fs/promises';
 import path from 'node:path';
 import { promisify } from 'node:util';
 import { SessionLookupFailureError } from '../adapter.js';
@@ -14,7 +14,9 @@ import {
   describeSessionReadFailure,
   emptySessionFileReasonFromStat,
   isMissingPathError,
+  readTextHeadDetail,
 } from '../../core/read-text.js';
+import type { TextHeadDetail } from '../../core/read-text.js';
 import { parseJsonObject } from '../../core/jsonl.js';
 import type { SessionRef, TokenUsage, UnifiedTurn } from '../../core/types.js';
 import { parsePiSession } from './parse.js';
@@ -86,18 +88,29 @@ function sessionIdFromName(name: string): string {
   return us >= 0 ? base.slice(us + 1) : base;
 }
 
-/** 读 jsonl 首条可解析记录拿 cwd（session 头事件带 cwd，目录名编码不可逆）。
- * `error` 区分「文件读不出来」与「内容里没有 cwd」——反查时前者不能说成「会话不存在」 */
+/** Pi 的 cwd 写在首条 `type: "session"` 记录里，通常在前几 KB；会话文件本机实测最大 62 MB，
+ * 只读头部既避开 V8 字符串上限，也不为取一个字段读整份。
+ * `error` 区分「文件读不出来」「文件里确实没有 cwd」与「只查了头部窗口」——反查时前者不能说成「会话不存在」。 */
 async function piSessionCwdDetail(filePath: string): Promise<{ cwd: string | null; error?: string }> {
-  let raw: string;
+  let head: TextHeadDetail;
   try {
-    raw = await readFile(filePath, 'utf8');
+    head = await readTextHeadDetail(filePath, PI_CWD_HEAD_BYTES);
   } catch (error) {
     return { cwd: null, error: describePathReadFailureReason(error) };
   }
-  // 0 字节文件里没有「首条可解析记录」可言
-  if (raw.length === 0) return { cwd: null, error: describeEmptySessionFile(filePath) };
-  for (const line of raw.split('\n')) {
+  // 只有真读到 0 字节才是「内容已丢失」；非空却解不出字符是另一档（与 claude 第一百一十五轮同口径）
+  if (head.bytesRead === 0) return { cwd: null, error: describeEmptySessionFile(filePath) };
+  if (head.text.length === 0) {
+    return {
+      cwd: null,
+      error:
+        `会话文件不是可解码的 UTF-8 文本（已读到 ${head.bytesRead} 字节，解不出任何字符，` +
+        `不是 0 字节）：${escapeControlChars(filePath)}`,
+    };
+  }
+  const segments = head.text.split('\n');
+  const completeLines = head.text.endsWith('\n') || head.truncated ? segments.slice(0, -1) : segments;
+  for (const line of completeLines) {
     if (!line.trim()) continue;
     // 顶层 null / 数组 / 标量是合法 JSON 但不是记录：以前直接读 `rec.cwd`（null 抛 TypeError），
     // 或遇到 `[]` / `42` 就 break，把其后的 session 头一起跳过——改为只认对象记录，
@@ -105,9 +118,32 @@ async function piSessionCwdDetail(filePath: string): Promise<{ cwd: string | nul
     const rec = parseJsonObject(line);
     if (!rec) continue;
     if (typeof rec.cwd === 'string' && rec.cwd) return { cwd: rec.cwd };
-    break;
+    // 首条可解析记录没有 cwd：整份已读到时这是确定的结论
+    return head.truncated
+      ? {
+          cwd: null,
+          error:
+            `首条可解析记录里没有 cwd 字段（只查了文件头部 ${formatKiB(head.bytesRead)}），` +
+            '文件更大，窗口之外还有内容',
+        }
+      : { cwd: null, error: '首条可解析记录里没有 cwd 字段' };
   }
-  return { cwd: null, error: '首条可解析记录里没有 cwd 字段' };
+  return head.truncated
+    ? {
+        cwd: null,
+        error:
+          `文件头部 ${formatKiB(head.bytesRead)} 里没有完整的一行可解析记录（首条记录就超过读取窗口）；` +
+          '文件更大，窗口之外还有内容',
+      }
+    : { cwd: null, error: '首条可解析记录里没有 cwd 字段' };
+}
+
+/** Pi cwd 探测的头部窗口。首条 session 记录通常在前几 KB。 */
+const PI_CWD_HEAD_BYTES = 64 * 1024;
+
+/** 诊断文案里的窗口大小（恰好 64 KiB 时显示 64 KB，不显示 65536 字节） */
+function formatKiB(bytes: number): string {
+  return bytes % 1024 === 0 ? `${bytes / 1024} KB` : `${bytes} 字节`;
 }
 
 /** 按原生 session id 全局反查 Pi 会话：扫各 cwd 目录匹配 `<timestamp>_<id>.jsonl`，cwd 从文件头读；sessionsRoot 可注入 */
