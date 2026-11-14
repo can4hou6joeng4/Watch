@@ -20,9 +20,11 @@ The steps are on the site [guides](https://relay.bobochang.cn/en/#guides): [Clau
 
 It does not provide models, bypass usage limits, replace native agent chat, or move permissions, credentials and plugins by default. What it transfers is the recorded session, not the model's unrecorded internal state. Today the implementation is centred on CLI sessions and terminal resume; the product direction includes validated desktop entry points, but **official interoperability does not mean Watch has integrated it**.
 
-### Latest release ([v0.1.23](https://github.com/can4hou6joeng4/Watch/releases/tag/v0.1.23))
+### Latest release ([v0.1.24](https://github.com/can4hou6joeng4/Watch/releases/tag/v0.1.24))
 
-v0.1.23 prevents control characters in resume commands from reaching terminals and the clipboard. Shell quoting protects argument boundaries, but terminals that type a command into a session can still interpret Ctrl-C, Ctrl-U and similar characters as keystrokes. The desktop app and Rust bridge now validate before delivery; CLI text output escapes these characters and discloses the restriction, while JSON preserves raw values for inspection. Earlier PowerShell quoting, header display and fence fixes remain in place.
+v0.1.24 fixes the desktop sidebar always showing `v0.1.1`. It now reads the desktop package version, so browser previews and installers update the label on each build and make the version in use easier to check. Earlier resume-command control-character checks, PowerShell quoting, header display and fence fixes remain in place.
+
+- **Sidebar version follows the desktop package (v0.1.24)**: reads `desktop/package.json` instead of maintaining another fixed string, and displays without the native bridge. Synthetic React rendering checks the version before and after the fix; desktop type checking and the production build pass. No native GUI was launched and no client acceptance claim is added.
 
 - **Resume commands with control characters stop before delivery (v0.1.23)**: covers C0, DEL and C1, including newlines, tabs and ESC. Source ID / directory copying, resume-command copying, the clipboard fallback after launch failure and the official-import copy button share the check, with persistent explanations. Commands from `open` / `switch` / `adopt` / `new` are escaped for display and warnings explain that they cannot be copied directly for execution; raw JSON fields are preserved. Verified with synthetic sessions, isolated PTYs and Rust tests; no native terminal GUI was launched and no native-client acceptance claim is added.
 
