@@ -1,3 +1,4 @@
+import { formatCommandArgv } from '../../core/command-argv.js';
 import { escapeControlChars } from '../../core/display.js';
 import { asJsonObject } from '../../core/jsonl.js';
 import { pushEvent, WATCH_CONTEXT_DISCLOSURE_PREFIX } from '../../core/rich.js';
@@ -76,9 +77,7 @@ export function codexToolOutputText(output: unknown): CodexOutputProjection {
 export function localShellCommand(action: unknown): string {
   const a = asJsonObject(action);
   if (a?.type !== 'exec' || !Array.isArray(a.command) || !a.command.length || !a.command.every(v => typeof v === 'string')) return '';
-  const argv = a.command as string[];
-  if (argv.length === 3 && /(?:^|[\\/])(?:bash|zsh|sh)$/.test(argv[0]!) && (argv[1] === '-c' || argv[1] === '-lc')) return argv[2]!;
-  return argv.map(arg => /^[A-Za-z0-9_@%+=:,./-]+$/.test(arg) ? arg : `'${arg.replace(/'/g, "'\\''")}'`).join(' ');
+  return formatCommandArgv(a.command as string[]);
 }
 
 export function webSearchDetail(p: Record<string, unknown>): string {

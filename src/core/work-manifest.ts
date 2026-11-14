@@ -1,4 +1,5 @@
 import path from 'node:path';
+import { formatCommandArgv, isPatchArgv, isShellScriptArgv } from './command-argv.js';
 import type { ProcessEvent, UnifiedTurn } from './types.js';
 
 /**
@@ -206,9 +207,17 @@ export function extractPatchPaths(command: string): string[] {
 type Classified =
   | { kind: 'file'; path: string; mode: 'write' | 'edit' }
   | { kind: 'patch'; paths: string[] }
-  | { kind: 'command'; command: string; workdir?: string }
+  // `scanPatch: false` 表示命令由普通 argv 拼接而来：参数里的补丁标记只是数据，不提取路径。
+  | { kind: 'command'; command: string; workdir?: string; scanPatch?: false }
   | { kind: 'unreadable-write' }
   | null;
+
+/** 旧版 Codex `shell` 的 `command` 是字符串数组；只接受非空纯字符串数组。 */
+function commandArgv(value: unknown): string[] | undefined {
+  if (!Array.isArray(value) || value.length === 0) return undefined;
+  if (!value.every((v): v is string => typeof v === 'string')) return undefined;
+  return value;
+}
 
 /**
  * 判定一条工具调用。
@@ -257,6 +266,29 @@ function classify(event: ProcessEvent): Classified {
   if (command) {
     const workdir = typeof obj.workdir === 'string' && obj.workdir.trim() ? obj.workdir.trim() : undefined;
     return { kind: 'command', command, ...(workdir ? { workdir } : {}) };
+  }
+  // 旧版 Codex shell（rust-v0.20.0 的 create_shell_tool）把 command 记成 argv 数组；
+  // 只认精确名 `shell`，MCP / 其他工具的同名参数不猜。字符串命令键优先（上面已返回）。
+  if (name.toLowerCase() === 'shell') {
+    const argv = commandArgv(obj.command);
+    if (argv) {
+      const workdir = typeof obj.workdir === 'string' && obj.workdir.trim() ? obj.workdir.trim() : undefined;
+      // 官方 maybe_parse_apply_patch：argv 恰好 [apply_patch, 补丁正文] 时它是补丁，不是 shell 命令。
+      if (isPatchArgv(argv)) {
+        const paths = extractPatchPaths(argv[1]!);
+        // 补丁正文读不出路径时与字符串形式同档：认得出是写入类工具，但清单可能不全。
+        if (paths.length > 0) return { kind: 'patch', paths };
+        return { kind: 'unreadable-write' };
+      }
+      // 只有 shell 脚本包装才是「命令里内嵌补丁」；普通 argv 里出现标记只是数据。
+      const scanPatch = isShellScriptArgv(argv);
+      return {
+        kind: 'command',
+        command: formatCommandArgv(argv),
+        ...(workdir ? { workdir } : {}),
+        ...(scanPatch ? {} : { scanPatch: false }),
+      };
+    }
   }
   return null;
 }
@@ -327,6 +359,7 @@ export function collectWorkManifest(
       }
       // 失败的命令仍运行过；内嵌补丁的文件则不能据此认定成功改动。
       addCommand(classified.command, classified.workdir);
+      if (classified.scanPatch === false) continue;
       const patchPaths = extractPatchPaths(classified.command);
       if (failed && patchPaths.length > 0) failedFileWrites += 1;
       else for (const patchPath of patchPaths) addFile(patchPath, 'edit');
