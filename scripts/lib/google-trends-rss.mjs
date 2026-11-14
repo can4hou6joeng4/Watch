@@ -1,6 +1,11 @@
 import { XMLParser } from 'fast-xml-parser';
+import { readFileSync } from 'node:fs';
 import { lstat, realpath } from 'node:fs/promises';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+// 采集请求的 User-Agent 跟随 package.json，不再写死 0.1.1。
+const packageVersion = JSON.parse(readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..', 'package.json'), 'utf8')).version;
 
 export const allowedTrendHours = Object.freeze([4, 24, 48, 168]);
 export const defaultTrendMarkets = Object.freeze([
@@ -157,7 +162,7 @@ async function fetchMarket(market, hours, fetchImpl, now) {
     redirect: 'error',
     headers: {
       accept: 'application/rss+xml, application/xml;q=0.9, text/xml;q=0.8',
-      'user-agent': 'Watch/0.1.1 trend-research (+https://relay.bobochang.cn/)',
+      'user-agent': `Watch/${packageVersion} trend-research (+https://relay.bobochang.cn/)`,
     },
     signal: AbortSignal.timeout(trendCollectionPolicy.requestTimeoutMs),
   });

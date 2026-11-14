@@ -8,7 +8,8 @@ import { guides as authoredGuides } from './lib/site-guides.mjs';
 import { loadLocaleDictionary, translateContent, translateGuideLocale } from './lib/apply-site-locale.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-// JSON-LD 的 softwareVersion 直接取根 package.json：以前写死成 0.1.1，连续多个版本都没跟上
+// 站点上的版本号一律取根 package.json：JSON-LD 的 softwareVersion、首页页脚与指南页「适用版本」。
+// 这些位置以前各自写死成 0.1.1，连续多个版本都没跟上（2026-11-14 两处补正）。
 const packageVersion = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8')).version;
 const localeDir = path.join(root, 'scripts/lib/site-locales');
 const authoredLocales = new Set(['zh', 'en']);
@@ -89,7 +90,7 @@ function renderPage(page) {
         <canvas id="signalCanvas" aria-hidden="true"></canvas>
         <header class="site-topbar"><a class="brand" href="${meta.path}"><img class="brand-mark" src="/watch-mark.svg" alt="" width="30" height="15">Watch<span> / 值更</span></a><nav id="siteNav" aria-label="${t.workspace}">${nav.slice(0, 4).map(([id, name, text]) => `<a href="#${id}" class="nav-item"><span>${text}</span></a>`).join('')}</nav><div class="topbar-actions">${languageMenu(locale, page.alternateGroup)}${link(repo, 'GitHub')}<a class="nav-start" href="#quickstart">${t.start}</a><button class="icon-button mobile-menu" id="menuButton" aria-label="${t.menu}" aria-expanded="false" aria-controls="siteNav">${icon('menu')}</button></div><span id="currentSection" class="sr-only">${t.demo}</span></header>
         <div class="hero-content"><p class="eyebrow">${t.heroLabel}</p><h1 id="hero-title">${esc(t.h1)}<span class="h1-sub">${esc(t.h1Sub)}</span></h1><p class="hero-tagline">${t.intro}</p><p class="hero-detail">${t.heroDetail}</p><div class="hero-actions"><a href="#quickstart" class="primary-button">${t.start}${icon('arrow-up-right')}</a><a href="#simulator" class="secondary-button">${t.explore}${icon('arrow-right')}</a></div></div>
-        <div class="hero-bottom"><span>CLAUDE / CODEX / OPENCODE / KIMI / PI / GROK</span><a href="#simulator">${t.scroll}${icon('arrow-down')}</a><span>MIT / v0.1.1</span></div>
+        <div class="hero-bottom"><span>CLAUDE / CODEX / OPENCODE / KIMI / PI / GROK</span><a href="#simulator">${t.scroll}${icon('arrow-down')}</a><span>MIT / v${esc(packageVersion)}</span></div>
       </section>
       <section id="simulator" class="site-section demo-section">
         <div class="page-heading"><div><span class="eyebrow">01 / SESSION CONTINUITY</span><h2>${t.demo}</h2><p>${t.introDetail}</p></div><span class="environment-label"><i class="status-dot"></i>${t.demoBadge}</span></div>
@@ -119,7 +120,7 @@ function renderPage(page) {
       <section id="faq" class="site-section"><div class="section-title"><span class="eyebrow">QUESTIONS & BOUNDARIES</span><h2>${t.faq}</h2></div><div class="faq-list">${t.faqs.map(([question, answer]) => `<details><summary>${esc(question)}${icon('plus')}</summary><p>${esc(answer)}</p></details>`).join('')}</div></section>
       <section id="antigravity" class="site-section"><div class="section-title"><span class="eyebrow">OFFICIAL ENTRY / NOT INTEGRATED</span><h2>${t.antigravityTitle}</h2><p>${t.antigravityIntro}</p></div><p class="antigravity-status">${icon('info')}${t.antigravityStatus}</p><div class="antigravity-list">${t.antigravityItems.map(([title, command, detail], index) => `<article><span class="item-index">0${index + 1}</span><h3>${esc(title)}</h3><code>${esc(command)}</code><p>${esc(detail)}</p></article>`).join('')}</div><div class="antigravity-links">${link('https://antigravity.google/docs/cli/commands/resume', t.antigravityDocs)}</div></section>
     </main>
-    <footer class="site-footer"><div class="footer-main"><div><strong>Watch · 值更</strong><p>${t.footerNote}</p></div><div><span class="nav-caption">${t.fleet}</span>${['Homeport', 'Watch', 'Atlas', 'Sonar', 'Semaphore'].map((name) => link(`https://github.com/can4hou6joeng4/${name}`, name)).join('')}</div><div><span class="nav-caption">${t.docs}</span>${guides.filter((guide) => guide.status === 'published').map((guide) => { const href = pageManifest.find((candidate) => candidate.guideId === guide.id && candidate.locale === page.locale).path; return `<a href="${href}">${esc(guide.locales[page.locale].h1)}</a>`; }).join('')}${link(`${repo}#readme`, 'README')}${link(`${repo}/blob/main/docs/import-codex.md`, 'Codex Import')}${link(`${repo}/blob/main/docs/ARCHITECTURE.md`, 'Architecture')}<a href="/sitemap.xml">Sitemap</a><a href="/robots.txt">Robots</a></div></div><div class="footer-bottom"><span>© 2026 can4hou6joeng4 · ${t.license}</span><span>${t.updated} / v0.1.1</span></div></footer>
+    <footer class="site-footer"><div class="footer-main"><div><strong>Watch · 值更</strong><p>${t.footerNote}</p></div><div><span class="nav-caption">${t.fleet}</span>${['Homeport', 'Watch', 'Atlas', 'Sonar', 'Semaphore'].map((name) => link(`https://github.com/can4hou6joeng4/${name}`, name)).join('')}</div><div><span class="nav-caption">${t.docs}</span>${guides.filter((guide) => guide.status === 'published').map((guide) => { const href = pageManifest.find((candidate) => candidate.guideId === guide.id && candidate.locale === page.locale).path; return `<a href="${href}">${esc(guide.locales[page.locale].h1)}</a>`; }).join('')}${link(`${repo}#readme`, 'README')}${link(`${repo}/blob/main/docs/import-codex.md`, 'Codex Import')}${link(`${repo}/blob/main/docs/ARCHITECTURE.md`, 'Architecture')}<a href="/sitemap.xml">Sitemap</a><a href="/robots.txt">Robots</a></div></div><div class="footer-bottom"><span>© 2026 can4hou6joeng4 · ${t.license}</span><span>${t.updated} / v${esc(packageVersion)}</span></div></footer>
   </div><div id="copyToast" class="copy-toast" role="status" aria-live="polite" hidden>${icon('check')}<span id="toastMessage"></span></div>
   <noscript><p class="noscript-note">${t.demoNotice} JavaScript is required for the synthetic demo. All project information is available below.</p></noscript>
 </body></html>`;
@@ -301,7 +302,7 @@ function renderGuidePage(page) {
         <div class="guide-meta">
           <span>${esc(t.published)}: ${page.published}</span>
           <span>${esc(t.modified)}: ${page.modified}</span>
-          <span>${esc(t.appliesTo)}: Watch v0.1.1</span>
+          <span>${esc(t.appliesTo)}: Watch v${esc(packageVersion)}</span>
         </div>
       </header>
       <article class="guide-content">
@@ -314,7 +315,7 @@ function renderGuidePage(page) {
         ${link(`${repo}/releases`, t.downloadDesktop)}
       </div>
     </main>
-    <footer class="site-footer"><div class="footer-main"><div><strong>Watch · 值更</strong><p>${t.footerNote}</p></div><div><span class="nav-caption">${t.fleet}</span>${['Homeport', 'Watch', 'Atlas', 'Sonar', 'Semaphore'].map((name) => link(`https://github.com/can4hou6joeng4/${name}`, name)).join('')}</div><div><span class="nav-caption">${t.docs}</span>${guides.filter((guide) => guide.status === 'published').map((guide) => { const href = pageManifest.find((candidate) => candidate.guideId === guide.id && candidate.locale === locale).path; return `<a href="${href}">${esc(guide.locales[locale].h1)}</a>`; }).join('')}${link(`${repo}#readme`, 'README')}${link(`${repo}/blob/main/docs/import-codex.md`, 'Codex Import')}${link(`${repo}/blob/main/docs/ARCHITECTURE.md`, 'Architecture')}<a href="/sitemap.xml">Sitemap</a><a href="/robots.txt">Robots</a></div></div><div class="footer-bottom"><span>© 2026 can4hou6joeng4 · ${t.license}</span><span>${t.updated} / v0.1.1</span></div></footer>
+    <footer class="site-footer"><div class="footer-main"><div><strong>Watch · 值更</strong><p>${t.footerNote}</p></div><div><span class="nav-caption">${t.fleet}</span>${['Homeport', 'Watch', 'Atlas', 'Sonar', 'Semaphore'].map((name) => link(`https://github.com/can4hou6joeng4/${name}`, name)).join('')}</div><div><span class="nav-caption">${t.docs}</span>${guides.filter((guide) => guide.status === 'published').map((guide) => { const href = pageManifest.find((candidate) => candidate.guideId === guide.id && candidate.locale === locale).path; return `<a href="${href}">${esc(guide.locales[locale].h1)}</a>`; }).join('')}${link(`${repo}#readme`, 'README')}${link(`${repo}/blob/main/docs/import-codex.md`, 'Codex Import')}${link(`${repo}/blob/main/docs/ARCHITECTURE.md`, 'Architecture')}<a href="/sitemap.xml">Sitemap</a><a href="/robots.txt">Robots</a></div></div><div class="footer-bottom"><span>© 2026 can4hou6joeng4 · ${t.license}</span><span>${t.updated} / v${esc(packageVersion)}</span></div></footer>
   </div>
   <div id="copyToast" class="copy-toast" role="status" aria-live="polite" hidden>${icon('check')}<span id="toastMessage"></span></div>
 </body>
