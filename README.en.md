@@ -20,7 +20,13 @@ The steps are on the site [guides](https://relay.bobochang.cn/en/#guides): [Clau
 
 It does not provide models, bypass usage limits, replace native agent chat, or move permissions, credentials and plugins by default. What it transfers is the recorded session, not the model's unrecorded internal state. Today the implementation is centred on CLI sessions and terminal resume; the product direction includes validated desktop entry points, but **official interoperability does not mean Watch has integrated it**.
 
-### Latest release ([v0.1.42](https://github.com/can4hou6joeng4/Watch/releases/tag/v0.1.42))
+### Latest release ([v0.1.43](https://github.com/can4hou6joeng4/Watch/releases/tag/v0.1.43))
+
+v0.1.43 fixes credential selection for Codex execution subprocesses. The old line scanner treated `api_key` / `base_url` from unselected providers as top-level defaults and could read fake fields inside multiline text. Selection now reuses the same parsed TOML document, reads the actual selected provider table, and falls back only to actual top-level fields for older configs. Provider names containing dots, quoted table names, string escapes and comments follow TOML semantics; numbers and booleans are not coerced into environment variables. Existing environment variables retain their priority.
+
+- **Validation scope**: six new isolated regressions use a synthetic CLI to check the values actually delivered to the subprocess. Five fail against the previous implementation and pass after the fix. Full isolated regression: 1857 passing; all 51 focused checks, typecheck, desktop build and 14 site regressions pass. Tests output only a match result, never keys, and call no real Codex CLI or model.
+
+### Previous release ([v0.1.42](https://github.com/can4hou6joeng4/Watch/releases/tag/v0.1.42))
 
 v0.1.42 fixes custom Codex providers being silently written as `openai`. Configuration now follows TOML semantics, including valid single-quoted and triple-quoted strings, escapes and quoted keys. Only the actual top-level `model_provider` is used; matching text inside multiline strings or nested tables cannot replace it. Invalid syntax, a wrong field type or an empty value makes preflight, `watch doctor` and writing report `codex_config_invalid` and refuse the write. Errors do not echo configuration contents. A missing config or an unset field in valid TOML still uses the default. Desktop installers include the pinned parser and its license, and bundle checks reject missing or mismatched dependencies.
 
