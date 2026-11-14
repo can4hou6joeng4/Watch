@@ -25,6 +25,7 @@ import {
   findRolloutBySessionId,
   importTurnsToCodex,
   parseModelProvider,
+  readModelProvider,
   validateRolloutFilename,
 } from './build.js';
 import { codexLineToProcessEvents } from './events.js';
@@ -419,6 +420,28 @@ async function readProviderCredential(codexHome: string): Promise<CodexProviderC
 }
 
 /**
+ * 预检用：`~/.codex/config.toml` 现在读得出来吗（读不出来就抛 `PreflightBlockedError`）。
+ *
+ * 只读一次 `readModelProvider()`——它就是写路径将要用的同一个事实来源（`model_provider`），
+ * 所以预检与写入不会对「配置能不能读」给出相反结论。**不在这里缓存**：预检与写入之间
+ * 文件仍可能变化，这里只负责「此刻可以继续」，写入路径自己会再读一次（并同样 fail closed）。
+ *
+ * 文件不存在（`ENOENT` / `ENOTDIR`）由 `readModelProvider()` 返回默认 provider，不阻断——
+ * 那是「这台机器没配过」，Codex 自己也会按 openai 处理。
+ */
+async function assertCodexConfigReadable(): Promise<void> {
+  try {
+    await readModelProvider(codexDir());
+  } catch (error) {
+    throw new PreflightBlockedError({
+      code: 'codex_config_unreadable',
+      message: error instanceof Error ? error.message : String(error),
+      hint: '预检发现配置读不出来，因此本次不写入；修好该文件（或让 Codex 自己重建一次配置）后重试。',
+    });
+  }
+}
+
+/**
  * 子进程环境：custom provider 声明了 env_key = "OPENAI_API_KEY" 时 codex 只认环境变量。
  * 优先保留用户已设置的 OPENAI_API_KEY / CODEX_API_KEY；都没有则从 config.toml 当前
  * provider 段读 api_key，最后再 fallback 到 ~/.codex/auth.json。
@@ -631,6 +654,11 @@ export const codexAdapter: ProviderAdapter = {
    * 详见 docs/COMPATIBILITY.md 的 Codex 保护说明。
    */
   async preflight(ctx?: PreflightContext): Promise<void> {
+    // 配置可读性与平台无关，必须在下面的 darwin 早退之前检查（第一百二十三轮）：
+    // 写路径的 `importTurnsToCodex()` 会读 config.toml 的 model_provider，读不出来就 fail closed；
+    // 预检不读它的话，`open --to codex --check` 会先说「可写入」、真正执行时再拒绝——
+    // 与第二十七轮修过的 opencode 2.x「预检说的与做相反」是同一类缺陷。
+    await assertCodexConfigReadable();
     if (process.platform !== 'darwin') return; // MVP 只覆盖 macOS，其余平台放行
     if (!ctx) {
       // 未提供任何目标上下文（兼容旧调用）：无法做目标级判定，按进程保守拒绝
