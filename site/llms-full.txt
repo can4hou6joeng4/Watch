@@ -2,7 +2,7 @@
 
 > Canonical Site: https://relay.bobochang.cn/ (zh-CN) | https://relay.bobochang.cn/en/ (en)
 > Author: can4hou6joeng4 (https://bobochang.cn)
-> Generated: 2026-11-14. License: MIT
+> Generated: 2026-11-15. License: MIT
 
 ---
 
@@ -41,8 +41,8 @@ Watch (Chinese: 值更, also called AgentRelay) is a free, local-only CLI and ma
 
 #### Procedure Steps:
 1. **Step 1: Verify source session ID and working directory**: Locate the active Claude Code session ID. History is stored under ~/.claude/projects/<encoded-cwd>/<session-id>.jsonl. Ensure the directory path (cwd) matches the actual project workspace to prevent worktree and repository misalignments.
-1. **Step 2: Ensure target project exists in Codex Desktop**: Under official external agent import requirements, the destination workspace must already be registered in Codex Desktop. Open the folder in Codex Desktop beforehand to establish local trust and project recognition.
-1. **Step 3: Prepare the import plan (Prepare)**: In Watch Desktop, select the source session and click OpenAI Codex, or run the prepare CLI command. This stage performs read-only checks, verifies lock status, and establishes an execution journal without modifying target files.
+1. **Step 2: Ensure target project exists in Codex Desktop**: This guide uses Watch's --desktop-project route, which requires the project to be registered in Codex Desktop and synchronized with app-server. Open the destination directory in Codex Desktop before preparing the plan. This is a guard for this desktop handoff route.
+1. **Step 3: Prepare the import plan (Prepare)**: Select the source session and click OpenAI Codex in Watch Desktop, or run prepare. Watch checks the source, working directory, destination and Codex version, then saves a local import plan. It does not submit the session import or acquire the Watch target lock used during confirmation. The native version check may maintain its own runtime files, so this is not an entirely write-free operation.
 1. **Step 4: Confirm import and review degradation items (Confirm)**: Review the previewed message count, working directory, and tool call traces. Explicitly confirm to initiate the transfer via the local Codex app-server import protocol. Note that tool call events may degrade into text representations.
 1. **Step 5: Launch the target client independently (Open)**: Once confirmed, open Codex Desktop using the app interface or resume command. Import and opening are strictly separated: if launching fails, retry opening only without repeating the import phase.
 
@@ -64,17 +64,17 @@ Watch (Chinese: 值更, also called AgentRelay) is a free, local-only CLI and ma
 
 #### Procedure Steps:
 1. **Step 1: Identify source session ID and working directory**: Locate your active session ID. Claude Code stores files in ~/.claude/projects/; Codex in ~/.codex/sessions/; OpenCode indexes sessions via globally unique IDs. Verify that the working directory is an absolute path to maintain project boundary alignment.
-1. **Step 2: Preflight target database status (Check)**: Run Watch CLI with --check to probe the target OpenCode database. Watch validates write permissions and locks on ~/.local/share/opencode/opencode.db (or the custom path specified by WATCH_OPENCODE_DB) to prevent concurrent write contention.
+1. **Step 2: Preflight target database status (Check)**: Run --check to preview the destination and pending turns, then inspect writable, blocked and warnings. When pending turns exist, OpenCode preflight checks the storage layout and an existing target's revert state; 2.x layouts are read-only. It does not write the target session, test write permissions or acquire a SQLite write lock, and cannot guarantee that a later write will face no concurrent changes.
 1. **Step 3: Execute bidirectional handoff (Handoff)**: Select the source session in Watch Desktop and target OpenCode, or run the CLI open command. Watch extracts incremental turns, executes atomic SQLite transactions across sessions, messages, and parts, and issues the destination session ID.
 1. **Step 4: Resume session natively in OpenCode (Resume)**: After conversion, execute opencode -s <session-id> in the workspace directory or trigger the launch button in Watch Desktop. OpenCode loads the recorded conversation in that working directory.
 
 #### Frequently Asked Questions:
 - **Q: What is the advantage of OpenCode's SQLite storage over JSONL?**
-  A: SQLite provides ACID transactions and robust indexing, eliminating the risk of line truncation or file corruption during unexpected termination. The WATCH_OPENCODE_DB override also facilitates isolated test environments.
+  A: A SQLite transaction commits a session write as a unit and rolls it back on failure. SQLite does not provide row-level write locks; concurrent writers can still contend for the database. WATCH_OPENCODE_DB redirects Watch's reads and writes to a separate test database; it does not automatically change the database used by the native OpenCode client.
 - **Q: Are custom model reasoning thoughts retained when handing off out of OpenCode?**
   A: Watch copies the saved user prompts, assistant text, thinking traces, and tool outputs it can map. Unsupported tool fields become text, so the copy is not a complete replica of the OpenCode row.
 - **Q: How does Watch prevent working directory mismatch?**
-  A: Watch strictly binds the source session's absolute cwd to the OpenCode session entry. When resuming via opencode -s <session-id>, OpenCode locks to that workspace, preventing accidental edits in the wrong directory.
+  A: Watch records the selected absolute cwd and returns a complete resume command that changes directory before running opencode -s <session-id>. Verify the working directory and use that complete command; opencode -s alone does not include Watch's directory change. A cwd record is not a file-access sandbox, so check paths and permissions in the destination tool as well.
 
 ---
 
@@ -94,9 +94,9 @@ Watch (Chinese: 值更, also called AgentRelay) is a free, local-only CLI and ma
 - **Q: Will /compact discard code modifications made on disk?**
   A: No. File edits already exist on your local filesystem. /compact only compresses in-memory conversation history. However, detailed sub-error messages may be summarized.
 - **Q: Why does /compact fail when hitting an account usage limit?**
-  A: /compact requires calling the underlying LLM to generate the conversation summary. When your account quota is exhausted, all API requests are blocked. In this scenario, switching to another agent via Watch is the only immediate continuation path.
+  A: /compact organizes conversation history; it does not restore account quota, and a request to generate a summary may also be blocked by the limit. You can wait for the reset, choose another available tool and follow a validated handoff route, or export a shorter document with watch prompt for manual handoff. Watch does not restore or bypass quota.
 - **Q: Does handing off to Codex or OpenCode reset context?**
-  A: The destination agent receives a fresh context window initialized with the preceding task summary and command outputs, resolving context saturation from the previous session.
+  A: Handoff carries saved history that can be converted into the destination session, where it still consumes context. Watch does not enlarge the window or automatically summarize to a target token budget, so it cannot guarantee that saturation is resolved. To shorten the input, use the destination tool's native compaction or export a shorter handoff document with watch prompt presets and --last, then review its omission disclosures.
 
 ---
 
