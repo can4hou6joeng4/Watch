@@ -66,6 +66,7 @@ export async function resolveCreatedKimiWire(
   const computedWire = path.join(computedDir, 'agents', 'main', 'wire.jsonl');
   const indexPath = path.join(kimidir(), 'session_index.jsonl');
   let indexFailure: string | null = null;
+  let badLines = 0;
   const indexProblems: string[] = [];
   let raw: string | null = null;
   try {
@@ -78,10 +79,20 @@ export async function resolveCreatedKimiWire(
     for (const line of raw.split('\n')) {
       if (!line.trim()) continue;
       const rec = parseJsonObject(line);
-      if (rec?.sessionId !== sessionId) continue;
+      if (!rec) {
+        badLines += 1;
+        continue;
+      }
+      if (rec.sessionId !== sessionId) continue;
       const sessionDir = typeof rec.sessionDir === 'string' ? rec.sessionDir : '';
       if (!sessionDir) {
         indexProblems.push('索引里这条会话缺少 sessionDir');
+        continue;
+      }
+      // 索引是不可信输入：相对路径会按 Watch 进程 cwd 解析（桌面端子进程 cwd 是仓库根），
+      // 随后 truncateToHeader 会重写它；上游始终写绝对路径，拒绝不会误伤原生数据。
+      if (!path.isAbsolute(sessionDir) || sessionDir.includes('\0')) {
+        indexProblems.push(`索引里的 sessionDir 不是绝对路径或含非法字符：${escapeControlChars(sessionDir)}`);
         continue;
       }
       const wirePath = path.join(sessionDir, 'agents', 'main', 'wire.jsonl');
@@ -98,21 +109,32 @@ export async function resolveCreatedKimiWire(
       }
     }
   }
+  // 「索引里没有」只有在索引确实读出来、且没有坏行时才是结论；其余两档分别说清。
+  const describeIndexState = (): string => {
+    if (indexFailure) return `会话索引没读出来（${indexFailure}），其中可能记录了另一个位置`;
+    if (badLines > 0) return `索引里有 ${badLines} 行无法解析，刚建会话的记录可能随坏行丢失`;
+    return '索引里没有这条会话的记录';
+  };
+  const indexDetail = (): string =>
+    indexProblems.length ? `；索引里的记录：${indexProblems.join('；')}` : '';
   let computedIsFile = false;
   try {
     computedIsFile = (await stat(computedWire)).isFile();
   } catch (error) {
-    const reasons = [
-      `kimi 报告创建了会话 ${sessionId}，但索引与按原生规则推出的目录里都没有它的 wire.jsonl`,
-      `按规则推出的路径：${escapeControlChars(computedWire)}（${describePathReadFailureReason(error)}）`,
-    ];
-    if (indexFailure) reasons.push(`会话索引也没读出来（${indexFailure}），其中可能记录了另一个位置`);
-    if (indexProblems.length) reasons.push(`索引里的记录：${indexProblems.join('；')}`);
-    throw new Error(reasons.join('；'));
+    throw new Error(
+      [
+        `kimi 报告创建了会话 ${escapeControlChars(sessionId)}，但按原生规则推出的目录里没有它的 wire.jsonl`,
+        `${describeIndexState()}${indexDetail()}`,
+        `按规则推出的路径：${escapeControlChars(computedWire)}（${describePathReadFailureReason(error)}）`,
+      ].join('；'),
+    );
   }
   if (computedIsFile) return { sessionDir: computedDir, wirePath: computedWire };
   throw new Error(
-    `kimi 报告创建了会话 ${sessionId}，但 ${escapeControlChars(computedWire)} 不是普通文件（被同名目录或设备文件占住了）`,
+    [
+      `kimi 报告创建了会话 ${escapeControlChars(sessionId)}，但按原生规则推出的路径不是普通文件（被同名目录或设备文件占住了）：${escapeControlChars(computedWire)}`,
+      `${describeIndexState()}${indexDetail()}`,
+    ].join('；'),
   );
 }
 
