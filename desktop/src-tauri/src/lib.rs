@@ -392,11 +392,20 @@ async fn open_codex_thread(thread_id: String) -> Result<(), String> {
         .map_err(|e| format!("open_codex_thread 任务失败: {e}"))?
 }
 
+// 与 core/display.ts 相同的 C0 / DEL / C1 字符集；按 Unicode 码点检查，不能按 UTF-8 字节拦中文。
+fn validate_terminal_text(cwd: &str, command: &str) -> Result<(), String> {
+    if cwd.chars().chain(command.chars()).any(char::is_control) {
+        return Err("恢复命令或工作目录含控制字符，终端可能将其解释为按键或控制序列；已停止起航，请核对会话 ID 与目录并改用不含控制字符的值".into());
+    }
+    Ok(())
+}
+
 /// 一键起航：在系统终端里新开窗口并执行 `command`（前端已拼好 `cd … && <resume>`）。
 /// `terminal`：macOS 下 "terminal"（默认）| "kaku" | "iterm2" | "ghostty"，其它平台忽略。
-/// 失败返回 Err（终端未安装、自动化权限被拒等），前端据此退回「复制命令」。
+/// 控制字符在启动前拒绝；其余失败（终端未安装、自动化权限被拒等）由前端尝试复制安全命令。
 #[tauri::command]
 async fn launch_terminal(cwd: String, command: String, terminal: Option<String>) -> Result<(), String> {
+    validate_terminal_text(&cwd, &command)?;
     tauri::async_runtime::spawn_blocking(move || {
         launch_terminal_blocking(&cwd, &command, terminal.as_deref().unwrap_or("terminal"))
     })
@@ -910,8 +919,20 @@ pub fn run() {
 mod tests {
     use super::{
         codex_confirm_args, codex_open_command, codex_prepare_args, codex_status_args,
-        codex_thread_url, is_plan_id, is_uuid, parse_cli_json, run_open_command, OpenPlatform,
+        codex_thread_url, is_plan_id, is_uuid, parse_cli_json, run_open_command, validate_terminal_text,
+        OpenPlatform,
     };
+
+    #[test]
+    fn rejects_terminal_controls_before_launch_for_both_fields() {
+        for code in (0_u32..=31).chain(127..=159) {
+            let value = format!("a{}b", char::from_u32(code).unwrap());
+            assert!(validate_terminal_text(&value, "echo ok").is_err());
+            assert!(validate_terminal_text("/tmp", &value).is_err());
+        }
+        assert!(validate_terminal_text("/tmp/中文 ‘quotes’", "cd '/tmp/a b' && pi --session 'id;literal'").is_ok());
+        assert!(validate_terminal_text("", "claude --resume abc-123").is_ok());
+    }
 
     #[test]
     fn validates_structured_codex_identifiers() {

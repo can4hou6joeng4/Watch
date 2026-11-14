@@ -26,6 +26,7 @@ import { doctorReport } from './core/doctor.js';
 import type { StoreFootprint } from './core/doctor.js';
 import { cwdAliasHint, cwdControlCharsNote, cwdProblem, describeCwdProblem, describeRecordedCwd, describeWorktreeNote, describeWriteCwd, inspectCwd, inspectWorktree, sameDirectorySync, splitElsewhereByDirectory } from './core/cwd.js';
 import { escapeControlChars, hasControlChars } from './core/display.js';
+import { commandControlWarnings } from './core/terminal-command.js';
 import { trimUserKey } from './core/cli-input.js';
 import { describeResumeTargetUnfinished } from './core/rich.js';
 import { describePathReadFailureReason, describeReadFailureOrSelf, describeSessionReadFailureReason, isEmptySessionFileReason, probeSessionReadable, sessionFilePresence } from './core/read-text.js';
@@ -712,7 +713,7 @@ async function cmdStatus(cwd: string, json: boolean, chain?: string): Promise<vo
     return;
   }
   const { tips, chainTip, chainTipUnusable, unreadable, history, historyFailed, chain: current, warnings } = result;
-  for (const warning of warnings) console.error(`警告: ${warning}`);
+  for (const warning of warnings) console.error(`警告: ${escapeControlChars(warning)}`);
   // 链名是用户输入、库里可能留着写入守卫上线前的坏名字：进终端前转义，别把 ESC / 换行打出去
   if (current) console.log(`链: ${escapeControlChars(current.name)}${current.status === 'archived' ? ' [归档]' : ''}  (${current.id})`);
   // 同一目录可能有多条链：只显示当前这条会让文本用户以为没有别的（--json 的 chains 一直是全量）
@@ -765,7 +766,7 @@ async function cmdStatus(cwd: string, json: boolean, chain?: string): Promise<vo
       // 一条看起来正常的 mtime 背后打不开（原因已由上方警告给出）
       const readMark = tip.unreadable ? '（文件读不出来，原因见上方警告）' : '';
       console.log(
-        `  ${tip.provider.padEnd(8)} ${tip.ref.sessionId}  mtime=${fmtTime(tip.updatedAt)}${chainMark}${mark}${readMark}`,
+        `  ${tip.provider.padEnd(8)} ${escapeControlChars(tip.ref.sessionId)}  mtime=${fmtTime(tip.updatedAt)}${chainMark}${mark}${readMark}`,
       );
       console.log(`           ${escapeControlChars(tip.ref.filePath)}`);
     }
@@ -775,7 +776,7 @@ async function cmdStatus(cwd: string, json: boolean, chain?: string): Promise<vo
     console.log('切换链:');
     for (const h of history) {
       const from = h.fromProvider ?? '?';
-      console.log(`  ${from} → ${h.toProvider}  (${h.toRef.sessionId})  @ ${fmtTime(h.createdAt)}`);
+      console.log(`  ${from} → ${h.toProvider}  (${escapeControlChars(h.toRef.sessionId)})  @ ${fmtTime(h.createdAt)}`);
     }
   } else if (store) {
     console.log('');
@@ -823,7 +824,7 @@ async function cmdSwitch(cwd: string, targetId: string, json: boolean, chain?: s
         ),
       );
     }
-    result.warnings.push(...chainProbe);
+    result.warnings.push(...chainProbe, ...commandControlWarnings(result.resumeCommand ?? ''));
     // 显式写了 --chain 却把当前链换走了，是这条命令最该说的一句：用户的动机恰恰是
     // 「这一次操作那条链，别动当前链」，而输出只有「已从 X 交接 → Y」
     const currentChain = safeActiveChain(store, cwd, result.warnings);
@@ -840,7 +841,7 @@ async function cmdSwitch(cwd: string, targetId: string, json: boolean, chain?: s
     }
     // 警告先打：alreadyAtTarget 分支同样可能带「读库/写链失败」，提前 return 会把它吞掉
     // 走 stderr：stdout 留给结果，重定向 / 管道时警告不该混进正文（与 status / new / usage 一致）
-    for (const warning of result.warnings) console.error(`警告: ${warning}`);
+    for (const warning of result.warnings) console.error(`警告: ${escapeControlChars(warning)}`);
     if (result.alreadyAtTarget) {
       // 链记录里可能根本没有链尾（chain new 之后没切过），也可能读不出来：这时一律说
       // 「链尾已在 X」会让人以为链已经绑到 X，而 status 里还是空的
@@ -848,8 +849,8 @@ async function cmdSwitch(cwd: string, targetId: string, json: boolean, chain?: s
         console.log('当前链还没有绑定任何会话（没有可交接的来源，本次未写入链记录）。');
         console.log(
           result.resumeUnreadable
-            ? `已找到 ${targetId} 的最新会话，但它的文件现在读不出来（原因见上方警告）；要让链记录指向它，可用 watch adopt ${targetId} --session ${result.newRef.sessionId}`
-            : `已找到 ${targetId} 的最新会话，可直接打开；要让链记录指向它，可用 watch adopt ${targetId} --session ${result.newRef.sessionId}`,
+            ? `已找到 ${targetId} 的最新会话，但它的文件现在读不出来（原因见上方警告）；要让链记录指向它，可用 watch adopt ${targetId} --session ${escapeControlChars(result.newRef.sessionId)}`
+            : `已找到 ${targetId} 的最新会话，可直接打开；要让链记录指向它，可用 watch adopt ${targetId} --session ${escapeControlChars(result.newRef.sessionId)}`,
         );
       } else if (result.chainTipState === 'recorded') {
         // 链尾确实停在这家，但文件读不出来时「直接打开即可」是错的下一步：
@@ -866,14 +867,14 @@ async function cmdSwitch(cwd: string, targetId: string, json: boolean, chain?: s
             : `无法确认链尾（本次未写入链记录），已找到 ${targetId} 的最新会话，可直接打开。`,
         );
       }
-      console.log(`resume: ${result.resumeCommand}`);
+      console.log(`resume: ${escapeControlChars(result.resumeCommand)}`);
       return;
     }
     console.log(`已从 ${result.fromProvider} 交接 → ${targetId}（${result.turnCount} 轮）`);
-    console.log(`新会话: ${result.newRef.sessionId}`);
+    console.log(`新会话: ${escapeControlChars(result.newRef.sessionId)}`);
     console.log(`文件:   ${escapeControlChars(result.newRef.filePath)}`);
     console.log('');
-    console.log(`resume: ${result.resumeCommand}`);
+    console.log(`resume: ${escapeControlChars(result.resumeCommand)}`);
     // 结果说明走 stdout（同 chain new / chain archive 的位置），不是降级警告
     if (shiftNote) console.log(`\n${shiftNote}`);
     // exact 之外的处置（整文件重写、去重跳过等）--json 里一直有，文本模式也要说，否则看不出内容被改写过
@@ -1077,7 +1078,7 @@ async function cmdAdopt(
         );
       }
     }
-    result.warnings.push(...chainProbe);
+    result.warnings.push(...chainProbe, ...commandControlWarnings(resumeCommand ?? ''));
     // 同 switch：显式 --chain 却把当前链换走了，必须在结果里说（空操作时链没被 touch，
     // previousChain 与 currentChain 相同，自然不冒这句）
     const currentChain = safeActiveChain(store, cwd, result.warnings);
@@ -1095,21 +1096,21 @@ async function cmdAdopt(
       return;
     }
     // 与 switch 一致：警告先打（未写入链记录这类说明不能排在成功之后被漏看），且走 stderr
-    for (const warning of result.warnings) console.error(`警告: ${warning}`);
+    for (const warning of result.warnings) console.error(`警告: ${escapeControlChars(warning)}`);
     // 空操作（这条会话本来就绑在这家）时不能打「已接入链」：链上什么都没有变，
     // 而它可能正是用户想修的那件事（链尾还停在另一家）
     if (result.unchanged) {
-      console.log(`未改动: ${result.adoptedRef.sessionId}`);
-      if (result.note) console.log(`  ${result.note}`);
+      console.log(`未改动: ${escapeControlChars(result.adoptedRef.sessionId)}`);
+      if (result.note) console.log(`  ${escapeControlChars(result.note)}`);
     } else {
-      console.log(`已接入链: ${result.adoptedRef.sessionId}`);
-      if (result.replacedRef) console.log(`替换了:  ${result.replacedRef.sessionId}`);
+      console.log(`已接入链: ${escapeControlChars(result.adoptedRef.sessionId)}`);
+      if (result.replacedRef) console.log(`替换了:  ${escapeControlChars(result.replacedRef.sessionId)}`);
       // 没给 --session 时接入的是「按 mtime 挑的最新会话」，这一点不能只在 --json 里
-      if (result.note) console.log(`  ${result.note}`);
+      if (result.note) console.log(`  ${escapeControlChars(result.note)}`);
     }
     if (resumeCommand) {
       console.log('');
-      console.log(`resume: ${resumeCommand}`);
+      console.log(`resume: ${escapeControlChars(resumeCommand)}`);
     }
     // 结果说明走 stdout（文本 mode 与 --json 的 warnings 同一条文案）
     if (shiftNote) console.log(`\n${shiftNote}`);
@@ -1175,10 +1176,10 @@ async function cmdOpen(
       if (!checked.ok) fail(false, checked.error ?? '预检失败');
       const target = checked.sessionId ? `${checked.sessionId}` : '（将新建会话）';
       // notes[0] 是给人看的计划描述（复用链上会话 / 并入既有 / 新建）；直接打 kind 会把内部枚举露给用户
-      console.log(`预检：${checked.notes?.[0] ?? checked.plan?.kind ?? '?'} · 目标 ${target} · ${checked.writable ? '可写入' : '暂不可写'}`);
+      console.log(`预检：${escapeControlChars(checked.notes?.[0] ?? checked.plan?.kind ?? '?')} · 目标 ${escapeControlChars(target)} · ${checked.writable ? '可写入' : '暂不可写'}`);
       // warnings 是降级原因（复用扫描失败、链上配对读不出等），只出现在 --json 里的话，
       // 文本模式的用户看不到「为什么是新建」
-      for (const warning of checked.warnings ?? []) console.error(`提示: ${warning}`);
+      for (const warning of checked.warnings ?? []) console.error(`提示: ${escapeControlChars(warning)}`);
       if (!checked.writable) {
         for (const line of [checked.error, checked.blocked?.hint]) if (line) console.error(line);
         process.exit(1);
@@ -1196,7 +1197,7 @@ async function cmdOpen(
         ...(result.warnings?.length ? { warnings: result.warnings } : {}),
       };
       if (!json) {
-        for (const warning of result.warnings ?? []) console.error(`提示: ${warning}`);
+        for (const warning of result.warnings ?? []) console.error(`提示: ${escapeControlChars(warning)}`);
       }
       if (!json && result.blocked) {
         // 与 failBlocked 同一格式：文本模式也要给 code 与下一步，不能只在 --json 里有
@@ -1210,11 +1211,11 @@ async function cmdOpen(
       console.log(JSON.stringify(result));
       return;
     }
-    // 降级原因走 stderr（与 switch / status 同一通道），stdout 只留结果行与可复制的 cd / resume
-    for (const warning of result.warnings ?? []) console.error(`提示: ${warning}`);
-    for (const n of result.notes ?? []) console.log(n);
-    console.log(result.cd);
-    console.log(result.resumeCommand);
+    // 原始命令留在 JSON；文本转义控制字符，交付限制已在 warnings 披露。
+    for (const warning of result.warnings ?? []) console.error(`提示: ${escapeControlChars(warning)}`);
+    for (const n of result.notes ?? []) console.log(escapeControlChars(n));
+    console.log(escapeControlChars(result.cd ?? ''));
+    console.log(escapeControlChars(result.resumeCommand ?? ''));
   } catch (error) {
     // 半坏 schema（`REQUIRED_TABLES` 只查表名，缺列只在查询时才炸）下这里是 `open --to` 的
     // 最后一道：裸 `no such column: xxx` 既不说这是库的问题，也给不出版本 / 重建的下一步
@@ -1402,7 +1403,7 @@ async function cmdSessions(cwd: string, json: boolean, chain?: string): Promise<
       }));
       return;
     }
-    for (const warning of warnings) console.error(`警告: ${warning}`);
+    for (const warning of warnings) console.error(`警告: ${escapeControlChars(warning)}`);
     if (!result.length) {
       // `--cwd` 本身不可用时，零结果是路径造成的，不是「这个目录没聊过」：与 status 同一口径，
       // 且排在「哪几家没读成」之前——路径全错时「修好这些存储」不是能解决问题的下一步
@@ -1422,7 +1423,7 @@ async function cmdSessions(cwd: string, json: boolean, chain?: string): Promise<
     for (const g of result) {
       console.log(`${g.provider}${g.capped ? '（已达列表上限，更早的会话未列出）' : ''}:`);
       for (const s of g.sessions) {
-        console.log(`  ${s.ref.sessionId}  mtime=${fmtTime(s.updatedAt)}`);
+        console.log(`  ${escapeControlChars(s.ref.sessionId)}  mtime=${fmtTime(s.updatedAt)}`);
         if (s.preview) console.log(`    ${escapeControlChars(s.preview)}`);
       }
     }
@@ -1575,7 +1576,7 @@ async function cmdRecent(cwd: string, json: boolean, limit: number = 8, cwdGiven
     }));
     return;
   }
-  for (const warning of warnings) console.error(`警告: ${warning}`);
+  for (const warning of warnings) console.error(`警告: ${escapeControlChars(warning)}`);
   if (unavailable.length) console.error(`未读取: ${unavailable.join('、')}（读取失败，已跳过）`);
   if (truncated) {
     console.error(`提示: 只显示最近 ${final.length} 条，另有 ${results.length - final.length} 条更早的会话未列出（--limit 可调，最大 50）`);
@@ -1596,7 +1597,7 @@ async function cmdRecent(cwd: string, json: boolean, limit: number = 8, cwdGiven
   }
   for (const s of final) {
     // 「最近」的价值就在时间与摘要：JSON 一直带 updatedAt / preview，文本模式不能只留 id
-    console.log(`  [${s.provider}] ${s.sessionId} (${escapeControlChars(s.cwd)})  mtime=${fmtTime(s.updatedAt)}`);
+    console.log(`  [${s.provider}] ${escapeControlChars(s.sessionId)} (${escapeControlChars(s.cwd)})  mtime=${fmtTime(s.updatedAt)}`);
     if (s.preview) console.log(`    ${escapeControlChars(s.preview)}`);
   }
 }
@@ -1936,7 +1937,7 @@ async function cmdPrompt(
   }
   // stdout 只放文档本身：它正是要被 `> seed.md` 或管道拿走的产物。
   // 诊断一律走 stderr，否则重定向后的文件里会混进「警告: …」。
-  for (const warning of warnings) console.error(`警告: ${warning}`);
+  for (const warning of warnings) console.error(`警告: ${escapeControlChars(warning)}`);
   for (const line of describeFindings(result.findings)) console.error(`说明: ${line}`);
   // 清单为空时提一句会被当成「这次没改文件」，而实际可能只是入参形状没识别——
   // 所以只在**清单非空**时提示它有多少条，让用户知道正文里多了一节。
@@ -2299,10 +2300,11 @@ async function cmdNew(cwd: string, providerId: string, json: boolean, chain?: st
       // 这次在 `--cwd` 下写出了链记录：同一个目录的另一种写法下若已有链，说明会有两组（见 helper）
       await aliasWarnings();
       const resumeCommand = adapter.resumeCommand(ref);
+      warnings.push(...commandControlWarnings(resumeCommand));
       // 空链分支同样会 touchChain（getOrCreateChainSession 在建会话之后就跑过）
       const currentChain = safeActiveChain(store, cwd, warnings);
       const shiftNote = currentChainShiftNote(previousChain, currentChain);
-      for (const warning of warnings) console.error(`警告: ${warning}`);
+      for (const warning of warnings) console.error(`警告: ${escapeControlChars(warning)}`);
       if (json) {
         console.log(
           JSON.stringify({
@@ -2317,8 +2319,8 @@ async function cmdNew(cwd: string, providerId: string, json: boolean, chain?: st
         );
         return;
       }
-      console.log(`新会话: ${ref.sessionId}`);
-      console.log(`resume: ${resumeCommand}`);
+      console.log(`新会话: ${escapeControlChars(ref.sessionId)}`);
+      console.log(`resume: ${escapeControlChars(resumeCommand)}`);
       // 结果说明走 stdout（同 switch / adopt / chain new 的位置），不是降级警告
       if (shiftNote) console.log(`\n${shiftNote}`);
       return;
@@ -2328,7 +2330,7 @@ async function cmdNew(cwd: string, providerId: string, json: boolean, chain?: st
     // 链已存在时的表单同样要带出 cwd / 读库 / 交接降级说明，不能只在空链分支打印
     // 先把「另一种写法下已有链」并进 warnings，再由这里统一带出（两条通道共用同一份）
     await aliasWarnings();
-    const allWarnings = [...warnings, ...result.warnings];
+    const allWarnings = [...warnings, ...result.warnings, ...commandControlWarnings(result.resumeCommand)];
     // 已有链分支可能复用配对会话，也可能新建；无论哪种，只要目录进不去，resume 都会在这一步失败
     if (cwdWriteIssue) allWarnings.push(newSessionCwdWarning(cwdWriteIssue, result.newRef.filePath));
     // createChainSession() 内部同样经 getOrCreateChainSession() 写 last_used_at
@@ -2345,9 +2347,9 @@ async function cmdNew(cwd: string, providerId: string, json: boolean, chain?: st
       );
       return;
     }
-    for (const warning of allWarnings) console.error(`警告: ${warning}`);
-    console.log(`新会话: ${result.newRef.sessionId}（${result.turnCount} 轮）`);
-    console.log(`resume: ${result.resumeCommand}`);
+    for (const warning of allWarnings) console.error(`警告: ${escapeControlChars(warning)}`);
+    console.log(`新会话: ${escapeControlChars(result.newRef.sessionId)}（${result.turnCount} 轮）`);
+    console.log(`resume: ${escapeControlChars(result.resumeCommand)}`);
     if (shiftNote) console.log(`\n${shiftNote}`);
   } catch (error) {
     // 结构化阻断（新建会话需要的原生 CLI 没装等）与 switch 走同一份输出：这两条都是写路径，
@@ -2497,7 +2499,7 @@ async function cmdChain(cwd: string, json: boolean, action?: string, a?: string,
         }));
         return;
       }
-      for (const warning of warnings) console.error(`警告: ${warning}`);
+      for (const warning of warnings) console.error(`警告: ${escapeControlChars(warning)}`);
       if (!chains.length) {
         console.log('（无链）');
         if (splitElsewhere.same.length) console.log(chainsSameDirectoryHint(splitElsewhere.same));
@@ -2932,7 +2934,7 @@ async function cmdUsage(cwd: string, json: boolean, chain?: string): Promise<voi
       console.log(`链: ${chain}（未能确认这条链是否存在；原因见警告）`);
     }
     // 警告必须先打：本地库不可用时 byProvider 也是空的，先 return 会把「读不出来」说成「没有绑定会话」
-    for (const warning of result.warnings) console.error(`警告: ${warning}`);
+    for (const warning of result.warnings) console.error(`警告: ${escapeControlChars(warning)}`);
     if (!result.byProvider.length) {
       // 说明来自 chainUsage 的 notes，与 --json 同一句（以前只在文本模式里手写，
       // 脚本拿到的是 byProvider: [] + total: 0，分不出「没绑定」和「真的用了 0」）
@@ -3136,7 +3138,7 @@ async function cmdSearch(cwd: string, json: boolean, query: string, resetIndex =
       }));
       return;
     }
-    for (const warning of warnings) console.error(`警告: ${warning}`);
+    for (const warning of warnings) console.error(`警告: ${escapeControlChars(warning)}`);
     if (!hits.length) {
       // 正文先说清范围（搜索只覆盖这一个目录），再说有没有别处线索——
       // 单打一句「无结果」会被当成「这台机器上没有」。
@@ -3151,7 +3153,7 @@ async function cmdSearch(cwd: string, json: boolean, query: string, resetIndex =
       return;
     }
     for (const h of hits) {
-      console.log(`${h.provider}  ${h.sessionId}`);
+      console.log(`${h.provider}  ${escapeControlChars(h.sessionId)}`);
       console.log(`  ${escapeControlChars(h.snippet.replace(/\s+/g, ' '))}`);
     }
     if (truncated) {

@@ -23,6 +23,7 @@ import {
 } from './core/read-text.js';
 import { sessionCwdProblem } from './core/cwd.js';
 import { escapeControlChars } from './core/display.js';
+import { commandControlWarnings } from './core/terminal-command.js';
 import { psQuote, shellQuote } from './core/shell-quote.js';
 export { psQuote, shellQuote };
 
@@ -786,6 +787,7 @@ export async function openSession(
 
   const cd = buildCd(target.found.ref.cwd);
   const resumeCommand = target.adapter.resumeCommand(target.found.ref);
+  warnings.push(...commandControlWarnings(cd, resumeCommand));
   return {
     ok: true,
     provider: target.adapter.id,
@@ -1325,6 +1327,7 @@ export async function openInProvider(
   if (plan.kind === 'resume') {
     const resumeCommand = target.resumeCommand(sourceRef);
     const cd = buildCd(cwd);
+    diagnostics.push(...commandControlWarnings(cd, resumeCommand));
     return {
       ok: true,
       provider: providerId,
@@ -1420,6 +1423,7 @@ export async function openInProvider(
     }
     const resumeCommand = target.resumeCommand(newRef);
     const cd = buildCd(cwd);
+    warnings.push(...commandControlWarnings(cd, resumeCommand));
     return {
       ok: true,
       provider: providerId,

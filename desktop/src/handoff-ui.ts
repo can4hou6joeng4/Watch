@@ -1,3 +1,7 @@
+// 仅依赖纯函数，可在 Vite 与隔离测试中复用核心显示 / 交付规则。
+export { escapeControlChars } from '../../src/core/display.js';
+export { assertTerminalTextSafe, terminalTextProblem } from '../../src/core/terminal-command.js';
+
 // 会话 id 来自文件名 / 索引等原生字符串，拼进命令前按目标终端引用一次。
 // 与 CLI 侧 `src/core/shell-quote.ts` 的 quoteCommandArg() 同规则。
 const quote = (value: string, windows: boolean): string => (
