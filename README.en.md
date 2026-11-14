@@ -20,9 +20,11 @@ The steps are on the site [guides](https://relay.bobochang.cn/en/#guides): [Clau
 
 It does not provide models, bypass usage limits, replace native agent chat, or move permissions, credentials and plugins by default. What it transfers is the recorded session, not the model's unrecorded internal state. Today the implementation is centred on CLI sessions and terminal resume; the product direction includes validated desktop entry points, but **official interoperability does not mean Watch has integrated it**.
 
-### Latest release ([v0.1.20](https://github.com/can4hou6joeng4/Watch/releases/tag/v0.1.20))
+### Latest release ([v0.1.21](https://github.com/can4hou6joeng4/Watch/releases/tag/v0.1.21))
 
-v0.1.20 fixes session ID quoting in copyable resume commands. All six CLI adapters previously concatenated raw IDs, allowing special characters from filenames or indexes to become shell syntax. CLI and desktop commands now quote IDs for the target terminal: POSIX on macOS / Linux and PowerShell on Windows, while ordinary UUIDs stay readable. The Markdown structure fixes from v0.1.19 / v0.1.18 and legacy shell array support from v0.1.17 remain in place.
+v0.1.21 hardens the session ID, source file and working directory in the `watch prompt` header. These fields previously entered Markdown directly, so newlines could start sections and links or backticks could become formatting. They now render as single-line code data using delimiters chosen from the content. The v0.1.20 resume-command quoting and earlier handoff document fence fixes remain in place.
+
+- **Header IDs and paths render as data (v0.1.21)**: newlines in the three fields become a visible `\n`, and backticks use longer inline-code delimiters. Link syntax stays inside code rather than becoming a clickable field value. The automatic-selection notice remains outside the ID span. This changes only the document display of these three fields; raw JSON fields and the actual working directory retain their original values.
 
 - **Resume commands preserve the original argument (v0.1.20)**: spaces, single quotes, semicolons, dollar signs, backticks and newlines stay within one session ID argument. Desktop cards receive the raw ID and quote it once, preventing quote characters from being passed to the agent through double quoting. The CLI defaults to the host platform; adapter methods also accept an explicit platform for checks. POSIX argument round trips were verified with the system shell; PowerShell output strings were checked without native Windows terminal acceptance.
 
