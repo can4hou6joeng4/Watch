@@ -54,7 +54,7 @@ export async function parseClaudeSession(ref: SessionRef): Promise<UnifiedTurn[]
   // 失败记录（system/api_error 与 isApiErrorMessage）只计数，循环结束后合成一条披露：
   // 逐条挂事件会让一个 146 次错误的会话刷满同一句话。
   const failures: ClaudeFailureCounts = createClaudeFailureCounts();
-  const toolMedia: ClaudeToolMediaCounts = { images: 0, files: 0, unknown: new Map() };
+  const toolMedia: ClaudeToolMediaCounts = { images: 0, files: 0, unknown: new Map(), persisted: 0 };
   let lastFailureTimestamp = '';
   // 失败之后是否再没有产生轮次的记录。只有这种**尾部**失败才补空正文助手轮：
   // 中途失败当场造轮时，写入侧会跳过「无正文且无事件」的轮次，目标永远比来源少一轮，
@@ -254,6 +254,13 @@ export async function parseClaudeSession(ref: SessionRef): Promise<UnifiedTurn[]
     const text = `${WATCH_CONTEXT_DISCLOSURE_PREFIX}Claude 的工具结果里有 ${toolMediaTotal} 个媒体或未识别内容块（${kinds}）；Watch 只保留占位文本，不复制原始数据，目标会话里无法还原这些载荷，需要时请在来源文件或原生 Claude Code 中核对。]`;
     pushEvent(disclosureContext, { kind: 'text', summary: text, detail: text, timestamp: disclosureContext.timestamp, provider: 'claude' });
   }
+  // Claude Code 的大工具结果被写进 `tool-results/` 旁路文件，记录里只剩预览与路径（约 50K 字符阈值）。
+  // Watch 不读旁路文件、也不把它内联进目标会话：那条路径是来源会话目录的私有存储，会被清理，
+  // 复制到别的机器后不存在。只带走预览这件事必须披露，否则读者会以为工具输出是完整的。
+  if (toolMedia.persisted > 0 && disclosureContext) {
+    const text = `${WATCH_CONTEXT_DISCLOSURE_PREFIX}Claude 有 ${toolMedia.persisted} 条工具结果被 Claude Code 持久化到会话目录的 tool-results/ 旁路文件，记录里只剩预览与旁路文件路径；交接只带走这段预览，完整输出没有并入。旁路文件随来源会话目录保留或清理，换机器后该路径不可用——需要完整内容时请在来源文件或原生 Claude Code 中核对。]`;
+    pushEvent(disclosureContext, { kind: 'text', summary: text, detail: text, timestamp: disclosureContext.timestamp, provider: 'claude' });
+  }
   const detected = await probeClaudeContinuation(continuation, ref.filePath);
   if (detected && disclosureContext) {
     const text = describeClaudeContinuation(detected);
@@ -348,6 +355,19 @@ interface ClaudeToolMediaCounts {
   images: number;
   files: number;
   unknown: Map<string, number>;
+  /** 被 Claude Code 持久化到 `tool-results/` 旁路文件的工具结果条数（正文只剩预览 + 路径）。 */
+  persisted: number;
+}
+
+/**
+ * Claude Code 把超过约 50K 字符的工具结果写进会话目录的 `tool-results/` 旁路文件，
+ * 记录里只剩 `<persisted-output>` 包装：大小、旁路文件绝对路径与 2KB 预览，且**没有闭合标签**。
+ * 判定要求标记在开头（trim 后）且带 `Full output saved to:`——正文里引用这段文字的普通结果
+ * （例如读一篇介绍这个机制的文档）不能被算成持久化。
+ */
+function isPersistedOutputText(text: string): boolean {
+  const trimmed = text.trimStart();
+  return trimmed.startsWith('<persisted-output>') && trimmed.includes('Full output saved to:');
 }
 
 function claudeBlockLabel(value: string, limit = 60): string {
@@ -416,7 +436,10 @@ function claudeToolResultText(output: unknown, counts: ClaudeToolMediaCounts): s
     }
     return parts.filter((part) => part.trim()).join('\n');
   };
-  return project(output);
+  const text = project(output);
+  // 计数只为披露：旁路文件不读、不复制、不猜路径是否还在（同 Codex compacted 的取舍）。
+  if (isPersistedOutputText(text)) counts.persisted += 1;
+  return text;
 }
 
 function extractRich(
