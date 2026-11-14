@@ -1,4 +1,4 @@
-// 打包产物运行期依赖检查：安装包里的 tsx/esbuild 必须能在目标架构上启动。
+// 打包产物运行期依赖检查：核对 esbuild 目标架构，以及核心声明的 TOML 解析器与许可文件。
 // 只读检查 bundle 资源，不执行被检查的二进制；参数为目标根目录（含 watch-core）。
 import { readdir, readFile, stat } from 'node:fs/promises';
 import path from 'node:path';
@@ -41,9 +41,25 @@ try {
   // `watch --version` / `doctor` 经 src/core/watch-version.ts 读 watch-core/package.json；
   // 打包资源漏了它，安装包就只能报「未知版本」（0.1.26 修复）。
   try {
-    const coreVersion = JSON.parse(await readFile(path.join(core, 'package.json'), 'utf8')).version;
+    const corePackage = JSON.parse(await readFile(path.join(core, 'package.json'), 'utf8'));
+    const coreVersion = corePackage.version;
     facts.corePackageVersion = typeof coreVersion === 'string' ? coreVersion : null;
     if (typeof coreVersion !== 'string') problems.push('watch-core/package.json 缺少 version 字段');
+    // 历史安装包可能没有该依赖；声明过就必须随包交付，不能依赖构建机的 node_modules。
+    const expectedTomlVersion = corePackage.dependencies?.['smol-toml'];
+    if (expectedTomlVersion) {
+      try {
+        const tomlRoot = path.join(core, 'node_modules', 'smol-toml');
+        const tomlPackage = JSON.parse(await readFile(path.join(tomlRoot, 'package.json'), 'utf8'));
+        facts.tomlVersion = tomlPackage.version;
+        if (tomlPackage.version !== expectedTomlVersion) problems.push('smol-toml 版本与 watch-core 声明的固定版本不一致');
+        for (const filename of ['dist/index.js', 'LICENSE']) {
+          if (!(await stat(path.join(tomlRoot, filename))).isFile()) problems.push(`smol-toml/${filename} 不是普通文件`);
+        }
+      } catch (error) {
+        problems.push(`smol-toml 运行期依赖或许可文件不完整：${error instanceof Error ? error.message : String(error)}`);
+      }
+    }
   } catch (error) {
     problems.push(`缺少 watch-core/package.json（运行期 --version / doctor 会报未知版本）：${error instanceof Error ? error.message : String(error)}`);
   }
