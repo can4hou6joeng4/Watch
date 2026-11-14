@@ -7,10 +7,10 @@ export type ImportTurnsOpts = { replace?: boolean };
 export type PreflightContext = { ref?: SessionRef; cwd?: string };
 
 /**
- * 「这个存储能读、但 Watch 写不进去」的只读限制（如 OpenCode 2.x 布局）。
+ * Watch 已知的存储写入限制，包括布局只读（OpenCode 2.x）与配置读取故障。
  *
- * 与 `PreflightBlock` 的区别是**没有时机**：`preflight` 回答「这一次写入会不会被拒绝」，
- * 这里回答「这个存储本身只能读」。`watch doctor` 用它提前说明，不必等一次失败的转入。
+ * `preflight` 检查本次写入的具体目标与运行状态；这里只探测存储布局和配置条件，
+ * 供 `watch doctor` 提前说明。没有这类限制不代表所有写入条件都已验证。
  * `code` / `reason` / `hint` 与 preflight 抛出的结构化 block 同源，同一件事不能有两套说法。
  */
 export type WriteLimit = {
@@ -20,6 +20,18 @@ export type WriteLimit = {
   reason: string;
   /** 下一步：能照抄的动作 / 不该做的事 */
   hint?: string;
+  /**
+   * 这一档该怎么看（缺省 `readonly`）：
+   *
+   * - `readonly`：Watch 主动不支持这种布局（OpenCode 2.x）。它长期成立、用户无法「修好」，
+   *   是已知且能读的状态——`watch doctor` 印出来，但不进 warnings，`--strict` 也不因此常红。
+   * - `fault`：环境坏了（如 `~/.codex/config.toml` 读不出来）。它是可修的故障，会让每一次
+   *   写入都失败，所以必须进 warnings，让 `--strict` 能捕获它。
+   *
+   * 不设这个字段会把两种性质完全不同的「写不了」合成一句，`--strict` 要么永远红、
+   * 要么永远看不见真正的故障。
+   */
+  kind?: 'readonly' | 'fault';
 };
 
 /** `preflight` 拒绝写入时携带的结构化原因（CLI / 桌面据此给出可操作提示） */
@@ -157,8 +169,8 @@ export interface ProviderAdapter {
    *  不传 ctx 时保持保守语义。不通过则抛 PreflightBlockedError（结构化）或其他 Error。 */
   preflight?(ctx?: PreflightContext): Promise<void>;
 
-  /** 可选：只读探测「这个存储是否只能读不能写」。不写任何文件、不探测运行中的进程；
-   *  返回 null 表示可写。doctor 据此给出「能读不能写」的说明。 */
+  /** 可选：只读探测存储布局与配置的写入限制。不写任何文件、不探测运行中的进程；
+   *  返回 null 表示未发现此类限制。doctor 按 kind 决定是否同时警告。 */
   writeLimit?(cwd?: string): Promise<WriteLimit | null>;
 
   /**

@@ -368,6 +368,12 @@ export async function doctorReport(cwd: string, deps: DoctorDeps): Promise<Docto
             `${adapter.displayName} 写入能力探测失败：${writeLimitError}；这不代表可以写入，转入前先用 watch open --check 确认`,
           );
         }
+        // `kind: 'fault'` 是可修的环境故障（如 config.toml 读不出来），会让每次写入都失败：
+        // 只印正文不进 warnings 的话 `--strict` 看不见它，而这个命令的存在意义就是脚本能捕获。
+        // `readonly`（OpenCode 2.x）是 Watch 主动不支持、用户无法修好的状态，保持只在正文出现。
+        if (writeLimit?.kind === 'fault') {
+          warnings.push(`${adapter.displayName} 当前无法写入：${writeLimit.reason}`);
+        }
       }
       storage.push({
         provider: adapter.id,

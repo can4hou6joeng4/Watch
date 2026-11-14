@@ -12,7 +12,7 @@ import { digestFile } from '../../core/atomic.js';
 import type { FileDigest } from '../../core/atomic.js';
 import { asJsonObject, parseJsonObject } from '../../core/jsonl.js';
 import { describePathReadFailureReason, isMissingPathError, iterateFileLines } from '../../core/read-text.js';
-import type { ProviderAdapter, PreflightContext } from '../adapter.js';
+import type { ProviderAdapter, PreflightContext, WriteLimit } from '../adapter.js';
 import { PreflightBlockedError, SessionLookupFailureError } from '../adapter.js';
 import { acquireThreadWriterLock, probeThreadWriterHolders, threadWriterLockPath, type WriterLockGuard } from './writer-lock.js';
 export { threadWriterLockPath };
@@ -430,14 +430,32 @@ async function readProviderCredential(codexHome: string): Promise<CodexProviderC
  * 那是「这台机器没配过」，Codex 自己也会按 openai 处理。
  */
 async function assertCodexConfigReadable(): Promise<void> {
+  const limit = await codexConfigWriteLimit();
+  if (limit) throw new PreflightBlockedError({ code: limit.code, message: limit.reason, hint: limit.hint });
+}
+
+/**
+ * 只读探测：Codex 配置是否存在阻止写入的读取故障（`null` = 未发现此类故障）。
+ *
+ * `preflight` 与 `writeLimit`（doctor 用）共用这一份判定——与 OpenCode 的
+ * `opencodeWriteLimit()` 同一模式，同一件事不能有两条说法。判的只是「写路径读得到配置吗」：
+ * writer 锁 / Desktop 进程是**运行时状态**，不是存储属性，`watch doctor` 不该把它印成写入限制。
+ *
+ * 配置可读（含未显式写 `model_provider`）或文件不存在（`ENOENT` / `ENOTDIR`）时返回 `null`，
+ * 与写路径使用默认 provider 的约定一致；writer 锁、写权限等条件仍由后续步骤检查。
+ */
+async function codexConfigWriteLimit(): Promise<WriteLimit | null> {
   try {
     await readModelProvider(codexDir());
+    return null;
   } catch (error) {
-    throw new PreflightBlockedError({
+    return {
       code: 'codex_config_unreadable',
-      message: error instanceof Error ? error.message : String(error),
-      hint: '预检发现配置读不出来，因此本次不写入；修好该文件（或让 Codex 自己重建一次配置）后重试。',
-    });
+      reason: error instanceof Error ? error.message : String(error),
+      hint: '修好该文件（或让 Codex 自己重建一次配置）后重试；配置可读之前 Watch 不会写入 Codex 会话，确认零写入。',
+      // 这是可修的故障，不是「Watch 主动只读」：doctor 要把它算进 warnings，--strict 也要能捕获
+      kind: 'fault',
+    };
   }
 }
 
@@ -455,7 +473,10 @@ async function codexEnv(): Promise<NodeJS.ProcessEnv> {
     if (cred.apiKey) env.OPENAI_API_KEY = cred.apiKey;
     if (cred.baseUrl) env.OPENAI_BASE_URL = cred.baseUrl;
   } catch {
-    // config.toml 解析失败时继续走 auth.json
+    // 这里**故意**吞掉读失败并继续走 auth.json（与写路径的 fail closed 不同）：
+    // codexEnv() 只决定起子进程时注入哪个 API key，不写任何会话文件；
+    // 读不出来时交给 codex 自己用它的配置解析去报错，比我们在这里替它下结论更准。
+    // 不要把这条吞错复制到写路径——那里读不出来必须拒绝（见 readModelProvider）。
   }
   if (!env.OPENAI_API_KEY) {
     try {
@@ -621,6 +642,9 @@ async function acquireCodexWriteLock(ctx: { ref?: SessionRef }): Promise<WriterL
 export const codexAdapter: ProviderAdapter = {
   id: 'codex',
   displayName: 'Codex',
+
+  // 只读探测（doctor 用）：与 preflight 共用 codexConfigWriteLimit()，两者不会给出相反结论
+  writeLimit: async (): Promise<WriteLimit | null> => codexConfigWriteLimit(),
 
   async detect(): Promise<boolean> {
     try {
