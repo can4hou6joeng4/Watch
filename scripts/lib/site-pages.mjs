@@ -1,6 +1,18 @@
 const idPattern = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 const isoDatePattern = /^\d{4}-\d{2}-\d{2}$/;
 
+// 页面日期按站点维护时区记账，构建机的默认时区不能改变未来日期守卫的结论。
+export const siteTimeZone = 'Asia/Shanghai';
+const siteDateFormatter = new Intl.DateTimeFormat('en-CA', {
+  timeZone: siteTimeZone, calendar: 'gregory', numberingSystem: 'latn',
+  year: 'numeric', month: '2-digit', day: '2-digit',
+});
+
+export function siteBuildDate(now = new Date()) {
+  const parts = siteDateFormatter.formatToParts(now);
+  return ['year', 'month', 'day'].map((type) => parts.find((part) => part.type === type).value).join('-');
+}
+
 const fail = (message) => {
   throw new Error(`[site-pages] ${message}`);
 };

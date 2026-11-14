@@ -3,7 +3,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createRequire } from 'node:module';
 import { agents, content, defaultLocale, evidence, locales, maintainer, repo, samples, siteDate, siteUrl, siteVerification } from './lib/site-content.mjs';
-import { alternatePagesFor, buildAllPageManifest, buildHomePageManifest, renderSitemap, validatePageManifest } from './lib/site-pages.mjs';
+import { alternatePagesFor, buildAllPageManifest, buildHomePageManifest, renderSitemap, siteBuildDate, validatePageManifest } from './lib/site-pages.mjs';
 import { guides as authoredGuides } from './lib/site-guides.mjs';
 import { loadLocaleDictionary, translateContent, translateGuideLocale } from './lib/apply-site-locale.mjs';
 import { verifyOgImages } from './lib/site-og.mjs';
@@ -42,8 +42,7 @@ const guides = authoredGuides.map((guide) => {
   return { ...guide, locales: localized };
 });
 const site = path.join(root, 'site');
-const now = new Date();
-const buildDate = [now.getFullYear(), String(now.getMonth() + 1).padStart(2, '0'), String(now.getDate()).padStart(2, '0')].join('-');
+const buildDate = siteBuildDate();
 const pageManifest = buildAllPageManifest({ siteUrl, locales: publishedLocales, published: '2026-09-12', modified: siteDate, guides });
 validatePageManifest({ pages: pageManifest, siteUrl, locales: publishedLocales, defaultLocale, buildDate });
 const esc = (text) => String(text).replace(/[&<>"']/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[char]));
