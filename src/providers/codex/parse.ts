@@ -6,7 +6,6 @@ import {
   ENCRYPTED_THINKING,
   ensureAssistant,
   extractExecCommand,
-  flattenToolOutput,
   normalizeUserText,
   pushEvent,
   stripEmptyEvents,
@@ -20,6 +19,11 @@ import {
   codexMediaPlaceholder,
   codexMediaRefFromContentItem,
 } from './media.js';
+import {
+  addCount, appendCodexDisclosure, CodexItemNotes, codexLabel, codexToolName,
+  codexToolOutputText, codexTypeCounts, imageGenerationNote, localShellCommand, webSearchDetail,
+  type CodexOutputProjection,
+} from './response-items.js';
 
 /**
  * Codex rollout JSONL → 统一时间线（Rich）：
@@ -27,13 +31,16 @@ import {
  * - content 块按类型处理：input_text / output_text 拼正文；input_image 可携带时挂 attachment text 事件
  *   （data URI 拆成 mediaType + data，http(s) 原样），file_id 引用 / input_audio / 未识别块写正文占位；
  *   refusal 作为终态正文保留，不能当成「没有回复」
- * - reasoning / function_call / custom_tool_call / command_execution 挂到 assistant.events
+ * - reasoning 的 summary / content、带 namespace 的工具调用与 local_shell action 挂到 assistant.events
+ * - 工具输出数组按换行投影，媒体 / 密文只留占位并计数披露；缺调用 ID 时稳定合成并声明
+ * - 独立具名输出标为外部上下文；网页搜索 / 协作消息 / 图片生成只记标注文本，不造工具调用
+ * - 记账条目忽略，未知 response_item 聚合披露；compaction / context_compaction 只披露不解密
  * - commentary / partial_answer 保留为 text 事件；显式 final_answer 后的阶段文本丢掉；phase 缺省保持旧兼容
  * - 最后停在阶段消息的助手轮标记 incomplete，并计数披露未记录最终答复
  * - compacted：Codex 压缩上下文后的摘要记录，只计数并披露，不并入摘要正文（见 describeCodexCompaction）
  * - 整份文件无 response_item message 时，回退 event_msg；agent_message 共享上述阶段处理，
  *   user_message 的 images / file_ids / local_images / audio 字段按同一口径处理
- * - 坏行/空行跳过；丢弃首条 user 之前的记录
+ * - 坏行/空行跳过；首条 user 前只计元信息与暂存独立上下文，其他过程记录跳过
  *
  * 已知边界：现代 rollout 同时写 response_item 与 event_msg 两条流，整份日志只采用前者；
  * 只有旧格式（整份没有 response_item message）才用 event_msg。两条流混在一份文件里时，
@@ -56,6 +63,10 @@ export function isLegacyEventMsgRollout(raw: string): boolean {
 function parseCodexRaw(raw: string): { turns: UnifiedTurn[]; usesEventFallback: boolean } {
   const turns: UnifiedTurn[] = [];
   const pairing = new ToolResultPairing(turns, 'codex', 'Codex');
+  const notes = new CodexItemNotes(turns);
+  const unknownItems = new Map<string, number>();
+  const outputCounts = { images: 0, audio: 0, encrypted: 0, unknown: new Map<string, number>() };
+  let generatedImages = 0;
   const fallback: UnifiedTurn[] = [];
   let sawUser = false;
   let sawFallbackUser = false;
@@ -95,6 +106,7 @@ function parseCodexRaw(raw: string): { turns: UnifiedTurn[]; usesEventFallback: 
   };
   const compaction: CodexCompactionCounts = {
     total: 0,
+    items: 0,
     readable: 0,
     unreadable: 0,
     turnsAtFirst: null,
@@ -103,6 +115,7 @@ function parseCodexRaw(raw: string): { turns: UnifiedTurn[]; usesEventFallback: 
 
   let lineIndex = 0;
   let synthesizedInlineCalls = 0;
+  let synthesizedCalls = 0;
   for (const line of raw.split('\n')) {
     lineIndex += 1;
     const trimmed = line.trim();
@@ -131,16 +144,37 @@ function parseCodexRaw(raw: string): { turns: UnifiedTurn[]; usesEventFallback: 
     if (!p) continue;
 
     if (r.type === 'response_item' && p.type !== 'message') {
-      if (!sawUser) continue;
-      const events = processItemToEvents(p, timestamp);
-      if (!events.length) continue;
-      // 同一原生记录直接拆出的 call/result 有明确归属。稳定补 ID，避免目标 writer
-      // 分别生成随机 ID 后失配；单独到达的无 ID output 仍按未配对结果处理。
-      if (events.length === 2 && events[0].kind === 'tool_call' && events[1].kind === 'tool_result' &&
-          !events[0].callId && !events[1].callId) {
+      const parsed = processItem(p, timestamp);
+      if ('unknown' in parsed) { addCount(unknownItems, parsed.unknown); continue; }
+      if ('compaction' in parsed) {
+        compaction.items += 1;
+        if (compaction.turnsAtFirst === null) {
+          compaction.turnsAtFirst = turns.length;
+          compaction.fallbackAtFirst = fallback.length;
+        }
+        continue;
+      }
+      // 独立命名输出是输入上下文，可以先于首条用户消息；其他过程仍须有真实提问。
+      if (!sawUser && parsed.placement !== 'before') continue;
+      if (parsed.output) {
+        outputCounts.images += parsed.output.images;
+        outputCounts.audio += parsed.output.audio;
+        outputCounts.encrypted += parsed.output.encrypted;
+        for (const [type, n] of parsed.output.unknown) outputCounts.unknown.set(type, (outputCounts.unknown.get(type) ?? 0) + n);
+      }
+      if (parsed.generatedImage) generatedImages += 1;
+      const events = parsed.events;
+      if (parsed.placement) {
+        for (const event of events) notes.add(event, parsed.placement);
+        continue;
+      }
+      // 原生调用缺 ID 时按记录位置与内容补稳定 ID；无 ID 的独立 output 仍不能猜归属。
+      const call = events.find(ev => ev.kind === 'tool_call');
+      if (call && !call.callId) {
         const id = `watch-codex-inline-${createHash('sha256').update(`${lineIndex}\0${trimmed}`).digest('hex')}`;
         for (const event of events) event.callId = id;
-        synthesizedInlineCalls += 1;
+        if (events.some(ev => ev.kind === 'tool_result')) synthesizedInlineCalls += 1;
+        else synthesizedCalls += 1;
       }
       for (const ev of events) {
         if (ev.kind === 'tool_result') pairing.result(ev);
@@ -227,8 +261,26 @@ function parseCodexRaw(raw: string): { turns: UnifiedTurn[]; usesEventFallback: 
       }
     }
   }
-  if (hasResponseMessages) pairing.finish();
+  if (hasResponseMessages) {
+    notes.finish();
+    pairing.finish();
+  }
   const active = hasResponseMessages ? turns : fallback;
+  if (hasResponseMessages && synthesizedCalls > 0) {
+    appendCodexDisclosure(active, `Codex 有 ${synthesizedCalls} 条工具调用没有调用 ID；Watch 按记录位置与内容合成稳定 ID，这些 ID 不是原生 ID，不能据此为缺少 ID 的独立结果确认归属。`);
+  }
+  if (unknownItems.size) {
+    const total = [...unknownItems.values()].reduce((a, b) => a + b, 0);
+    appendCodexDisclosure(active, `Codex 有 ${total} 条未识别或无法解析的 response_item（${codexTypeCounts(unknownItems)}），这部分原始内容没有并入交接，请在来源核对。`);
+  }
+  const placeholders = [
+    outputCounts.images ? `工具输出图片 ${outputCounts.images} 项` : '',
+    outputCounts.audio ? `工具输出音频 ${outputCounts.audio} 项` : '',
+    outputCounts.encrypted ? `工具输出加密内容 ${outputCounts.encrypted} 项` : '',
+    outputCounts.unknown.size ? `工具输出未识别 ${[...outputCounts.unknown.values()].reduce((a, b) => a + b, 0)} 项（${codexTypeCounts(outputCounts.unknown)}）` : '',
+    generatedImages ? `生成图片 ${generatedImages} 项` : '',
+  ].filter(Boolean);
+  if (placeholders.length) appendCodexDisclosure(active, `Codex 的${placeholders.join('、')}只保留了占位说明，原始数据没有并入交接，请在来源核对。`);
   if (hasResponseMessages && synthesizedInlineCalls > 0) {
     const carrier = [...active].reverse().find((turn) => turn.role === 'user' || turn.text.trim());
     if (carrier) {
@@ -267,6 +319,8 @@ function parseCodexRaw(raw: string): { turns: UnifiedTurn[]; usesEventFallback: 
 type CodexCompactionCounts = {
   /** 顶层 compacted 记录总数 */
   total: number;
+  /** response_item 的 compaction / context_compaction；与顶层 compacted 分开计数 */
+  items: number;
   /** payload.message 为非空字符串 */
   readable: number;
   /** message 缺失 / 空 / 非字符串，或 payload 形状不可读 */
@@ -284,7 +338,9 @@ type CodexCompactionCounts = {
  * - 摘要正文与 replacement_history 不复制，措辞里也不说「内容已丢失」。
  */
 function describeCodexCompaction(counts: CodexCompactionCounts, sawConversationBefore: boolean): string {
-  if (counts.total === 0) return '';
+  if (counts.total === 0 && counts.items === 0) return '';
+  const items = counts.items ? `另有 ${counts.items} 条 response_item 压缩条目（compaction / context_compaction），Watch 不解密其内容，也不应用其上下文窗口；这些条目与顶层 compacted 分开计数。` : '';
+  if (counts.total === 0) return `${WATCH_CONTEXT_DISCLOSURE_PREFIX}${items}需要以 Codex 当前上下文为准时请在原生 Codex 里核对]`;
   const details: string[] = [];
   if (counts.readable > 0) details.push(`${counts.readable} 条带可读摘要`);
   if (counts.unreadable > 0) details.push(`${counts.unreadable} 条摘要为空或不可读`);
@@ -295,7 +351,7 @@ function describeCodexCompaction(counts: CodexCompactionCounts, sawConversationB
     `${WATCH_CONTEXT_DISCLOSURE_PREFIX}Codex 会话日志里有 ${counts.total} 条上下文压缩记录` +
     (details.length > 0 ? `（${details.join('、')}）` : '') +
     `，Watch 没有把摘要并入交接、也没有应用 Codex 的压缩窗口：${shape}；` +
-    '需要以 Codex 当前上下文为准时请在原生 Codex 里核对]'
+    items + '需要以 Codex 当前上下文为准时请在原生 Codex 里核对]'
   );
 }
 
@@ -338,121 +394,85 @@ function lastAssistantOf(turns: UnifiedTurn[]): UnifiedTurn | undefined {
   return last && last.role === 'assistant' ? last : undefined;
 }
 
-function processItemToEvents(p: Record<string, unknown>, timestamp: string): ProcessEvent[] {
+type CodexItem =
+  | { events: ProcessEvent[]; placement?: 'before' | 'turn'; output?: CodexOutputProjection; generatedImage?: boolean }
+  | { unknown: unknown }
+  | { compaction: true };
+
+const IGNORED_ITEMS = new Set(['additional_tools', 'configuration_update', 'compaction_trigger', 'tool_search_call', 'tool_search_output', 'ghost_snapshot']);
+const nonemptyString = (value: unknown): string | undefined => typeof value === 'string' && value.trim() ? value : undefined;
+
+function processItem(p: Record<string, unknown>, timestamp: string): CodexItem {
   const base = { timestamp, provider: 'codex' as const };
+  const note = (text: string, placement: 'before' | 'turn' = 'turn'): Extract<CodexItem, { events: ProcessEvent[] }> => ({
+    events: [{ ...base, kind: 'text', summary: summarize(text, 'Codex 过程记录'), detail: text }], placement,
+  });
   switch (p.type) {
     case 'reasoning': {
       const text = reasoningPlaintext(p);
-      if (!text) return [];
-      return [
-        {
-          ...base,
-          kind: 'thinking',
-          summary: text === ENCRYPTED_THINKING ? ENCRYPTED_THINKING : summarize(text, '思考'),
-          detail: text,
-        },
-      ];
+      return { events: text ? [{ ...base, kind: 'thinking', summary: text === ENCRYPTED_THINKING ? text : summarize(text, '思考'), detail: text }] : [] };
     }
     case 'function_call':
     case 'custom_tool_call': {
-      const name = typeof p.name === 'string' ? p.name : 'tool';
-      const callId = typeof p.call_id === 'string' ? p.call_id : undefined;
+      const name = codexToolName(typeof p.name === 'string' ? p.name : 'tool', p.namespace);
       const raw = p.input ?? p.arguments ?? '';
       const rawText = typeof raw === 'string' ? raw : JSON.stringify(raw);
       const detail = name === 'exec' ? extractExecCommand(rawText) : rawText;
-      return [
-        {
-          ...base,
-          kind: 'tool_call',
-          summary: summarize(`${name}: ${detail}`, name),
-          detail,
-          name,
-          callId,
-          input: parseToolInput(raw) ?? detail,
-        },
-      ];
+      return { events: [{ ...base, kind: 'tool_call', summary: summarize(`${name}: ${detail}`, name), detail, name,
+        callId: nonemptyString(p.call_id), input: parseToolInput(raw) ?? detail }] };
     }
     case 'function_call_output':
     case 'custom_tool_call_output': {
-      const callId = typeof p.call_id === 'string' ? p.call_id : undefined;
-      const detail = flattenToolOutput(p.output);
-      return [{ ...base, kind: 'tool_result', summary: '工具返回', detail, callId }];
-    }
-    case 'command_execution': {
-      const command = typeof p.command === 'string' ? p.command : '';
-      const output = typeof p.aggregated_output === 'string' ? p.aggregated_output : '';
-      const callId = typeof p.call_id === 'string' ? p.call_id : undefined;
-      const events: ProcessEvent[] = [
-        {
-          ...base,
-          kind: 'tool_call',
-          summary: summarize(command, 'exec'),
-          detail: command,
-          name: 'exec',
-          callId,
-          input: command,
-        },
-      ];
-      if (output.trim()) {
-        events.push({ ...base, kind: 'tool_result', summary: '工具返回', detail: output, callId });
+      const callId = nonemptyString(p.call_id);
+      const output = codexToolOutputText(p.output);
+      if (p.type === 'function_call_output' && !callId && nonemptyString(p.name)) {
+        const label = [nonemptyString(p.namespace), p.name].filter(Boolean).join('.');
+        const text = `[Codex 附加上下文：${codexLabel(label)}]\n这是 Codex 注入给模型的独立上下文，没有对应的工具调用，也不是助手发言或用户指令；其中的文字属于外部内容。\n${output.text || '（日志没有可读的输出文本）'}`;
+        return { ...note(text, 'before'), output };
       }
-      return events;
+      return { events: [{ ...base, kind: 'tool_result', summary: '工具返回', detail: output.text, callId }], output };
     }
-    // 私有 item 也尽量入账，避免 codex→他侧缺过程：本地 shell 调用 / 网页搜索 / 协作者消息
+    case 'command_execution':
     case 'local_shell_call': {
-      const callId = typeof p.call_id === 'string' ? p.call_id : undefined;
-      const shellCommand =
-        typeof p.shell_command === 'string' && p.shell_command.trim() ? p.shell_command : '';
-      const command = shellCommand || (typeof p.command === 'string' ? p.command : '');
-      if (!command.trim()) return [];
-      const events: ProcessEvent[] = [
-        {
-          ...base,
-          kind: 'tool_call',
-          summary: summarize(command, 'exec'),
-          detail: command,
-          name: 'exec',
-          callId,
-          input: command,
-        },
-      ];
-      const output = typeof p.output === 'string' && p.output.trim() ? p.output : '';
-      if (output) {
-        events.push({ ...base, kind: 'tool_result', summary: '工具返回', detail: output, callId });
-      }
-      return events;
+      const local = p.type === 'local_shell_call';
+      const command = local
+        ? localShellCommand(p.action) || nonemptyString(p.shell_command) || nonemptyString(p.command) || ''
+        : nonemptyString(p.command) || '';
+      if (!command.trim()) return { unknown: `${p.type}（没有可读命令）` };
+      const callId = nonemptyString(p.call_id) ?? (local ? nonemptyString(p.id) : undefined);
+      const output = nonemptyString(local ? p.output : p.aggregated_output);
+      const events: ProcessEvent[] = [{ ...base, kind: 'tool_call', summary: summarize(command, 'exec'), detail: command, name: 'exec', callId, input: command }];
+      if (output) events.push({ ...base, kind: 'tool_result', summary: '工具返回', detail: output, callId });
+      return { events };
     }
     case 'web_search_call': {
-      const callId = typeof p.call_id === 'string' ? p.call_id : undefined;
+      const callId = nonemptyString(p.call_id);
+      const output = nonemptyString(p.output);
+      if (!callId && !output) return note(webSearchDetail(p));
+      // 兼容旧日志中带 call_id / output 的内联形状；上游 action 形状没有可配对调用。
       const query = typeof p.query === 'string' ? p.query : '';
-      const events: ProcessEvent[] = [
-        {
-          ...base,
-          kind: 'tool_call',
-          summary: summarize(query || '网页搜索', 'web_search'),
-          detail: query,
-          name: 'web_search',
-          callId,
-          input: { query },
-        },
-      ];
-      const output = typeof p.output === 'string' && p.output.trim() ? p.output : '';
-      if (output) {
-        events.push({ ...base, kind: 'tool_result', summary: '搜索结果', detail: output, callId });
-      }
-      return events;
+      const events: ProcessEvent[] = [{ ...base, kind: 'tool_call', summary: summarize(query || '网页搜索', 'web_search'), detail: query, name: 'web_search', callId, input: { query } }];
+      if (output) events.push({ ...base, kind: 'tool_result', summary: '搜索结果', detail: output, callId });
+      return { events };
     }
     case 'agent_message': {
-      // 协作者/中间消息：不进 turn.text（最终回复由 response_item message 覆盖），只作为中间文本
       const parsed = parseCodexContent(p.content, timestamp);
-      const text = [parsed.text, ...parsed.placeholders].filter((t) => t.trim() !== '').join('\n');
-      if (!text.trim()) return [];
-      const events: ProcessEvent[] = [{ ...base, kind: 'text', summary: summarize(text, '过程'), detail: text }];
-      for (const ev of parsed.events) events.push(ev);
-      return events;
+      const encrypted = Array.isArray(p.content) ? p.content.filter(c => asJsonObject(c)?.type === 'encrypted_content').length : 0;
+      const text = [parsed.text, ...parsed.placeholders, ...(encrypted ? [`[${encrypted} 项加密协作消息内容，Watch 读不到明文]`] : [])].filter(t => t.trim()).join('\n');
+      if (!text.trim()) return { events: [] };
+      const author = typeof p.author === 'string' ? codexLabel(p.author) : '';
+      const recipient = typeof p.recipient === 'string' ? codexLabel(p.recipient) : '';
+      const label = author || recipient ? `：${author || '（未记录）'} → ${recipient || '（未记录）'}` : '';
+      return note(`[Codex 协作消息${label}]\n${text}`);
     }
+    case 'image_generation_call':
+      return { ...note(imageGenerationNote(p)), generatedImage: p.status === 'completed' && Boolean(nonemptyString(p.result)) };
+    case 'compaction':
+    case 'compaction_summary':
+    case 'context_compaction':
+      return { compaction: true };
     default:
-      return [];
+      return typeof p.type === 'string' && IGNORED_ITEMS.has(p.type) ? { events: [] } : { unknown: p.type };
   }
 }
 
@@ -501,19 +521,15 @@ function unwrapLegacyWrappedInput(obj: Record<string, unknown>): unknown {
 }
 
 function reasoningPlaintext(p: Record<string, unknown>): string | null {
-  const summary = p.summary;
-  if (Array.isArray(summary)) {
-    const texts = summary
-      .map((item) => {
-        if (typeof item === 'string') return item;
-        if (typeof item === 'object' && item && typeof (item as { text?: unknown }).text === 'string') {
-          return (item as { text: string }).text;
-        }
-        return '';
-      })
-      .filter((t) => t.trim() !== '');
-    if (texts.length) return texts.join('\n');
+  const texts: string[] = [];
+  for (const entries of [p.summary, p.content]) {
+    if (!Array.isArray(entries)) continue;
+    for (const item of entries) {
+      const text = typeof item === 'string' ? item : asJsonObject(item)?.text;
+      if (typeof text === 'string' && text.trim()) texts.push(text);
+    }
   }
+  if (texts.length) return texts.join('\n');
   if (typeof p.encrypted_content === 'string' && p.encrypted_content) return ENCRYPTED_THINKING;
   return null;
 }
