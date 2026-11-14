@@ -638,7 +638,7 @@ export async function openSession(
       // 过程文本的回复时，这一轮被判成「已包含」而跳过——过程事件静默消失，`notes` 还会说
       // 「内容已全部包含」。这条路径不做整份重写（目标格式未必存得下这些事件，且每次
       // `--from` 都会重演一次），但必须披露有多少轮只并入了文本。
-      const missingEvents = countPairedTurnsMissingEvents(srcTurns, dstTurns);
+      const missingEvents = countPairedTurnsMissingEvents(srcTurns, dstTurns, target.adapter);
       if (missingEvents > 0) {
         warnings.push(
           `目标会话 ${escapeControlChars(targetId)}（${target.adapter.displayName}）已有 ${missingEvents} 轮与来源同文本的回复，` +
@@ -943,7 +943,7 @@ function warnPairedMissingEvents(
   sourceId: string,
   diagnostics?: string[],
 ): void {
-  const missingEvents = countPairedTurnsMissingEvents(sourceTurns, targetTurns);
+  const missingEvents = countPairedTurnsMissingEvents(sourceTurns, targetTurns, target);
   if (missingEvents > 0) {
     diagnostics?.push(
       `目标会话 ${escapeControlChars(targetRef.sessionId)}（${target.displayName}）已有 ${missingEvents} 轮与来源同文本的回复，` +

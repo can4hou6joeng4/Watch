@@ -1492,7 +1492,9 @@ export async function handoff(
     }
   };
 
-  const replace = Boolean(into && shouldReplacePairedSession(turns, destTurns));
+  // 目标能力参与对账：写不进去的事件（用户侧文本 / 同文助手文本 / 不支持的附件）不算「缺过程事件」，
+  // 否则每次交接都会判成需要整份重写（第九十三轮）。
+  const replace = Boolean(into && shouldReplacePairedSession(turns, destTurns, target));
   let outgoing = replace ? mergeTurns(turns, destTurns) : into ? diffTurns(turns, destTurns) : turns;
   if (!replace && into) {
     const seen = new Set(

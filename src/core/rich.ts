@@ -312,14 +312,67 @@ export function mergeTurns(source: UnifiedTurn[], dest: UnifiedTurn[]): UnifiedT
 }
 
 /**
+ * 目标写入侧的事件承载能力（对账用）。字段与适配器的能力声明同名同义，
+ * 与 `describeTextEventLoss()` / `describeAttachmentLoss()` 是同一套口径——
+ * 披露说「写不进去」的事件，在这里也不能算成「重写一次就能补上」。
+ */
+export interface EventCarryCaps {
+  textEventSupport?: 'assistant';
+  attachmentSupport?: 'images' | 'user-images' | 'all';
+}
+
+/**
+ * 事件写进目标后能否被反解回来。三条丢弃是结构性的，与具体 provider 无关：
+ * - 无附件的文本事件：六家的写入侧都不写用户侧；助手侧只有声明 `textEventSupport`
+ *   的目标才写。以前按「事件数组更长」硬比，这类事件会让计数**永远** > 0。
+ * - 与正文同文的助手文本事件：build 主动跳过（写了 parse 也会当最终正文去重）。
+ * - 附件事件：按目标 `attachmentSupport` 判定；不支持的种类只留占位文本，事件本身不落盘。
+ * 空 / 加密思考所有 build 都丢；其余 thinking 与工具调用 / 结果六家都能写出并反解，
+ * 所以仍按「重写一次就能补上」计数。
+ */
+function isEventCarriable(turn: UnifiedTurn, ev: ProcessEvent, caps: EventCarryCaps): boolean {
+  if (ev.kind === 'tool_call' || ev.kind === 'tool_result') return true;
+  if (ev.kind === 'thinking') {
+    const text = (ev.detail ?? ev.summary).trim();
+    return text.length > 0 && text !== ENCRYPTED_THINKING;
+  }
+  if (ev.kind !== 'text') return true;
+  if (ev.attachment) {
+    const support = caps.attachmentSupport ?? 'none';
+    if (support === 'all') return true;
+    if (support === 'images') return ev.attachment.kind === 'image';
+    if (support === 'user-images') return turn.role === 'user' && ev.attachment.kind === 'image';
+    return false;
+  }
+  if (turn.role !== 'assistant' || caps.textEventSupport !== 'assistant') return false;
+  const text = (ev.detail ?? ev.summary).trim();
+  return text.length > 0 && text !== turn.text.trim();
+}
+
+function carriableEventCount(turn: UnifiedTurn, caps: EventCarryCaps | undefined): number {
+  const events = turn.events ?? [];
+  // 未提供目标能力时保持旧口径（按全部事件计）：只有测试与不写盘的只读路径会走到这里。
+  if (!caps) return events.length;
+  return events.filter((ev) => isEventCarriable(turn, ev, caps)).length;
+}
+
+/**
  * 按 turnsPair 对齐后，**dest 回合缺少 source 过程事件**的回合数。
  *
  * `diffTurns` 用轮次身份（正文 + 调用身份）对齐：一轮同文本、但来源多出 thinking /
  * 过程文本（都不带 callId）的回复会被判成「目标已包含」而跳过，过程事件静默消失。
  * 这里是同一件事的计数版——`handoff` 用它决定是否整份重写；`open --from` 不能重写
  * （目标格式可能存不下这些事件，重写会在每次 `--from` 时反复发生），但必须据此披露。
+ *
+ * **只数目标写得出的事件**：用户侧文本事件、与正文同文的助手文本事件、目标不支持的
+ * 附件种类都不会因为「重写一次」而出现，按原始事件数比较会让计数永久 > 0，
+ * 于是每次交接都判成「缺过程事件」并整份重写（2026-11-14 第九十三轮，probe 复现）。
  */
-export function countPairedTurnsMissingEvents(source: UnifiedTurn[], dest: UnifiedTurn[]): number {
+export function countPairedTurnsMissingEvents(
+  source: UnifiedTurn[],
+  dest: UnifiedTurn[],
+  target?: EventCarryCaps,
+): number {
   if (dest.length === 0) return 0;
   let si = 0;
   let count = 0;
@@ -332,7 +385,7 @@ export function countPairedTurnsMissingEvents(source: UnifiedTurn[], dest: Unifi
       }
     }
     if (found >= 0) {
-      if ((source[found]!.events?.length ?? 0) > (d.events?.length ?? 0)) count += 1;
+      if (carriableEventCount(source[found]!, target) > carriableEventCount(d, target)) count += 1;
       si = found + 1;
     }
   }
@@ -340,8 +393,12 @@ export function countPairedTurnsMissingEvents(source: UnifiedTurn[], dest: Unifi
 }
 
 /** 对齐后的 dest 回合缺 source 的过程事件 → 必须整文件重写，不能追加到最终回复后面 */
-export function shouldReplacePairedSession(source: UnifiedTurn[], dest: UnifiedTurn[]): boolean {
-  return countPairedTurnsMissingEvents(source, dest) > 0;
+export function shouldReplacePairedSession(
+  source: UnifiedTurn[],
+  dest: UnifiedTurn[],
+  target?: EventCarryCaps,
+): boolean {
+  return countPairedTurnsMissingEvents(source, dest, target) > 0;
 }
 
 export function toClaudeToolName(name: string): string {
