@@ -1,5 +1,6 @@
 import type { Finding } from './findings.js';
 import { addFinding } from './findings.js';
+import { codeFence } from './markdown.js';
 import { CLAUDE_COMPACT_SUMMARY_PREFIX, findContextDisclosure, KIMI_COMPACTION_SUMMARY_PREFIX, OPENCODE_COMPACTION_SUMMARY_PREFIX, PI_COMPACTION_SUMMARY_PREFIX, WATCH_CONTEXT_DISCLOSURE_PREFIX } from './rich.js';
 import type { ProcessEvent, TokenUsage, UnifiedTurn } from './types.js';
 import { collectWorkManifest, isEmptyWorkManifest, renderWorkManifest, type WorkManifest } from './work-manifest.js';
@@ -351,7 +352,9 @@ function renderEvent(event: ProcessEvent, detailLimit: number | null, stats: Pro
     if (detail.escaped) stats.escapedBodies += 1;
     const clipped = clip(detail.text, detailLimit);
     if (clipped.truncated) stats.truncatedTexts += 1;
-    line += `\n  \`\`\`\n${clipped.text}\n  \`\`\``;
+    // 围栏长度按（截断后的）内容选择：工具入参里的 ``` 否则会提前闭合并把后续行漏成正文。
+    const fence = codeFence(clipped.text);
+    line += `\n  ${fence}\n${clipped.text}\n  ${fence}`;
   }
   return line;
 }
