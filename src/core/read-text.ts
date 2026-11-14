@@ -151,6 +151,7 @@ export function describeSessionReadFailureReason(error: unknown): string {
   const code = (error as NodeJS.ErrnoException).code;
   if (code === 'ENOENT' || code === 'ENOTDIR') return '会话文件已不存在';
   if (code === 'EACCES' || code === 'EPERM') return '会话文件无权读取（权限问题，不是被删除）';
+  if (isOversizedStringError(error)) return '会话文件太大，超过单次读入的上限（文件本身完好，不是被损坏）';
   const reason = code ?? (error instanceof Error ? error.message : String(error));
   return `会话文件读不出来（${reason}）`;
 }
@@ -168,8 +169,27 @@ export function describePathReadFailureReason(error: unknown): string {
   if (code === 'ENOENT' || code === 'ENOTDIR') return '路径不存在（可能刚被移动或删除）';
   if (code === 'EACCES' || code === 'EPERM') return '无权读取（权限问题，不是路径写错）';
   if (code === 'EISDIR') return '该路径是目录，不是文件';
+  if (isOversizedStringError(error)) return '文件太大，超过单次读入的上限（不是文件损坏）';
   if (code) return `读取失败（${code}）`;
   return error instanceof Error ? error.message : String(error);
+}
+
+/**
+ * 「整份读成字符串时超过 V8 字符串上限」的错误。
+ *
+ * 第一百二十轮实测（Node 24）：`readFile(path, 'utf8')` 对约 520 MB 的文件抛
+ * `Error: Cannot create a string longer than 0x1fffffe8 characters`，`code` 是
+ * `ERR_STRING_TOO_LONG`——**不是**以往注释里说的「没有 code 的 `Invalid string length`」；
+ * `readFileSync` 报的是同一句。也就是说，旧文案会走到「读取失败（ERR_STRING_TOO_LONG）」，
+ * 用户既看不出「文件本身是好的」，也不知道下一步是改用流式读取而不是修文件。
+ *
+ * 兜底也认 `RangeError` + `Invalid string length`：不同 Node 版本 / `Buffer.toString` 路径
+ * 可能走那一句，且它没有 code，`describe*()` 会把它原样当英文吐给用户。
+ */
+function isOversizedStringError(error: unknown): boolean {
+  const code = (error as NodeJS.ErrnoException).code;
+  if (code === 'ERR_STRING_TOO_LONG') return true;
+  return error instanceof RangeError && /Invalid string length/i.test(error.message);
 }
 
 /**
