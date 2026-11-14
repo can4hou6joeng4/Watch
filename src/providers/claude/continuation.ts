@@ -50,10 +50,18 @@ export function readContinuedInRecord(record: unknown): { sessionId: string | nu
 /**
  * 纯文本扫描（给「不解析对话」的前置检查用，如官方导入的 prepare）：只看 `continued-in`
  * 记录本身，不解析消息内容、不复制任何正文。
+ *
+ * **必须逐行流式**：来源是 Claude 会话文件，本机实测有 695 MB 的（超过 V8 字符串上限，
+ * 整份 `readFile` 会抛 `Invalid string length`）。以前调用点整份读入再 `split('\n')`，
+ * 于是大会话在官方导入的**前置检查**里就被讲成「无法读取来源会话」，而文件本身完好。
+ * 输入与 `parseCodexLines()` 同一形状（同步 / 异步行迭代器）；读取错误原样抛出，
+ * 由调用点按既有中文分档说明。
  */
-export function scanContinuedInRecords(raw: string): ClaudeContinuationCounts {
+export async function scanContinuedInRecords(
+  lines: Iterable<string> | AsyncIterable<string>,
+): Promise<ClaudeContinuationCounts> {
   const counts: ClaudeContinuationCounts = { count: 0, malformed: 0, sessionId: null };
-  for (const line of raw.split('\n')) {
+  for await (const line of lines) {
     const trimmed = line.trim();
     if (!trimmed) continue;
     let record: unknown;

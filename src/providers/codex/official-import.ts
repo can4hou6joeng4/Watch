@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process';
-import { readFile, lstat, readdir, realpath, stat } from 'node:fs/promises';
+import { lstat, readdir, realpath, stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
@@ -8,7 +8,7 @@ import { sameDirectorySync } from '../../core/cwd.js';
 import { escapeControlChars } from '../../core/display.js';
 import { ImportJobs, type ImportOutcome, type ImportPlan } from '../../core/import-jobs.js';
 import { resolveCli } from '../../core/platform.js';
-import { describePathReadFailureReason, isEmptySessionFileReason, isMissingPathError } from '../../core/read-text.js';
+import { describePathReadFailureReason, isEmptySessionFileReason, isMissingPathError, iterateFileLines } from '../../core/read-text.js';
 import type { SessionRef } from '../../core/types.js';
 import { claudeProjectsDir, encodeClaudeProjectDir } from '../claude/build.js';
 import { scanContinuedInRecords } from '../claude/continuation.js';
@@ -199,14 +199,13 @@ function notInProjectMessage(sourceId: string, cwd: string, found: ElsewhereSess
  * 读不出续接文件状态时用中性措辞，不把「读不出来」写成「没有」。
  */
 async function continuedImportBlock(ref: SessionRef): Promise<string | null> {
-  let raw: string;
+  let counts;
   try {
-    raw = await readFile(ref.filePath, 'utf8');
+    counts = await scanContinuedInRecords(iterateFileLines(ref.filePath));
   } catch (error) {
     // findSource 刚确认过可读；这里再读失败就按真实原因说，不假装没这回事
     return `无法读取来源会话 ${escapeControlChars(ref.filePath)}：${describePathReadFailureReason(error)}；先修好它再重新预览——本次未写入任何内容`;
   }
-  const counts = scanContinuedInRecords(raw);
   if (counts.count === 0 && counts.malformed === 0) return null;
   const id = counts.sessionId ? escapeControlChars(counts.sessionId) : '';
   if (!id) {

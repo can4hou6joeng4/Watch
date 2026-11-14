@@ -8,7 +8,7 @@ import { asJsonObject, parseJsonObject } from '../../core/jsonl.js';
 import { verifyWrittenTurns } from '../../core/verify.js';
 import { ENCRYPTED_THINKING, codexToolInput, isCodexExecScript, toCodexToolName, turnHasContent } from '../../core/rich.js';
 import { codexUserTurnContent } from './media.js';
-import { describePathReadFailureReason, isMissingPathError } from '../../core/read-text.js';
+import { describePathReadFailureReason, isMissingPathError, iterateFileLines } from '../../core/read-text.js';
 import { isLegacyEventMsgRollout, parseCodexSession } from './parse.js';
 import { codexSessionUsage } from './usage.js';
 import type { ProcessEvent, SessionRef, TokenUsage, UnifiedTurn } from '../../core/types.js';
@@ -29,28 +29,32 @@ const DEFAULT_PROVIDER = 'openai';
 async function detectCodexIdentity(sessionsDir: string): Promise<CodexIdentity> {
   const files = await newestJsonlPaths(sessionsDir, 5);
   for (const file of files) {
-    let content: string;
+    // 只扫前 20 行，而且是流式的：rollout 可能大到超过 V8 字符串上限（与 claude / pi / kimi
+    // 同一族），整份 `readFile` 会抛 `Invalid string length` 而被静默跳过——探测不到身份就
+    // 退回默认 originator，写出的会话与原生不一致。读失败只跳过这一份，继续试下一个。
+    let seen = 0;
     try {
-      content = await readFile(file, 'utf8');
+      for await (const line of iterateFileLines(file)) {
+        if (seen >= 20) break;
+        seen += 1;
+        const record = parseJsonObject(line);
+        if (!record || record.type !== 'session_meta') continue;
+        const payload = asJsonObject(record.payload);
+        if (!payload) continue;
+        const originator = typeof payload.originator === 'string' ? payload.originator : undefined;
+        const source = typeof payload.source === 'string' ? payload.source : undefined;
+        // 跳过 exec 会话的身份：我们要让导入/新建会话走普通 interactive resume，避免被 resume 选择器排除
+        if (!originator || generatedOriginLabel(originator) || source === 'exec') {
+          continue; // 试下一个文件
+        }
+        return {
+          originator,
+          cliVersion: typeof payload.cli_version === 'string' ? payload.cli_version : undefined,
+          source: source ?? 'vscode',
+        };
+      }
     } catch {
       continue;
-    }
-    for (const line of content.split('\n').slice(0, 20)) {
-      const record = parseJsonObject(line);
-      if (!record || record.type !== 'session_meta') continue;
-      const payload = asJsonObject(record.payload);
-      if (!payload) continue;
-      const originator = typeof payload.originator === 'string' ? payload.originator : undefined;
-      const source = typeof payload.source === 'string' ? payload.source : undefined;
-      // 跳过 exec 会话的身份：我们要让导入/新建会话走普通 interactive resume，避免被 resume 选择器排除
-      if (!originator || generatedOriginLabel(originator) || source === 'exec') {
-        continue; // 试下一个文件
-      }
-      return {
-        originator,
-        cliVersion: typeof payload.cli_version === 'string' ? payload.cli_version : undefined,
-        source: source ?? 'vscode',
-      };
     }
   }
   return { ...DEFAULT_IDENTITY };
