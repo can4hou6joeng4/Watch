@@ -355,24 +355,6 @@ export function toCodexToolName(name: string): string {
   return name;
 }
 
-export function flattenToolOutput(output: unknown): string {
-  if (typeof output === 'string') return output;
-  if (Array.isArray(output)) {
-    return output
-      .map((item) => {
-        if (typeof item === 'string') return item;
-        if (typeof item !== 'object' || item === null) return '';
-        const o = item as Record<string, unknown>;
-        if (typeof o.text === 'string') return o.text;
-        if ('content' in o) return flattenToolOutput(o.content);
-        return '';
-      })
-      .join('');
-  }
-  if (output && typeof output === 'object') return JSON.stringify(output);
-  return '';
-}
-
 /** 只认调用脚本的起始形状，shell 命令里提到 tools.exec_command 不等于已经包装。 */
 export function isCodexExecScript(input: string): boolean {
   return /^\s*(?:(?:const|let|var)\s+[\w$]+\s*=\s*(?:await\s+)?|await\s+)?tools\.exec_command\s*\(/.test(input);

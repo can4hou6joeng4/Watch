@@ -3,13 +3,13 @@ import {
   CLAUDE_THINKING_PREFIX,
   ENCRYPTED_THINKING,
   ensureAssistant,
-  flattenToolOutput,
   pushEvent,
   stripEmptyEvents,
   summarize,
   unwrapUserQuery,
   WATCH_CONTEXT_DISCLOSURE_PREFIX,
 } from '../../core/rich.js';
+import { escapeControlChars } from '../../core/display.js';
 import { iterateFileLines } from '../../core/read-text.js';
 import type { ProcessEvent, SessionRef, TokenUsage, UnifiedTurn } from '../../core/types.js';
 import { describeClaudeContinuation, probeClaudeContinuation, readContinuedInRecord, type ClaudeContinuationCounts } from './continuation.js';
@@ -26,6 +26,7 @@ import { describeQueuedImages, readQueuedUserPrompt } from './queued.js';
  * Claude JSONL → 统一时间线（Rich）：
  * - 跳过 isMeta/isSidechain、custom-title/ai-title、未知 type、坏行
  * - thinking / tool_use 挂到当前助手轮；tool_result 按调用 ID 回到对应助手轮，未配对结果保留并披露
+ * - 工具结果里的图片 / 文件 / 未识别块留占位并计数披露，不复制 data / url，不产 attachment
  * - 仅含 tool_result 的 user 记录不当作用户消息
  * - 同一 user turn 内多条 assistant 合并：过程事件累积，文本留最后一条非空
  * - assistant 的 `[思考] …` 记录（build 的 thinking 降级形态）还原成 thinking 事件
@@ -53,6 +54,7 @@ export async function parseClaudeSession(ref: SessionRef): Promise<UnifiedTurn[]
   // 失败记录（system/api_error 与 isApiErrorMessage）只计数，循环结束后合成一条披露：
   // 逐条挂事件会让一个 146 次错误的会话刷满同一句话。
   const failures: ClaudeFailureCounts = createClaudeFailureCounts();
+  const toolMedia: ClaudeToolMediaCounts = { images: 0, files: 0, unknown: new Map() };
   let lastFailureTimestamp = '';
   // 失败之后是否再没有产生轮次的记录。只有这种**尾部**失败才补空正文助手轮：
   // 中途失败当场造轮时，写入侧会跳过「无正文且无事件」的轮次，目标永远比来源少一轮，
@@ -133,7 +135,7 @@ export async function parseClaudeSession(ref: SessionRef): Promise<UnifiedTurn[]
     if (r.isMeta === true || r.isSidechain === true) continue;
 
     const content = (r.message as Record<string, unknown> | undefined)?.content;
-    const extracted = extractRich(content, timestamp, type, r.watchGeneratedThinking === true);
+    const extracted = extractRich(content, timestamp, type, r.watchGeneratedThinking === true, toolMedia);
     if (!extracted) continue;
     const { text, onlyToolResult, events } = extracted;
 
@@ -239,6 +241,19 @@ export async function parseClaudeSession(ref: SessionRef): Promise<UnifiedTurn[]
     const text = `${WATCH_CONTEXT_DISCLOSURE_PREFIX}Claude 日志中有 ${unpaired.length} 条工具结果无法确认调用归属（${reasons}），已作为带标记的过程文本保留，不计作已配对结果；可用 watch prompt <来源会话 id> --profile full 查看记录，完整原文请在来源文件或原生 Claude Code 中核对。]`;
     pushEvent(disclosureContext, { kind: 'text', summary: text, detail: text, timestamp: disclosureContext.timestamp, provider: 'claude' });
   }
+  const toolMediaTotal = toolMedia.images + toolMedia.files
+    + [...toolMedia.unknown.values()].reduce((sum, n) => sum + n, 0);
+  if (toolMediaTotal > 0 && disclosureContext) {
+    const kinds = [
+      toolMedia.images ? `图片 ${toolMedia.images} 个` : '',
+      toolMedia.files ? `文件 ${toolMedia.files} 个` : '',
+      toolMedia.unknown.size
+        ? `未识别块 ${[...toolMedia.unknown.values()].reduce((sum, n) => sum + n, 0)} 个（${[...toolMedia.unknown].slice(0, 3).map(([type, n]) => `${type}×${n}`).join('、')}）`
+        : '',
+    ].filter(Boolean).join('、');
+    const text = `${WATCH_CONTEXT_DISCLOSURE_PREFIX}Claude 的工具结果里有 ${toolMediaTotal} 个媒体或未识别内容块（${kinds}）；Watch 只保留占位文本，不复制原始数据，目标会话里无法还原这些载荷，需要时请在来源文件或原生 Claude Code 中核对。]`;
+    pushEvent(disclosureContext, { kind: 'text', summary: text, detail: text, timestamp: disclosureContext.timestamp, provider: 'claude' });
+  }
   const detected = await probeClaudeContinuation(continuation, ref.filePath);
   if (detected && disclosureContext) {
     const text = describeClaudeContinuation(detected);
@@ -328,11 +343,88 @@ function readUsage(message: unknown): TokenUsage | undefined {
   return { inputTokens, outputTokens };
 }
 
+/** 工具结果里的非文本块：以前在 flattenToolOutput 里整块变空串，截图 / PDF / 未识别块静默消失。 */
+interface ClaudeToolMediaCounts {
+  images: number;
+  files: number;
+  unknown: Map<string, number>;
+}
+
+function claudeBlockLabel(value: string, limit = 60): string {
+  const escaped = escapeControlChars(value);
+  return escaped.length > limit ? `${escaped.slice(0, limit)}…` : escaped;
+}
+
+/** 只留占位与计数，不复制 base64 / url，不产 attachment（工具结果不是附件载体）。 */
+function claudeToolMediaPlaceholder(kind: '图片' | '文件', block: Record<string, unknown>): string {
+  const src = typeof block.source === 'object' && block.source !== null ? (block.source as Record<string, unknown>) : undefined;
+  const media = typeof src?.media_type === 'string' && src.media_type ? claudeBlockLabel(src.media_type) : '';
+  const name = media ? `${kind}：${media}` : kind;
+  if (typeof src?.data === 'string') return `[${name}，${src.data.length}B]`;
+  if (typeof src?.url === 'string') return `[${name}（外部链接）]`;
+  return `[${name}]`;
+}
+
+/**
+ * tool_result 的 content 投影：文本块保留、多个块按换行连接，图片 / 文档 / 未识别块写成占位并计数。
+ * 与 Codex 的 `codexToolOutputText` 同一口径——这些载荷不进交接产物，但消失必须可披露。
+ */
+function claudeToolResultText(output: unknown, counts: ClaudeToolMediaCounts): string {
+  const addUnknown = (type: string): void => {
+    counts.unknown.set(type, (counts.unknown.get(type) ?? 0) + 1);
+  };
+  const project = (value: unknown): string => {
+    if (typeof value === 'string') return value;
+    if (!Array.isArray(value)) {
+      if (value && typeof value === 'object') return JSON.stringify(value);
+      return '';
+    }
+    const parts: string[] = [];
+    for (const item of value) {
+      if (typeof item === 'string') {
+        parts.push(item);
+        continue;
+      }
+      if (typeof item !== 'object' || item === null) {
+        addUnknown('（非对象内容块）');
+        parts.push('[未识别内容块：（非对象内容块）]');
+        continue;
+      }
+      const b = item as Record<string, unknown>;
+      if (typeof b.text === 'string') {
+        parts.push(b.text);
+        continue;
+      }
+      if (b.type === 'image') {
+        counts.images += 1;
+        parts.push(claudeToolMediaPlaceholder('图片', b));
+        continue;
+      }
+      if (b.type === 'document') {
+        counts.files += 1;
+        parts.push(claudeToolMediaPlaceholder('文件', b));
+        continue;
+      }
+      if ('content' in b) {
+        const nested = project(b.content);
+        if (nested.trim()) parts.push(nested);
+        continue;
+      }
+      const type = typeof b.type === 'string' && b.type ? claudeBlockLabel(b.type) : '（空类型）';
+      addUnknown(type);
+      parts.push(`[未识别内容块：${type}]`);
+    }
+    return parts.filter((part) => part.trim()).join('\n');
+  };
+  return project(output);
+}
+
 function extractRich(
   content: unknown,
   timestamp: string,
   role: 'user' | 'assistant',
-  watchGeneratedThinking = false,
+  watchGeneratedThinking: boolean,
+  toolMedia: ClaudeToolMediaCounts,
 ): { text: string; onlyToolResult: boolean; events: ProcessEvent[] } | null {
   let blocks: unknown[];
   if (typeof content === 'string') {
@@ -422,7 +514,7 @@ function extractRich(
       case 'tool_result': {
         sawVisible = true;
         const callId = typeof b.tool_use_id === 'string' ? b.tool_use_id : undefined;
-        const detail = flattenToolOutput(b.content);
+        const detail = claudeToolResultText(b.content, toolMedia);
         events.push({
           ...base,
           kind: 'tool_result',
