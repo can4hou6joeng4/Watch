@@ -59,10 +59,12 @@ jobs:
             rust-target: aarch64-apple-darwin
             bundles: dmg
             artifact: watch-macos-arm64
+            esbuild-arch: arm64
           - os: macos-latest
             rust-target: x86_64-apple-darwin
             bundles: dmg
             artifact: watch-macos-x64
+            esbuild-arch: x64
           - os: windows-latest
             bundles: nsis
             artifact: watch-windows-x64
@@ -99,6 +101,17 @@ jobs:
       - name: 根依赖
         run: npm ci
 
+      # npm 按安装机架构选 @esbuild 可选包；交叉构建必须补装目标架构包，
+      # 否则 watch-core 在目标机器上找不到可执行的 esbuild（0.1.25 修复）。
+      - name: 交叉架构 esbuild 依赖
+        if: matrix.esbuild-arch
+        run: |
+          host=$(node -p 'process.arch')
+          if [ "$host" != "${{ matrix.esbuild-arch }}" ]; then
+            version=$(node -p "require('./node_modules/esbuild/package.json').version")
+            npm install --no-save --force --ignore-scripts "@esbuild/darwin-${{ matrix.esbuild-arch }}@$version"
+          fi
+
       - name: 桌面前端构建
         working-directory: desktop
         run: |
@@ -111,6 +124,13 @@ jobs:
         with:
           projectPath: desktop
           args: --bundles ${{ matrix.bundles }} ${{ matrix.rust-target && format('--target {0}', matrix.rust-target) || '' }}
+
+      # 静态检查 bundle 内 tsx/esbuild 的运行期依赖架构；不执行被打包的二进制。
+      - name: 检查打包运行期依赖
+        if: matrix.rust-target == 'x86_64-apple-darwin'
+        run: |
+          app=desktop/src-tauri/target/${{ matrix.rust-target }}/release/bundle/macos/Watch.app
+          node scripts/verify-bundle-runtime.mjs "$app/Contents/Resources/watch-core" darwin/x64
 
       - name: 上传安装包
         uses: actions/upload-artifact@v4
