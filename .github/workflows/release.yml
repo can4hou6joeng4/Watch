@@ -24,16 +24,19 @@ jobs:
             package-lock.json
             desktop/package-lock.json
 
-      - name: 根依赖、类型与站点检查
+      - name: 根依赖与类型检查
         run: |
           npm ci
           npm run typecheck
-          npm run site:build
 
       - name: 前端依赖与构建
         run: |
           npm --prefix desktop ci
           npm --prefix desktop run build
+
+      # 站点图标生成使用 desktop/node_modules 中的 React 与 Lucide。
+      - name: 站点构建与分享图校验
+        run: npm run site:build
 
       # cargo test 需要与打包相同的 Tauri Linux 运行时依赖
       - name: 系统依赖
