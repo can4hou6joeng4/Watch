@@ -20,7 +20,13 @@ The steps are on the site [guides](https://relay.bobochang.cn/en/#guides): [Clau
 
 It does not provide models, bypass usage limits, replace native agent chat, or move permissions, credentials and plugins by default. What it transfers is the recorded session, not the model's unrecorded internal state. Today the implementation is centred on CLI sessions and terminal resume; the product direction includes validated desktop entry points, but **official interoperability does not mean Watch has integrated it**.
 
-### Latest release ([v0.1.40](https://github.com/can4hou6joeng4/Watch/releases/tag/v0.1.40))
+### Latest release ([v0.1.41](https://github.com/can4hou6joeng4/Watch/releases/tag/v0.1.41))
+
+v0.1.41 makes `watch doctor` detect Codex configuration read failures before a handoff. When permissions or a path problem prevent reading `~/.codex/config.toml`, diagnostics now show the write restriction, its cause and a repair hint, and include the fault in `warnings`: ordinary mode exits 0, while `--strict` exits 1 so scripts can catch it. Diagnostics and handoff preflight share the same check; a readable or not-yet-created config does not raise a false alarm. OpenCode 2.x read-only support remains visible in the report without making strict mode fail for that known limitation.
+
+- **Validation scope**: two new synthetic regressions cover unreadable-config diagnostics, text warnings and strict-mode exit codes, plus normal behavior for readable and missing configs. The fault-warning test was verified red before the fix and green after it; existing OpenCode read-only tests pass. Full isolated regression: 1843 passing, with no native CLI or model started.
+
+### Previous release ([v0.1.40](https://github.com/can4hou6joeng4/Watch/releases/tag/v0.1.40))
 
 v0.1.40 makes the Codex precheck agree with the write path about whether the config can be read. v0.1.39 made the write path fail closed when `~/.codex/config.toml` could not be read, but `codexAdapter.preflight()` never touched the config, so `watch open <id> --to codex --check` said "writable" and the real run then refused — and the whole point of `--check` is knowing before you click. The precheck now probes with the same `readModelProvider()` first and throws `PreflightBlockedError` (`code: codex_config_unreadable`) when it cannot read the file, with a reason worded from the same source as the write path; the check sits before the `darwin` early return, so it applies everywhere (config readability is platform-independent — only the writer lock and Desktop process parts are macOS-specific). A missing file still means "never configured" and does not block.
 
