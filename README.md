@@ -20,13 +20,19 @@ Watch 只做一件事：**把已保存的会话记录连同工作目录交到目
 
 它不提供模型、不绕过配额、不代替原生 Agent 聊天，也不默认搬迁权限、凭据或插件；接力的是已有记录，不是模型未记录的内部状态。当前实现以 CLI 会话与终端恢复为主，产品方向包含经过验证的桌面端入口，但**官方支持互通不等于 Watch 已经集成**。
 
-### 最新版本（[v0.1.38](https://github.com/can4hou6joeng4/Watch/releases/tag/v0.1.38)）
+### 最新版本（[v0.1.39](https://github.com/can4hou6joeng4/Watch/releases/tag/v0.1.39)）
+
+v0.1.39 修正 Codex 写路径的一处静默替换：`~/.codex/config.toml` 读不出来时，以前一律当成「没配 `model_provider`」，把 `openai` 写进新 rollout 的 `session_meta.model_provider`，而用户看到的是「转入成功」——目标会话的 provider 于是与原生配置不一致。现在只有文件不存在（`ENOENT` / `ENOTDIR`）才是「没配、按 Codex 默认 openai 处理」，其余读失败（权限、路径被目录占住、I/O）按 errno 分档报中文原因并 fail closed，声明本次未写入任何内容。同一轮还让 `codexEnv()` 的凭据解析只读一次 `config.toml`：以前先读一份吞掉错误、再调 `readModelProvider()` 重新读同一个文件，两次读之间文件被改就会出现「凭据按 A 段解析、provider 名来自第二次读取」的错配。
+
+- **验证范围**：新增 5 项合成回归（`chmod 000` 的 config.toml 拒绝写入且不建会话目录、路径被同名目录占住按分档拒绝、无 config.toml 仍按默认 openai 成功写入、自定义 provider 写进 `session_meta` 且不误认子表、顶层缺省回默认），前两例在旧实现下先红后绿；完整隔离回归 1838 项通过。全部为合成文件，未启动原生 CLI 或模型。
+
+### 上一版本（[v0.1.38](https://github.com/can4hou6joeng4/Watch/releases/tag/v0.1.38)）
 
 v0.1.38 修正「文件太大」的报错文案。v0.1.37 的说明把 Node 的整份读取超限写成「没有 `code` 的 `Invalid string length`」，实际在 Node 24 上实测是带 `code: ERR_STRING_TOO_LONG` 的 `Error`（裸 `RangeError` 只是另一条路径）。于是写路径（pi / grok / kimi 的追加分支）遇到超出上限的会话时，用户看到的是「读取失败（ERR_STRING_TOO_LONG）」——既看不出文件本身完好，猜不到下一步是换成流式读取而不是修文件，也读不懂那串错误码。现在 `describePathReadFailureReason()` / `describeSessionReadFailureReason()` 把它翻成「文件太大，超过单次读入的上限（不是文件损坏）」/「会话文件太大，超过单次读入的上限（文件本身完好，不是被损坏）」，并兜底认没有 `code` 的裸 `RangeError: Invalid string length`。
 
 - **验证范围**：新增第 4 项回归（两种错误形状都翻成中文、不吐英文原文与裸错误码，普通 errno 分档不变），完整隔离回归 1833 项通过；全部为合成文件，未启动原生 CLI 或模型。
 
-v0.1.37 让 Codex 的追加路径也不再整份读入既有 rollout。v0.1.37 让 Codex 的追加路径也不再整份读入既有 rollout。`importTurnsToCodex()` 追加前只需要两项事实——目标还在不在、是不是旧版 `event_msg`-only 时间线——旧实现为此把整条 rollout 读成一个字符串；超过 V8 字符串上限（约 512 MB，与本系列前几版同一族）时 `readFile` 抛超限错误，完好的大会话被讲成「读取既有 Codex 会话文件失败」而拒绝追加。现在 `isLegacyEventMsgRollout()` 直接接受行迭代器，扫描与判定都是流式的；旧格式仍 fail closed 拒绝，读不出来的原因仍按 errno 分档并声明未写入。
+v0.1.37 让 Codex 的追加路径也不再整份读入既有 rollout。`importTurnsToCodex()` 追加前只需要两项事实——目标还在不在、是不是旧版 `event_msg`-only 时间线——旧实现为此把整条 rollout 读成一个字符串；超过 V8 字符串上限（约 512 MB，与本系列前几版同一族）时 `readFile` 抛超限错误，完好的大会话被讲成「读取既有 Codex 会话文件失败」而拒绝追加。现在 `isLegacyEventMsgRollout()` 直接接受行迭代器，扫描与判定都是流式的；旧格式仍 fail closed 拒绝，读不出来的原因仍按 errno 分档并声明未写入。
 
 - **验证范围**：新增 3 项合成文件回归（1 MB 单行既有 rollout 仍正常追加且旧历史原样保留、迭代器与字符串入口判定一致、目标被同名目录占住时按中文分档拒绝且不留下 tmp / bak），完整隔离回归 1832 项通过；全部为合成文件，未启动原生 CLI 或模型。
 
