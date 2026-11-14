@@ -20,7 +20,13 @@ The steps are on the site [guides](https://relay.bobochang.cn/en/#guides): [Clau
 
 It does not provide models, bypass usage limits, replace native agent chat, or move permissions, credentials and plugins by default. What it transfers is the recorded session, not the model's unrecorded internal state. Today the implementation is centred on CLI sessions and terminal resume; the product direction includes validated desktop entry points, but **official interoperability does not mean Watch has integrated it**.
 
-### Latest release ([v0.1.44](https://github.com/can4hou6joeng4/Watch/releases/tag/v0.1.44))
+### Latest release ([v0.1.45](https://github.com/can4hou6joeng4/Watch/releases/tag/v0.1.45))
+
+v0.1.45 fixes backup-link overwrites during session writes. Copying directly to an existing `.bak` symbolic or hard link could overwrite an unrelated file; a dangling symbolic link could also create its referent unexpectedly. Replacement and append now share an independent temporary backup, sync it and replace the `.bak` directory entry, preserving the single-generation backup and source permission bits. A backup publication failure prevents replacement of the main session file.
+
+- **Validation scope**: 13 new isolated synthetic-file regressions cover symbolic links, hard links, dangling links, backup publication failures, long filenames and permission compatibility across both write paths. Six of the first eight tests reproduce the failure before the fix and pass afterward. Four additional review regressions were also verified red then green; `ENOENT` from a temporary backup stage no longer gets treated as a new file. Full isolated regression: 1870 passing, zero failures and zero skips; all 93 focused checks, typecheck, desktop build and 14 site regressions pass. No real agent history or native client is used.
+
+### Previous release ([v0.1.44](https://github.com/can4hou6joeng4/Watch/releases/tag/v0.1.44))
 
 v0.1.44 updates development, build and research tooling to address known advisories in the existing lockfiles: `fast-xml-parser` 5.12.1, `wrangler` 4.162.0, `vite` 7.3.8, and transitive `source-map-js` 1.2.2. Both dependency trees report zero advisories in this `npm audit` check. This reflects the advisory database at the time of checking and does not establish the absence of all vulnerabilities. The Node ≥ 22.13 requirement is unchanged.
 
