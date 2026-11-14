@@ -20,7 +20,13 @@ Watch 只做一件事：**把已保存的会话记录连同工作目录交到目
 
 它不提供模型、不绕过配额、不代替原生 Agent 聊天，也不默认搬迁权限、凭据或插件；接力的是已有记录，不是模型未记录的内部状态。当前实现以 CLI 会话与终端恢复为主，产品方向包含经过验证的桌面端入口，但**官方支持互通不等于 Watch 已经集成**。
 
-### 最新版本（[v0.1.39](https://github.com/can4hou6joeng4/Watch/releases/tag/v0.1.39)）
+### 最新版本（[v0.1.40](https://github.com/can4hou6joeng4/Watch/releases/tag/v0.1.40)）
+
+v0.1.40 让 Codex 的预检与写入对「配置能不能读」给出同一结论。v0.1.39 让写入路径在 `~/.codex/config.toml` 读不出来时 fail closed，但 `codexAdapter.preflight()` 不读配置，于是 `watch open <id> --to codex --check` 先说「可写入」、真正执行时才拒绝——而 `--check` 的全部意义就是「点下去之前知道会不会被拒」。现在预检在最前面用同一个 `readModelProvider()` 探一次，读不出来就抛 `PreflightBlockedError`（`code: codex_config_unreadable`），原因与写入路径逐字同源；检查放在 `darwin` 早退之前，所以非 macOS 也会生效（配置可读性与平台无关，只有 writer 锁与 Desktop 进程那部分才是 macOS 专属）。文件不存在仍是「没配过」，不阻断。
+
+- **验证范围**：新增 3 项回归（`chmod 000` 时预检拒绝且 code / 原因 / hint 齐全、无 `config.toml` 不阻断、配置可读不误伤），第一例在去掉检查后先红后绿；另用隔离 HOME 端到端实测 `--check` 与真正写入返回同一个 `codex_config_unreadable`。完整隔离回归 1841 项通过。全部为合成文件，未启动原生 CLI 或模型。
+
+### 上一版本（[v0.1.39](https://github.com/can4hou6joeng4/Watch/releases/tag/v0.1.39)）
 
 v0.1.39 修正 Codex 写路径的一处静默替换：`~/.codex/config.toml` 读不出来时，以前一律当成「没配 `model_provider`」，把 `openai` 写进新 rollout 的 `session_meta.model_provider`，而用户看到的是「转入成功」——目标会话的 provider 于是与原生配置不一致。现在只有文件不存在（`ENOENT` / `ENOTDIR`）才是「没配、按 Codex 默认 openai 处理」，其余读失败（权限、路径被目录占住、I/O）按 errno 分档报中文原因并 fail closed，声明本次未写入任何内容。同一轮还让 `codexEnv()` 的凭据解析只读一次 `config.toml`：以前先读一份吞掉错误、再调 `readModelProvider()` 重新读同一个文件，两次读之间文件被改就会出现「凭据按 A 段解析、provider 名来自第二次读取」的错配。
 
