@@ -27,7 +27,7 @@ import {
 
 /**
  * Codex rollout JSONL → 统一时间线（Rich）：
- * - response_item message：user 过滤内部上下文；assistant 最终回复覆盖 turn.text
+ * - response_item message：user 过滤内部上下文；assistant 最后正文写入 turn.text，较早正文保留来源标记事件
  * - content 块按类型处理：input_text / output_text 拼正文；input_image 可携带时挂 attachment text 事件
  *   （data URI 拆成 mediaType + data，http(s) 原样），file_id 引用 / input_audio / 未识别块写正文占位；
  *   refusal 作为终态正文保留，不能当成「没有回复」
@@ -35,7 +35,8 @@ import {
  * - 工具输出数组按换行投影，媒体 / 密文只留占位并计数披露；缺调用 ID 时稳定合成并声明
  * - 独立具名输出标为外部上下文；网页搜索 / 协作消息 / 图片生成只记标注文本，不造工具调用
  * - 记账条目忽略，未知 response_item 聚合披露；compaction / context_compaction 只披露不解密
- * - commentary / partial_answer 保留为 text 事件；显式 final_answer 后的阶段文本丢掉；phase 缺省保持旧兼容
+ * - commentary / partial_answer 保留为 text 事件；显式 final_answer 后的阶段文本带标记保留且不覆盖终稿
+ * - 较早的 final / 无 phase 正文留在原事件位置并计数披露；phase 缺省保持旧主正文兼容
  * - 最后停在阶段消息的助手轮标记 incomplete，并计数披露未记录最终答复
  * - compacted：Codex 压缩上下文后的摘要记录，只计数并披露，不并入摘要正文（见 describeCodexCompaction）
  * - 整份文件无 response_item message 时，回退 event_msg；agent_message 共享上述阶段处理，
@@ -72,6 +73,10 @@ function parseCodexRaw(raw: string): { turns: UnifiedTurn[]; usesEventFallback: 
   let sawFallbackUser = false;
   let hasResponseMessages = false;
   const finalized = new WeakSet<UnifiedTurn>();
+  // 与 Claude 读取侧相同：先按日志顺序挂正文事件，收尾时只移除仍充当主正文的最后一条。
+  const bodyTextEvents = new Map<UnifiedTurn, ProcessEvent>();
+  const earlierBodies = new WeakSet<ProcessEvent>();
+  const lateStages = new WeakSet<ProcessEvent>();
   const acceptAssistant = (turn: UnifiedTurn, text: string, timestamp: string, p: Record<string, unknown>): void => {
     // Watch 披露不是助手答复或阶段回复；终稿之后也要保留，且不能改变正文 / incomplete。
     if (text.startsWith(WATCH_CONTEXT_DISCLOSURE_PREFIX)) {
@@ -79,23 +84,34 @@ function parseCodexRaw(raw: string): { turns: UnifiedTurn[]; usesEventFallback: 
       return;
     }
     const isMidTurn = p.phase === 'commentary' || p.phase === 'partial_answer';
-    if (isMidTurn && finalized.has(turn)) return;
     // 只跳过带 Watch 标记且与最近结构事件对应的回显；原生同文说明仍须保留。
     const meta = p.internal_chat_message_metadata_passthrough;
     const marked = typeof meta === 'object' && meta !== null &&
       (meta as Record<string, unknown>).watch_generated_commentary === true;
     if (p.phase === 'commentary' && marked && isGeneratedCommentaryMirror(turn, text)) return;
     if (isMidTurn) {
-      pushEvent(turn, {
-        kind: 'text',
-        summary: text.startsWith(WATCH_CONTEXT_DISCLOSURE_PREFIX)
-          ? text : summarize(text, p.phase === 'partial_answer' ? '阶段回复' : '过程'),
-        detail: text,
-        timestamp,
-        provider: 'codex',
-      });
+      const late = finalized.has(turn);
+      const detail = late ? `[Codex 终稿后的阶段消息：${p.phase}]\n${text}` : text;
+      const event: ProcessEvent = {
+        kind: 'text', summary: summarize(detail, p.phase === 'partial_answer' ? '阶段回复' : '过程'),
+        detail, timestamp, provider: 'codex',
+      };
+      pushEvent(turn, event);
+      if (late) {
+        lateStages.add(event);
+        return; // 保留迟到文字，但不让它改写终稿、终稿时间或完成状态。
+      }
+      bodyTextEvents.delete(turn); // 较早的无 phase 正文仍留在原位置。
       turn.incomplete = true;
     } else {
+      const phase = typeof p.phase === 'string' && p.phase ? codexLabel(p.phase) : '未标注 phase';
+      const detail = `[Codex 较早的助手正文：${phase}]\n${text}`;
+      const event: ProcessEvent = {
+        kind: 'text', summary: summarize(detail, '较早正文'), detail, timestamp, provider: 'codex',
+      };
+      pushEvent(turn, event);
+      bodyTextEvents.set(turn, event);
+      earlierBodies.add(event);
       // 缺省 phase 保持旧正文语义，但不能据此阻断后续明确标记的阶段消息。
       delete turn.incomplete;
     }
@@ -261,11 +277,29 @@ function parseCodexRaw(raw: string): { turns: UnifiedTurn[]; usesEventFallback: 
       }
     }
   }
+  for (const [turn, finalEvent] of bodyTextEvents) {
+    turn.events = turn.events?.filter(event => event !== finalEvent);
+  }
   if (hasResponseMessages) {
     notes.finish();
     pairing.finish();
   }
   const active = hasResponseMessages ? turns : fallback;
+  let earlierBodyCount = 0;
+  let lateStageCount = 0;
+  for (const turn of active) {
+    for (const event of turn.events ?? []) {
+      if (earlierBodies.has(event)) earlierBodyCount += 1;
+      if (lateStages.has(event)) lateStageCount += 1;
+    }
+  }
+  if (earlierBodyCount || lateStageCount) {
+    const details = [
+      earlierBodyCount ? `${earlierBodyCount} 条较早的助手正文转为带来源标记的过程文本` : '',
+      lateStageCount ? `${lateStageCount} 条终稿后的阶段消息保留为带来源标记的过程文本，不覆盖终稿或改变完成状态` : '',
+    ].filter(Boolean);
+    appendCodexDisclosure(active, `Codex 有 ${details.join('；')}；目标格式无法保存过程文本时仍可能丢失，请在来源或 full 交接文档中核对。`);
+  }
   if (hasResponseMessages && synthesizedCalls > 0) {
     appendCodexDisclosure(active, `Codex 有 ${synthesizedCalls} 条工具调用没有调用 ID；Watch 按记录位置与内容合成稳定 ID，这些 ID 不是原生 ID，不能据此为缺少 ID 的独立结果确认归属。`);
   }
