@@ -20,9 +20,13 @@ Watch 只做一件事：**把已保存的会话记录连同工作目录交到目
 
 它不提供模型、不绕过配额、不代替原生 Agent 聊天，也不默认搬迁权限、凭据或插件；接力的是已有记录，不是模型未记录的内部状态。当前实现以 CLI 会话与终端恢复为主，产品方向包含经过验证的桌面端入口，但**官方支持互通不等于 Watch 已经集成**。
 
-### 最新版本（[v0.1.37](https://github.com/can4hou6joeng4/Watch/releases/tag/v0.1.37)）
+### 最新版本（[v0.1.38](https://github.com/can4hou6joeng4/Watch/releases/tag/v0.1.38)）
 
-v0.1.37 让 Codex 的追加路径也不再整份读入既有 rollout。`importTurnsToCodex()` 追加前只需要两项事实——目标还在不在、是不是旧版 `event_msg`-only 时间线——旧实现为此把整条 rollout 读成一个字符串；超过 V8 字符串上限（约 512 MB，与本系列前几版同一族）时 `readFile` 抛**没有 `code`** 的 `Invalid string length`，完好的大会话被讲成「读取既有 Codex 会话文件失败」而拒绝追加。现在 `isLegacyEventMsgRollout()` 直接接受行迭代器，扫描与判定都是流式的；旧格式仍 fail closed 拒绝，读不出来的原因仍按 errno 分档并声明未写入。
+v0.1.38 修正「文件太大」的报错文案。v0.1.37 的说明把 Node 的整份读取超限写成「没有 `code` 的 `Invalid string length`」，实际在 Node 24 上实测是带 `code: ERR_STRING_TOO_LONG` 的 `Error`（裸 `RangeError` 只是另一条路径）。于是写路径（pi / grok / kimi 的追加分支）遇到超出上限的会话时，用户看到的是「读取失败（ERR_STRING_TOO_LONG）」——既看不出文件本身完好，猜不到下一步是换成流式读取而不是修文件，也读不懂那串错误码。现在 `describePathReadFailureReason()` / `describeSessionReadFailureReason()` 把它翻成「文件太大，超过单次读入的上限（不是文件损坏）」/「会话文件太大，超过单次读入的上限（文件本身完好，不是被损坏）」，并兜底认没有 `code` 的裸 `RangeError: Invalid string length`。
+
+- **验证范围**：新增第 4 项回归（两种错误形状都翻成中文、不吐英文原文与裸错误码，普通 errno 分档不变），完整隔离回归 1833 项通过；全部为合成文件，未启动原生 CLI 或模型。
+
+v0.1.37 让 Codex 的追加路径也不再整份读入既有 rollout。v0.1.37 让 Codex 的追加路径也不再整份读入既有 rollout。`importTurnsToCodex()` 追加前只需要两项事实——目标还在不在、是不是旧版 `event_msg`-only 时间线——旧实现为此把整条 rollout 读成一个字符串；超过 V8 字符串上限（约 512 MB，与本系列前几版同一族）时 `readFile` 抛超限错误，完好的大会话被讲成「读取既有 Codex 会话文件失败」而拒绝追加。现在 `isLegacyEventMsgRollout()` 直接接受行迭代器，扫描与判定都是流式的；旧格式仍 fail closed 拒绝，读不出来的原因仍按 errno 分档并声明未写入。
 
 - **验证范围**：新增 3 项合成文件回归（1 MB 单行既有 rollout 仍正常追加且旧历史原样保留、迭代器与字符串入口判定一致、目标被同名目录占住时按中文分档拒绝且不留下 tmp / bak），完整隔离回归 1832 项通过；全部为合成文件，未启动原生 CLI 或模型。
 
