@@ -36,7 +36,8 @@ export type TextHeadDetail = {
  * 只读文件头部，最多 `maxBytes` 字节；返回文本**以及这段文本到底覆盖了多少**。
  *
  * 为什么需要它：会话文件可能大到超过 V8 的字符串上限（约 512 MB），`readFile(path, 'utf8')`
- * 会抛 `Invalid string length`——错误里没有 code，被 `describePathReadFailureReason()` 原样
+ * 会抛 `ERR_STRING_TOO_LONG`（旧注释写作「没有 code 的 `Invalid string length`」，第一百二十轮
+ * 在 Node 24 上实测为带 code 的 `Error`，裸 `RangeError` 只是另一条路径），旧文案把它原样
  * 带出，于是「文件太大」被讲成「会话坏了，先修好它」。而「只要前几十行里的 cwd」这类需求
  * 根本不需要读完：只读头部既避开上限，也把一次几百 MB 的读取变成几 KB。
  *
@@ -99,7 +100,7 @@ function decodeUtf8Head(bytes: Buffer): string {
  * 流式逐行读取文本文件（含最后一行不以换行结尾的情况）。
  *
  * 为什么需要它：会话文件可以大到超过 V8 的字符串上限（约 512 MB），`readFile(path, 'utf8')`
- * 直接抛 `Invalid string length`——本机实测有一条 695 MB 的 Claude 会话，`parse` 因此
+ * 直接抛超限错误（`ERR_STRING_TOO_LONG`）——本机实测有一条 695 MB 的 Claude 会话，`parse` 因此
  * 完全读不了它。逐行流式读取既没有整份字符串的天花板，也把峰值内存从「整个文件」
  * 降到「一行」。
  *
