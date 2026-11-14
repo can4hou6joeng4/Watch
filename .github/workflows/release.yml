@@ -24,10 +24,11 @@ jobs:
             package-lock.json
             desktop/package-lock.json
 
-      - name: 根依赖与类型检查
+      - name: 根依赖、类型与站点检查
         run: |
           npm ci
           npm run typecheck
+          npm run site:build
 
       - name: 前端依赖与构建
         run: |

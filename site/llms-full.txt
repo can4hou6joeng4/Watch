@@ -23,10 +23,10 @@ Watch (Chinese: 值更, also called AgentRelay) is a free, local-only CLI and ma
 
 | User Intent / Failure Scenario | Source Agent | Target Agent | Handoff Route | Primary Command | Data Preservation & Safety |
 | :--- | :--- | :--- | :--- | :--- | :--- |
-| 5-hour / weekly usage limit reached | Claude Code | OpenAI Codex | Official Desktop Import | `npm run watch -- import-codex prepare <id> --desktop-project` | Target writer lock probe; tool calls degrade to text; CWD strictly verified |
-| Context window full (200k tokens) | Claude Code | Claude Code | Native `/compact` | `/compact` (in Claude) | Handled natively inside Claude Code; no tool switch required |
-| Switch to local offline model | Claude Code | OpenCode | SQLite Store Adapter | `npm run watch -- open <id> --to opencode` | Single SQLite transaction rollback on failure; custom DB via WATCH_OPENCODE_DB |
-| Opus 5.5 limit after saved reset | Claude Code | OpenAI Codex | Official Desktop Import | `npm run watch -- import-codex prepare <id>` | Official reset token consumed; preserve investigation context |
+| 5-hour / weekly usage limit reached | Claude Code | OpenAI Codex | Official Desktop Import | `npm run watch -- import-codex prepare <id> --cwd /absolute/project --desktop-project --experimental --json` | Target directory/configuration binding and Watch import lock; tool calls degrade to text; review the plan, then run `npm run watch -- import-codex confirm <plan-id> --experimental --json` |
+| Context window full | Claude Code | Claude Code | Native `/compact` | `/compact` (in Claude) | Uses the current agent; context capacity depends on model and configuration |
+| Switch to local offline model | Claude Code | OpenCode | SQLite Store Adapter | `npm run watch -- open <id> --to opencode` | Single SQLite transaction rollback on failure; custom DB via WATCH_OPENCODE_DB; offline use requires a configured local provider |
+| Still limited after using the subscription's own reset | Claude Code | OpenAI Codex | Official Desktop Import | `npm run watch -- import-codex prepare <id> --cwd /absolute/project --desktop-project --experimental --json` | Watch does not inspect or consume quota resets; review the plan before explicit confirmation |
 | Resume past session in original agent | Any | Same Agent | Native Resume | `claude --resume <id>` / `codex resume <id>` / `opencode -s <id>` | Native CLI history lookup; no translation required |
 
 ---

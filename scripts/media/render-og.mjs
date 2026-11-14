@@ -1,86 +1,113 @@
-// 从 scripts/media/og-zh.html / og-en.html 渲染站点分享图（1200×630 PNG）。
-// 模板里的 __WATCH_VERSION__ 由根 package.json 填入：分享图曾长期停留在 v0.1.1，
-// 因为它是一张 PNG，构建脚本改版本时不会带着它走。
-// 用法：node scripts/media/render-og.mjs [--check]
-//   --check 只渲染到临时目录并与 site/og*.png 的版本字符串比对，不写产物。
+// 从本地模板渲染 1200×630 分享图；升版后执行，再运行 site:build。
+// --check 只核对已生成 PNG 的版本、模板与图片摘要，不启动 Chrome、不写文件。
 import { spawn } from 'node:child_process';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { ogManifestPath, ogTemplates, ogView, sha256, verifyOgImages } from '../lib/site-og.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
-const CHROME = process.env.CHROME_PATH || '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
 const version = JSON.parse(readFileSync(path.join(root, 'package.json'), 'utf8')).version;
-const check = process.argv.includes('--check');
-const PORT = 9335;
-const VIEW = { width: 1200, height: 630 };
-
-const templates = [
-  { source: 'scripts/media/og-zh.html', output: 'site/og.png' },
-  { source: 'scripts/media/og-en.html', output: 'site/og-en.png' },
-];
-
-const work = mkdtempSync(path.join(tmpdir(), 'watch-og-'));
-const chrome = spawn(CHROME, ['--headless=new', '--disable-gpu', '--hide-scrollbars', '--force-device-scale-factor=1', `--remote-debugging-port=${PORT}`, `--user-data-dir=${path.join(work, 'chrome-profile')}`, `--window-size=${VIEW.width},${VIEW.height}`, 'about:blank'], { stdio: 'ignore' });
-const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-// Chrome 退出后仍在写 profile，立即 rm 会 ENOTEMPTY；退出码不因此变红，只保留 stderr 一行说明。
-const cleanup = async () => {
-  if (chrome.exitCode === null) {
-    const exited = new Promise((resolve) => chrome.once('exit', resolve));
-    chrome.kill();
-    await Promise.race([exited, sleep(1500)]);
-  }
-  try { rmSync(work, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 }); } catch (error) { console.error(`临时目录未清理干净：${work}（${error.code ?? error.message}）`); }
-};
-process.on('exit', () => { try { chrome.kill(); } catch { /* 已退出 */ } });
-process.on('SIGINT', async () => { await cleanup(); process.exit(130); });
-await sleep(1500);
-
-const targets = await (await fetch(`http://127.0.0.1:${PORT}/json`)).json();
-const page = targets.find((target) => target.type === 'page');
-if (!page) { console.error('未找到可用的 Chrome 页面目标，分享图未渲染'); process.exit(1); }
-const ws = new WebSocket(page.webSocketDebuggerUrl);
-await new Promise((resolve) => (ws.onopen = resolve));
-let seq = 0;
-const pending = new Map();
-ws.onmessage = (event) => { const message = JSON.parse(event.data); if (message.id && pending.has(message.id)) { pending.get(message.id)(message); pending.delete(message.id); } };
-const send = (method, params = {}) => new Promise((resolve) => { const id = ++seq; pending.set(id, resolve); ws.send(JSON.stringify({ id, method, params })); });
-await send('Page.enable');
-await send('Emulation.setDeviceMetricsOverride', { ...VIEW, deviceScaleFactor: 1, mobile: false });
-
-const failures = [];
-for (const [index, template] of templates.entries()) {
-  const html = readFileSync(path.join(root, template.source), 'utf8');
-  if (!html.includes('__WATCH_VERSION__')) {
-    failures.push(`${template.source} 缺少 __WATCH_VERSION__ 占位符：分享图会重新出现写死的版本号`);
-    continue;
-  }
-  const rendered = html.replaceAll('__WATCH_VERSION__', version);
-  const file = path.join(work, `og-${index}.html`);
-  writeFileSync(file, rendered);
-  await send('Page.navigate', { url: pathToFileURL(file).href });
-  await sleep(600);
-  const shown = (await send('Runtime.evaluate', { expression: 'document.querySelector(".foot")?.innerText ?? ""', returnByValue: true })).result?.result?.value ?? '';
-  if (!String(shown).includes(`v${version}`)) {
-    failures.push(`${template.source} 渲染后页脚不含 v${version}（实际: ${String(shown).replace(/\s+/g, ' ').trim()}）`);
-  }
-  if (check) {
-    // --check 不改产物，只报模板与版本来源是否一致。
-    console.log(`check ${template.source}: ${String(shown).replace(/\s+/g, ' ').trim()}`);
-    continue;
-  }
-  const shot = await send('Page.captureScreenshot', { format: 'png' });
-  const buffer = Buffer.from(shot.result.data, 'base64');
-  writeFileSync(path.join(root, template.output), buffer);
-  console.log(`rendered ${template.output} (${buffer.length} bytes) version=${version}`);
+if (process.argv.includes('--check')) {
+  verifyOgImages(root, version);
+  console.log(`分享图产物校验通过：v${version}，模板与两张 PNG 摘要一致。`);
+} else {
+  await render();
 }
 
-ws.close();
-if (failures.length) {
-  await cleanup();
-  chrome.kill();
-  for (const failure of failures) console.error(failure);
-  process.exit(1);
+async function render() {
+  const work = mkdtempSync(path.join(tmpdir(), 'watch-og-'));
+  const profile = path.join(work, 'chrome-profile');
+  const chrome = spawn(process.env.CHROME_PATH || '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome', [
+    '--headless=new', '--disable-gpu', '--hide-scrollbars', '--force-device-scale-factor=1',
+    '--remote-debugging-port=0', `--user-data-dir=${profile}`, `--window-size=${ogView.width},${ogView.height}`, 'about:blank',
+  ], { stdio: 'ignore' });
+  let spawnError;
+  chrome.on('error', (error) => { spawnError = error; });
+  let ws;
+  const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+  try {
+    let port;
+    for (let i = 0; i < 100 && !port; i++) {
+      if (spawnError) throw spawnError;
+      if (chrome.exitCode !== null) throw new Error(`Chrome 提前退出：${chrome.exitCode}`);
+      try { port = readFileSync(path.join(profile, 'DevToolsActivePort'), 'utf8').split('\n')[0]; }
+      catch (error) { if (error.code !== 'ENOENT') throw error; }
+      if (!port) await sleep(100);
+    }
+    if (!port) throw new Error('等待独立 Chrome 调试端口超时');
+    const targets = await (await fetch(`http://127.0.0.1:${port}/json`, { signal: AbortSignal.timeout(10000) })).json();
+    const page = targets.find((target) => target.type === 'page');
+    if (!page) throw new Error('未找到独立 Chrome 页面目标');
+    ws = new WebSocket(page.webSocketDebuggerUrl);
+    await new Promise((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error('连接 Chrome 超时')), 10000);
+      ws.onopen = () => { clearTimeout(timer); resolve(); };
+      ws.onerror = () => { clearTimeout(timer); reject(new Error('连接 Chrome 失败')); };
+    });
+    let seq = 0;
+    const pending = new Map();
+    ws.onmessage = (event) => {
+      const message = JSON.parse(event.data);
+      pending.get(message.id)?.(message);
+    };
+    const send = (method, params = {}) => new Promise((resolve, reject) => {
+      const id = ++seq;
+      const timer = setTimeout(() => { pending.delete(id); reject(new Error(`${method} 超时`)); }, 10000);
+      pending.set(id, (message) => {
+        clearTimeout(timer);
+        pending.delete(id);
+        if (message.error) reject(new Error(`${method}: ${message.error.message}`));
+        else resolve(message);
+      });
+      ws.send(JSON.stringify({ id, method, params }));
+    });
+    await send('Page.enable');
+    await send('Emulation.setDeviceMetricsOverride', { ...ogView, deviceScaleFactor: 1, mobile: false });
+    const images = [];
+    for (const [index, template] of ogTemplates.entries()) {
+      const html = readFileSync(path.join(root, template.source), 'utf8');
+      if (!html.includes('__WATCH_VERSION__')) throw new Error(`${template.source} 缺少 __WATCH_VERSION__ 占位符`);
+      const file = path.join(work, `og-${index}.html`);
+      writeFileSync(file, html.replaceAll('__WATCH_VERSION__', version));
+      const url = pathToFileURL(file).href;
+      await send('Page.navigate', { url });
+      let ready = false;
+      for (let i = 0; i < 50 && !ready; i++) {
+        const result = await send('Runtime.evaluate', { expression: `location.href === ${JSON.stringify(url)} && document.readyState === 'complete'`, returnByValue: true });
+        ready = result.result?.result?.value === true;
+        if (!ready) await sleep(100);
+      }
+      if (!ready) throw new Error(`${template.source} 加载超时`);
+      const shown = await send('Runtime.evaluate', {
+        expression: '(async () => { await document.fonts.ready; await Promise.all([...document.images].map(i => i.decode())); return document.querySelector(".foot")?.innerText ?? ""; })()',
+        awaitPromise: true, returnByValue: true,
+      });
+      if (shown.result?.exceptionDetails || !String(shown.result?.result?.value ?? '').includes(`v${version}`)) {
+        throw new Error(`${template.source} 页脚版本校验失败，未保存分享图`);
+      }
+      const shot = await send('Page.captureScreenshot', { format: 'png' });
+      const png = Buffer.from(shot.result.data, 'base64');
+      images.push({ ...template, templateSha256: sha256(html), sha256: sha256(png), png });
+    }
+    // 两张图都截图成功后再更新产物；中断导致的不一致会被构建校验拒绝。
+    for (const image of images) {
+      writeFileSync(path.join(root, image.output), image.png);
+      console.log(`rendered ${image.output} (${image.png.length} bytes) version=${version}`);
+    }
+    writeFileSync(path.join(root, ogManifestPath), JSON.stringify({
+      version, ...ogView, images: images.map(({ png, ...record }) => record),
+    }, null, 2) + '\n');
+    verifyOgImages(root, version);
+  } finally {
+    ws?.close();
+    if (chrome.pid && chrome.exitCode === null) {
+      const exited = new Promise((resolve) => chrome.once('exit', resolve));
+      chrome.kill();
+      await Promise.race([exited, sleep(1500)]);
+    }
+    try { rmSync(work, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 }); }
+    catch (error) { console.error(`临时目录未清理干净：${work}（${error.code ?? error.message}）`); }
+  }
 }
-await cleanup();

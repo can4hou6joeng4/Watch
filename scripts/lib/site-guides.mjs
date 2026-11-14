@@ -500,9 +500,9 @@ export const guides = [
             accessed: '2026-09-21',
           },
           {
-            label: 'Watch Guide Source Matrix & Boundaries',
-            url: 'https://github.com/can4hou6joeng4/Watch/blob/main/docs/guide-source-matrix-2026-09-17.md',
-            accessed: '2026-09-21',
+            label: 'Watch System Architecture & Storage',
+            url: 'https://github.com/can4hou6joeng4/Watch/blob/main/docs/ARCHITECTURE.md',
+            accessed: '2026-11-14',
           },
           {
             label: 'Watch Client Compatibility Evidence',
@@ -598,9 +598,9 @@ export const guides = [
             accessed: '2026-09-21',
           },
           {
-            label: 'Watch Guide Source Matrix & Boundaries',
-            url: 'https://github.com/can4hou6joeng4/Watch/blob/main/docs/guide-source-matrix-2026-09-17.md',
-            accessed: '2026-09-21',
+            label: 'Watch System Architecture & Storage',
+            url: 'https://github.com/can4hou6joeng4/Watch/blob/main/docs/ARCHITECTURE.md',
+            accessed: '2026-11-14',
           },
           {
             label: 'Watch Client Compatibility Evidence',

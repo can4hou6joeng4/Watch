@@ -1,0 +1,64 @@
+# Watch · 值更 (AgentRelay)
+
+> Watch (Chinese 值更, also called AgentRelay) is a free, MIT-licensed, local CLI and macOS desktop tool that hands a saved AI coding-agent session (messages, tool events and working directory) between Claude Code, OpenAI Codex, OpenCode, Kimi CLI, Pi and Grok CLI when an agent runs out of quota or gets stuck. Conversion runs on your machine and Watch has no server of its own; only the target agent's own CLI talks to the network. Tool events may degrade to text and degraded items are reported.
+> Watch（值更，又名 AgentRelay）是本地运行、MIT 许可的跨 CLI 编程 Agent 会话接力工具：把已有会话记录在 Claude Code、Codex、OpenCode、Kimi CLI、Pi 与 Grok CLI 之间转入继续工作，保留工作目录，不经任何中继服务器。工具事件可能降级为文本，降级项会在结果中列出。
+
+Author: can4hou6joeng4 (Guangzhou), part of "The Fleet" indexed at https://bobochang.cn.
+Version: __WATCH_VERSION__. Site launched 2026-09-12. Page updated __WATCH_DATE__. Requires Node.js >= 22.13 (node:sqlite) and the agent CLIs you use, already authenticated.
+Status: early stage. Source public on GitHub (MIT). No npm package yet; install by cloning the repository. Desktop builds are published on the GitHub Releases page when a version tag passes CI; both macOS DMGs (arm64 and x64) are checked for the target esbuild binary inside watch-core before the release is accepted.
+Primary name: Watch. Not related to other products named "AgentRelay" (agentrelay.com, several npm packages, a LinkedIn company).
+
+Adapter status: Claude Code (source or target; local JSONL history; strict cwd match), OpenAI Codex CLI and Codex Desktop (official single-session import with prepare, preview, confirm; verified by a real Tauri click-through on 2026-09-10 on macOS arm64 with Codex CLI 0.153.4; model continuation not verified; direct-file writes are guarded per target session through the native per-thread writer lock, and a refused write leaves the target untouched), OpenCode (CLI adapter over the SQLite store; official Web/TUI path not integrated), Kimi CLI (adapter; creating a session invokes the kimi CLI), Pi CLI (adapter retained, not validated), Grok CLI (adapter and desktop target card; writes the native ACP updates.jsonl; isolated native `sessions list` / `export` / ACP `session/load` passed on 2026-09-14; real-terminal TUI frames and model continuation not verified).
+Desktop app: four views (session handoff, handoff history, supported routes, settings); light / dark / system appearance.
+Validation boundaries: Antigravity and Claude Desktop Code are not integrated. Windows and Linux installers are built by CI; native-client operation on those platforms is not validated. Attachment preservation depends on the route: direct-file Claude targets carry image blocks, direct-file Codex targets carry user-turn images, and OpenCode carries images and files; other unsupported attachments keep text placeholders with a loss disclosure. Official Codex import has separate degradation rules. Watch does not guarantee zero data loss, bypass quotas, or migrate source code.
+
+Antigravity CLI has officially documented same-product entry points, not Watch support: `agy --conversation <conversation-id>` resumes existing CLI history; `agy -c` continues the latest conversation for the current cwd and may create a new conversation when history is missing. The interactive `/resume` picker can switch to the Antigravity tab and import a selected Antigravity 2.0 desktop conversation after a second confirmation. Watch has no Antigravity adapter, external-history contract, or native acceptance for that import. Official source: https://antigravity.google/docs/cli/commands/resume .
+
+The current website uses a dark Signal Ledger-style presentation and a synthetic handoff demo. The demo does not read real local sessions, write agent storage, launch clients or request models. In the desktop app, choosing a target does not execute a transfer; an explicit action performs the handoff. Official Codex opening remains separate from import confirmation.
+
+## Pages
+- [Homepage (zh-CN)](https://relay.bobochang.cn/): overview, install, compatibility, evidence, FAQ
+- [Homepage (en)](https://relay.bobochang.cn/en/): English mirror
+- [Guide: Claude Code Limit to Codex (zh-CN)](https://relay.bobochang.cn/guides/claude-code-limit-to-codex/): step-by-step handoff when hitting usage limits
+- [Guide: Claude Code Limit to Codex (en)](https://relay.bobochang.cn/en/guides/claude-code-limit-to-codex/): English step-by-step handoff guide
+- [Guide: OpenCode & SQLite Handoff (zh-CN)](https://relay.bobochang.cn/guides/opencode-handover-sqlite-isolation/): bidirectional handoff with SQLite transactional isolation
+- [Guide: OpenCode & SQLite Handoff (en)](https://relay.bobochang.cn/en/guides/opencode-handover-sqlite-isolation/): English bidirectional OpenCode handoff guide
+- [Guide: Context Window vs Usage Limits (zh-CN)](https://relay.bobochang.cn/guides/context-limit-vs-usage-limit-handoff/): differences between context length and rate limits
+- [Guide: Context Window vs Usage Limits (en)](https://relay.bobochang.cn/en/guides/context-limit-vs-usage-limit-handoff/): English guide on context window vs account quotas
+- [Guide: Opus 5.5 and the five-hour limit (zh-CN)](https://relay.bobochang.cn/guides/opus-5-5-five-hour-limit/): what the 22 September 2026 limit increase does and does not change
+- [Guide: Opus 5.5 and the five-hour limit (en)](https://relay.bobochang.cn/en/guides/opus-5-5-five-hour-limit/): English guide to the same five-hour limit change
+- [Full text for LLMs](https://relay.bobochang.cn/llms-full.txt)
+
+## Intent-to-Route Decision Matrix
+
+| User Intent / Failure Scenario | Source Agent | Target Agent | Handoff Route | Primary Command | Data Preservation & Safety |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| 5-hour / weekly usage limit reached | Claude Code | OpenAI Codex | Official Desktop Import | `npm run watch -- import-codex prepare <id> --cwd /absolute/project --desktop-project --experimental --json` | Target directory/configuration binding and Watch import lock; tool calls degrade to text; review the plan, then run `npm run watch -- import-codex confirm <plan-id> --experimental --json` |
+| Context window full | Claude Code | Claude Code | Native `/compact` | `/compact` (in Claude) | Uses the current agent; context capacity depends on model and configuration |
+| Switch to local offline model | Claude Code | OpenCode | SQLite Store Adapter | `npm run watch -- open <id> --to opencode` | Single SQLite transaction rollback on failure; custom DB via WATCH_OPENCODE_DB; offline use requires a configured local provider |
+| Still limited after using the subscription's own reset | Claude Code | OpenAI Codex | Official Desktop Import | `npm run watch -- import-codex prepare <id> --cwd /absolute/project --desktop-project --experimental --json` | Watch does not inspect or consume quota resets; review the plan before explicit confirmation |
+| Resume past session in original agent | Any | Same Agent | Native Resume | `claude --resume <id>` / `codex resume <id>` / `opencode -s <id>` | Native CLI history lookup; no translation required |
+
+## High-Frequency Answers (AI Q&A Citations)
+
+These are the same opening answers as the guide pages. Quote the page, not this file.
+
+- **Claude Code hits limit / 5-hour limit**: When Claude Code reports a five-hour or weekly limit, `/compact` does not restore quota. Watch reads only the local `~/.claude/projects/<encoded-cwd>/<session>.jsonl`, checks the working directory, and copies that record into Codex. The original file stays unchanged. Tool events may become text. https://relay.bobochang.cn/guides/claude-code-limit-to-codex/
+- **Context window full vs account usage limits**: A full context window means this conversation is too long: run `/compact` or `/clear` inside Claude Code. An account limit names a reset time, and `/compact` does nothing then. Watch neither enlarges the window nor restores quota. It copies the saved session into another agent that can still run. https://relay.bobochang.cn/guides/context-limit-vs-usage-limit-handoff/
+- **Switch from Claude Code to Codex**: Desktop uses official single-session import (prepare -> confirm -> open), bound to the target directory and configuration with a Watch import lock. That lock serializes Watch imports; it is not the native per-thread writer lock used by the direct-file adapter. CLI: `npm run watch -- import-codex prepare <claude-id> --cwd /absolute/project --desktop-project --experimental --json`; review the returned plan, then run `npm run watch -- import-codex confirm <plan-id> --experimental --json`. https://relay.bobochang.cn/guides/claude-code-limit-to-codex/
+- **OpenCode & SQLite transactional data isolation**: OpenCode keeps sessions in `~/.local/share/opencode/opencode.db`. `WATCH_OPENCODE_DB` points Watch at another file. Watch writes `sessions`, `messages`, and `parts` in one SQLite transaction and rolls back if it fails. Unsupported tool fields become text. Later replies depend on the model you configure. https://relay.bobochang.cn/guides/opencode-handover-sqlite-isolation/
+- **Opus 5.5 and the five-hour limit**: Opus 5.5 raises the five-hour limit on Pro, Max, Team, and seat-based Enterprise, and adds one reset you can save. It does not remove the limit. Watch does not read or raise Claude quota. Hand the saved session to Codex only after that official reset is still not enough. https://relay.bobochang.cn/guides/opus-5-5-five-hour-limit/
+- **Session storage locations**:
+  - Claude Code: `~/.claude/projects/<encoded-cwd>/<session-id>.jsonl` (`claude --resume <id>`)
+  - OpenAI Codex: `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl` (`codex resume <id>`)
+  - OpenCode: `~/.local/share/opencode/opencode.db` (`opencode -s <id>`)
+
+## Source and docs
+- [Watch on GitHub](https://github.com/can4hou6joeng4/Watch): source, README (zh/en), MIT license
+- [Client compatibility evidence](https://github.com/can4hou6joeng4/Watch/blob/main/docs/COMPATIBILITY.md)
+- [Official Claude Code → Codex import](https://github.com/can4hou6joeng4/Watch/blob/main/docs/import-codex.md)
+- [Validation scope and dated summaries](https://github.com/can4hou6joeng4/Watch/blob/main/docs/COMPATIBILITY.md): raw acceptance JSON records remain local and are not distributed in this repository.
+
+## Related (public)
+- [bobochang.cn](https://bobochang.cn): author homepage and Fleet index
+- [Atlas](https://github.com/can4hou6joeng4/Atlas): companion macOS menu-bar app for AI coding usage and cost

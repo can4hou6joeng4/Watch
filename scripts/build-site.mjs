@@ -6,11 +6,20 @@ import { agents, content, defaultLocale, evidence, locales, maintainer, repo, sa
 import { alternatePagesFor, buildAllPageManifest, buildHomePageManifest, renderSitemap, validatePageManifest } from './lib/site-pages.mjs';
 import { guides as authoredGuides } from './lib/site-guides.mjs';
 import { loadLocaleDictionary, translateContent, translateGuideLocale } from './lib/apply-site-locale.mjs';
+import { verifyOgImages } from './lib/site-og.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 // 站点上的版本号一律取根 package.json：JSON-LD 的 softwareVersion、首页页脚与指南页「适用版本」。
 // 这些位置以前各自写死成 0.1.1，连续多个版本都没跟上（2026-11-14 两处补正）。
 const packageVersion = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8')).version;
+verifyOgImages(root, packageVersion);
+const llmsSource = fs.readFileSync(path.join(root, 'scripts/site-content/llms.txt'), 'utf8');
+for (const placeholder of ['__WATCH_VERSION__', '__WATCH_DATE__']) {
+  if (!llmsSource.includes(placeholder)) throw new Error(`[site-build] llms.txt 源缺少 ${placeholder}`);
+}
+const llmsText = llmsSource.replaceAll('__WATCH_VERSION__', packageVersion).replaceAll('__WATCH_DATE__', siteDate);
+const decisionMatrix = llmsText.match(/## Intent-to-Route Decision Matrix\n([\s\S]*?)\n## /)?.[1].trim();
+if (!decisionMatrix) throw new Error('[site-build] llms.txt 源缺少接力路径决策表');
 const localeDir = path.join(root, 'scripts/lib/site-locales');
 const authoredLocales = new Set(['zh', 'en']);
 const activeLocaleList = process.env.WATCH_ALL_LOCALES ? Object.keys(locales) : ['zh', 'en'];
@@ -405,13 +414,7 @@ function generateLlmsFull({ guides, siteUrl, maintainer, siteDate }) {
     '',
     '## 2. Intent-to-Route Decision Matrix',
     '',
-    '| User Intent / Failure Scenario | Source Agent | Target Agent | Handoff Route | Primary Command | Data Preservation & Safety |',
-    '| :--- | :--- | :--- | :--- | :--- | :--- |',
-    '| 5-hour / weekly usage limit reached | Claude Code | OpenAI Codex | Official Desktop Import | `npm run watch -- import-codex prepare <id> --desktop-project` | Target writer lock probe; tool calls degrade to text; CWD strictly verified |',
-    '| Context window full (200k tokens) | Claude Code | Claude Code | Native `/compact` | `/compact` (in Claude) | Handled natively inside Claude Code; no tool switch required |',
-    '| Switch to local offline model | Claude Code | OpenCode | SQLite Store Adapter | `npm run watch -- open <id> --to opencode` | Single SQLite transaction rollback on failure; custom DB via WATCH_OPENCODE_DB |',
-    '| Opus 5.5 limit after saved reset | Claude Code | OpenAI Codex | Official Desktop Import | `npm run watch -- import-codex prepare <id>` | Official reset token consumed; preserve investigation context |',
-    '| Resume past session in original agent | Any | Same Agent | Native Resume | `claude --resume <id>` / `codex resume <id>` / `opencode -s <id>` | Native CLI history lookup; no translation required |',
+    ...decisionMatrix.split('\n'),
     '',
     '---',
     '',
@@ -451,6 +454,8 @@ function generateLlmsFull({ guides, siteUrl, maintainer, siteDate }) {
   return lines.join('\n');
 }
 
+// 版本、日期由构建注入；两个 AI 阅读入口共用同一份接力路径决策表。
+writeIfChanged(path.join(site, 'llms.txt'), llmsText);
 writeIfChanged(path.join(site, 'llms-full.txt'), generateLlmsFull({ guides, siteUrl, maintainer, siteDate }));
 const headers = fs.readFileSync(path.join(site, '_headers'), 'utf8').split(/\n(?=\/)/).filter((block) => !/^\/[a-z-]+\/\*\n  ! Content-Language/.test(block)).join('\n').trimEnd();
 writeIfChanged(path.join(site, '_headers'), `${headers}\n${Object.entries(publishedLocales).filter(([locale]) => publishedLocales[locale].path !== '/').map(([, meta]) => `\n${meta.path}*\n  ! Content-Language\n  Content-Language: ${meta.hreflang}`).join('')}\n`);
