@@ -117,8 +117,32 @@ async function readRawChatLines(filePath: string): Promise<{ pieces: string[]; c
   return { pieces, chatMsgCount };
 }
 
-async function readSummary(filePath: string): Promise<Record<string, unknown> | null> {
-  const raw = await readFile(filePath, 'utf8').catch(() => '');
+/**
+ * 读 `summary.json`；读不出来与「没有摘要」是两件事。
+ *
+ * `write` 为 true 时（`importTurnsToGrok` 的末尾）读失败必须抛出：那里会拿返回值 `?? {…}`
+ * 重建摘要再 `writeFileAtomic` 覆盖原文件——`EACCES` 等被 `.catch(() => '')` 吞成空串后，
+ * 原生摘要里的 `generated_title` / `next_trace_turn` / 创建时间等字段会被 Watch 重建的版本
+ * 静默替换，而 chat / updates 两条日志早已写好，用户只会看到「转入成功、摘要变了」。
+ * 读路径（列表 / 反查 / 身份探测）继续用 null 表示「这份摘要不可用」，由各自的分档披露。
+ */
+async function readSummary(
+  filePath: string,
+  opts: { write?: boolean } = {},
+): Promise<Record<string, unknown> | null> {
+  let raw: string;
+  try {
+    raw = await readFile(filePath, 'utf8');
+  } catch (error) {
+    // 写路径只认 ENOENT（旧会话目录没有 summary.json，可以重建）；`ENOTDIR` 说明路径本身坏了，
+    // 不能当成「还没有摘要」——同 codex 官方导入对 `config.toml` 的既有教训。
+    if (opts.write && (error as NodeJS.ErrnoException).code !== 'ENOENT') {
+      throw new Error(
+        `读取既有 Grok 会话摘要失败：${describePathReadFailureReason(error)}（${escapeControlChars(filePath)}）；未写入，避免用重建的摘要覆盖原生字段`,
+      );
+    }
+    return null;
+  }
   // 非对象 summary（`"bad"` / `42` / `[]`）以前被当成对象返回，随后 `summary.updated_at = now`
   // 在严格模式下抛 TypeError；按「读不出可用摘要」处理，由调用方重建。
   return parseJsonObject(raw);
@@ -689,6 +713,10 @@ export async function importTurnsToGrok(
     pieces = existing.pieces;
     chatMsgCount = existing.chatMsgCount;
   }
+  // 既有摘要必须在**任何写入之前**读：读不出来就整次拒绝，别等 chat / updates 都写好之后
+  // 才发现摘要不能用（那时只能回一句「未写入摘要」，两条日志已经变了）。新建会话的摘要
+  // 刚由 `createEmptyGrokSession()` 写好，同样走这里，字段与旧行为一致。
+  const existingSummary = await readSummary(summaryPath, { write: true });
   if (pieces.length === 0) {
     pieces = [JSON.stringify(systemLine())];
   }
@@ -776,7 +804,7 @@ export async function importTurnsToGrok(
     });
   }
 
-  const summary = (await readSummary(summaryPath)) ?? {
+  const summary = existingSummary ?? {
     info: { id: ref.sessionId, cwd },
     session_summary: `Imported - ${isoNow()}`,
     created_at: isoNow(),
