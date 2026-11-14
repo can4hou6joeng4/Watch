@@ -21,7 +21,7 @@ export function shellQuote(s: string): string {
   return `'${s.replace(/'/g, `'\\''`)}'`;
 }
 
-/** PowerShell 单引号包裹（单引号双写转义）。 */
+/** PowerShell 把 ASCII 与 U+2018–U+201B 都当成单引号，逐个双写并保留原字符。 */
 export function psQuote(s: string): string {
-  return `'${s.replace(/'/g, `''`)}'`;
+  return `'${s.replace(/['\u2018-\u201b]/g, (quote) => quote + quote)}'`;
 }
