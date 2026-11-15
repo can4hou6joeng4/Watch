@@ -183,9 +183,14 @@ export async function findKimiSessionById(
   try {
     raw = await readFile(idxFile, 'utf8');
   } catch (error) {
-    // 索引不存在 = 这台机器没用过 Kimi（或从未建过会话），按「没有这个会话」处理；
+    // 索引不存在 = 这台机器没用过 Kimi（或从未建过会话）；但磁盘上还有会话目录时就是索引被删了，
+    // 按「查不了」处理，不能返回 null 让 `open` 说「未找到」。
     // 其余（权限 / I/O）读不出来照常抛，原因交给 resolveById 的 diagnostics
-    if (isMissingPathError(error)) return null;
+    if (isMissingPathError(error)) {
+      const loss = await kimiIndexLoss(idxFile, null, 0);
+      if (loss) throw new SessionLookupFailureError('incomplete', loss);
+      return null;
+    }
     throw new SessionLookupFailureError(
       'incomplete',
       `无法读取 Kimi 会话索引 ${escapeControlChars(idxFile)}：${describePathReadFailureReason(error)}`,
@@ -249,13 +254,23 @@ export async function findKimiSessionById(
   // 但它属于哪个目录已经不可知（workspaceId 里的 hash 不可逆）。这时同样不能返回 null——
   // 那会让 `open` 说「未找到会话…请确认 id 正确」，而 id 恰恰是抄对的
   if (unparsable > 0) {
-    const wirePath = await findKimiSessionDirOnDisk(sessionId);
-    if (wirePath) {
+    const disk = await findKimiSessionDirOnDisk(sessionId);
+    if (disk.wirePath) {
       throw new SessionLookupFailureError(
         'incomplete',
-        `Kimi 会话索引 ${escapeControlChars(idxFile)} 里有 ${unparsable} 行无法解析，磁盘上存在会话 ${sessionId} 的目录（${escapeControlChars(wirePath)}），` +
+        `Kimi 会话索引 ${escapeControlChars(idxFile)} 里有 ${unparsable} 行无法解析，磁盘上存在会话 ${sessionId} 的目录（${escapeControlChars(disk.wirePath)}），` +
           '但它在索引里的那条记录已经损坏，读不出它属于哪个工作目录，因此无法确认它是否可用；' +
           '这不代表这个会话不存在——先确认索引文件能否从备份恢复（别直接删掉它）再重试',
+      );
+    }
+    // 目标可能正躺在读不出来的分组里：磁盘上找不到不等于不存在，不能返回 null
+    const missingLocations = disk.faults.length + (disk.rootFault ? 1 : 0);
+    if (missingLocations > 0) {
+      throw new SessionLookupFailureError(
+        'incomplete',
+        `Kimi 会话索引 ${escapeControlChars(idxFile)} 里有 ${unparsable} 行无法解析，磁盘上还有 ${missingLocations} 个位置读不出来` +
+          `（里面可能正有会话 ${sessionId}）：${escapeControlChars(disk.rootFault ?? disk.faults[0]!)}；` +
+          '无法确认这个会话是否存在——先确认索引能否从备份恢复、这些位置能否恢复可读性，再重试',
       );
     }
   }

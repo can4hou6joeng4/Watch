@@ -23,6 +23,12 @@ export type UnattributableStat = {
   cause?: string;
   /** 覆盖默认的「可能是被截断，能从备份恢复就别直接删」建议；压缩副本不是损坏，不能沿用 */
   advice?: string;
+  /**
+   * 读不出来的容器位置（如 Kimi 的工作区分组目录）。
+   * `count` 只数会话文件；一个分组里可能有 0 到几十条会话，混进同一个数字会少报，
+   * 也会让共用文案把目录路径叫成「会话文件」，所以单独一档。
+   */
+  locations?: { description: string; count: number; samples: string[] }[];
 };
 
 const DEFAULT_CAUSE = '会话归属的元数据缺失或损坏';
@@ -34,6 +40,25 @@ function causeAdvice(stat: UnattributableStat): { cause: string; advice: string 
   return { cause: stat.cause ?? fallback, advice: stat.advice ?? DEFAULT_ADVICE };
 }
 
+function locationCount(stat: UnattributableStat): number {
+  return (stat.locations ?? []).reduce((sum, l) => sum + l.count, 0);
+}
+
+/** 「另有 N 个工作区分组读不出来（里面可能还有会话）」一句；没有位置故障时 `null` */
+function locationsText(stat: UnattributableStat): string | null {
+  const locs = (stat.locations ?? []).filter((l) => l.count > 0);
+  if (!locs.length) return null;
+  const parts = locs
+    .map((l) => (l.description === 'Kimi 会话目录' ? 'Kimi 会话目录本身' : `${l.count} 个${l.description}`))
+    .join('、');
+  const samples = locs
+    .flatMap((l) => l.samples)
+    .slice(0, 3)
+    .map((x) => escapeControlChars(x))
+    .join('、');
+  return `另有 ${parts}读不出来（里面可能还有若干会话）${samples ? `：${samples}` : ''}`;
+}
+
 /** 逐家问一次；未实现的跳过，抛错的也跳过（那已由本家 `listSessions` 的失败通道说过） */
 export async function collectUnattributable(
   adapters: readonly ProviderAdapter[],
@@ -43,7 +68,8 @@ export async function collectUnattributable(
     if (!adapter.unattributable) continue;
     try {
       const result = await adapter.unattributable();
-      if (result.count <= 0) continue;
+      const locations = (result.locations ?? []).filter((l) => l.count > 0);
+      if (result.count <= 0 && locations.length === 0) continue;
       stats.push({
         provider: adapter.id,
         displayName: adapter.displayName,
@@ -53,6 +79,7 @@ export async function collectUnattributable(
         // 家自定义的原因 / 建议要原样带到文案层，否则压缩副本会落回「元数据损坏」的默认句
         ...(result.cause ? { cause: result.cause } : {}),
         ...(result.advice ? { advice: result.advice } : {}),
+        ...(locations.length ? { locations } : {}),
       });
     } catch {
       // 整体读不出来时 `listSessions` 已经说过一遍；这里不再把同一个问题说两次，也不下结论
@@ -75,10 +102,20 @@ function sampleText(stat: UnattributableStat): string {
  */
 export function unattributableWarning(stat: UnattributableStat, cwd?: string): string {
   const { cause, advice } = causeAdvice(stat);
+  const where = cwd ? `，也无法判断它们是否属于 ${escapeControlChars(cwd)}` : '';
+  const locations = locationsText(stat);
+  if (stat.count <= 0) {
+    // 只有读不出来的位置（如 Kimi 的工作区分组）：不能说成「N 个会话文件」，
+    // 一个分组里可能还有若干会话，数量根本未知。
+    return (
+      `${stat.displayName} ${locations ?? '有位置读不出来'}（${cause}），` +
+      `里面可能还有会话，因此不会出现在任何目录的会话列表里${where}；这不代表它们不存在——${advice}`
+    );
+  }
   return (
     `${stat.displayName} 有 ${stat.count} 个会话文件读不出目录归属（${cause}），` +
-    `因此不会出现在任何目录的会话列表里：${sampleText(stat)}；` +
-    `这不代表它们不存在${cwd ? `，也无法判断它们是否属于 ${escapeControlChars(cwd)}` : ''}——${advice}`
+    `因此不会出现在任何目录的会话列表里：${sampleText(stat)}${locations ? `；${locations}` : ''}；` +
+    `这不代表它们不存在${where}——${advice}`
   );
 }
 
@@ -90,17 +127,27 @@ export function unattributableWarning(stat: UnattributableStat, cwd?: string): s
 export function unattributableEmptyNote(stats: readonly UnattributableStat[]): string | null {
   if (!stats.length) return null;
   const total = stats.reduce((sum, s) => sum + s.count, 0);
+  const locationTotal = stats.reduce((sum, s) => sum + locationCount(s), 0);
   const names = stats.map((s) => s.displayName).join(' / ');
   const advice = [...new Set(stats.map((s) => causeAdvice(s).advice))].join('；');
+  const what = [
+    ...(total ? [`${total} 个会话文件读不出目录归属`] : []),
+    ...(locationTotal ? [`${locationTotal} 个位置读不出来（里面可能还有会话）`] : []),
+  ].join('、');
   return (
-    `未发现可列出的原生会话；但 ${names} 另有 ${total} 个会话文件读不出目录归属（原因见上方警告），` +
+    `未发现可列出的原生会话；但 ${names} 另有 ${what}（原因见上方警告），` +
     `无法确认这个目录里是否还有它们的会话——${advice}，再重试`
   );
 }
 
 /** `--json` 用的结构化形状：脚本不必解析中文文案 */
-export function unattributableJson(stats: readonly UnattributableStat[]): { provider: string; count: number }[] {
-  return stats.map((s) => ({ provider: s.provider, count: s.count }));
+export function unattributableJson(
+  stats: readonly UnattributableStat[],
+): { provider: string; count: number; locations?: number }[] {
+  return stats.map((s) => {
+    const locations = locationCount(s);
+    return { provider: s.provider, count: s.count, ...(locations ? { locations } : {}) };
+  });
 }
 
 /**
@@ -112,18 +159,35 @@ export function unattributableJson(stats: readonly UnattributableStat[]): { prov
  */
 function hiddenByAttribution(
   stats: readonly UnattributableStat[],
-): { names: string; total: number; what: string; samples: string; advice: string } | null {
+): { names: string; parts: string[]; advice: string } | null {
   if (!stats.length) return null;
   const names = stats.map((s) => s.displayName).join(' / ');
   const total = stats.reduce((sum, s) => sum + s.count, 0);
+  const locationTotal = stats.reduce((sum, s) => sum + locationCount(s), 0);
+  if (total === 0 && locationTotal === 0) return null;
   const causes = [...new Set(stats.map((s) => causeAdvice(s).cause))];
   const advice = [...new Set(stats.map((s) => causeAdvice(s).advice))].join('；');
-  const samples = stats
-    .filter((s) => s.samples.length > 0)
-    .map((s) => (stats.length > 1 ? `${s.displayName}：${escapeControlChars(s.samples[0])}` : escapeControlChars(s.samples[0])))
-    .slice(0, 3)
-    .join('、');
-  return { names, total, what: causes.join(' / '), samples, advice };
+  const parts: string[] = [];
+  if (total > 0) {
+    const samples = stats
+      .filter((s) => s.samples.length > 0)
+      .map((s) => (stats.length > 1 ? `${s.displayName}：${escapeControlChars(s.samples[0])}` : escapeControlChars(s.samples[0])))
+      .slice(0, 3)
+      .join('、');
+    parts.push(
+      `另有 ${total} 个会话文件读不出目录归属（${causes.join(' / ')}），` +
+        `它们不属于任何目录、不会出现在会话列表里${samples ? `：${samples}` : ''}`,
+    );
+  }
+  if (locationTotal > 0) {
+    const samples = stats
+      .flatMap((s) => (s.locations ?? []).flatMap((l) => l.samples))
+      .slice(0, 3)
+      .map((x) => escapeControlChars(x))
+      .join('、');
+    parts.push(`另有 ${locationTotal} 个位置读不出来（里面可能还有若干会话）${samples ? `：${samples}` : ''}`);
+  }
+  return { names, parts, advice };
 }
 
 /**
@@ -146,10 +210,8 @@ export function unattributablePickWarning(
 ): string | null {
   const hidden = hiddenByAttribution(stats);
   if (!hidden) return null;
-  const samples = hidden.samples ? `：${hidden.samples}` : '';
   return (
-    `${hidden.names} 另有 ${hidden.total} 个会话文件读不出目录归属（${hidden.what}），` +
-    `它们不属于任何目录、不会出现在会话列表里${samples}；` +
+    `${hidden.names} ${hidden.parts.join('；')}；` +
     `本次${subject}只在能读出的会话里挑，没有把它们算进去——${consequence}；` +
     `${hidden.advice}`
   );
@@ -165,10 +227,8 @@ export function unattributablePickWarning(
 export function unattributableNoPickMessage(stats: readonly UnattributableStat[]): string | null {
   const hidden = hiddenByAttribution(stats);
   if (!hidden) return null;
-  const samples = hidden.samples ? `：${hidden.samples}` : '';
   return (
-    `未发现可列出的原生会话；但 ${hidden.names} 另有 ${hidden.total} 个会话文件读不出目录归属` +
-    `（${hidden.what}），它们不属于任何目录、不会出现在会话列表里${samples}——` +
+    `未发现可列出的原生会话；但 ${hidden.names} ${hidden.parts.join('；')}——` +
     `无法确认这个目录里是否还有可交接的会话（不能据此说「这里没有会话」）；` +
     `${hidden.advice}`
   );
@@ -230,11 +290,16 @@ export function emptiedJson(rows: readonly EmptiedSession[]): { provider: string
 export function unattributableSearchNote(stats: readonly UnattributableStat[]): string | null {
   if (!stats.length) return null;
   const total = stats.reduce((sum, s) => sum + s.count, 0);
+  const locationTotal = stats.reduce((sum, s) => sum + locationCount(s), 0);
   const names = stats.map((s) => s.displayName).join(' / ');
   const advice = [...new Set(stats.map((s) => causeAdvice(s).advice))].join('；');
+  const what = [
+    ...(total ? [`${total} 个会话文件读不出目录归属`] : []),
+    ...(locationTotal ? [`${locationTotal} 个位置读不出来（里面可能还有会话）`] : []),
+  ].join('、');
   return (
-    `本次没有命中；但 ${names} 另有 ${total} 个会话文件读不出目录归属（原因见上方警告），` +
-    '它们不属于任何目录，也就不会进任何目录的搜索索引——无法确认里面是否有你要找的内容，搜索没有覆盖到它们；' +
+    `本次没有命中；但 ${names} 另有 ${what}（原因见上方警告），` +
+    '这些内容不属于任何目录，也就不会进任何目录的搜索索引——无法确认里面是否有你要找的内容，搜索没有覆盖到它们；' +
     `${advice}，再重试`
   );
 }

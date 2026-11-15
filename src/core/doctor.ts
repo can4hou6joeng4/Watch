@@ -102,6 +102,13 @@ export type StorageProbe = {
    */
   unattributable?: number;
   /**
+   * 读不出来的容器位置数（如 Kimi 的工作区分组）。
+   *
+   * 与 `unattributable` 分开：那一档数会话文件，这一档数目录——一个分组里可能有 0 到几十条会话，
+   * 混进同一个数字会少报。两者都让 `count` 变成下界，文本行分别说明。
+   */
+  unattributableLocations?: number;
+  /**
    * 这个存储只能读、不能写（如 OpenCode 2.x 布局）：`count` 读得出来，但转入 / switch
    * 会被 preflight 拒绝。只报条数时 doctor 看起来一切正常，用户要到一次失败的写入
    * 才知道写不了——排障入口该先说出来。
@@ -375,13 +382,16 @@ export async function doctorReport(cwd: string, deps: DoctorDeps): Promise<Docto
           reason: item.previewError as string,
         });
       }
-      const unattributable = unattributableStats.find((s) => s.provider === adapter.id)?.count;
+      const unattributableStat = unattributableStats.find((s) => s.provider === adapter.id);
+      const unattributable = unattributableStat?.count;
+      const unattributableLocations = (unattributableStat?.locations ?? []).reduce((n, l) => n + l.count, 0);
       storage.push({
         provider: adapter.id,
         count: listed.length,
         ...(capped ? { capped: true } : {}),
         ...(unreadable.length ? { unreadable: unreadable.length } : {}),
         ...(unattributable ? { unattributable } : {}),
+        ...(unattributableLocations ? { unattributableLocations } : {}),
         ...writeState,
       });
     } catch (error) {

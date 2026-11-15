@@ -217,9 +217,17 @@ export interface ProviderAdapter {
    * 目前只有 Codex 有这一档（rollout 的 cwd 写在 `session_meta` 首行里）。`watch sessions` /
    * `recent` / `status` / `doctor` 都会披露（文案统一在 `src/core/session-coverage.ts`）；
    * `summary` 说明归属写在哪一行（如「session_meta 首行」），用于不写死 provider 名的共用文案。
-   * 不实现 = 本家没有这一档。
+   * `locations` 是「读不出来的容器位置」（如 Kimi 的工作区分组）：里面可能还有未知数量的会话，
+   * 不能按会话条数计，也不能把目录路径叫成「会话文件」。不实现 = 本家没有这一档。
    */
-  unattributable?(): Promise<{ count: number; samples: string[]; summary?: string; cause?: string; advice?: string }>;
+  unattributable?(): Promise<{
+    count: number;
+    samples: string[];
+    summary?: string;
+    cause?: string;
+    advice?: string;
+    locations?: { description: string; count: number; samples: string[] }[];
+  }>;
 
   /**
    * 可选：为目标会话取协作写锁（如 Codex 的原生 per-thread writer 锁）。
