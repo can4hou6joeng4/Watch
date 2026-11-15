@@ -28,9 +28,15 @@ function missingTargetDirectory(directory: string): Error {
 }
 
 function unreadableTargetDirectory(directory: string, error: unknown): Error {
+  const notDirectory = (error as NodeJS.ErrnoException).code === 'ENOTDIR';
+  const reason = notDirectory
+    ? '路径上的某一级不是目录（可能被同名文件或设备文件占住了）'
+    : describePathReadFailureReason(error);
+  const next = notDirectory
+    ? '先恢复该路径的目录结构，或用 CODEX_HOME 指向已有的数据目录后重试'
+    : '先确认该目录可访问（权限、路径）再重试';
   return new Error(
-    `无法读取 Codex 数据目录 ${escapeControlChars(directory)}：${describePathReadFailureReason(error)}；` +
-      '先确认该目录可访问（权限、路径）再重试——本次未写入任何内容',
+    `无法读取 Codex 数据目录 ${escapeControlChars(directory)}：${reason}；${next}——本次未写入任何内容`,
   );
 }
 
@@ -40,12 +46,16 @@ async function inspectTargetDirectory(directory: string): Promise<{ canonical: s
   try {
     canonical = await realpath(directory);
   } catch (error) {
-    throw isMissingPathError(error) ? missingTargetDirectory(directory) : unreadableTargetDirectory(directory, error);
+    throw (error as NodeJS.ErrnoException).code === 'ENOENT'
+      ? missingTargetDirectory(directory)
+      : unreadableTargetDirectory(directory, error);
   }
   try {
     return { canonical, info: await lstat(canonical, { bigint: true }) };
   } catch (error) {
-    throw isMissingPathError(error) ? missingTargetDirectory(directory) : unreadableTargetDirectory(directory, error);
+    throw (error as NodeJS.ErrnoException).code === 'ENOENT'
+      ? missingTargetDirectory(directory)
+      : unreadableTargetDirectory(directory, error);
   }
 }
 
