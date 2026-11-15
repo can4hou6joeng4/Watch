@@ -103,8 +103,15 @@ async function detectCodexIdentity(sessionsDir: string): Promise<CodexIdentity> 
 /** 按 mtime 倒序取 sessions 下的 rollout .jsonl（最多 max 个）。
  * `errors` 收集遍历失败的位置：反查靠「找不到」下结论，读不出来的目录必须先记下来，
  * 否则权限 / 路径错误会被讲成「这个会话不存在」。`ENOENT` / `ENOTDIR` 不算失败——
- * sessions 根目录在没用过 Codex 的机器上本来就不存在，逐级目录也可能边扫边被删。 */
-async function newestJsonlPaths(sessionsDir: string, max: number, errors?: string[]): Promise<string[]> {
+ * sessions 根目录在没用过 Codex 的机器上本来就不存在，逐级目录也可能边扫边被删。
+ * `compressed` 收集只有 `.jsonl.zst` 副本的 rollout（Codex 的 `local_thread_store_compression`
+ * 会把 7 天没写过的会话压成该格式）：它们真实存在但本版读不出内容，不能当「没有这个会话」。 */
+async function newestJsonlPaths(
+  sessionsDir: string,
+  max: number,
+  errors?: string[],
+  compressed?: string[],
+): Promise<string[]> {
   const collected: string[] = [];
   const walk = async (dir: string, depth: number): Promise<void> => {
     if (depth > 3) return;
@@ -117,6 +124,9 @@ async function newestJsonlPaths(sessionsDir: string, max: number, errors?: strin
       }
       return;
     }
+    // 同一次 readdir 先记下普通副本：`.zst` 只有在没有同名 `.jsonl` 时才算「只有压缩副本」，
+    // 与原生 `should_skip_compressed_sibling` 的优先级一致（普通副本永远优先读取）。
+    const plainNames = new Set(entries.filter((entry) => entry.endsWith('.jsonl')));
     for (const entry of entries) {
       const p = path.join(dir, entry);
       try {
@@ -128,7 +138,10 @@ async function newestJsonlPaths(sessionsDir: string, max: number, errors?: strin
           const datePath = parts.length <= 3 && /^\d{4}$/.test(parts[0]) && parts.slice(1).every((part) => /^\d{2}$/.test(part));
           if (info.isFile() && datePath) {
             errors?.push(`${escapeControlChars(p)}（日期路径不是目录，被普通文件占住）`);
-          } else if (entry.endsWith('.jsonl')) {
+          } else if (info.isFile() && entry.endsWith('.jsonl.zst')) {
+            // 普通副本也在时原生只读普通副本（`should_skip_compressed_sibling`），这里不重复计数。
+            if (!plainNames.has(entry.slice(0, -'.zst'.length))) compressed?.push(p);
+          } else if (info.isFile() && entry.endsWith('.jsonl')) {
             collected.push(p);
           }
         }
@@ -228,14 +241,17 @@ export function parseCodexConfig(raw: string): { provider: string; config: TomlT
 }
 
 /** 按 session id 定位 rollout 文件（sessions/YYYY/MM/DD/rollout-*-<id>.jsonl），找不到返回 null。
- * `errors` 传出去后，调用方能区分「确实没有这个会话」与「有位置读不出来、无法确认」 */
+ * `errors` 传出去后，调用方能区分「确实没有这个会话」与「有位置读不出来、无法确认」。
+ * `compressed` 传出去后，调用方能区分「确实没有」与「只有 `.jsonl.zst` 压缩副本」：
+ * 后者是 Codex 压缩过的真实会话，Watch 本版读不出内容，不能讲成「不存在」。 */
 export async function findRolloutBySessionId(
   sessionsDir: string,
   sessionId: string,
   errors?: string[],
+  compressed?: string[],
 ): Promise<string | null> {
   const suffix = `-${sessionId}.jsonl`;
-  const files = await newestJsonlPaths(sessionsDir, Number.MAX_SAFE_INTEGER, errors);
+  const files = await newestJsonlPaths(sessionsDir, Number.MAX_SAFE_INTEGER, errors, compressed);
   return files.find((f) => f.endsWith(suffix)) ?? null;
 }
 

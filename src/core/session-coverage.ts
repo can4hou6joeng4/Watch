@@ -19,7 +19,20 @@ export type UnattributableStat = {
   samples: string[];
   /** 归属写在哪一行（如 Codex 的 `session_meta` 首行）；缺省时用通用说法 */
   summary?: string;
+  /** 覆盖默认的「归属元数据缺失或损坏」原因（例如 Codex 的 `.jsonl.zst` 压缩副本） */
+  cause?: string;
+  /** 覆盖默认的「可能是被截断，能从备份恢复就别直接删」建议；压缩副本不是损坏，不能沿用 */
+  advice?: string;
 };
+
+const DEFAULT_CAUSE = '会话归属的元数据缺失或损坏';
+const DEFAULT_ADVICE = '先确认这些文件的内容（可能是被截断），能从备份恢复就别直接删';
+
+/** 原因与建议两句话按家覆盖，缺省沿用「<summary>缺失或损坏」的旧文案 */
+function causeAdvice(stat: UnattributableStat): { cause: string; advice: string } {
+  const fallback = stat.summary ? `${stat.summary}缺失或损坏` : DEFAULT_CAUSE;
+  return { cause: stat.cause ?? fallback, advice: stat.advice ?? DEFAULT_ADVICE };
+}
 
 /** 逐家问一次；未实现的跳过，抛错的也跳过（那已由本家 `listSessions` 的失败通道说过） */
 export async function collectUnattributable(
@@ -37,6 +50,9 @@ export async function collectUnattributable(
         count: result.count,
         samples: result.samples,
         ...(result.summary ? { summary: result.summary } : {}),
+        // 家自定义的原因 / 建议要原样带到文案层，否则压缩副本会落回「元数据损坏」的默认句
+        ...(result.cause ? { cause: result.cause } : {}),
+        ...(result.advice ? { advice: result.advice } : {}),
       });
     } catch {
       // 整体读不出来时 `listSessions` 已经说过一遍；这里不再把同一个问题说两次，也不下结论
@@ -58,12 +74,11 @@ function sampleText(stat: UnattributableStat): string {
  * 「这些文件不属于这里」；`watch doctor` 是全局视角，说这句反而多余。
  */
 export function unattributableWarning(stat: UnattributableStat, cwd?: string): string {
-  const what = stat.summary ?? '会话归属的元数据';
+  const { cause, advice } = causeAdvice(stat);
   return (
-    `${stat.displayName} 有 ${stat.count} 个会话文件读不出目录归属（${what}缺失或损坏），` +
+    `${stat.displayName} 有 ${stat.count} 个会话文件读不出目录归属（${cause}），` +
     `因此不会出现在任何目录的会话列表里：${sampleText(stat)}；` +
-    `这不代表它们不存在${cwd ? `，也无法判断它们是否属于 ${escapeControlChars(cwd)}` : ''}——` +
-    `先确认这些文件的内容（可能是被截断），能从备份恢复就别直接删`
+    `这不代表它们不存在${cwd ? `，也无法判断它们是否属于 ${escapeControlChars(cwd)}` : ''}——${advice}`
   );
 }
 
@@ -76,9 +91,10 @@ export function unattributableEmptyNote(stats: readonly UnattributableStat[]): s
   if (!stats.length) return null;
   const total = stats.reduce((sum, s) => sum + s.count, 0);
   const names = stats.map((s) => s.displayName).join(' / ');
+  const advice = [...new Set(stats.map((s) => causeAdvice(s).advice))].join('；');
   return (
     `未发现可列出的原生会话；但 ${names} 另有 ${total} 个会话文件读不出目录归属（原因见上方警告），` +
-    '无法确认这个目录里是否还有它们的会话——先确认这些文件的内容（可能是被截断，能从备份恢复就别直接删）再重试'
+    `无法确认这个目录里是否还有它们的会话——${advice}，再重试`
   );
 }
 
@@ -96,17 +112,18 @@ export function unattributableJson(stats: readonly UnattributableStat[]): { prov
  */
 function hiddenByAttribution(
   stats: readonly UnattributableStat[],
-): { names: string; total: number; what: string; samples: string } | null {
+): { names: string; total: number; what: string; samples: string; advice: string } | null {
   if (!stats.length) return null;
   const names = stats.map((s) => s.displayName).join(' / ');
   const total = stats.reduce((sum, s) => sum + s.count, 0);
-  const whats = [...new Set(stats.map((s) => s.summary ?? '会话归属的元数据'))];
+  const causes = [...new Set(stats.map((s) => causeAdvice(s).cause))];
+  const advice = [...new Set(stats.map((s) => causeAdvice(s).advice))].join('；');
   const samples = stats
     .filter((s) => s.samples.length > 0)
     .map((s) => (stats.length > 1 ? `${s.displayName}：${escapeControlChars(s.samples[0])}` : escapeControlChars(s.samples[0])))
     .slice(0, 3)
     .join('、');
-  return { names, total, what: whats.join(' / '), samples };
+  return { names, total, what: causes.join(' / '), samples, advice };
 }
 
 /**
@@ -131,10 +148,10 @@ export function unattributablePickWarning(
   if (!hidden) return null;
   const samples = hidden.samples ? `：${hidden.samples}` : '';
   return (
-    `${hidden.names} 另有 ${hidden.total} 个会话文件读不出目录归属（${hidden.what}缺失或损坏），` +
+    `${hidden.names} 另有 ${hidden.total} 个会话文件读不出目录归属（${hidden.what}），` +
     `它们不属于任何目录、不会出现在会话列表里${samples}；` +
     `本次${subject}只在能读出的会话里挑，没有把它们算进去——${consequence}；` +
-    `先确认这些文件的内容（可能是被截断），能从备份恢复就别直接删`
+    `${hidden.advice}`
   );
 }
 
@@ -151,9 +168,9 @@ export function unattributableNoPickMessage(stats: readonly UnattributableStat[]
   const samples = hidden.samples ? `：${hidden.samples}` : '';
   return (
     `未发现可列出的原生会话；但 ${hidden.names} 另有 ${hidden.total} 个会话文件读不出目录归属` +
-    `（${hidden.what}缺失或损坏），它们不属于任何目录、不会出现在会话列表里${samples}——` +
+    `（${hidden.what}），它们不属于任何目录、不会出现在会话列表里${samples}——` +
     `无法确认这个目录里是否还有可交接的会话（不能据此说「这里没有会话」）；` +
-    `先确认这些文件的内容（可能是被截断），能从备份恢复就别直接删`
+    `${hidden.advice}`
   );
 }
 
@@ -214,9 +231,10 @@ export function unattributableSearchNote(stats: readonly UnattributableStat[]): 
   if (!stats.length) return null;
   const total = stats.reduce((sum, s) => sum + s.count, 0);
   const names = stats.map((s) => s.displayName).join(' / ');
+  const advice = [...new Set(stats.map((s) => causeAdvice(s).advice))].join('；');
   return (
     `本次没有命中；但 ${names} 另有 ${total} 个会话文件读不出目录归属（原因见上方警告），` +
     '它们不属于任何目录，也就不会进任何目录的搜索索引——无法确认里面是否有你要找的内容，搜索没有覆盖到它们；' +
-    '先确认这些文件的内容（可能只是首行被截断、正文还在，能从备份恢复就别直接删）再重试'
+    `${advice}，再重试`
   );
 }

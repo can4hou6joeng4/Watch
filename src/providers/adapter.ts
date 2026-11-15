@@ -219,7 +219,7 @@ export interface ProviderAdapter {
    * `summary` 说明归属写在哪一行（如「session_meta 首行」），用于不写死 provider 名的共用文案。
    * 不实现 = 本家没有这一档。
    */
-  unattributable?(): Promise<{ count: number; samples: string[]; summary?: string }>;
+  unattributable?(): Promise<{ count: number; samples: string[]; summary?: string; cause?: string; advice?: string }>;
 
   /**
    * 可选：为目标会话取协作写锁（如 Codex 的原生 per-thread writer 锁）。

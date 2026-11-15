@@ -52,10 +52,14 @@ function codexDateDirectories(
 }
 
 /** 按 YYYY/MM/DD 结构扫 rollout，withFileTypes 避免对目录再 stat。
- * `errors` 收集目录 / 文件读不出来的原因：列表与「最新会话」都据此判断结果是完整结论还是「没查成」。 */
+ * `errors` 收集目录 / 文件读不出来的原因：列表与「最新会话」都据此判断结果是完整结论还是「没查成」。
+ * `compressed` 收集只有 `.jsonl.zst` 副本的 rollout：Codex 的 `local_thread_store_compression`
+ * （上游主线，尚在 UnderDevelopment、默认关闭）把 7 天没写过的会话压成该格式，它们仍是真实会话，
+ * 本版 Watch 读不出内容，不能因为扩展名不在名单里就当成「没有这条会话」。 */
 async function collectRecentRolloutFiles(
   sessionsRoot: string,
   errors?: string[],
+  compressed?: string[],
 ): Promise<{ filePath: string; mtimeMs: number }[]> {
   const collected: { filePath: string; mtimeMs: number }[] = [];
   let years: string[];
@@ -105,8 +109,15 @@ async function collectRecentRolloutFiles(
           }
           continue;
         }
+        const plainNames = new Set(entries.filter((entry) => entry.isFile() && entry.name.endsWith('.jsonl')).map((entry) => entry.name));
         for (const entry of entries) {
-          if (!entry.isFile() || !entry.name.startsWith('rollout-') || !entry.name.endsWith('.jsonl')) continue;
+          if (!entry.isFile() || !entry.name.startsWith('rollout-')) continue;
+          if (entry.name.endsWith('.jsonl.zst')) {
+            // 普通副本也在时原生只读普通副本（`should_skip_compressed_sibling`），这里不重复计数。
+            if (!plainNames.has(entry.name.slice(0, -'.zst'.length))) compressed?.push(path.join(dayDir, entry.name));
+            continue;
+          }
+          if (!entry.name.endsWith('.jsonl')) continue;
           const filePath = path.join(dayDir, entry.name);
           try {
             collected.push({ filePath, mtimeMs: (await stat(filePath)).mtimeMs });
@@ -305,9 +316,10 @@ export async function listCodexRollouts(
  */
 export async function codexUnattributableRollouts(
   sessionsRoot?: string,
-): Promise<{ count: number; samples: string[]; summary: string }> {
+): Promise<{ count: number; samples: string[]; summary: string; cause?: string; advice?: string }> {
   const root = sessionsRoot ?? path.join(codexDir(), 'sessions');
-  const files = await collectRecentRolloutFiles(root);
+  const compressed: string[] = [];
+  const files = await collectRecentRolloutFiles(root, undefined, compressed);
   const samples: string[] = [];
   let count = 0;
   for (const f of files) {
@@ -317,7 +329,20 @@ export async function codexUnattributableRollouts(
     if (samples.length < 3) samples.push(`${escapeControlChars(f.filePath)}（${error ?? '原因未知'}）`);
   }
   // summary 直接点名那一行：共用文案不写死 provider 名，但用户需要知道「修的是首行」
-  return { count, samples, summary: 'session_meta 首行' };
+  const summary = 'session_meta 首行';
+  if (!compressed.length) return { count, samples, summary };
+  // 压缩副本是另一种原因：文件没有损坏，只是本版不读 `.jsonl.zst`。混用「可能是被截断」会把用户
+  // 引去反复查文件内容，必须换掉原因与建议两句话。
+  const compressedCount = compressed.length;
+  return {
+    count: count + compressedCount,
+    samples: [...samples, ...compressed.slice(0, Math.max(0, 3 - samples.length)).map((f) => `${escapeControlChars(f)}（只有 .jsonl.zst 压缩副本）`)],
+    summary,
+    cause: count > 0
+      ? `${summary}缺失或损坏，另有 ${compressedCount} 个已被 Codex 压缩为 .jsonl.zst，本版 Watch 只读取未压缩的 .jsonl`
+      : '这些文件已被 Codex 压缩为 .jsonl.zst，本版 Watch 只读取未压缩的 .jsonl',
+    advice: '文件本身是完好的；在 Codex 里继续该会话会把它重新展开为 .jsonl（Watch 随后即可列出），不要直接删除或改名',
+  };
 }
 
 /** 按原生 session id（rollout 文件名尾部 uuid）全局反查 Codex 会话；sessionsRoot 可注入供单测 */
@@ -327,8 +352,19 @@ export async function findCodexSessionById(
 ): Promise<{ ref: SessionRef; updatedAt: number } | null> {
   const root = sessionsRoot ?? path.join(codexDir(), 'sessions');
   const walkErrors: string[] = [];
-  const filePath = await findRolloutBySessionId(root, sessionId, walkErrors);
+  const compressed: string[] = [];
+  const filePath = await findRolloutBySessionId(root, sessionId, walkErrors, compressed);
   if (!filePath) {
+    // 只有压缩副本时这个会话真实存在（名字里的 id 完全匹配），只是本版读不出内容：
+    // 讲成「没有」会把用户引去核对 id 或以为 Codex 没装
+    const compressedMatch = compressed.find((f) => f.endsWith(`-${sessionId}.jsonl.zst`));
+    if (compressedMatch) {
+      throw new SessionLookupFailureError(
+        'found-unreadable',
+        `找到会话 ${sessionId} 的压缩副本 ${escapeControlChars(compressedMatch)}，但本版 Watch 只读取未压缩的 .jsonl：` +
+          '文件本身是完好的；在 Codex 里继续该会话会把它重新展开为 .jsonl，不要直接删除或改名',
+      );
+    }
     // 有目录读不出来时不能下「没有这个会话」的结论：抛出原因，由 resolveById 记进 diagnostics，
     // 用户才会去查权限 / 路径，而不是怀疑 id 写错或 Codex 没装
     if (walkErrors.length) {
