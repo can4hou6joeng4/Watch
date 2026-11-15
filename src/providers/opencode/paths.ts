@@ -6,10 +6,14 @@ import { describeWriteFailureReason } from '../../core/atomic.js';
 import { isMissingPathError } from '../../core/read-text.js';
 import { probeSqliteTables, readSqliteFileHead } from '../../core/sqlite-file.js';
 import { escapeControlChars } from '../../core/display.js';
+import { assertDataDirectory } from '../../core/provider-directory.js';
 
 export function opencodeDbPath(): string {
   if (process.env.WATCH_OPENCODE_DB) return process.env.WATCH_OPENCODE_DB;
-  return path.join(opencodeNativeDataRoot(), 'opencode.db');
+  const root = opencodeNativeDataRoot();
+  // 默认数据根被普通文件占住时，stat 库路径会得到 ENOTDIR；不能当成「没有库」。
+  assertDataDirectory(root, 'OpenCode 数据目录');
+  return path.join(root, 'opencode.db');
 }
 
 export function opencodeSessionsRoot(): string {
@@ -222,6 +226,9 @@ export function assertUsableOpencodeDb(dbPath: string): void {
  * SQLite 层变成一句英文原文。
  */
 export async function probeOpencodeDbFile(dbPath: string): Promise<'missing' | 'file'> {
+  // `isMissingPathError()` 把 ENOTDIR 也算「没有库」；先单独检查父目录类型，
+  // 否则「数据目录被文件占住」会被讲成「这个目录没聊过」。
+  assertDataDirectory(path.dirname(dbPath), 'OpenCode 数据目录');
   let info: Awaited<ReturnType<typeof stat>>;
   try {
     info = await stat(dbPath);

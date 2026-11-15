@@ -1,7 +1,7 @@
 import { execFile } from 'node:child_process';
 import { describeBrokenCommandStart, resolveCli } from '../../core/platform.js';
 import { escapeControlChars } from '../../core/display.js';
-import { providerDirectoryFromEnv } from '../../core/provider-directory.js';
+import { assertDataDirectory, providerDirectoryFromEnv } from '../../core/provider-directory.js';
 import type { Dirent } from 'node:fs';
 import { readFile, readdir, stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
@@ -33,7 +33,9 @@ export function kimidirFrom(home: string): string {
 }
 
 export function kimiSessionsRoot(): string {
-  return path.join(kimidir(), 'sessions');
+  const dir = path.join(kimidir(), 'sessions');
+  assertDataDirectory(dir, 'Kimi 会话目录');
+  return dir;
 }
 
 /**
@@ -59,7 +61,10 @@ export function encodeKimiWorkspaceDir(cwd: string): string {
 }
 
 export function kimidir(): string {
-  return kimidirFrom(homedir());
+  const dir = kimidirFrom(homedir());
+  // 默认根被普通文件占住时，索引读取会得到 ENOTDIR；不能把它当成「这家没有会话」。
+  assertDataDirectory(dir, 'Kimi 数据目录');
+  return dir;
 }
 
 const KIMI_INDEX_PATH_CONTROL = /[\u0000-\u001f\u007f]/;

@@ -1,6 +1,6 @@
 import { mkdir } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
-import { providerDirectoryFromEnv } from '../../core/provider-directory.js';
+import { assertDataDirectory, providerDirectoryFromEnv } from '../../core/provider-directory.js';
 import { homedir } from 'node:os';
 import { randomBytes, randomUUID } from 'node:crypto';
 import { writeFileAtomic } from '../../core/atomic.js';
@@ -27,7 +27,13 @@ export function piAgentDirFrom(home: string): string {
  */
 export function piSessionsRootFrom(home: string): string {
   const sessionDir = providerDirectoryFromEnv('PI_CODING_AGENT_SESSION_DIR', '', home);
-  return sessionDir || join(piAgentDirFrom(home), 'sessions');
+  if (sessionDir) return sessionDir;
+  const agentDir = piAgentDirFrom(home);
+  // 默认根也可能被普通文件占住；显式变量已在 providerDirectoryFromEnv 检查过类型。
+  assertDataDirectory(agentDir, 'Pi 配置目录');
+  const sessions = join(agentDir, 'sessions');
+  assertDataDirectory(sessions, 'Pi 会话目录');
+  return sessions;
 }
 
 export function piSessionsRoot(): string {

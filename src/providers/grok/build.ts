@@ -7,7 +7,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { homedir } from 'node:os';
 import path from 'node:path';
 import { writeFileAtomic } from '../../core/atomic.js';
-import { providerDirectoryFromEnv } from '../../core/provider-directory.js';
+import { assertDataDirectory, providerDirectoryFromEnv } from '../../core/provider-directory.js';
 import { asJsonObject, parseJsonObject } from '../../core/jsonl.js';
 import { describePathReadFailureReason, emptySessionFileReasonFromStat, readTextOrEmpty } from '../../core/read-text.js';
 import { verifyWrittenTurns, expectAttachmentPlaceholders } from '../../core/verify.js';
@@ -26,11 +26,16 @@ import type { ProcessEvent, SessionRef, UnifiedTurn } from '../../core/types.js'
  * 会看到「一份会话都没有」，Watch 还会把新会话写进原生根本不读的 `~/.grok`。
  */
 export function grokHomeDir(): string {
-  return providerDirectoryFromEnv('GROK_HOME', path.join(homedir(), '.grok'));
+  const dir = providerDirectoryFromEnv('GROK_HOME', path.join(homedir(), '.grok'));
+  // 默认根被普通文件占住时，sessions 的 readdir 会得到 ENOTDIR；不能当成「没有会话」。
+  assertDataDirectory(dir, 'Grok 数据目录');
+  return dir;
 }
 
 export function grokSessionsRoot(): string {
-  return path.join(grokHomeDir(), 'sessions');
+  const dir = path.join(grokHomeDir(), 'sessions');
+  assertDataDirectory(dir, 'Grok 会话目录');
+  return dir;
 }
 
 /** `/Users/foo/bar` → `%2FUsers%2Ffoo%2Fbar`（与 Grok 会话目录一致） */

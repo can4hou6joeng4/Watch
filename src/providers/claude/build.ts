@@ -4,7 +4,7 @@ import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { appendFileAtomic, writeFileAtomic } from '../../core/atomic.js';
 import { escapeControlChars } from '../../core/display.js';
-import { providerDirectoryFromEnv } from '../../core/provider-directory.js';
+import { assertDataDirectory, providerDirectoryFromEnv } from '../../core/provider-directory.js';
 import { iterateFileLines } from '../../core/read-text.js';
 import { verifyWrittenTurns } from '../../core/verify.js';
 import { claudeBashInput, CLAUDE_THINKING_PREFIX, ENCRYPTED_THINKING, toClaudeToolName, turnHasContent, WATCH_CONTEXT_DISCLOSURE_PREFIX } from '../../core/rich.js';
@@ -28,11 +28,16 @@ export function claudeConfigDirFrom(home: string): string {
 }
 
 export function claudeConfigDir(): string {
-  return claudeConfigDirFrom(homedir());
+  const dir = claudeConfigDirFrom(homedir());
+  // 默认根也可能被普通文件占住；显式变量已在 providerDirectoryFromEnv 检查过类型。
+  assertDataDirectory(dir, 'Claude 配置目录');
+  return dir;
 }
 
 export function claudeProjectsDir(): string {
-  return path.join(claudeConfigDir(), 'projects');
+  const dir = path.join(claudeConfigDir(), 'projects');
+  assertDataDirectory(dir, 'Claude 会话目录');
+  return dir;
 }
 
 type ClaudeIdentity = { model: string; version?: string };

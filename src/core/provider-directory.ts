@@ -49,3 +49,31 @@ export function providerDirectoryFromEnv(name: string, fallback: string, tildeHo
   }
   return dir;
 }
+
+/**
+ * 默认数据目录（没有显式环境变量时的位置）的路径类型检查。
+ *
+ * 与 `providerDirectoryFromEnv()` 同一判据，但用于不带变量名的默认根：
+ * - `ENOENT` 视为首次使用，交给各 provider 的首次写入创建，检查本身不建目录；
+ * - 被普通文件占住、祖先不是目录或读取失败都抛出中文原因，不能当成「没有会话」。
+ *
+ * 只读 stat，不承诺写权限，也不保证检查之后路径不再变化。
+ */
+export function assertDataDirectory(dir: string, label: string): void {
+  let info;
+  try {
+    info = statSync(dir);
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === 'ENOENT') return;
+    if (code === 'ENOTDIR') {
+      throw new Error(`${label}有一级不是目录（被文件占住）：${escapeControlChars(dir)}；请先恢复目录或修正路径后重试`);
+    }
+    throw new Error(
+      `无法读取 ${label} ${escapeControlChars(dir)}：${describePathReadFailureReason(error)}；请先恢复路径的可访问性后重试`,
+    );
+  }
+  if (!info.isDirectory()) {
+    throw new Error(`${label}不是目录（被文件占住）：${escapeControlChars(dir)}；请先恢复目录或修正路径后重试`);
+  }
+}
