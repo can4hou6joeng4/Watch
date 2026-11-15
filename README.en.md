@@ -20,7 +20,13 @@ The steps are on the site [guides](https://relay.bobochang.cn/en/#guides): [Clau
 
 It does not provide models, bypass usage limits, replace native agent chat, or move permissions, credentials and plugins by default. What it transfers is the recorded session, not the model's unrecorded internal state. Today the implementation is centred on CLI sessions and terminal resume; the product direction includes validated desktop entry points, but **official interoperability does not mean Watch has integrated it**.
 
-### Latest release ([v0.1.54](https://github.com/can4hou6joeng4/Watch/releases/tag/v0.1.54))
+### Latest release ([v0.1.55](https://github.com/can4hou6joeng4/Watch/releases/tag/v0.1.55))
+
+v0.1.55 supports `CODEX_HOME`. Codex's official `find_codex_home()` states the data directory can be set through this variable and defaults to `~/.codex`. The direct-file Codex adapter was pinned to `~/.codex` (only the official import read it), so users with the variable set saw no sessions in `sessions` / `recent` / `doctor`, and new rollouts plus the writer lock landed where the native client does not read. `codexHomeDirFrom()` now resolves it consistently (empty means unset), and session scanning, creation, preflight config reads and the writer lock path follow it.
+
+- **Validation scope**: 3 new isolated checks; the CLI-level case reproduces a failure against the old implementation (`sessions` returned `providers: []`, listing none of the custom-directory sessions). Full isolated regression: 1941 passing, zero failures and zero skips. These are synthetic-directory checks; the native client was not run.
+
+### Previous release ([v0.1.54](https://github.com/can4hou6joeng4/Watch/releases/tag/v0.1.54))
 
 v0.1.54 supports `CLAUDE_CONFIG_DIR`. Claude Code's official docs state it overrides `~/.claude`: settings, session history and plugins are stored there instead. Watch only joined `homedir()`, so users with the variable set saw no sessions in `sessions` / `recent` / `doctor`, and new sessions were written into `~/.claude`, which the native client does not read. Claude's projects root and the Codex official import's "source session elsewhere" scan now follow it (falling back to `~/.claude` when unset or blank).
 

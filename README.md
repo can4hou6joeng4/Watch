@@ -20,7 +20,13 @@ Watch 只做一件事：**把已保存的会话记录连同工作目录交到目
 
 它不提供模型、不绕过配额、不代替原生 Agent 聊天，也不默认搬迁权限、凭据或插件；接力的是已有记录，不是模型未记录的内部状态。当前实现以 CLI 会话与终端恢复为主，产品方向包含经过验证的桌面端入口，但**官方支持互通不等于 Watch 已经集成**。
 
-### 最新版本（[v0.1.54](https://github.com/can4hou6joeng4/Watch/releases/tag/v0.1.54)）
+### 最新版本（[v0.1.55](https://github.com/can4hou6joeng4/Watch/releases/tag/v0.1.55)）
+
+v0.1.55 支持 `CODEX_HOME`。Codex 官方 `find_codex_home()` 写明数据目录可由该变量指定，未设置时默认 `~/.codex`。直接写文件的 Codex 适配器以前固定 `~/.codex`（只有官方导入路径读它），设了变量的用户在 `sessions` / `recent` / `doctor` 里看到零条会话，新建 rollout 与 writer 锁也落在原生不读的位置。现在 `codexHomeDirFrom()` 统一解析（空值等同未设置），会话扫描、新建、预检配置读取与 writer 锁路径都跟随它。
+
+- **验证范围**：新增 3 项隔离检查，其中 CLI 级用例在旧实现上先复现失败（`sessions` 返回 `providers: []`，自定义目录里的会话一条都列不出）。完整隔离回归 1941 项通过，0 失败、0 跳过。这些是合成目录检查，没有运行原生客户端。
+
+### 上一版本（[v0.1.54](https://github.com/can4hou6joeng4/Watch/releases/tag/v0.1.54)）
 
 v0.1.54 支持 `CLAUDE_CONFIG_DIR`。Claude Code 官方文档写明它覆盖 `~/.claude`：设置、会话历史与插件都改存到那里。Watch 以前只按 `homedir()` 拼路径，设了该变量的用户在 `sessions` / `recent` / `doctor` 里看到零条会话，新建会话还会写进原生不读的 `~/.claude`。现在 Claude 的项目根目录与 Codex 官方导入的「来源会话在别处」扫描都跟随它（未设置或只有空白时回退 `~/.claude`）。
 
