@@ -108,7 +108,9 @@ export async function writeFileAtomic(
     } catch {
       mode = undefined; // 新文件
     }
-    const handle = await open(tmpPath, 'w', mode ?? 0o600);
+    // 临时文件先按 0600 创建：源文件可能是 0200（只写）或 0444（只读），
+    // 用源权限位创建会让 verify 读不了、后续也改不了；发布前再恢复源权限位。
+    const handle = await open(tmpPath, 'w', 0o600);
     try {
       await handle.writeFile(content, 'utf8');
       await handle.sync();
@@ -117,6 +119,7 @@ export async function writeFileAtomic(
     }
     if (opts?.verify) await opts.verify(tmpPath);
     if (opts?.backup) await backupFileAtomic(filePath);
+    if (mode !== undefined) await chmod(tmpPath, mode);
     await rename(tmpPath, filePath);
   } catch (error) {
     await rm(tmpPath, { force: true }).catch(() => {});
@@ -170,6 +173,9 @@ export async function appendFileAtomic(
         // 读不出末尾字节就不做判断，保持原来的纯追加行为
       }
       await copyFile(filePath, tmpPath);
+      // copyFile 会保留源权限位；0444 / 0200 的源文件会让 'a' 打开或 verify 读取失败。
+      // 先给本次私有副本补上读写位，发布前再恢复源权限位。
+      if (mode !== undefined) await chmod(tmpPath, mode | 0o600);
       const handle = await open(tmpPath, 'a');
       try {
         await handle.writeFile(needsNewline ? `\n${extraContent}` : extraContent, 'utf8');
@@ -188,6 +194,7 @@ export async function appendFileAtomic(
     }
 
     if (opts?.verify) await opts.verify(tmpPath);
+    if (mode !== undefined) await chmod(tmpPath, mode);
     if (opts?.backup && originalExists) await backupFileAtomic(filePath);
     await rename(tmpPath, filePath);
   } catch (error) {
