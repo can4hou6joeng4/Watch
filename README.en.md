@@ -20,9 +20,16 @@ The steps are on the site [guides](https://relay.bobochang.cn/en/#guides): [Clau
 
 It does not provide models, bypass usage limits, replace native agent chat, or move permissions, credentials and plugins by default. What it transfers is the recorded session, not the model's unrecorded internal state. Today the implementation is centred on CLI sessions and terminal resume; the product direction includes validated desktop entry points, but **official interoperability does not mean Watch has integrated it**.
 
-### Latest release ([v0.1.58](https://github.com/can4hou6joeng4/Watch/releases/tag/v0.1.58))
+### Latest release ([v0.1.59](https://github.com/can4hou6joeng4/Watch/releases/tag/v0.1.59))
 
-v0.1.58 supports Kimi's `KIMI_CODE_HOME`. Kimi's official source states the data directory priority is `KIMI_CODE_HOME` > `~/.kimi-code`. Watch only joined `homedir()`, so users with the variable set saw no sessions in `sessions` / `recent` / `doctor`, and new sessions plus `session_index.jsonl` writes landed where the native client does not read. `kimidirFrom()` now resolves it consistently (trimmed and made absolute), and the sessions root, index reads/writes and creation path follow it.
+v0.1.59 rejects data-directory settings that change meaning with the working directory. `CLAUDE_CONFIG_DIR`, `CODEX_HOME`, `GROK_HOME`, `KIMI_CODE_HOME`, `PI_CODING_AGENT_DIR` and `PI_CODING_AGENT_SESSION_DIR` now require full absolute paths; Pi still expands `~` / `~/` under its native rules (`~\` also works on Windows). Watch and the native CLI can run in different working directories, so relative values could send scans, writes and the Codex writer lock to different locations. Errors name the variable and explain how to fix it; aggregate lists disclose them through `unavailable` and `warnings`. Unset variables and empty strings still use the defaults, while whitespace in a path is preserved rather than trimmed only by Watch.
+
+- **Validation scope**: 16 new isolated checks cover all six variables, path whitespace, Pi expansion, CLI aggregate warnings, rejection before session writes and native process launch, and rejection before an official import journal is created. Full isolated regression: 1968 passing, zero failures and zero skips. Typecheck, desktop build, site build and share-image checks pass. Synthetic-directory checks do not establish native-client acceptance.
+- **Known limitation**: an explicit custom Pi session directory stores native files directly, while Watch still looks in a project subdirectory. This path awaits a fix; the earlier grouped fixtures do not establish support for the native layout.
+
+### Previous release ([v0.1.58](https://github.com/can4hou6joeng4/Watch/releases/tag/v0.1.58))
+
+v0.1.58 supports Kimi's `KIMI_CODE_HOME`. Kimi's official source states the data directory priority is `KIMI_CODE_HOME` > `~/.kimi-code`. Watch only joined `homedir()`, so it could miss custom-directory sessions or fail to locate a session registered by the native CLI after creation. That release made the sessions root, index reads and lookup after creation follow the variable; the native Kimi CLI still registers the index. v0.1.59 further requires absolute paths and preserves path whitespace, replacing the earlier trim / resolve behavior.
 
 - **Validation scope**: 3 new isolated checks; the CLI-level case reproduces a failure against the previous implementation (`sessions` returned `providers: []`). Full isolated regression: 1952 passing, zero failures and zero skips. These are synthetic-directory checks; the native client was not run.
 

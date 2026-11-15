@@ -20,9 +20,16 @@ Watch 只做一件事：**把已保存的会话记录连同工作目录交到目
 
 它不提供模型、不绕过配额、不代替原生 Agent 聊天，也不默认搬迁权限、凭据或插件；接力的是已有记录，不是模型未记录的内部状态。当前实现以 CLI 会话与终端恢复为主，产品方向包含经过验证的桌面端入口，但**官方支持互通不等于 Watch 已经集成**。
 
-### 最新版本（[v0.1.58](https://github.com/can4hou6joeng4/Watch/releases/tag/v0.1.58)）
+### 最新版本（[v0.1.59](https://github.com/can4hou6joeng4/Watch/releases/tag/v0.1.59)）
 
-v0.1.58 支持 Kimi 的 `KIMI_CODE_HOME`。Kimi 官方源码写明数据目录优先级是 `KIMI_CODE_HOME` > `~/.kimi-code`。Watch 以前只按 `homedir()` 拼路径，设了变量的用户在 `sessions` / `recent` / `doctor` 里看到零条会话，新建会话与 `session_index.jsonl` 写入也会落在原生不读的位置。现在 `kimidirFrom()` 统一解析（去首尾空白、绝对化），会话根、索引读写与新建路径都跟随它。
+v0.1.59 拒绝会随启动目录变化的数据目录配置。`CLAUDE_CONFIG_DIR`、`CODEX_HOME`、`GROK_HOME`、`KIMI_CODE_HOME`、`PI_CODING_AGENT_DIR` 与 `PI_CODING_AGENT_SESSION_DIR` 现在要求完整绝对路径；Pi 仍按原生规则展开 `~` / `~/`（Windows 另认 `~\`）。Watch 与原生 CLI 可能在不同工作目录运行，相对值会让会话扫描、写入与 Codex writer 锁指向不同位置。错误会点名变量并给出修正方法，聚合列表通过 `unavailable` 与 `warnings` 披露。未设置或空字符串仍用默认目录，路径里的空白原样保留，不再只在 Watch 一侧裁掉。
+
+- **验证范围**：新增 16 项隔离检查，覆盖六个变量的拒绝行为、路径空白、Pi 展开、CLI 聚合披露、写入前阻断、原生进程启动前的检查和官方导入日志创建前的拒绝。完整隔离回归 1968 项通过，0 失败、0 跳过；类型检查、桌面构建、站点与分享图校验通过。合成目录检查不等于原生客户端验收。
+- **已知限制**：Pi 显式自定义会话目录的原生布局是平铺文件，Watch 当前仍按项目子目录查找；这条路径尚待修复，已有分组夹具通过不代表原生布局已支持。
+
+### 上一版本（[v0.1.58](https://github.com/can4hou6joeng4/Watch/releases/tag/v0.1.58)）
+
+v0.1.58 支持 Kimi 的 `KIMI_CODE_HOME`。Kimi 官方源码写明数据目录优先级是 `KIMI_CODE_HOME` > `~/.kimi-code`。Watch 以前只按 `homedir()` 拼路径，可能漏掉自定义目录的会话，或在原生 CLI 新建后找不到它登记的会话。该版让会话根、索引读取与新建后的会话定位跟随变量；索引仍由原生 Kimi CLI 登记。v0.1.59 进一步要求绝对路径并保留路径空白，取代该版的 trim / resolve 行为。
 
 - **验证范围**：新增 3 项隔离检查，其中 CLI 级用例在旧实现上先复现失败（`sessions` 返回 `providers: []`）。完整隔离回归 1952 项通过，0 失败、0 跳过。这些是合成目录检查，没有运行原生客户端。
 
