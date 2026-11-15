@@ -33,6 +33,24 @@ import { codexLineToProcessEvents } from './events.js';
 
 const execFileAsync = promisify(execFile);
 
+/** 只将符合日期层级名称的普通文件记为占位故障，其他非目录保持既有过滤规则。 */
+function codexDateDirectories(
+  entries: import('node:fs').Dirent[],
+  parent: string,
+  pattern: RegExp,
+  errors?: string[],
+): string[] {
+  const names: string[] = [];
+  for (const entry of entries) {
+    if (!pattern.test(entry.name)) continue;
+    if (entry.isDirectory()) names.push(entry.name);
+    else if (entry.isFile()) {
+      errors?.push(`${escapeControlChars(path.join(parent, entry.name))}（日期路径不是目录，被普通文件占住）`);
+    }
+  }
+  return names.sort((a, b) => b.localeCompare(a));
+}
+
 /** 按 YYYY/MM/DD 结构扫 rollout，withFileTypes 避免对目录再 stat。
  * `errors` 收集目录 / 文件读不出来的原因：列表与「最新会话」都据此判断结果是完整结论还是「没查成」。 */
 async function collectRecentRolloutFiles(
@@ -42,10 +60,7 @@ async function collectRecentRolloutFiles(
   const collected: { filePath: string; mtimeMs: number }[] = [];
   let years: string[];
   try {
-    years = (await readdir(sessionsRoot, { withFileTypes: true }))
-      .filter((d) => d.isDirectory() && /^\d{4}$/.test(d.name))
-      .map((d) => d.name)
-      .sort((a, b) => b.localeCompare(a));
+    years = codexDateDirectories(await readdir(sessionsRoot, { withFileTypes: true }), sessionsRoot, /^\d{4}$/, errors);
   } catch (error) {
     const code = (error as NodeJS.ErrnoException).code;
     // 根目录不存在 = 这台机器没用过 codex，空结果就是事实；读不出来则必须记下来
@@ -57,10 +72,8 @@ async function collectRecentRolloutFiles(
   for (const y of years) {
     let months: string[];
     try {
-      months = (await readdir(path.join(sessionsRoot, y), { withFileTypes: true }))
-        .filter((d) => d.isDirectory() && /^\d{2}$/.test(d.name))
-        .map((d) => d.name)
-        .sort((a, b) => b.localeCompare(a));
+      const yearDir = path.join(sessionsRoot, y);
+      months = codexDateDirectories(await readdir(yearDir, { withFileTypes: true }), yearDir, /^\d{2}$/, errors);
     } catch (error) {
       const code = (error as NodeJS.ErrnoException).code;
       if (code !== 'ENOENT' && code !== 'ENOTDIR') {
@@ -71,10 +84,8 @@ async function collectRecentRolloutFiles(
     for (const m of months) {
       let dus: string[];
       try {
-        dus = (await readdir(path.join(sessionsRoot, y, m), { withFileTypes: true }))
-          .filter((d) => d.isDirectory() && /^\d{2}$/.test(d.name))
-          .map((d) => d.name)
-          .sort((a, b) => b.localeCompare(a));
+        const monthDir = path.join(sessionsRoot, y, m);
+        dus = codexDateDirectories(await readdir(monthDir, { withFileTypes: true }), monthDir, /^\d{2}$/, errors);
       } catch (error) {
         const code = (error as NodeJS.ErrnoException).code;
         if (code !== 'ENOENT' && code !== 'ENOTDIR') {

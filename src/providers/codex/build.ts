@@ -120,10 +120,17 @@ async function newestJsonlPaths(sessionsDir: string, max: number, errors?: strin
     for (const entry of entries) {
       const p = path.join(dir, entry);
       try {
-        if ((await stat(p)).isDirectory()) {
+        const info = await stat(p);
+        if (info.isDirectory()) {
           await walk(p, depth + 1);
-        } else if (entry.endsWith('.jsonl')) {
-          collected.push(p);
+        } else {
+          const parts = path.relative(sessionsDir, p).split(path.sep);
+          const datePath = parts.length <= 3 && /^\d{4}$/.test(parts[0]) && parts.slice(1).every((part) => /^\d{2}$/.test(part));
+          if (info.isFile() && datePath) {
+            errors?.push(`${escapeControlChars(p)}（日期路径不是目录，被普通文件占住）`);
+          } else if (entry.endsWith('.jsonl')) {
+            collected.push(p);
+          }
         }
       } catch (error) {
         if (!isMissingPathError(error)) {
