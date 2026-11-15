@@ -20,7 +20,13 @@ The steps are on the site [guides](https://relay.bobochang.cn/en/#guides): [Clau
 
 It does not provide models, bypass usage limits, replace native agent chat, or move permissions, credentials and plugins by default. What it transfers is the recorded session, not the model's unrecorded internal state. Today the implementation is centred on CLI sessions and terminal resume; the product direction includes validated desktop entry points, but **official interoperability does not mean Watch has integrated it**.
 
-### Latest release ([v0.1.69](https://github.com/can4hou6joeng4/Watch/releases/tag/v0.1.69))
+### Latest release ([v0.1.70](https://github.com/can4hou6joeng4/Watch/releases/tag/v0.1.70))
+
+v0.1.70 discloses compressed Codex sessions. Codex's `local_thread_store_compression` compresses rollouts idle for seven days into `.jsonl.zst` and removes the plain copy (currently UnderDevelopment and off by default upstream). Watch previously scanned only `.jsonl`, so such sessions were silently treated as absent: missing from lists and `recent`, and `open <id>` reported no match. Global ID lookup now reports "found but unreadable in this version" when it hits a compressed copy. Lists and `doctor` count it under `unattributable` with a compressed-format explanation and the next step: continuing the session in Codex re-expands it to `.jsonl`. When a plain copy exists in the same directory, native precedence applies and only `.jsonl` is read without double counting. Watch never reads, changes or deletes the `.zst` file.
+
+- **Validation scope**: all 10 new isolated checks pass, 6 of which failed against the previous implementation; another 110 related Codex and disclosure-channel checks pass. Final full isolated regression: 2130 passing, zero failures and zero skips. Typecheck, desktop build, site build and share-image checks pass. Only regular-file compressed copies are recognized; symlink and device types are not covered, and compressed content is still not read.
+
+### Previous release ([v0.1.69](https://github.com/can4hou6joeng4/Watch/releases/tag/v0.1.69))
 
 v0.1.69 discloses regular files occupying Codex date-directory paths. Scans previously kept only directory entries, silently filtering out a file at `sessions/2026`, `2026/11` or `2026/11/15`. Lists could appear empty and global ID lookup could report no match. Lists now report an incomplete scan and name the obstructed path. Automatic selection and ID lookup report uncertainty when no readable candidate exists; a readable candidate remains usable with failed-location counts and selection-scope disclosure. `sessions` includes `unavailable` and the reason, while `doctor` reports a hard failure.
 
