@@ -179,7 +179,7 @@ export async function grokUnattributableGroups(
   return {
     count: samples.length,
     samples,
-    summary: '分组名不是 URL 编码的绝对路径，分组里的 .cwd 也缺失或不可用；原生把长路径目录放进这种分组并用 .cwd 记原路径',
+    summary: '分组里记录原路径的 .cwd 文件',
   };
 }
 
