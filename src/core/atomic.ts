@@ -154,11 +154,17 @@ export async function appendFileAtomic(
     }
 
     if (originalExists) {
+      await copyFile(filePath, tmpPath);
+      // copyFile 会保留源权限位；0444 / 0200 的源文件会让 'a' 打开或 verify 读取失败。
+      // 先给本次私有副本补上读写位，发布前再恢复源权限位。
+      if (mode !== undefined) await chmod(tmpPath, mode | 0o600);
       // 末尾没有换行时先补一个：原生文件被截断（进程被杀）后末尾常缺 \n，
       // 直接追加会把两行 JSON 粘成一行，既有最后一条与新追加的第一条一起失效。
+      // 判断做在本次私有副本上，不再读源文件：源文件在 stat 之后被别的进程改写时，
+      // 旧写法会按改之前的内容决定补不补换行，与随后复制到的内容对不上。
       let needsNewline = false;
       try {
-        const handle = await open(filePath, 'r');
+        const handle = await open(tmpPath, 'r');
         try {
           const { size } = await handle.stat();
           if (size > 0) {
@@ -170,12 +176,8 @@ export async function appendFileAtomic(
           await handle.close();
         }
       } catch {
-        // 读不出末尾字节就不做判断，保持原来的纯追加行为
+        // 刚复制出的私有副本读不出末尾字节：保持原来的纯追加行为
       }
-      await copyFile(filePath, tmpPath);
-      // copyFile 会保留源权限位；0444 / 0200 的源文件会让 'a' 打开或 verify 读取失败。
-      // 先给本次私有副本补上读写位，发布前再恢复源权限位。
-      if (mode !== undefined) await chmod(tmpPath, mode | 0o600);
       const handle = await open(tmpPath, 'a');
       try {
         await handle.writeFile(needsNewline ? `\n${extraContent}` : extraContent, 'utf8');
