@@ -20,7 +20,13 @@ The steps are on the site [guides](https://relay.bobochang.cn/en/#guides): [Clau
 
 It does not provide models, bypass usage limits, replace native agent chat, or move permissions, credentials and plugins by default. What it transfers is the recorded session, not the model's unrecorded internal state. Today the implementation is centred on CLI sessions and terminal resume; the product direction includes validated desktop entry points, but **official interoperability does not mean Watch has integrated it**.
 
-### Latest release ([v0.1.66](https://github.com/can4hou6joeng4/Watch/releases/tag/v0.1.66))
+### Latest release ([v0.1.67](https://github.com/can4hou6joeng4/Watch/releases/tag/v0.1.67))
+
+v0.1.67 preserves incomplete-scan diagnostics when Codex automatically selects a session. If an earlier rollout header or date directory cannot be read but an older readable candidate is found, the result now includes the number of failed locations, a sample path and recovery advice. It states that the candidate is newest among readable sessions and may not be newest overall. `adopt` narrows its selection label; `status` and `switch` carry the warning. All four `watch prompt` profiles include the selection scope in the document and degraded findings, so it remains visible after copying. Candidate selection, existing chain bindings and failure when no candidate can be found remain unchanged. Missing header content keeps the existing attribution disclosure; known older files that were not read add no selection warning.
+
+- **Validation scope**: 16 new isolated checks, 13 of which failed against the previous implementation because disclosure was missing; all pass after the fix. They cover file/day-directory permission faults, combined counts, automatic adoption, status, switching, existing bindings, all prompt profiles, and text/JSON output. Full isolated regression: 2086 passing, zero failures and zero skips. Typecheck and desktop build pass. No real agent history or credentials were read, no native client was launched and no model request was made. This adds no native resume acceptance claim.
+
+### Previous release ([v0.1.66](https://github.com/can4hou6joeng4/Watch/releases/tag/v0.1.66))
 
 v0.1.66 corrects directory-fault advice for the Codex official import target. When a regular file occupies an ancestor of the target path, `ENOTDIR` now identifies a non-directory path component and suggests restoring the directory structure or correcting `CODEX_HOME`. Previously this branch claimed Codex had not been run yet and suggested starting it to create the directory. Explicit directory overrides already detected this fault in their initial check; this fix covers the subsequent target check, including a directory changed after that initial check passed. Actual `ENOENT` keeps the first-use advice, and existing directory and target-lock protections remain in effect.
 
