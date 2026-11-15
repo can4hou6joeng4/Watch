@@ -21,7 +21,7 @@ import type { TextHeadDetail } from '../../core/read-text.js';
 import { parseJsonObject } from '../../core/jsonl.js';
 import type { SessionRef, TokenUsage, UnifiedTurn } from '../../core/types.js';
 import { parsePiSession } from './parse.js';
-import { encodePiProjectDir, importTurnsToPi, piSessionsRoot } from './build.js';
+import { encodePiProjectDir, importTurnsToPi, piSessionsLayout, piSessionsRoot } from './build.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -39,12 +39,16 @@ export async function listPiSessions(
   cwd: string,
   sessionsRoot?: string,
 ): Promise<{ ref: SessionRef; updatedAt: number; preview?: string; previewError?: string }[]> {
-  const root = sessionsRoot ?? piSessionsRoot();
+  // 注入的根只用于测试 / 调用方，保持项目分组；真实根跟随环境变量、项目设置或默认目录。
+  const layout = sessionsRoot === undefined
+    ? piSessionsLayout(cwd)
+    : { root: sessionsRoot, flat: false, source: 'default' as const };
+  const root = layout.root;
   const names = new Set([encodePiProjectDir(cwd)]);
   // 旧 Watch 在 POSIX 上可能写出含冒号或反斜杠的目录；继续读取，不移动或重写旧文件。
   // Windows 不扫描旧编码：这些字符会变成非法目录名或额外路径层级。
   if (process.platform !== 'win32') names.add(`--${cwd.replace(/^\//, '').replaceAll('/', '-')}--`);
-  const custom = sessionsRoot === undefined && Boolean(process.env.PI_CODING_AGENT_SESSION_DIR);
+  const custom = layout.flat;
   const items = custom ? await listPiSessionDirectory(cwd, root, true) : [];
   // 旧 Watch 曾在自定义目录下再拼项目名；保留只读兼容，原生平铺文件优先。
   const seen = new Set(items.map((item) => item.ref.sessionId));
@@ -184,7 +188,19 @@ export async function findPiSessionById(
   sessionId: string,
   sessionsRoot?: string,
 ): Promise<{ ref: SessionRef; updatedAt: number } | null> {
-  const root = sessionsRoot ?? piSessionsRoot();
+  // 全局反查没有 cwd：只看全局设置与默认目录；项目级 sessionDir 覆盖无法被发现（已知边界）。
+  let layout: ReturnType<typeof piSessionsLayout>;
+  try {
+    layout = sessionsRoot === undefined
+      ? piSessionsLayout()
+      : { root: sessionsRoot, flat: false, source: 'default' };
+  } catch (error) {
+    throw new SessionLookupFailureError(
+      'incomplete',
+      `无法确认 Pi 会话目录：${describePathReadFailureReason(error)}`,
+    );
+  }
+  const root = layout.root;
   let dirs: string[];
   try {
     dirs = await readdir(root);
@@ -199,7 +215,7 @@ export async function findPiSessionById(
   }
   const unreadable: string[] = [];
   const foundButUnreadable: string[] = [];
-  const custom = sessionsRoot === undefined && Boolean(process.env.PI_CODING_AGENT_SESSION_DIR);
+  const custom = layout.flat;
   const scanDirs = custom ? ['', ...dirs] : dirs;
   for (const dir of scanDirs) {
     let files: string[];
@@ -294,7 +310,8 @@ export const piAdapter: ProviderAdapter = {
   id: 'pi',
   displayName: 'Pi',
   toolFailureSupport: 'assistant',
-  ...directoryWriteChecks('pi', piSessionsRoot),
+  // 预检 / doctor 有 cwd 时读取项目设置；没有 cwd 时只看全局设置与默认目录。
+  ...directoryWriteChecks('pi', (cwd) => piSessionsLayout(cwd).root),
 
   async detect(): Promise<boolean> {
     try {

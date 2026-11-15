@@ -9,11 +9,11 @@ import type { ProviderAdapter, WriteLimit } from './adapter.js';
  */
 export function directoryWriteChecks(
   providerId: string,
-  directory: () => string,
+  directory: (cwd?: string) => string,
 ): Required<Pick<ProviderAdapter, 'preflight' | 'writeLimit'>> {
-  const writeLimit = async (): Promise<WriteLimit | null> => {
+  const writeLimit = async (cwd?: string): Promise<WriteLimit | null> => {
     try {
-      directory();
+      directory(cwd);
       return null;
     } catch (error) {
       return {
@@ -26,8 +26,8 @@ export function directoryWriteChecks(
   };
   return {
     writeLimit,
-    async preflight() {
-      const limit = await writeLimit();
+    async preflight(ctx) {
+      const limit = await writeLimit(ctx?.cwd);
       if (limit) {
         throw new PreflightBlockedError({ code: limit.code, message: limit.reason, hint: limit.hint });
       }

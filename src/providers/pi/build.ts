@@ -1,6 +1,10 @@
+import { readFileSync, statSync } from 'node:fs';
 import { mkdir } from 'node:fs/promises';
-import { dirname, join } from 'node:path';
+import { dirname, isAbsolute, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { assertDataDirectory, providerDirectoryFromEnv } from '../../core/provider-directory.js';
+import { describePathReadFailureReason } from '../../core/read-text.js';
+import { escapeControlChars } from '../../core/display.js';
 import { homedir } from 'node:os';
 import { randomBytes, randomUUID } from 'node:crypto';
 import { writeFileAtomic } from '../../core/atomic.js';
@@ -20,32 +24,184 @@ export function piAgentDirFrom(home: string): string {
   return providerDirectoryFromEnv('PI_CODING_AGENT_DIR', join(home, '.pi', 'agent'), home);
 }
 
+/** Pi sessions 的布局来源：环境变量 / 设置文件 / 默认目录。 */
+export type PiSessionsLayout = {
+  root: string;
+  /** true = 原生显式目录，文件直接平铺；false = `<root>/<encoded-cwd>` 分组 */
+  flat: boolean;
+  source: 'env' | 'settings' | 'default';
+};
+
+type PiSettingsLayer =
+  | { kind: 'absent' }
+  | { kind: 'ok'; path: string; hasKey: boolean; value: unknown };
+
 /**
- * Pi 会话根：官方优先级是 `--session-dir`（单次运行参数，Watch 看不到）→
- * `PI_CODING_AGENT_SESSION_DIR` → 设置 `sessionDir` → `<agent-dir>/sessions`。
- * 这里读取目录环境变量；单次参数与 `sessionDir` 设置尚未读取（已知限制）。
+ * 读取一层 Pi 设置（全局 `<agent-dir>/settings.json` 或项目 `<cwd>/.pi/settings.json`）。
+ *
+ * 原生 `loadFromStorage` 对缺失 / 0 字节文件按 `{}` 处理；JSON 解析失败时该层也按 `{}`
+ * 继续，并在运行诊断里给出警告。Watch 没有设置层的警告通道，因此解析失败会直接拒绝
+ * 本次解析——不能让一个坏掉的设置悄悄退回默认目录，再把结果讲成「这个项目没有会话」。
+ * 不照搬原生 `FileSettingsStorage.withLock`：只读解析不取锁，也不建文件。
  */
-export function piSessionsRootFrom(home: string): string {
+function piSettingsLayer(filePath: string): PiSettingsLayer {
+  let raw: string;
+  try {
+    // 设备文件 / FIFO 不能交给同步读取，否则一次只读列表也可能永久阻塞。
+    const info = statSync(filePath);
+    if (!info.isFile()) throw new Error('该路径不是普通设置文件');
+    raw = readFileSync(filePath, 'utf8');
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === 'ENOENT') return { kind: 'absent' };
+    throw new Error(
+      `无法读取 Pi 设置文件 ${escapeControlChars(filePath)}：${code === 'ENOTDIR' ? '路径上的某一级不是目录（被文件占住）' : describePathReadFailureReason(error)}；` +
+        '无法确认 Pi 实际使用的会话目录，本次没有按默认目录继续，也不会把它当成「没有会话」。先恢复该文件的可读性后重试',
+    );
+  }
+  const text = raw.charCodeAt(0) === 0xfeff ? raw.slice(1) : raw;
+  if (text.length === 0) return { kind: 'absent' };
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    throw new Error(
+      `Pi 设置文件 ${escapeControlChars(filePath)} 不是有效的 JSON；` +
+        '原生会忽略这一层并继续，但 Watch 无法确认这一层是否本来要覆盖会话目录，本次没有按默认目录继续。' +
+        '请修好该文件（或临时移走）后重试',
+    );
+  }
+  // 原生不校验设置对象的 schema；非对象展开后不提供任何键，按空层处理。
+  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+    return { kind: 'ok', path: filePath, hasKey: false, value: undefined };
+  }
+  const hasKey = Object.prototype.hasOwnProperty.call(parsed, 'sessionDir');
+  return { kind: 'ok', path: filePath, hasKey, value: (parsed as Record<string, unknown>).sessionDir };
+}
+
+/** 与原生一致的 `~` 展开：只认 `~` / `~/`，win32 另认 `~\`；其余路径保留空白。 */
+function expandPiHome(value: string, home: string): string {
+  if (value === '~') return home;
+  if (value.startsWith('~/') || (process.platform === 'win32' && value.startsWith('~\\'))) {
+    return join(home, value.slice(2));
+  }
+  return value;
+}
+
+/**
+ * 把设置里的 `sessionDir` 解析成绝对目录；falsy 值（缺省 / null / false / 0 / 空串）
+ * 表示未设置，与原生 `getSessionDir()` 的 truthy 判定一致。
+ *
+ * 相对路径不能按 Watch 的 cwd 绝对化：原生由实际进程 cwd 解释，两者可能不同。
+ * 已存在的非目录与读取失败照常抛出；不存在的目录留给写入创建（与原生 create 一致）。
+ */
+function resolvePiSessionDirValue(value: unknown, sourcePath: string, home: string): string | null {
+  if (!value) return null;
+  if (typeof value !== 'string') {
+    throw new Error(
+      `Pi 设置 ${escapeControlChars(sourcePath)} 里的 sessionDir 不是字符串（实际是 ${Array.isArray(value) ? 'array' : typeof value}）；` +
+        '原生会在启动时因此报错。请改为绝对路径字符串后重试',
+    );
+  }
+  let dir = value;
+  if (dir.startsWith('file://')) {
+    try {
+      dir = fileURLToPath(dir);
+    } catch {
+      throw new Error(
+        `Pi 设置 ${escapeControlChars(sourcePath)} 里的 sessionDir 是无法解析的 file:// URL：${escapeControlChars(value)}；请改为绝对路径后重试`,
+      );
+    }
+  }
+  dir = expandPiHome(dir, home);
+  const currentDriveRoot = process.platform === 'win32' && /^[\\/](?![\\/])/.test(dir);
+  if (!dir || !isAbsolute(dir) || currentDriveRoot) {
+    throw new Error(
+      `Pi 设置 ${escapeControlChars(sourcePath)} 里的 sessionDir 需要绝对路径，收到：${escapeControlChars(value)}；` +
+        '原生会按 Pi 进程的工作目录解释相对路径，Watch 与 Pi 的启动目录可能不同，不能猜成同一个位置。请改为完整绝对路径后重试',
+    );
+  }
+  // 不存在的目录仍交给首次写入创建（与原生 create 一致）；已存在的非目录与读取失败必须提前暴露。
+  let info;
+  try {
+    info = statSync(dir);
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === 'ENOENT') return dir;
+    if (code === 'ENOTDIR') {
+      throw new Error(
+        `Pi 设置中的 sessionDir 指向的路径有一级不是目录（被文件占住）：${escapeControlChars(dir)}；` +
+          `来源：${escapeControlChars(sourcePath)}。请恢复该路径或修改设置后重试`,
+      );
+    }
+    throw new Error(
+      `无法读取 Pi 设置中的 sessionDir 指向的路径 ${escapeControlChars(dir)}：${describePathReadFailureReason(error)}；` +
+        `来源：${escapeControlChars(sourcePath)}。请先恢复路径的可访问性后重试`,
+    );
+  }
+  if (!info.isDirectory()) {
+    throw new Error(
+      `Pi 设置中的 sessionDir 指向的不是目录（被文件占住）：${escapeControlChars(dir)}；` +
+        `来源：${escapeControlChars(sourcePath)}。请恢复该路径或修改设置后重试`,
+    );
+  }
+  return dir;
+}
+
+/**
+ * 解析 Pi 会话根：`--session-dir`（单次参数，Watch 看不到）→ `PI_CODING_AGENT_SESSION_DIR`
+ * → 设置 `sessionDir`（项目覆盖全局，空串也算覆盖）→ `<agent-dir>/sessions`。
+ *
+ * 项目设置只在提供 cwd 时读取；全局按 id 反查没有 cwd，只能看到全局设置与默认目录。
+ * 注入的 `sessionsRoot` 不经过这里，仍保持项目分组语义。
+ */
+export function piSessionsLayoutFrom(home: string, cwd?: string): PiSessionsLayout {
   const sessionDir = providerDirectoryFromEnv('PI_CODING_AGENT_SESSION_DIR', '', home);
-  if (sessionDir) return sessionDir;
+  if (sessionDir) return { root: sessionDir, flat: true, source: 'env' };
+
+  // 项目层有 sessionDir（含空串）就是最终值，不必再读全局；只有项目层未提供时才看全局。
+  const projectLayer: PiSettingsLayer = cwd
+    ? piSettingsLayer(join(cwd, '.pi', 'settings.json'))
+    : { kind: 'absent' };
+  let chosen: { path: string; value: unknown } | null = null;
+  if (projectLayer.kind === 'ok' && projectLayer.hasKey) {
+    chosen = { path: projectLayer.path, value: projectLayer.value };
+  } else {
+    const globalLayer = piSettingsLayer(join(piAgentDirFrom(home), 'settings.json'));
+    if (globalLayer.kind === 'ok' && globalLayer.hasKey) {
+      chosen = { path: globalLayer.path, value: globalLayer.value };
+    }
+  }
+  if (chosen) {
+    const resolved = resolvePiSessionDirValue(chosen.value, chosen.path, home);
+    if (resolved) return { root: resolved, flat: true, source: 'settings' };
+  }
+
   const agentDir = piAgentDirFrom(home);
   // 默认根也可能被普通文件占住；显式变量已在 providerDirectoryFromEnv 检查过类型。
   assertDataDirectory(agentDir, 'Pi 配置目录');
   const sessions = join(agentDir, 'sessions');
   assertDataDirectory(sessions, 'Pi 会话目录');
-  return sessions;
+  return { root: sessions, flat: false, source: 'default' };
+}
+
+export function piSessionsRootFrom(home: string): string {
+  return piSessionsLayoutFrom(home).root;
 }
 
 export function piSessionsRoot(): string {
-  return piSessionsRootFrom(homedir());
+  return piSessionsLayoutFrom(homedir()).root;
+}
+
+export function piSessionsLayout(cwd?: string): PiSessionsLayout {
+  return piSessionsLayoutFrom(homedir(), cwd);
 }
 
 /** 原生显式 sessionDir 直接存放文件；默认根与注入的 sessionsRoot 仍按项目分组。 */
 export function piSessionDirectory(cwd: string, sessionsRoot?: string): string {
-  const root = sessionsRoot ?? piSessionsRoot();
-  return sessionsRoot === undefined && process.env.PI_CODING_AGENT_SESSION_DIR
-    ? root
-    : join(root, encodePiProjectDir(cwd));
+  if (sessionsRoot !== undefined) return join(sessionsRoot, encodePiProjectDir(cwd));
+  const layout = piSessionsLayout(cwd);
+  return layout.flat ? layout.root : join(layout.root, encodePiProjectDir(cwd));
 }
 
 /** 按 Pi 原生规则编码已解析的 cwd：移除首个分隔符，其余分隔符与冒号转为连字符。 */
