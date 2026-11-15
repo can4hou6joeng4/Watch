@@ -342,6 +342,27 @@ export async function doctorReport(cwd: string, deps: DoctorDeps): Promise<Docto
   const unattributableStats = await collectUnattributable(adapters);
   for (const adapter of adapters) {
     if (!adapter.listSessions) continue;
+    // 列表读取与写入能力独立；目录坏了导致列表失败时，仍需保留写入故障的 code 和建议。
+    let writeLimit: WriteLimit | null = null;
+    let writeLimitError: string | undefined;
+    if (adapter.writeLimit) {
+      try {
+        writeLimit = await adapter.writeLimit(cwd);
+      } catch (error) {
+        writeLimitError = error instanceof Error ? error.message : String(error);
+        warnings.push(
+          `${adapter.displayName} 写入能力探测失败：${writeLimitError}；这不代表可以写入，转入前先用 watch open --check 确认`,
+        );
+      }
+      // 可修故障进入 warnings；已知只读布局只显示在正文，不因它使 --strict 常红。
+      if (writeLimit?.kind === 'fault') {
+        warnings.push(`${adapter.displayName} 当前无法写入：${writeLimit.reason}`);
+      }
+    }
+    const writeState = {
+      ...(writeLimit ? { writeLimit } : {}),
+      ...(writeLimitError ? { writeLimitError } : {}),
+    };
     try {
       const listed = await adapter.listSessions(cwd);
       const capped = adapter.listSessionsCap !== undefined && listed.length >= adapter.listSessionsCap;
@@ -355,38 +376,17 @@ export async function doctorReport(cwd: string, deps: DoctorDeps): Promise<Docto
         });
       }
       const unattributable = unattributableStats.find((s) => s.provider === adapter.id)?.count;
-      // 条数读得出来不代表写得进去（OpenCode 2.x 只能读）：写入限制与读取结果分开探，
-      // 探测失败记成 `writeLimitError` 而不是「没有限制」——同一个错误不能有两种讲法
-      let writeLimit: WriteLimit | null = null;
-      let writeLimitError: string | undefined;
-      if (adapter.writeLimit) {
-        try {
-          writeLimit = await adapter.writeLimit(cwd);
-        } catch (error) {
-          writeLimitError = error instanceof Error ? error.message : String(error);
-          warnings.push(
-            `${adapter.displayName} 写入能力探测失败：${writeLimitError}；这不代表可以写入，转入前先用 watch open --check 确认`,
-          );
-        }
-        // `kind: 'fault'` 是可修的环境故障（如 config.toml 读不出来），会让每次写入都失败：
-        // 只印正文不进 warnings 的话 `--strict` 看不见它，而这个命令的存在意义就是脚本能捕获。
-        // `readonly`（OpenCode 2.x）是 Watch 主动不支持、用户无法修好的状态，保持只在正文出现。
-        if (writeLimit?.kind === 'fault') {
-          warnings.push(`${adapter.displayName} 当前无法写入：${writeLimit.reason}`);
-        }
-      }
       storage.push({
         provider: adapter.id,
         count: listed.length,
         ...(capped ? { capped: true } : {}),
         ...(unreadable.length ? { unreadable: unreadable.length } : {}),
         ...(unattributable ? { unattributable } : {}),
-        ...(writeLimit ? { writeLimit } : {}),
-        ...(writeLimitError ? { writeLimitError } : {}),
+        ...writeState,
       });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      storage.push({ provider: adapter.id, count: null, error: message });
+      storage.push({ provider: adapter.id, count: null, error: message, ...writeState });
       warnings.push(`${adapter.displayName} 会话列表读取失败：${message}`);
       failures.push(`${adapter.displayName} 会话列表读不出来`);
     }

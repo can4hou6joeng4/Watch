@@ -404,12 +404,14 @@ async function readProviderCredential(codexHome: string): Promise<CodexProviderC
  * 那是「这台机器没配过」，Codex 自己也会按 openai 处理。
  */
 async function assertCodexConfigReadable(): Promise<void> {
-  const limit = await codexConfigWriteLimit();
+  const limit = await codexStorageWriteLimit();
   if (limit) throw new PreflightBlockedError({ code: limit.code, message: limit.reason, hint: limit.hint });
 }
 
 /**
- * 只读探测：Codex 配置是否存在阻止写入的读取或解析故障（`null` = 未发现此类故障）。
+ * 只读探测：先确认 Codex 数据目录可用，再检查配置的读取与解析故障。
+ * 目录错误使用独立 code / hint，不能引导用户去修尚未读取的配置文件。
+ * `null` = 未发现这些故障，不代表写权限或 writer 锁已检查。
  *
  * `preflight` 与 `writeLimit`（doctor 用）共用这一份判定——与 OpenCode 的
  * `opencodeWriteLimit()` 同一模式，同一件事不能有两条说法。判的只是「写路径能读取并解析配置吗」：
@@ -418,9 +420,20 @@ async function assertCodexConfigReadable(): Promise<void> {
  * 配置可读且合法（含未显式写 `model_provider`）或文件不存在（`ENOENT` / `ENOTDIR`）时返回 `null`，
  * 与写路径使用默认 provider 的约定一致；writer 锁、写权限等条件仍由后续步骤检查。
  */
-async function codexConfigWriteLimit(): Promise<WriteLimit | null> {
+async function codexStorageWriteLimit(): Promise<WriteLimit | null> {
+  let home: string;
   try {
-    await readModelProvider(codexDir());
+    home = codexDir();
+  } catch (error) {
+    return {
+      code: 'codex_home_unusable',
+      reason: error instanceof Error ? error.message : String(error),
+      hint: '先按上述原因修正 CODEX_HOME 或恢复数据目录，再重试；数据目录可用之前 Watch 不会写入 Codex 会话，本次未写入任何内容。',
+      kind: 'fault',
+    };
+  }
+  try {
+    await readModelProvider(home);
     return null;
   } catch (error) {
     return {
@@ -617,8 +630,8 @@ export const codexAdapter: ProviderAdapter = {
   id: 'codex',
   displayName: 'Codex',
 
-  // 只读探测（doctor 用）：与 preflight 共用 codexConfigWriteLimit()，两者不会给出相反结论
-  writeLimit: async (): Promise<WriteLimit | null> => codexConfigWriteLimit(),
+  // 只读探测（doctor 用）：与 preflight 共用 codexStorageWriteLimit()，两者不会给出相反结论
+  writeLimit: async (): Promise<WriteLimit | null> => codexStorageWriteLimit(),
 
   async detect(): Promise<boolean> {
     try {
