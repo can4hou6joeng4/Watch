@@ -20,7 +20,13 @@ The steps are on the site [guides](https://relay.bobochang.cn/en/#guides): [Clau
 
 It does not provide models, bypass usage limits, replace native agent chat, or move permissions, credentials and plugins by default. What it transfers is the recorded session, not the model's unrecorded internal state. Today the implementation is centred on CLI sessions and terminal resume; the product direction includes validated desktop entry points, but **official interoperability does not mean Watch has integrated it**.
 
-### Latest release ([v0.1.49](https://github.com/can4hou6joeng4/Watch/releases/tag/v0.1.49))
+### Latest release ([v0.1.50](https://github.com/can4hou6joeng4/Watch/releases/tag/v0.1.50))
+
+v0.1.50 fixes writes to read-only session files: appending to a 0444 file failed with `EACCES` because the temporary copy inherited 0444 before being opened for append, and rewriting a 0200 (write-only) file could not verify its temporary copy. Temporary copies are now created or adjusted to 0600 first, and the source permission bits are restored after verification and before publication. The Kimi index `sessionDir` checks for absolute paths and control characters now also cover directory listing, lookup by id and a write-time fallback, so `handoff` cannot send a relative path into the process working directory. "The index has records but none usable" is no longer reported as "the index has no record".
+
+- **Validation scope**: 7 new isolated checks; 2 of the 3 atomic-write cases reproduce failures against the old implementation (read-only append, write-only rewrite verification), and the 4 Kimi cases cover rejecting relative paths in listing and lookup, the write fallback and the error wording. Full isolated regression: 1908 passing, zero failures and zero skips. These are synthetic-file checks; the native client was not run. A 0200 source cannot be appended because `copyFile` cannot read it — that is the permission itself, and Watch does not bypass it by changing source permissions.
+
+### Previous release ([v0.1.49](https://github.com/can4hou6joeng4/Watch/releases/tag/v0.1.49))
 
 v0.1.49 hardens the Kimi session-creation index lookup after an independent review: unparsable index lines are counted and disclosed, and only a readable index without bad lines may report that it has no record of the session. `sessionDir` must be absolute and free of NUL, so a damaged or hand-edited index cannot point the later truncation at a same-named file under the process cwd. An occupied rule-derived path now also reports the index read failure, and session ids in error messages are escaped.
 
