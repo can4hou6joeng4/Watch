@@ -22,8 +22,18 @@ const execFileAsync = promisify(execFile);
 
 const HEADER_TYPES = new Set(['metadata', 'runtime.set_binding', 'profile.bind', 'permission.set_mode']);
 
+/**
+ * Kimi 数据目录：官方 `getDataDir()` 优先读 `KIMI_CODE_HOME`，否则 `~/.kimi-code`
+ * （`apps/kimi-code/src/utils/paths.ts`，优先级注释直接写在函数上方）。
+ * 原生返回环境变量原值；这里去首尾空白并 `path.resolve()`，保证 Watch 拿到绝对路径。
+ */
+export function kimidirFrom(home: string): string {
+  const fromEnv = process.env.KIMI_CODE_HOME?.trim();
+  return fromEnv ? path.resolve(fromEnv) : path.join(home, '.kimi-code');
+}
+
 export function kimiSessionsRoot(): string {
-  return path.join(homedir(), '.kimi-code', 'sessions');
+  return path.join(kimidir(), 'sessions');
 }
 
 /**
@@ -49,7 +59,7 @@ export function encodeKimiWorkspaceDir(cwd: string): string {
 }
 
 export function kimidir(): string {
-  return path.join(homedir(), '.kimi-code');
+  return kimidirFrom(homedir());
 }
 
 const KIMI_INDEX_PATH_CONTROL = /[\u0000-\u001f\u007f]/;
