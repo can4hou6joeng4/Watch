@@ -20,7 +20,13 @@ Watch 只做一件事：**把已保存的会话记录连同工作目录交到目
 
 它不提供模型、不绕过配额、不代替原生 Agent 聊天，也不默认搬迁权限、凭据或插件；接力的是已有记录，不是模型未记录的内部状态。当前实现以 CLI 会话与终端恢复为主，产品方向包含经过验证的桌面端入口，但**官方支持互通不等于 Watch 已经集成**。
 
-### 最新版本（[v0.1.56](https://github.com/can4hou6joeng4/Watch/releases/tag/v0.1.56)）
+### 最新版本（[v0.1.57](https://github.com/can4hou6joeng4/Watch/releases/tag/v0.1.57)）
+
+v0.1.57 支持 Pi 的目录环境变量。Pi 官方文档写明配置目录默认 `~/.pi/agent`、可由 `PI_CODING_AGENT_DIR` 覆盖，会话存储默认 `<agent-dir>/sessions`、可由 `PI_CODING_AGENT_SESSION_DIR` 覆盖。Watch 以前只按 `homedir()` 拼路径，设了变量的用户会看到零条会话，新建会话还会写进原生不读的位置。现在 `piAgentDirFrom()` / `piSessionsRootFrom()` 解析这两档并展开 `~`；单次运行的 `--session-dir` 与设置里的 `sessionDir` 仍看不到，属已知限制。
+
+- **验证范围**：新增 4 项隔离检查，其中 CLI 级用例在旧实现上先复现失败（`sessions` 返回 `providers: []`）。完整隔离回归 1949 项通过，0 失败、0 跳过。这些是合成目录检查，没有运行原生客户端。
+
+### 上一版本（[v0.1.56](https://github.com/can4hou6joeng4/Watch/releases/tag/v0.1.56)）
 
 v0.1.56 补齐 `CODEX_HOME` 写错时的报错语义。官方 Codex 在变量指向不存在或非目录的路径时直接失败，而 Watch 上一版会把这当成「没有会话」，`sessions` 安静地返回空列表。现在 `codexDir()` 在变量非空时先校验：不存在、读不出来或不是目录都直接报出变量名、路径与原因；`sessions` 这类逐家聚合命令把它记进 `unavailable` 与 `warnings`，不掩盖其他 provider，也不再让配置错误看起来像「这个目录没聊过」。
 

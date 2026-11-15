@@ -20,7 +20,13 @@ The steps are on the site [guides](https://relay.bobochang.cn/en/#guides): [Clau
 
 It does not provide models, bypass usage limits, replace native agent chat, or move permissions, credentials and plugins by default. What it transfers is the recorded session, not the model's unrecorded internal state. Today the implementation is centred on CLI sessions and terminal resume; the product direction includes validated desktop entry points, but **official interoperability does not mean Watch has integrated it**.
 
-### Latest release ([v0.1.56](https://github.com/can4hou6joeng4/Watch/releases/tag/v0.1.56))
+### Latest release ([v0.1.57](https://github.com/can4hou6joeng4/Watch/releases/tag/v0.1.57))
+
+v0.1.57 supports Pi's directory environment variables. Pi's official docs state the config directory defaults to `~/.pi/agent` and can be overridden by `PI_CODING_AGENT_DIR`, and session storage defaults to `<agent-dir>/sessions` and can be overridden by `PI_CODING_AGENT_SESSION_DIR`. Watch only joined `homedir()`, so users with the variables set saw no sessions, and new sessions were written where the native client does not read. `piAgentDirFrom()` / `piSessionsRootFrom()` now resolve both and expand `~`; a per-run `--session-dir` and the `sessionDir` setting remain invisible, a known limitation.
+
+- **Validation scope**: 4 new isolated checks; the CLI-level case reproduces a failure against the previous implementation (`sessions` returned `providers: []`). Full isolated regression: 1949 passing, zero failures and zero skips. These are synthetic-directory checks; the native client was not run.
+
+### Previous release ([v0.1.56](https://github.com/can4hou6joeng4/Watch/releases/tag/v0.1.56))
 
 v0.1.56 completes the error semantics for a misconfigured `CODEX_HOME`. Official Codex fails outright when the variable points at a missing path or a non-directory, while the previous Watch release treated it as "no sessions" and `sessions` quietly returned an empty list. `codexDir()` now validates a non-empty variable first: missing, unreadable or not-a-directory all report the variable name, path and reason; per-provider aggregating commands such as `sessions` record it in `unavailable` and `warnings`, without hiding other providers or letting a configuration mistake look like "nothing was ever discussed here".
 
