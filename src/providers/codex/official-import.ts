@@ -14,6 +14,7 @@ import { claudeConfigDirFrom, claudeProjectsDir, encodeClaudeProjectDir } from '
 import { scanContinuedInRecords } from '../claude/continuation.js';
 import { claudeSessionCwdDetail } from '../claude/index.js';
 import { asRecord, connectImportRpc, type ImportRpc, type RpcProfile } from './app-server.js';
+import { codexHomeDirFrom } from './build.js';
 import {
   assertCodexDesktopThreadPlacement,
   inspectCodexDesktopProject,
@@ -513,7 +514,7 @@ export function officialImportJournalRoot(home = homedir()): string {
 
 export function createOfficialCodexImport(): OfficialCodexImport {
   const home = homedir();
-  const codexHome = path.resolve(process.env.CODEX_HOME ?? path.join(home, '.codex'));
+  const codexHome = codexHomeDirFrom(home);
   const root = officialImportJournalRoot(home);
   const executable = resolveCli('codex');
   const env = { ...process.env, CODEX_HOME: codexHome };

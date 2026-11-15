@@ -15,8 +15,17 @@ import { codexSessionUsage } from './usage.js';
 import type { ProcessEvent, SessionRef, TokenUsage, UnifiedTurn } from '../../core/types.js';
 import type { ImportTurnsOpts } from '../adapter.js';
 
+/**
+ * Codex 数据目录：官方 `find_codex_home()` 优先读 `CODEX_HOME`（空值等同未设置），否则 `~/.codex`。
+ * 原生对设置值会 canonicalize；这里用 `path.resolve()` 对齐绝对路径语义，相对值按当前进程 cwd 解析。
+ */
+export function codexHomeDirFrom(home: string): string {
+  const fromEnv = process.env.CODEX_HOME?.trim();
+  return fromEnv ? path.resolve(fromEnv) : path.join(home, '.codex');
+}
+
 export function codexDir(): string {
-  return path.join(homedir(), '.codex');
+  return codexHomeDirFrom(homedir());
 }
 
 type CodexIdentity = { originator: string; cliVersion?: string; source: string };
