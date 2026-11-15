@@ -394,14 +394,17 @@ async function readProviderCredential(codexHome: string): Promise<CodexProviderC
 }
 
 /**
- * 预检用：`~/.codex/config.toml` 现在读得出来吗（读不出来就抛 `PreflightBlockedError`）。
+ * 预检用：Codex 数据目录与 `config.toml` 现在可用吗（不可用就抛 `PreflightBlockedError`）。
  *
- * 只读一次 `readModelProvider()`——它就是写路径将要用的同一个事实来源（`model_provider`），
- * 所以预检与写入不会对「配置能不能读取和解析」给出相反结论。**不在这里缓存**：预检与写入之间
- * 文件仍可能变化，这里只负责「此刻可以继续」，写入路径自己会再读一次（并同样 fail closed）。
+ * 先过 `codexDir()` 的目录类型检查，再读一次 `readModelProvider()`——它就是写路径将要用的同一个
+ * 事实来源（`model_provider`），所以预检与写入不会对「配置能不能读取和解析」给出相反结论。
+ * **不在这里缓存**：预检与写入之间路径仍可能变化，这里只负责「此刻可以继续」，写入路径自己会
+ * 再查一次（并同样 fail closed）。
  *
- * 文件不存在（`ENOENT` / `ENOTDIR`）由 `readModelProvider()` 返回默认 provider，不阻断——
- * 那是「这台机器没配过」，Codex 自己也会按 openai 处理。
+ * 配置文件不存在（`ENOENT` / `ENOTDIR`）由 `readModelProvider()` 返回默认 provider，不阻断——那是
+ * 「这台机器没配过」，Codex 自己也会按 openai 处理。数据根或 `sessions` 被文件占住不属于这一档：
+ * `codexDir()` 已先把它归为目录故障（`codex_home_unusable`），这里的 `ENOTDIR` 只剩检查之后路径
+ * 又被改动的情形。
  */
 async function assertCodexConfigReadable(): Promise<void> {
   const limit = await codexStorageWriteLimit();
@@ -417,8 +420,12 @@ async function assertCodexConfigReadable(): Promise<void> {
  * `opencodeWriteLimit()` 同一模式，同一件事不能有两条说法。判的只是「写路径能读取并解析配置吗」：
  * writer 锁 / Desktop 进程是**运行时状态**，不是存储属性，`watch doctor` 不该把它印成写入限制。
  *
- * 配置可读且合法（含未显式写 `model_provider`）或文件不存在（`ENOENT` / `ENOTDIR`）时返回 `null`，
- * 与写路径使用默认 provider 的约定一致；writer 锁、写权限等条件仍由后续步骤检查。
+ * 目录阶段由 `codexDir()` 只读检查数据根与 `sessions` 的路径类型：被文件占住、祖先不是目录或
+ * 无法访问都归 `codex_home_unusable`；默认根与 `sessions` 尚未建立（`ENOENT`）不算故障，留给
+ * 首次写入创建，显式 `CODEX_HOME` 则要求根目录已存在。
+ *
+ * 配置可读且合法（含未显式写 `model_provider`）或配置文件不存在（`ENOENT` / `ENOTDIR`）时返回
+ * `null`，与写路径使用默认 provider 的约定一致；writer 锁、写权限等条件仍由后续步骤检查。
  */
 async function codexStorageWriteLimit(): Promise<WriteLimit | null> {
   let home: string;
@@ -439,7 +446,9 @@ async function codexStorageWriteLimit(): Promise<WriteLimit | null> {
     return {
       code: error instanceof CodexConfigError ? error.code : 'codex_config_unreadable',
       reason: error instanceof Error ? error.message : String(error),
-      hint: '修好该文件（或让 Codex 自己重建一次配置）后重试；配置可以读取并解析之前 Watch 不会写入 Codex 会话，确认零写入。',
+      hint: error instanceof CodexConfigError && error.code === 'codex_config_invalid'
+        ? '修好该文件（或让 Codex 自己重建一次配置）后重试；配置可以读取并解析之前 Watch 不会写入 Codex 会话，确认零写入。'
+        : '先检查配置文件及父目录的访问权限、路径和文件类型，恢复可读后重试；配置可以读取并解析之前 Watch 不会写入 Codex 会话，本次未写入任何内容。',
       // 这是可修的故障，不是「Watch 主动只读」：doctor 要把它算进 warnings，--strict 也要能捕获
       kind: 'fault',
     };
@@ -613,8 +622,10 @@ async function desktopProcessRunning(): Promise<boolean> {
 async function acquireCodexWriteLock(ctx: { ref?: SessionRef }): Promise<WriterLockGuard | undefined> {
   const ref = ctx.ref;
   if (!ref || process.platform !== 'darwin') return undefined;
+  // 锁路径依赖数据目录：目录故障在这里原样抛出，不归入下面的「被其他 writer 抢先持有」。
+  const lockPath = threadWriterLockPath(ref.sessionId);
   try {
-    return await acquireThreadWriterLock(threadWriterLockPath(ref.sessionId));
+    return await acquireThreadWriterLock(lockPath);
   } catch {
     // 锁在探测与取锁之间被别的 writer 拿走（或取锁失败）→ 拒绝写入，交由调用方转成结构化 blocked
     throw new PreflightBlockedError({
