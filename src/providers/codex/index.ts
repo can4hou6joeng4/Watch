@@ -188,12 +188,13 @@ async function rolloutCwdDetail(
 export async function findLatestCodexRollout(
   cwd: string,
   sessionsRoot?: string,
-): Promise<{ ref: SessionRef; updatedAt: number } | null> {
+): Promise<{ ref: SessionRef; updatedAt: number; warnings?: string[] } | null> {
   const root = sessionsRoot ?? path.join(codexDir(), 'sessions');
   const walkErrors: string[] = [];
   const unreadCwd: string[] = [];
   const files = await collectRecentRolloutFiles(root, walkErrors);
   files.sort((a, b) => b.mtimeMs - a.mtimeMs);
+  let found: { ref: SessionRef; updatedAt: number } | null = null;
   for (const f of files) {
     const sessionId = sessionIdFromRolloutPath(f.filePath);
     if (!sessionId) continue;
@@ -205,12 +206,25 @@ export async function findLatestCodexRollout(
       continue;
     }
     if (metaCwd !== cwd) continue;
-    return {
+    found = {
       ref: { provider: 'codex', sessionId, filePath: f.filePath, cwd },
       updatedAt: f.mtimeMs,
     };
+    break;
   }
   const incomplete = walkErrors.length + unreadCwd.length;
+  if (found) {
+    if (!incomplete) return found;
+    // 可读候选仍可使用，但扫描故障可能藏着更新的一条，不能把子集中的最新说成全局最新。
+    return {
+      ...found,
+      warnings: [
+        `Codex 扫描有 ${incomplete} 个位置读不出来；本次自动挑的是在能读出的会话里按修改时间最新的会话 ${found.ref.sessionId}，` +
+          `无法确认它是否为全部会话中最新的一条：${escapeControlChars(walkErrors[0] ?? unreadCwd[0])}；` +
+          '先恢复这些位置的可访问性（权限、路径）后重试，或显式指定要使用的会话 id',
+      ],
+    };
+  }
   if (incomplete) {
     // 有位置读不出来时「这个目录没有 Codex 会话」不是结论
     throw new Error(

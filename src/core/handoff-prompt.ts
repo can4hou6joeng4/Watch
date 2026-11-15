@@ -141,6 +141,8 @@ export type PromptSessionMeta = {
    * 文档头部的会话 ID 一行要写明这件事——文档会被复制走，「这条是谁挑的」属于读者需要的事实。
    */
   autoPicked?: boolean;
+  /** 自动选择时扫描不完整等范围警告；文档脱离终端后也必须保留，并计入 findings。 */
+  sourceSelectionWarnings?: string[];
   /**
    * 来源文件在渲染期间被追加 / 改写 / 截断过（`describeSourceChangedDuringPrompt()` 的结论）。
    *
@@ -564,6 +566,12 @@ export function buildHandoffPrompt(
   lines.push(
     `- 会话 ID：${metadataCode(meta.sessionId)}${meta.autoPicked ? '（自动挑选：本目录按修改时间最新的可读会话，可能不是你想要的另一条）' : ''}`,
   );
+  if (meta.sourceSelectionWarnings?.length) {
+    addFinding(findings, 'prompt_source_selection_incomplete', 'degraded', meta.sourceSelectionWarnings.length);
+    for (const warning of meta.sourceSelectionWarnings) {
+      lines.push(`- 选择范围：${singleLineText(sanitizeBody(warning).text)}`);
+    }
+  }
   if (meta.sourcePath) lines.push(`- 源文件：${metadataCode(meta.sourcePath)}`);
   if (meta.sourceBadLines && meta.sourceBadLines > 0) {
     addFinding(findings, 'prompt_source_bad_lines', 'degraded', meta.sourceBadLines);

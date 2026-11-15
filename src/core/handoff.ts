@@ -359,7 +359,7 @@ export async function adoptIntoChain(
   // 换成别条链的会话（2026-11-08 实测 `chain list` 里两条链从此指向同一个 id），
   // 而 `replacedRef` 只写「替换了: <id>」，用户看不出那条会话根本不是自己指定的。
   const autoPicked = !targetRef;
-  const found = targetRef
+  const found: { ref: SessionRef; warnings?: string[] } | null = targetRef
     ? { ref: targetRef }
     : await adapter.findLatestSession(cwd);
   if (!found) {
@@ -390,8 +390,10 @@ export async function adoptIntoChain(
   // `adopt codex` 接入了 10:00 那条，note 却写着「本次是按修改时间挑的最新会话 5677…」，
   // `warnings` 一个字都不提被跳过的那条——而同一状态下 `sessions` 已经带出 unattributable
   // 与点名路径的警告。自动挑选是在替用户做选择，说错就等于让他接错会话。
+  const selectionWarnings = found.warnings ?? [];
+  warnings.push(...selectionWarnings);
   const hiddenPicks = autoPicked ? await collectUnattributable([adapter]) : [];
-  const pickedLabel = hiddenPicks.length ? '在能读出的会话里按修改时间最新' : '按修改时间最新';
+  const pickedLabel = hiddenPicks.length || selectionWarnings.length ? '在能读出的会话里按修改时间最新' : '按修改时间最新';
   if (autoPicked) {
     const pickWarning = unattributablePickWarning(
       hiddenPicks,
@@ -982,7 +984,10 @@ export async function collectTips(
       warnings?.push(`${adapter.id} 原生会话读取失败，已跳过：${escapeControlChars(reason)}`);
       continue;
     }
-    if (found) tips.push({ provider: adapter.id, ref: found.ref, updatedAt: found.updatedAt });
+    if (found) {
+      warnings?.push(...(found.warnings ?? []));
+      tips.push({ provider: adapter.id, ref: found.ref, updatedAt: found.updatedAt });
+    }
   }
   return tips;
 }

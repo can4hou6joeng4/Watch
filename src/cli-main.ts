@@ -1896,6 +1896,7 @@ async function cmdPrompt(
       ...(usageBadLinesScanError ? { usageBadLinesScanError } : {}),
       // 文档会被复制走：这一条必须写在正文里，stderr 的警告不会跟着文档
       ...(autoPicked ? { autoPicked: true } : {}),
+      ...(autoPicked && diagnostics.length ? { sourceSelectionWarnings: diagnostics } : {}),
       // 文档会被复制走：这条也必须进正文，不能只留在 stderr
       ...(sourceDrift ? { sourceDriftNote: sourceDrift } : {}),
       ...(sourceCwdNote ? { sourceCwdNote } : {}),
