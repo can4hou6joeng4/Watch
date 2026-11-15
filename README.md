@@ -20,9 +20,15 @@ Watch 只做一件事：**把已保存的会话记录连同工作目录交到目
 
 它不提供模型、不绕过配额、不代替原生 Agent 聊天，也不默认搬迁权限、凭据或插件；接力的是已有记录，不是模型未记录的内部状态。当前实现以 CLI 会话与终端恢复为主，产品方向包含经过验证的桌面端入口，但**官方支持互通不等于 Watch 已经集成**。
 
-### 最新版本（[v0.1.64](https://github.com/can4hou6joeng4/Watch/releases/tag/v0.1.64)）
+### 最新版本（[v0.1.65](https://github.com/can4hou6joeng4/Watch/releases/tag/v0.1.65)）
 
-v0.1.64 把默认数据目录的路径类型检查扩展到其余五家。未设置目录变量时，Claude 的 `~/.claude`、Kimi 的 `~/.kimi-code`、Pi 的 `~/.pi`、Grok 的 `~/.grok`、OpenCode 的 `~/.local/share/opencode` 被普通文件占住，`sessions` / `recent` 现在把该家记进 `unavailable` 并给出原因与路径，`doctor` 逐家 `count:null` 并退出 1；此前这类故障被当成「这个目录没聊过」。目录尚未建立仍视为首次使用，由首次写入创建，检查只读 `stat`、不建目录。写入在原生创建之前失败，Kimi 新建不会先启动可能调用模型的 CLI。四家没有 `preflight` / `writeLimit`，`open --to --check` 不会提前报出这类目录故障。
+v0.1.65 让 Claude、Kimi、Pi、Grok 的目录故障在转入预检阶段就得到结构化阻断。此前目标数据根已被文件占住，`open --to --check` 仍可能回 `writable:true`；现在返回 `writable:false` 与 `<provider>_data_dir_unusable`，并与实际转入、`doctor` 共用原因和下一步。空链 `new` 也先执行适配器预检；Kimi 新建在启动 CLI 前检查数据根和 `sessions` 子目录，避免先触发可能的模型请求再发现目录故障。未建立的目录仍留给首次写入创建，检查本身不建目录；Pi 的专用会话目录优先级不变。
+
+- **验证范围**：新增 30 项隔离检查，覆盖默认根、会话子目录、显式目录、缺失目录反例、CLI 预检与实际转入及诊断的一致性、空链和已有链新建、切换、来源字节与交接记录不变，以及 Kimi 未调用假 CLI、Pi 目录优先级。四家 CLI 预检误报已先在旧实现复现。完整隔离回归 2059 项通过，0 失败、0 跳过；类型检查、桌面构建、站点与分享图校验通过。检查不证明写权限、writer 锁或项目叶子目录可用；未读取真实 Agent 历史或凭据，未启动原生客户端或调用模型，不增加原生恢复验收结论。
+
+### 上一版本（[v0.1.64](https://github.com/can4hou6joeng4/Watch/releases/tag/v0.1.64)）
+
+v0.1.64 把默认数据目录的路径类型检查扩展到其余五家。未设置目录变量时，Claude 的 `~/.claude`、Kimi 的 `~/.kimi-code`、Pi 的 `~/.pi`、Grok 的 `~/.grok`、OpenCode 的 `~/.local/share/opencode` 被普通文件占住，`sessions` / `recent` 现在把该家记进 `unavailable` 并给出原因与路径，`doctor` 逐家 `count:null` 并退出 1；此前这类故障被当成「这个目录没聊过」。目录尚未建立仍视为首次使用，由首次写入创建，检查只读 `stat`、不建目录。上述数据根故障在原生创建之前失败；该版 Kimi 的 `sessions` 子目录仍可能在启动 CLI 后才检查，v0.1.65 已提前检查。该版四家没有 `preflight` / `writeLimit`，`open --to --check` 不提前报出这类目录故障，v0.1.65 已补齐。
 
 - **验证范围**：新增 11 项隔离检查，覆盖五家默认根被文件占住时的列表与反查、五家同时故障时的 CLI 披露、默认根缺失的反例与四家首次创建；旧实现其中 6 项失败。完整隔离回归 2029 项通过，0 失败、0 跳过；类型检查、桌面构建、站点与分享图校验通过。检查只读路径类型，不代表写权限或 writer 锁已确认。未读取真实 Agent 历史或凭据，未启动原生客户端或调用模型；不增加原生恢复验收结论。
 
