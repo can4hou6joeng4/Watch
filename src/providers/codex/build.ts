@@ -1,3 +1,4 @@
+import { statSync } from 'node:fs';
 import { mkdir, readdir, readFile, stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import path from 'node:path';
@@ -25,7 +26,29 @@ export function codexHomeDirFrom(home: string): string {
 }
 
 export function codexDir(): string {
-  return codexHomeDirFrom(homedir());
+  const fromEnv = process.env.CODEX_HOME?.trim();
+  if (!fromEnv) return path.join(homedir(), '.codex');
+  const dir = path.resolve(fromEnv);
+  // 官方设置 CODEX_HOME 时要求该值存在且是目录，否则 Codex 自己直接失败。
+  // Watch 若不检查，缺失目录会被当成「这个目录没有会话」，把配置写错讲成「没有」。
+  let info;
+  try {
+    info = statSync(dir);
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === 'ENOENT' || code === 'ENOTDIR') {
+      throw new Error(
+        `CODEX_HOME 指向的目录不存在：${escapeControlChars(dir)}（官方 Codex 在这种配置下会直接失败）；先创建该目录，或让 Codex 自己建出它，或修正 CODEX_HOME 后重试`,
+      );
+    }
+    throw new Error(`无法读取 CODEX_HOME 指向的路径 ${escapeControlChars(dir)}：${describePathReadFailureReason(error)}`);
+  }
+  if (!info.isDirectory()) {
+    throw new Error(
+      `CODEX_HOME 指向的不是目录：${escapeControlChars(dir)}（官方 Codex 在这种配置下会直接失败）；把 CODEX_HOME 改为已有的数据目录后重试`,
+    );
+  }
+  return dir;
 }
 
 type CodexIdentity = { originator: string; cliVersion?: string; source: string };
