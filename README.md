@@ -20,7 +20,17 @@ Watch 只做一件事：**把已保存的会话记录连同工作目录交到目
 
 它不提供模型、不绕过配额、不代替原生 Agent 聊天，也不默认搬迁权限、凭据或插件；接力的是已有记录，不是模型未记录的内部状态。当前实现以 CLI 会话与终端恢复为主，产品方向包含经过验证的桌面端入口，但**官方支持互通不等于 Watch 已经集成**。
 
-### 最新版本（[v0.1.70](https://github.com/can4hou6joeng4/Watch/releases/tag/v0.1.70)）
+### 最新版本（[v0.1.71](https://github.com/can4hou6joeng4/Watch/releases/tag/v0.1.71)）
+
+v0.1.71 修正 Kimi 工作区分组读取故障的披露。Kimi 的会话按 `sessions/<workspaceId>/<sessionId>/agents/main/wire.jsonl` 存放；某个分组目录读不出来（权限被收走、路径被同名文件占住、目录能列出但里面的会话 stat 不了）时，以前的「无法归属」统计会静默跳过它。现在：
+
+- 分组故障按「位置」单独披露：`sessions` / `recent` / `status` / `doctor` / `search` 的 `unattributable` 增加 `locations` 字段与文案，不把 1 个分组算成 1 个会话文件。
+- 列表不再因为无关分组读不出来就整家失败（索引驱动的条目照常列出）；只有本 cwd 的分组读不出来、又没有一条可列出的会话时，才拒绝「这个目录没会话」的结论并点名分组。
+- 索引文件被删、磁盘上还有会话目录时，列表与按 id 反查都不再说「没有」；按 id 反查报 `incomplete`。
+
+- **验证范围**：新增 10 项隔离检查全部通过，覆盖分组故障、根目录故障、索引缺失、路径占位与 CLI / doctor 通道；另有 104 项 Kimi 与披露通道相关回归通过。最终完整隔离回归 2140 项通过，0 失败、0 跳过；类型检查、桌面构建、站点与分享图检查通过。只识别普通文件形式的路径故障，符号链接与设备类型未纳入；索引健康时只读分组目录项，不逐会话 stat。
+
+### 上一版本（[v0.1.70](https://github.com/can4hou6joeng4/Watch/releases/tag/v0.1.70)）
 
 v0.1.70 披露 Codex 压缩会话。Codex 主线的 `local_thread_store_compression` 会把 7 天没写过的 rollout 压成 `.jsonl.zst` 并删掉普通副本（该功能目前标记为 UnderDevelopment、默认关闭）。Watch 以前只扫 `.jsonl`，这类会话会被静默当成「没有」：列表少一条、`recent` 看不到、`open <id>` 说未找到。现在全局反查命中压缩副本时说「找到但本版读不出」，列表与 `doctor` 把它计入 `unattributable` 并说明是压缩格式，同时给出下一步：在 Codex 里继续该会话会重新展开为 `.jsonl`。同目录同时存在普通副本时按原生规则只读 `.jsonl`，不重复计数；不读取、不修改、不删除 `.zst` 文件。
 

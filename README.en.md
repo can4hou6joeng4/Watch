@@ -20,7 +20,17 @@ The steps are on the site [guides](https://relay.bobochang.cn/en/#guides): [Clau
 
 It does not provide models, bypass usage limits, replace native agent chat, or move permissions, credentials and plugins by default. What it transfers is the recorded session, not the model's unrecorded internal state. Today the implementation is centred on CLI sessions and terminal resume; the product direction includes validated desktop entry points, but **official interoperability does not mean Watch has integrated it**.
 
-### Latest release ([v0.1.70](https://github.com/can4hou6joeng4/Watch/releases/tag/v0.1.70))
+### Latest release ([v0.1.71](https://github.com/can4hou6joeng4/Watch/releases/tag/v0.1.71))
+
+v0.1.71 fixes how Kimi workspace-group read faults are disclosed. Kimi stores sessions under `sessions/<workspaceId>/<sessionId>/agents/main/wire.jsonl`. When a group directory could not be read (permissions revoked, a file occupying the path, or a directory that lists but cannot stat its sessions), the unattributable count used to skip it silently. Now:
+
+- Group faults are reported as separate locations: `unattributable` entries gain a `locations` field and wording, so one group is not counted as one session file.
+- Lists no longer fail entirely because an unrelated group is unreadable (index-driven entries still list); only when the group for this working directory is unreadable and nothing can be listed does Watch refuse the no-sessions conclusion and name the group.
+- When the index file is gone but session directories remain, lists and ID lookup no longer report absence; ID lookup reports an incomplete result.
+
+- **Validation scope**: all 10 new isolated checks pass, covering group faults, root-directory faults, a missing index, path occupation, and the CLI plus doctor channels; another 104 Kimi and disclosure-channel checks pass. Final full isolated regression: 2140 passing, zero failures and zero skips. Typecheck, desktop build, site build and share-image checks pass. Only regular-file path faults are recognized; symlink and device types are not covered. With a healthy index Watch reads only group directory entries, not per-session stats.
+
+### Previous release ([v0.1.70](https://github.com/can4hou6joeng4/Watch/releases/tag/v0.1.70))
 
 v0.1.70 discloses compressed Codex sessions. Codex's `local_thread_store_compression` compresses rollouts idle for seven days into `.jsonl.zst` and removes the plain copy (currently UnderDevelopment and off by default upstream). Watch previously scanned only `.jsonl`, so such sessions were silently treated as absent: missing from lists and `recent`, and `open <id>` reported no match. Global ID lookup now reports "found but unreadable in this version" when it hits a compressed copy. Lists and `doctor` count it under `unattributable` with a compressed-format explanation and the next step: continuing the session in Codex re-expands it to `.jsonl`. When a plain copy exists in the same directory, native precedence applies and only `.jsonl` is read without double counting. Watch never reads, changes or deletes the `.zst` file.
 
