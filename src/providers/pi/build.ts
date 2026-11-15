@@ -1,5 +1,5 @@
 import { mkdir } from 'node:fs/promises';
-import { dirname, join } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { homedir } from 'node:os';
 import { randomBytes, randomUUID } from 'node:crypto';
 import { writeFileAtomic } from '../../core/atomic.js';
@@ -11,8 +11,37 @@ import { parsePiSession } from './parse.js';
 import type { ImportTurnsOpts } from '../adapter.js';
 import type { ProcessEvent, SessionRef, TokenUsage, UnifiedTurn } from '../../core/types.js';
 
+/** Pi 的目录变量允许 `~`；原生 `normalizePath()` 只展开 `~` 与 `~/`（win32 另认 `~\`）。 */
+function expandHomePath(value: string, home: string): string {
+  if (value === '~') return home;
+  if (value.startsWith('~/') || (process.platform === 'win32' && value.startsWith('~\\'))) {
+    return join(home, value.slice(2));
+  }
+  return value;
+}
+
+/**
+ * Pi 配置目录：官方 `getAgentDir()` 优先读 `PI_CODING_AGENT_DIR`，否则 `~/.pi/agent`。
+ * 原生只对 `~` 展开，其余按给出的路径使用；这里再 `resolve()` 保证绝对路径。
+ */
+export function piAgentDirFrom(home: string): string {
+  const fromEnv = process.env.PI_CODING_AGENT_DIR?.trim();
+  return fromEnv ? resolve(expandHomePath(fromEnv, home)) : join(home, '.pi', 'agent');
+}
+
+/**
+ * Pi 会话根：官方优先级是 `--session-dir`（单次运行参数，Watch 看不到）→
+ * `PI_CODING_AGENT_SESSION_DIR` → 设置 `sessionDir` → `<agent-dir>/sessions`。
+ * 这里覆盖前两档；`sessionDir` 设置尚未读取（已知限制）。
+ */
+export function piSessionsRootFrom(home: string): string {
+  const fromEnv = process.env.PI_CODING_AGENT_SESSION_DIR?.trim();
+  if (fromEnv) return resolve(expandHomePath(fromEnv, home));
+  return join(piAgentDirFrom(home), 'sessions');
+}
+
 export function piSessionsRoot(): string {
-  return join(homedir(), '.pi', 'agent', 'sessions');
+  return piSessionsRootFrom(homedir());
 }
 
 /** 按 Pi 原生规则编码已解析的 cwd：移除首个分隔符，其余分隔符与冒号转为连字符。 */
