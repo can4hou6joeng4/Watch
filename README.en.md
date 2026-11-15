@@ -20,7 +20,13 @@ The steps are on the site [guides](https://relay.bobochang.cn/en/#guides): [Clau
 
 It does not provide models, bypass usage limits, replace native agent chat, or move permissions, credentials and plugins by default. What it transfers is the recorded session, not the model's unrecorded internal state. Today the implementation is centred on CLI sessions and terminal resume; the product direction includes validated desktop entry points, but **official interoperability does not mean Watch has integrated it**.
 
-### Latest release ([v0.1.61](https://github.com/can4hou6joeng4/Watch/releases/tag/v0.1.61))
+### Latest release ([v0.1.62](https://github.com/can4hou6joeng4/Watch/releases/tag/v0.1.62))
+
+v0.1.62 separates Codex directory failures from configuration errors. A relative `CODEX_HOME`, missing directory, file at the path or non-directory ancestor now returns `codex_home_unusable` in preflight and diagnostics, with advice to fix the variable or restore the data directory. These failures no longer ask users to rebuild a configuration file. TOML syntax and configuration read failures retain their own codes. `doctor` probes session lists and write capability separately: a failed list keeps `count:null` while still showing the write restriction and next step.
+
+- **Validation scope**: 11 new isolated checks cover four directory failures, shared preflight and diagnostic results, CLI advice, and counterexamples for missing configuration, invalid TOML and configuration read failures; 8 failed against the previous implementation. Full isolated regression: 2003 passing, zero failures and zero skips. Typecheck, desktop build, site build and share-image checks pass. No real agent history or credentials were read, no native client was launched and no model request was made. This adds no native resume acceptance claim.
+
+### Previous release ([v0.1.61](https://github.com/can4hou6joeng4/Watch/releases/tag/v0.1.61))
 
 v0.1.61 fixes directory configuration failures displayed as zero sessions. All six directory variables now receive a read-only path type check: a file at the configured path, or an ancestor occupied by a file, reports the variable and the path failure. Claude, Grok, Kimi and Pi previously treated this `ENOTDIR` as absent history; Codex also reported an obstructed ancestor as a missing directory. Aggregate lists now disclose these failures through `unavailable` and `warnings`. Missing directories retain each provider's existing rules; the shared check creates no directory.
 
