@@ -23,7 +23,7 @@ export function piAgentDirFrom(home: string): string {
 /**
  * Pi 会话根：官方优先级是 `--session-dir`（单次运行参数，Watch 看不到）→
  * `PI_CODING_AGENT_SESSION_DIR` → 设置 `sessionDir` → `<agent-dir>/sessions`。
- * 这里覆盖前两档；`sessionDir` 设置尚未读取（已知限制）。
+ * 这里读取目录环境变量；单次参数与 `sessionDir` 设置尚未读取（已知限制）。
  */
 export function piSessionsRootFrom(home: string): string {
   const sessionDir = providerDirectoryFromEnv('PI_CODING_AGENT_SESSION_DIR', '', home);
@@ -32,6 +32,14 @@ export function piSessionsRootFrom(home: string): string {
 
 export function piSessionsRoot(): string {
   return piSessionsRootFrom(homedir());
+}
+
+/** 原生显式 sessionDir 直接存放文件；默认根与注入的 sessionsRoot 仍按项目分组。 */
+export function piSessionDirectory(cwd: string, sessionsRoot?: string): string {
+  const root = sessionsRoot ?? piSessionsRoot();
+  return sessionsRoot === undefined && process.env.PI_CODING_AGENT_SESSION_DIR
+    ? root
+    : join(root, encodePiProjectDir(cwd));
 }
 
 /** 按 Pi 原生规则编码已解析的 cwd：移除首个分隔符，其余分隔符与冒号转为连字符。 */
@@ -58,8 +66,7 @@ export async function importTurnsToPi(
   if (!turns.some((t) => t.role === 'user' && userTurnTextForWrite(t).trim())) {
     throw new Error('没有可迁移的用户消息');
   }
-  const root = sessionsRoot ?? piSessionsRoot();
-  const dir = join(root, encodePiProjectDir(cwd));
+  const dir = piSessionDirectory(cwd, sessionsRoot);
   await mkdir(dir, { recursive: true });
 
   let sessionId = into?.sessionId ?? randomUUID();

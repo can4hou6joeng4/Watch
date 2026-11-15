@@ -43,8 +43,18 @@ export async function listPiSessions(
   // 旧 Watch 在 POSIX 上可能写出含冒号或反斜杠的目录；继续读取，不移动或重写旧文件。
   // Windows 不扫描旧编码：这些字符会变成非法目录名或额外路径层级。
   if (process.platform !== 'win32') names.add(`--${cwd.replace(/^\//, '').replaceAll('/', '-')}--`);
-  const items: Awaited<ReturnType<typeof listPiSessionDirectory>> = [];
-  for (const name of names) items.push(...await listPiSessionDirectory(cwd, path.join(root, name)));
+  const custom = sessionsRoot === undefined && Boolean(process.env.PI_CODING_AGENT_SESSION_DIR);
+  const items = custom ? await listPiSessionDirectory(cwd, root, true) : [];
+  // 旧 Watch 曾在自定义目录下再拼项目名；保留只读兼容，原生平铺文件优先。
+  const seen = new Set(items.map((item) => item.ref.sessionId));
+  for (const name of names) {
+    for (const item of await listPiSessionDirectory(cwd, path.join(root, name))) {
+      if (!seen.has(item.ref.sessionId)) {
+        seen.add(item.ref.sessionId);
+        items.push(item);
+      }
+    }
+  }
   items.sort((a, b) => b.updatedAt - a.updatedAt);
   return items;
 }
@@ -52,6 +62,7 @@ export async function listPiSessions(
 async function listPiSessionDirectory(
   cwd: string,
   dir: string,
+  filterCwd = false,
 ): Promise<{ ref: SessionRef; updatedAt: number; previewError?: string }[]> {
   let entries: string[];
   try {
@@ -72,10 +83,19 @@ async function listPiSessionDirectory(
     try {
       const st = await stat(filePath);
       if (!st.isFile()) continue;
+      if (filterCwd) {
+        const detail = await piSessionCwdDetail(filePath);
+        if (!detail.cwd) {
+          throw new Error(`无法确认 Pi 会话文件 ${escapeControlChars(filePath)} 的工作目录：${detail.error ?? '原因未知'}；自定义目录可能由多个项目共享，本次列表不完整`);
+        }
+        if (!path.isAbsolute(detail.cwd)) {
+          throw new Error(`Pi 会话文件 ${escapeControlChars(filePath)} 的工作目录不是绝对路径：${escapeControlChars(detail.cwd)}；无法确认它属于哪个项目，本次列表不完整`);
+        }
+        if (path.resolve(detail.cwd) !== path.resolve(cwd)) continue;
+      }
       const sessionId = sessionIdFromName(entry);
-      // Pi 的列表从不读会话内容（没有 preview），于是 0 字节会话在这里一路「正常」：
-      // `open` 会说「会话文件是空的…内容已丢失」，而 sessions / recent / doctor 把它算成
-      // 健康的一条、`warnings` 一个字都没有。`stat` 已经拿到大小，顺手判一次就能对齐口径。
+      // 项目分组列表无需读内容；0 字节仍要披露为丢失，不能被算作健康会话。
+      // 共享自定义目录已在上方读头部确认归属，空文件会先报无法确认 cwd。
       const previewError = emptySessionFileReasonFromStat(st, filePath);
       items.push({
         ref: { provider: 'pi', sessionId, filePath, cwd },
@@ -178,10 +198,12 @@ export async function findPiSessionById(
   }
   const unreadable: string[] = [];
   const foundButUnreadable: string[] = [];
-  for (const dir of dirs) {
+  const custom = sessionsRoot === undefined && Boolean(process.env.PI_CODING_AGENT_SESSION_DIR);
+  const scanDirs = custom ? ['', ...dirs] : dirs;
+  for (const dir of scanDirs) {
     let files: string[];
     try {
-      files = await readdir(path.join(root, dir));
+      files = dir === '' ? dirs : await readdir(path.join(root, dir));
     } catch (error) {
       const code = (error as NodeJS.ErrnoException).code;
       if (code !== 'ENOENT' && code !== 'ENOTDIR') {
@@ -202,10 +224,14 @@ export async function findPiSessionById(
       }
       continue;
     }
+    if (!st.isFile()) {
+      foundButUnreadable.push(`${escapeControlChars(filePath)}（现在不是普通文件）`);
+      continue;
+    }
     const { cwd, error } = await piSessionCwdDetail(filePath);
-    if (cwd) return { ref: { provider: 'pi', sessionId, filePath, cwd }, updatedAt: st.mtimeMs };
+    if (cwd && (!custom || path.isAbsolute(cwd))) return { ref: { provider: 'pi', sessionId, filePath, cwd }, updatedAt: st.mtimeMs };
     // 文件确实在，只是读不出 cwd：结论不能是「会话不存在」
-    foundButUnreadable.push(`${escapeControlChars(filePath)}（${error ?? '原因未知'}）`);
+    foundButUnreadable.push(`${escapeControlChars(filePath)}（${cwd ? '工作目录不是绝对路径' : error ?? '原因未知'}）`);
   }
   if (foundButUnreadable.length) {
     throw new SessionLookupFailureError(
