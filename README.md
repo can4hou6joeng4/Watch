@@ -20,7 +20,13 @@ Watch 只做一件事：**把已保存的会话记录连同工作目录交到目
 
 它不提供模型、不绕过配额、不代替原生 Agent 聊天，也不默认搬迁权限、凭据或插件；接力的是已有记录，不是模型未记录的内部状态。当前实现以 CLI 会话与终端恢复为主，产品方向包含经过验证的桌面端入口，但**官方支持互通不等于 Watch 已经集成**。
 
-### 最新版本（[v0.1.51](https://github.com/can4hou6joeng4/Watch/releases/tag/v0.1.51)）
+### 最新版本（[v0.1.52](https://github.com/can4hou6joeng4/Watch/releases/tag/v0.1.52)）
+
+v0.1.52 两处小修。`appendFileAtomic` 判断「末尾缺不缺换行」时改在复制出的私有副本上读最后一个字节，不再读源文件：源文件在 `stat` 与 `copyFile` 之间被别人改写时，旧写法会按改之前的内容决定补不补换行，与随后复制到的内容对不上。Grok 无法归属分组的披露文案改成与其他 provider 同构的名词短语，警告读作「（分组里记录原路径的 .cwd 文件缺失或损坏）」。
+
+- **验证范围**：新增 3 项 CLI 级检查，覆盖长路径分组经 `sessions` 列出、无法归属分组进入 `sessions` 的 `warnings` / `unattributable` 与 `doctor` 的 `storage`；原子写与 Grok 相关 31 项单测通过。完整隔离回归 1933 项通过，0 失败、0 跳过。全部是合成目录检查，没有运行原生客户端。
+
+### 上一版本（[v0.1.51](https://github.com/can4hou6joeng4/Watch/releases/tag/v0.1.51)）
 
 v0.1.51 修复 Grok 长路径目录的会话定位。Grok 用工作目录的 URL 编码给会话分组；编码名超过 255 字节时改用「slug + hash」命名分组，并在分组里用 `.cwd` 记录原路径。深层中文路径很容易越过这条线（每个汉字占 9 个编码字节），而 Watch 之前只认 `encodeURIComponent` 那一个目录名：列出和新建会话会 `ENAMETOOLONG`，slug 分组里的会话按 id 也反查不到。
 

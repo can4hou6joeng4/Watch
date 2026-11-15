@@ -20,7 +20,13 @@ The steps are on the site [guides](https://relay.bobochang.cn/en/#guides): [Clau
 
 It does not provide models, bypass usage limits, replace native agent chat, or move permissions, credentials and plugins by default. What it transfers is the recorded session, not the model's unrecorded internal state. Today the implementation is centred on CLI sessions and terminal resume; the product direction includes validated desktop entry points, but **official interoperability does not mean Watch has integrated it**.
 
-### Latest release ([v0.1.51](https://github.com/can4hou6joeng4/Watch/releases/tag/v0.1.51))
+### Latest release ([v0.1.52](https://github.com/can4hou6joeng4/Watch/releases/tag/v0.1.52))
+
+v0.1.52 contains two small fixes. `appendFileAtomic` now decides whether the last newline is missing by reading the last byte of its private copy instead of the source file: if the source is rewritten between `stat` and `copyFile`, the old code decided based on content that no longer matched what was copied. The disclosure for unattributable Grok groups now uses the same noun-phrase shape as other providers, reading "(the .cwd file inside the group that records the original path is missing or damaged)".
+
+- **Validation scope**: 3 new CLI-level checks cover listing a long-path group through `sessions`, unattributable groups reaching `sessions` `warnings` / `unattributable` and `doctor` `storage`; 31 atomic-write and Grok unit checks pass. Full isolated regression: 1933 passing, zero failures and zero skips. All are synthetic-directory checks; the native client was not run.
+
+### Previous release ([v0.1.51](https://github.com/can4hou6joeng4/Watch/releases/tag/v0.1.51))
 
 v0.1.51 fixes session discovery for long Grok working directories. Grok groups sessions by the URL encoding of the working directory; when that encoded name exceeds 255 bytes it switches to a "slug + hash" group name and records the original path in a `.cwd` file inside the group. Deep non-ASCII paths cross that line easily (each CJK character is 9 encoded bytes), while Watch only knew the single `encodeURIComponent` name: listing and creating sessions hit `ENAMETOOLONG`, and sessions in slug groups could not be found by id.
 
