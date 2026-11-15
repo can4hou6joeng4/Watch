@@ -18,8 +18,19 @@ import type { ImportTurnsOpts } from '../adapter.js';
 import { SessionLookupFailureError } from '../adapter.js';
 import type { ProcessEvent, SessionRef, UnifiedTurn } from '../../core/types.js';
 
+/**
+ * Grok 的 home 目录：`GROK_HOME` 覆盖 `~/.grok`（内置文档原文：Set `GROK_HOME` to override
+ * the base directory; when it is unset, Grok uses `~/.grok`）。
+ * 只看环境变量不够——会话目录、`summary.grok_home` 都得跟着它走，否则设了 `GROK_HOME` 的用户
+ * 会看到「一份会话都没有」，Watch 还会把新会话写进原生根本不读的 `~/.grok`。
+ */
+export function grokHomeDir(): string {
+  const fromEnv = process.env.GROK_HOME?.trim();
+  return fromEnv ? fromEnv : path.join(homedir(), '.grok');
+}
+
 export function grokSessionsRoot(): string {
-  return path.join(homedir(), '.grok', 'sessions');
+  return path.join(grokHomeDir(), 'sessions');
 }
 
 /** `/Users/foo/bar` → `%2FUsers%2Ffoo%2Fbar`（与 Grok 会话目录一致） */
@@ -678,6 +689,8 @@ export async function createEmptyGrokSession(
   const dir = path.join(root, group, sessionId);
   await mkdir(dir, { recursive: true });
   const now = isoNow();
+  // 与真实的 sessions 根一致：注入了 sessionsRoot 时取它的上一级，否则原生读到的 grok_home 会指向别处
+  const grokHome = path.dirname(root);
   const chatPath = path.join(dir, 'chat_history.jsonl');
   const summaryPath = path.join(dir, 'summary.json');
   await writeFile(chatPath, JSON.stringify(systemLine()) + '\n', 'utf8');
@@ -694,7 +707,7 @@ export async function createEmptyGrokSession(
     next_trace_turn: 1,
     chat_format_version: 1,
     request_id: randomUUID(),
-    grok_home: path.join(homedir(), '.grok'),
+    grok_home: grokHome,
     last_active_at: now,
     generated_title: `Imported - ${now}`,
     agent_name: identity.agentName,
@@ -1031,7 +1044,7 @@ export async function importTurnsToGrok(
   summary.num_messages = pieces.length;
   summary.num_chat_messages = chatMsgCount;
   summary.current_model_id = modelId;
-  summary.grok_home = path.join(homedir(), '.grok');
+  summary.grok_home = path.dirname(sessionsRoot ?? grokSessionsRoot());
   // 身份字段只在缺失时补：已有原生会话的 agent_name / effort 属于它自己的创建者，不覆盖
   if (typeof summary.agent_name !== 'string' || !summary.agent_name) summary.agent_name = identity.agentName;
   if (typeof summary.reasoning_effort !== 'string' || !summary.reasoning_effort) {
