@@ -6,6 +6,7 @@ import { randomUUID } from 'node:crypto';
 import { parse as parseToml, type TomlTable } from 'smol-toml';
 import { appendFileAtomic, writeFileAtomic } from '../../core/atomic.js';
 import { escapeControlChars } from '../../core/display.js';
+import { providerDirectoryFromEnv } from '../../core/provider-directory.js';
 import { asJsonObject, parseJsonObject } from '../../core/jsonl.js';
 import { verifyWrittenTurns } from '../../core/verify.js';
 import { ENCRYPTED_THINKING, codexToolInput, isCodexExecScript, toCodexToolName, turnHasContent } from '../../core/rich.js';
@@ -18,17 +19,15 @@ import type { ImportTurnsOpts } from '../adapter.js';
 
 /**
  * Codex 数据目录：官方 `find_codex_home()` 优先读 `CODEX_HOME`（空值等同未设置），否则 `~/.codex`。
- * 原生对设置值会 canonicalize；这里用 `path.resolve()` 对齐绝对路径语义，相对值按当前进程 cwd 解析。
+ * 原生会 canonicalize 设置值；Watch 先要求绝对路径，避免与原生子进程按不同 cwd 定位。
  */
 export function codexHomeDirFrom(home: string): string {
-  const fromEnv = process.env.CODEX_HOME?.trim();
-  return fromEnv ? path.resolve(fromEnv) : path.join(home, '.codex');
+  return providerDirectoryFromEnv('CODEX_HOME', path.join(home, '.codex'));
 }
 
 export function codexDir(): string {
-  const fromEnv = process.env.CODEX_HOME?.trim();
-  if (!fromEnv) return path.join(homedir(), '.codex');
-  const dir = path.resolve(fromEnv);
+  const dir = codexHomeDirFrom(homedir());
+  if (!process.env.CODEX_HOME) return dir;
   // 官方设置 CODEX_HOME 时要求该值存在且是目录，否则 Codex 自己直接失败。
   // Watch 若不检查，缺失目录会被当成「这个目录没有会话」，把配置写错讲成「没有」。
   let info;

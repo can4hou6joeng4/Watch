@@ -16,7 +16,7 @@ import type { ProcessEvent, SessionRef, UnifiedTurn } from '../../core/types.js'
 import { streamCommand } from '../../core/streamCommand.js';
 import { parseClaudeSession } from './parse.js';
 import { claudeSessionUsage } from './usage.js';
-import { claudeProjectsDir, encodeClaudeProjectDir, importTurnsToClaude } from './build.js';
+import { claudeConfigDir, claudeProjectsDir, encodeClaudeProjectDir, importTurnsToClaude } from './build.js';
 import { claudeLineToProcessEvents, claudeResultFromStream } from './events.js';
 
 const execFileAsync = promisify(execFile);
@@ -336,6 +336,7 @@ async function runClaude(
   cwd: string,
   onEvent?: (e: ProcessEvent) => void,
 ): Promise<Record<string, unknown>> {
+  claudeConfigDir(); // 发送或新建都必须在启动原生进程之前检查目录变量。
   let stdout: string;
   try {
     const out = await streamCommand(

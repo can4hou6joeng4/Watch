@@ -4,6 +4,7 @@ import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { appendFileAtomic, writeFileAtomic } from '../../core/atomic.js';
 import { escapeControlChars } from '../../core/display.js';
+import { providerDirectoryFromEnv } from '../../core/provider-directory.js';
 import { iterateFileLines } from '../../core/read-text.js';
 import { verifyWrittenTurns } from '../../core/verify.js';
 import { claudeBashInput, CLAUDE_THINKING_PREFIX, ENCRYPTED_THINKING, toClaudeToolName, turnHasContent, WATCH_CONTEXT_DISCLOSURE_PREFIX } from '../../core/rich.js';
@@ -23,8 +24,7 @@ export function encodeClaudeProjectDir(cwd: string): string {
  * 需要注入 `home` 的调用方用 `claudeConfigDirFrom(home)`，不要在测试里读真实 HOME。
  */
 export function claudeConfigDirFrom(home: string): string {
-  const fromEnv = process.env.CLAUDE_CONFIG_DIR?.trim();
-  return fromEnv ? fromEnv : path.join(home, '.claude');
+  return providerDirectoryFromEnv('CLAUDE_CONFIG_DIR', path.join(home, '.claude'));
 }
 
 export function claudeConfigDir(): string {

@@ -58,6 +58,7 @@ function parseStreamJson(stdout: string): { sessionId?: string; text: string } {
 }
 
 async function runKimi(args: string[], cwd: string): Promise<{ stdout: string; text: string }> {
+  kimidir(); // 在启动原生进程之前拒绝含糊的目录变量。
   let stdout: string;
   try {
     const out = await execFileAsync(resolveCli('kimi'), [...args, '--output-format', 'stream-json'], {

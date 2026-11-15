@@ -7,6 +7,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { homedir } from 'node:os';
 import path from 'node:path';
 import { writeFileAtomic } from '../../core/atomic.js';
+import { providerDirectoryFromEnv } from '../../core/provider-directory.js';
 import { asJsonObject, parseJsonObject } from '../../core/jsonl.js';
 import { describePathReadFailureReason, emptySessionFileReasonFromStat, readTextOrEmpty } from '../../core/read-text.js';
 import { verifyWrittenTurns, expectAttachmentPlaceholders } from '../../core/verify.js';
@@ -25,8 +26,7 @@ import type { ProcessEvent, SessionRef, UnifiedTurn } from '../../core/types.js'
  * 会看到「一份会话都没有」，Watch 还会把新会话写进原生根本不读的 `~/.grok`。
  */
 export function grokHomeDir(): string {
-  const fromEnv = process.env.GROK_HOME?.trim();
-  return fromEnv ? fromEnv : path.join(homedir(), '.grok');
+  return providerDirectoryFromEnv('GROK_HOME', path.join(homedir(), '.grok'));
 }
 
 export function grokSessionsRoot(): string {

@@ -439,9 +439,9 @@ async function codexConfigWriteLimit(): Promise<WriteLimit | null> {
  * provider 段读 api_key，最后再 fallback 到 ~/.codex/auth.json。
  */
 async function codexEnv(): Promise<NodeJS.ProcessEnv> {
+  const codexHome = codexDir();
   if (process.env.OPENAI_API_KEY || process.env.CODEX_API_KEY) return process.env;
   const env = { ...process.env };
-  const codexHome = codexDir();
   try {
     const cred = await readProviderCredential(codexHome);
     if (cred.apiKey) env.OPENAI_API_KEY = cred.apiKey;

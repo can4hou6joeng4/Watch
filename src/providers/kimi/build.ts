@@ -1,6 +1,7 @@
 import { execFile } from 'node:child_process';
 import { describeBrokenCommandStart, resolveCli } from '../../core/platform.js';
 import { escapeControlChars } from '../../core/display.js';
+import { providerDirectoryFromEnv } from '../../core/provider-directory.js';
 import type { Dirent } from 'node:fs';
 import { readFile, readdir, stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
@@ -25,11 +26,10 @@ const HEADER_TYPES = new Set(['metadata', 'runtime.set_binding', 'profile.bind',
 /**
  * Kimi 数据目录：官方 `getDataDir()` 优先读 `KIMI_CODE_HOME`，否则 `~/.kimi-code`
  * （`apps/kimi-code/src/utils/paths.ts`，优先级注释直接写在函数上方）。
- * 原生返回环境变量原值；这里去首尾空白并 `path.resolve()`，保证 Watch 拿到绝对路径。
+ * 原生返回环境变量原值；Watch 保留路径空白并要求绝对路径，避免按不同 cwd 定位。
  */
 export function kimidirFrom(home: string): string {
-  const fromEnv = process.env.KIMI_CODE_HOME?.trim();
-  return fromEnv ? path.resolve(fromEnv) : path.join(home, '.kimi-code');
+  return providerDirectoryFromEnv('KIMI_CODE_HOME', path.join(home, '.kimi-code'));
 }
 
 export function kimiSessionsRoot(): string {
@@ -375,6 +375,7 @@ function describeUnusableTargetCwd(cwd: string, probe: Exclude<CwdInspection, { 
  * 依赖原生 CLI 登记会话目录与 `session_index.jsonl`；需要已登录，且会产生一次模型调用。
  */
 async function createRealKimiSession(cwd: string): Promise<{ sessionId: string; filePath: string }> {
+  kimidir(); // 先校验数据目录，不能在原生创建（可能调用模型）之后才失败。
   // 目录不可用与「PATH 里没有 kimi」在 spawn 层都是 ENOENT，先分开判定再给准确报错。
   // 这里以前是 `catch { cwdUsable = false }`，EACCES（父目录不可搜索 / 权限被收走）会被讲成
   // 「不存在或不是目录」——用户会去核对路径，而真正要修的是权限
