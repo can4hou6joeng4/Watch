@@ -20,7 +20,13 @@ The steps are on the site [guides](https://relay.bobochang.cn/en/#guides): [Clau
 
 It does not provide models, bypass usage limits, replace native agent chat, or move permissions, credentials and plugins by default. What it transfers is the recorded session, not the model's unrecorded internal state. Today the implementation is centred on CLI sessions and terminal resume; the product direction includes validated desktop entry points, but **official interoperability does not mean Watch has integrated it**.
 
-### Latest release ([v0.1.55](https://github.com/can4hou6joeng4/Watch/releases/tag/v0.1.55))
+### Latest release ([v0.1.56](https://github.com/can4hou6joeng4/Watch/releases/tag/v0.1.56))
+
+v0.1.56 completes the error semantics for a misconfigured `CODEX_HOME`. Official Codex fails outright when the variable points at a missing path or a non-directory, while the previous Watch release treated it as "no sessions" and `sessions` quietly returned an empty list. `codexDir()` now validates a non-empty variable first: missing, unreadable or not-a-directory all report the variable name, path and reason; per-provider aggregating commands such as `sessions` record it in `unavailable` and `warnings`, without hiding other providers or letting a configuration mistake look like "nothing was ever discussed here".
+
+- **Validation scope**: 4 new isolated checks; the CLI-level case reproduces a failure against the previous implementation (`CODEX_HOME` pointing at a missing directory returned `{ok:true, providers:[]}` with no warning). Full isolated regression: 1945 passing, zero failures and zero skips. These are synthetic-directory checks; the native client was not run.
+
+### Previous release ([v0.1.55](https://github.com/can4hou6joeng4/Watch/releases/tag/v0.1.55))
 
 v0.1.55 supports `CODEX_HOME`. Codex's official `find_codex_home()` states the data directory can be set through this variable and defaults to `~/.codex`. The direct-file Codex adapter was pinned to `~/.codex` (only the official import read it), so users with the variable set saw no sessions in `sessions` / `recent` / `doctor`, and new rollouts plus the writer lock landed where the native client does not read. `codexHomeDirFrom()` now resolves it consistently (empty means unset), and session scanning, creation, preflight config reads and the writer lock path follow it.
 
