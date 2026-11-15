@@ -20,7 +20,16 @@ The steps are on the site [guides](https://relay.bobochang.cn/en/#guides): [Clau
 
 It does not provide models, bypass usage limits, replace native agent chat, or move permissions, credentials and plugins by default. What it transfers is the recorded session, not the model's unrecorded internal state. Today the implementation is centred on CLI sessions and terminal resume; the product direction includes validated desktop entry points, but **official interoperability does not mean Watch has integrated it**.
 
-### Latest release ([v0.1.50](https://github.com/can4hou6joeng4/Watch/releases/tag/v0.1.50))
+### Latest release ([v0.1.51](https://github.com/can4hou6joeng4/Watch/releases/tag/v0.1.51))
+
+v0.1.51 fixes session discovery for long Grok working directories. Grok groups sessions by the URL encoding of the working directory; when that encoded name exceeds 255 bytes it switches to a "slug + hash" group name and records the original path in a `.cwd` file inside the group. Deep non-ASCII paths cross that line easily (each CJK character is 9 encoded bytes), while Watch only knew the single `encodeURIComponent` name: listing and creating sessions hit `ENAMETOOLONG`, and sessions in slug groups could not be found by id.
+
+- A group now counts as this directory when its decoded name equals the directory or its `.cwd` records the directory; groups are merged and de-duplicated by session id, and new sessions prefer an existing group. The slug/hash algorithm is not public, so Watch does not guess: a long path with no native group is refused, with a note to start grok once in that directory first.
+- `.cwd` is treated as untrusted input: `lstat` must show a regular file (a symlink could point at a FIFO and hang the command forever), size is capped at 4 KB, and the content must be an absolute path without control characters.
+- Groups that cannot be attributed are no longer reported as "this directory has no sessions": an empty list reports an error, and when there are usable groups the count and reason are disclosed in `sessions` / `recent` / `status` / `doctor`.
+- **Validation scope**: 22 new isolated checks (10 reproduced failures against the old implementation, 10 more from independent review: same session id in several groups, `.cwd` symlink / FIFO / permissions, unreadable summary, de-duplication, unattributable disclosure). Full isolated regression: 1930 passing, zero failures and zero skips. All are synthetic-directory checks; the native client was not run to create a long-path session.
+
+### Previous release ([v0.1.50](https://github.com/can4hou6joeng4/Watch/releases/tag/v0.1.50))
 
 v0.1.50 fixes writes to read-only session files: appending to a 0444 file failed with `EACCES` because the temporary copy inherited 0444 before being opened for append, and rewriting a 0200 (write-only) file could not verify its temporary copy. Temporary copies are now created or adjusted to 0600 first, and the source permission bits are restored after verification and before publication. The Kimi index `sessionDir` checks for absolute paths and control characters now also cover directory listing, lookup by id and a write-time fallback, so `handoff` cannot send a relative path into the process working directory. "The index has records but none usable" is no longer reported as "the index has no record".
 
