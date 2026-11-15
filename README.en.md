@@ -20,12 +20,18 @@ The steps are on the site [guides](https://relay.bobochang.cn/en/#guides): [Clau
 
 It does not provide models, bypass usage limits, replace native agent chat, or move permissions, credentials and plugins by default. What it transfers is the recorded session, not the model's unrecorded internal state. Today the implementation is centred on CLI sessions and terminal resume; the product direction includes validated desktop entry points, but **official interoperability does not mean Watch has integrated it**.
 
-### Latest release ([v0.1.59](https://github.com/can4hou6joeng4/Watch/releases/tag/v0.1.59))
+### Latest release ([v0.1.60](https://github.com/can4hou6joeng4/Watch/releases/tag/v0.1.60))
+
+v0.1.60 fixes the layout of explicit custom Pi session directories. Pinned upstream `SessionManager.create(cwd, sessionDir)` stores files directly in the specified directory; only the default location groups them by project. Watch added an extra encoded-cwd directory, missing native sessions and writing new sessions into the wrong subdirectory. It now scans and creates files directly under `PI_CODING_AGENT_SESSION_DIR`, filtering a shared directory by the cwd in each session header. Lookup by ID also handles flat files. Old Watch project subdirectories remain readable, with native flat files preferred for duplicate IDs; old files are neither moved nor rewritten. Damaged headers or unknown cwd values disclose an incomplete list.
+
+- **Validation scope**: 9 new isolated checks cover flat reading, creation and lookup, project filtering, legacy groups, de-duplication, damaged headers and CLI `sessions` / `open`. Full isolated regression: 1977 passing, zero failures and zero skips. Typecheck, desktop build, site build and share-image checks pass. No native Pi client or model was run; per-run `--session-dir` and the `sessionDir` setting remain unread.
+
+### Previous release ([v0.1.59](https://github.com/can4hou6joeng4/Watch/releases/tag/v0.1.59))
 
 v0.1.59 rejects data-directory settings that change meaning with the working directory. `CLAUDE_CONFIG_DIR`, `CODEX_HOME`, `GROK_HOME`, `KIMI_CODE_HOME`, `PI_CODING_AGENT_DIR` and `PI_CODING_AGENT_SESSION_DIR` now require full absolute paths; Pi still expands `~` / `~/` under its native rules (`~\` also works on Windows). Watch and the native CLI can run in different working directories, so relative values could send scans, writes and the Codex writer lock to different locations. Errors name the variable and explain how to fix it; aggregate lists disclose them through `unavailable` and `warnings`. Unset variables and empty strings still use the defaults, while whitespace in a path is preserved rather than trimmed only by Watch.
 
 - **Validation scope**: 16 new isolated checks cover all six variables, path whitespace, Pi expansion, CLI aggregate warnings, rejection before session writes and native process launch, and rejection before an official import journal is created. Full isolated regression: 1968 passing, zero failures and zero skips. Typecheck, desktop build, site build and share-image checks pass. Synthetic-directory checks do not establish native-client acceptance.
-- **Known limitation**: an explicit custom Pi session directory stores native files directly, while Watch still looks in a project subdirectory. This path awaits a fix; the earlier grouped fixtures do not establish support for the native layout.
+- **Limitation in that release (fixed in v0.1.60)**: explicit custom Pi session directories store native files directly, while v0.1.59 still looked in project subdirectories. The earlier grouped fixtures did not establish support for the native layout.
 
 ### Previous release ([v0.1.58](https://github.com/can4hou6joeng4/Watch/releases/tag/v0.1.58))
 
