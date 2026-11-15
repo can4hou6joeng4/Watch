@@ -20,7 +20,13 @@ Watch 只做一件事：**把已保存的会话记录连同工作目录交到目
 
 它不提供模型、不绕过配额、不代替原生 Agent 聊天，也不默认搬迁权限、凭据或插件；接力的是已有记录，不是模型未记录的内部状态。当前实现以 CLI 会话与终端恢复为主，产品方向包含经过验证的桌面端入口，但**官方支持互通不等于 Watch 已经集成**。
 
-### 最新版本（[v0.1.52](https://github.com/can4hou6joeng4/Watch/releases/tag/v0.1.52)）
+### 最新版本（[v0.1.53](https://github.com/can4hou6joeng4/Watch/releases/tag/v0.1.53)）
+
+v0.1.53 支持 `GROK_HOME`。Grok 内置文档写明 `GROK_HOME` 覆盖 `~/.grok`，而 Watch 之前只看 `homedir()`：设了 `GROK_HOME` 的用户在 `sessions` 里一份会话都看不到，新建会话还会写进原生根本不读的 `~/.grok`。现在会话根目录与写入的 `summary.grok_home` 都跟随 `GROK_HOME`（未设置或只有空白时回退 `~/.grok`）。
+
+- **验证范围**：新增 3 项隔离检查，其中 CLI 级用例在旧实现上先复现失败（`sessions` 读不到 `GROK_HOME` 下的会话，期望 `sid-env`、实际为空）。完整隔离回归 1936 项通过，0 失败、0 跳过。这些是合成目录检查，没有运行原生客户端。
+
+### 上一版本（[v0.1.52](https://github.com/can4hou6joeng4/Watch/releases/tag/v0.1.52)）
 
 v0.1.52 两处小修。`appendFileAtomic` 判断「末尾缺不缺换行」时改在复制出的私有副本上读最后一个字节，不再读源文件：源文件在 `stat` 与 `copyFile` 之间被别人改写时，旧写法会按改之前的内容决定补不补换行，与随后复制到的内容对不上。Grok 无法归属分组的披露文案改成与其他 provider 同构的名词短语，警告读作「（分组里记录原路径的 .cwd 文件缺失或损坏）」。
 
