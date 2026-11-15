@@ -15,6 +15,7 @@ import {
 } from '../../core/read-text.js';
 import { escapeControlChars } from '../../core/display.js';
 import { SessionLookupFailureError } from '../adapter.js';
+import { directoryWriteChecks } from '../directory-preflight.js';
 import type { ProviderAdapter } from '../adapter.js';
 import type { ProcessEvent, SessionRef, TokenUsage, UnifiedTurn } from '../../core/types.js';
 import { parseKimiSession, usageFromRecord } from './parse.js';
@@ -345,6 +346,7 @@ export const kimiAdapter: ProviderAdapter = {
   id: 'kimi',
   displayName: 'Kimi',
   toolFailureSupport: 'assistant',
+  ...directoryWriteChecks('kimi', kimiSessionsRoot),
 
   async detect(): Promise<boolean> {
     try {

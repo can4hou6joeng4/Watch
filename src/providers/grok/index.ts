@@ -5,12 +5,14 @@ import { promisify } from 'node:util';
 import { digestFile } from '../../core/atomic.js';
 import type { FileDigest } from '../../core/atomic.js';
 import type { ProviderAdapter, ImportTurnsOpts } from '../adapter.js';
+import { directoryWriteChecks } from '../directory-preflight.js';
 import type { ProcessEvent, SessionRef, UnifiedTurn } from '../../core/types.js';
 import {
   createEmptyGrokSession,
   findGrokSessionById,
   findLatestGrokSession,
   grokUnattributableGroups,
+  grokSessionsRoot,
   importTurnsToGrok,
   listGrokSessions,
 } from './build.js';
@@ -24,6 +26,7 @@ const execFileAsync = promisify(execFile);
 export const grokAdapter: ProviderAdapter = {
   id: 'grok',
   displayName: 'Grok',
+  ...directoryWriteChecks('grok', grokSessionsRoot),
 
   async detect(): Promise<boolean> {
     try {

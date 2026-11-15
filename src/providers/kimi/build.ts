@@ -380,7 +380,7 @@ function describeUnusableTargetCwd(cwd: string, probe: Exclude<CwdInspection, { 
  * 依赖原生 CLI 登记会话目录与 `session_index.jsonl`；需要已登录，且会产生一次模型调用。
  */
 async function createRealKimiSession(cwd: string): Promise<{ sessionId: string; filePath: string }> {
-  kimidir(); // 先校验数据目录，不能在原生创建（可能调用模型）之后才失败。
+  kimiSessionsRoot(); // 先校验数据根和会话目录，不能在原生创建（可能调用模型）之后才失败。
   // 目录不可用与「PATH 里没有 kimi」在 spawn 层都是 ENOENT，先分开判定再给准确报错。
   // 这里以前是 `catch { cwdUsable = false }`，EACCES（父目录不可搜索 / 权限被收走）会被讲成
   // 「不存在或不是目录」——用户会去核对路径，而真正要修的是权限

@@ -5,6 +5,7 @@ import { readdir, stat } from 'node:fs/promises';
 import path from 'node:path';
 import { promisify } from 'node:util';
 import { SessionLookupFailureError } from '../adapter.js';
+import { directoryWriteChecks } from '../directory-preflight.js';
 import type { ProviderAdapter } from '../adapter.js';
 import { digestFile, type FileDigest } from '../../core/atomic.js';
 import { escapeControlChars } from '../../core/display.js';
@@ -293,6 +294,7 @@ export const piAdapter: ProviderAdapter = {
   id: 'pi',
   displayName: 'Pi',
   toolFailureSupport: 'assistant',
+  ...directoryWriteChecks('pi', piSessionsRoot),
 
   async detect(): Promise<boolean> {
     try {

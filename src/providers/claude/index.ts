@@ -11,6 +11,7 @@ import type { TextHeadDetail } from '../../core/read-text.js';
 import { asJsonObject, parseJsonObject } from '../../core/jsonl.js';
 import { escapeControlChars } from '../../core/display.js';
 import { SessionLookupFailureError } from '../adapter.js';
+import { directoryWriteChecks } from '../directory-preflight.js';
 import type { ProviderAdapter } from '../adapter.js';
 import type { ProcessEvent, SessionRef, UnifiedTurn } from '../../core/types.js';
 import { streamCommand } from '../../core/streamCommand.js';
@@ -375,6 +376,7 @@ const replyTurn = (text: string): UnifiedTurn => ({
 export const claudeAdapter: ProviderAdapter = {
   id: 'claude',
   displayName: 'Claude Code',
+  ...directoryWriteChecks('claude', claudeProjectsDir),
 
   async detect(): Promise<boolean> {
     try {
