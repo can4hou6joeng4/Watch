@@ -10,7 +10,7 @@ import { ImportJobs, type ImportOutcome, type ImportPlan } from '../../core/impo
 import { resolveCli } from '../../core/platform.js';
 import { describePathReadFailureReason, isEmptySessionFileReason, isMissingPathError, iterateFileLines } from '../../core/read-text.js';
 import type { SessionRef } from '../../core/types.js';
-import { claudeProjectsDir, encodeClaudeProjectDir } from '../claude/build.js';
+import { claudeConfigDirFrom, claudeProjectsDir, encodeClaudeProjectDir } from '../claude/build.js';
 import { scanContinuedInRecords } from '../claude/continuation.js';
 import { claudeSessionCwdDetail } from '../claude/index.js';
 import { asRecord, connectImportRpc, type ImportRpc, type RpcProfile } from './app-server.js';
@@ -107,7 +107,7 @@ async function locateClaudeSessionElsewhere(
   sessionId: string,
   cwd: string,
 ): Promise<ElsewhereSession> {
-  const projectsRoot = path.join(home, '.claude', 'projects');
+  const projectsRoot = path.join(claudeConfigDirFrom(home), 'projects');
   let projects: string[];
   try {
     projects = (await readdir(projectsRoot, { withFileTypes: true }))

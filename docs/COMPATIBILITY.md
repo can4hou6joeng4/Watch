@@ -178,3 +178,4 @@ Codex 原生实验与 P4 客户端扩展入口各有独立的分客户端门禁�
 Computer Use 原生管道未能启动，因此此记录依赖真实窗口中的用户点击确认，不冒充自动截图。没有发送 turn、调用模型或修改项目文件。该结果完成已接入路径在 macOS 26.6.2 arm64、Codex CLI 0.153.4、ChatGPT Desktop 26.903.61454 的 P2 点击验收；模型继续、安装包启动、其他版本和平台仍未覆盖。见 P2 Tauri 原生点击记录。
 
 项目重建复测 保留为历史边界证据；它不再是推荐操作。
+**CLAUDE_CONFIG_DIR 覆盖（2026-11-15，v0.1.54，官方文档对照 + 合成目录检查）**：Claude Code 官方设置文档写明，设 `CLAUDE_CONFIG_DIR` 后设置、会话历史与插件改存到该目录（claude.ai 文档原文：To keep the home-directory files somewhere else, set CLAUDE_CONFIG_DIR; Claude Code then stores your settings, session history, and plugins there instead）。Watch 以前只按 `homedir()` 拼 `~/.claude/projects`，设了该变量的用户在 `sessions` / `recent` / `doctor` 里看到零条会话，新建会话还会写进原生不读的 `~/.claude`；现在 `claudeConfigDirFrom(home)` 优先取该变量，Claude 项目根与 Codex 官方导入的「来源会话在别处」扫描都跟随它。合成目录与 CLI 级检查覆盖；未运行原生客户端验证该变量下的 resume。

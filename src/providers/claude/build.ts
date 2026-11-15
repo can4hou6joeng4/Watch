@@ -16,8 +16,23 @@ export function encodeClaudeProjectDir(cwd: string): string {
   return cwd.replace(/[^A-Za-z0-9]/g, '-');
 }
 
+/**
+ * Claude Code 的配置目录：`CLAUDE_CONFIG_DIR` 覆盖 `~/.claude`。
+ * 官方文档（code.claude.com/docs/en/settings）：设了这个变量后，设置、**会话历史**与插件都存到那里。
+ * 只看 `homedir()` 会让设了该变量的用户看到零条会话，新会话还会写进原生不读的 `~/.claude`。
+ * 需要注入 `home` 的调用方用 `claudeConfigDirFrom(home)`，不要在测试里读真实 HOME。
+ */
+export function claudeConfigDirFrom(home: string): string {
+  const fromEnv = process.env.CLAUDE_CONFIG_DIR?.trim();
+  return fromEnv ? fromEnv : path.join(home, '.claude');
+}
+
+export function claudeConfigDir(): string {
+  return claudeConfigDirFrom(homedir());
+}
+
 export function claudeProjectsDir(): string {
-  return path.join(homedir(), '.claude', 'projects');
+  return path.join(claudeConfigDir(), 'projects');
 }
 
 type ClaudeIdentity = { model: string; version?: string };
