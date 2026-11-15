@@ -2260,6 +2260,8 @@ async function cmdNew(cwd: string, providerId: string, json: boolean, chain?: st
     if (historyLen === 0) {
       const adapter = getAdapter(providerId);
       if (!adapter) fail(json, unknownProviderMessage(providerId));
+      // 空链也会写原生存储；与已有链交接一样，先检查本家已知的写入限制。
+      await adapter.preflight?.({ cwd });
       let ref: import('./core/types.js').SessionRef;
       let turnCount = 0;
       // 两个分支都会写原生存储（kimi 还要真跑一次 CLI 建会话）：失败时抛的是 Node 原文，
