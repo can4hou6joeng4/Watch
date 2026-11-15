@@ -10,6 +10,7 @@ import {
   createEmptyGrokSession,
   findGrokSessionById,
   findLatestGrokSession,
+  grokUnattributableGroups,
   importTurnsToGrok,
   listGrokSessions,
 } from './build.js';
@@ -66,6 +67,9 @@ export const grokAdapter: ProviderAdapter = {
   },
 
   findById: findGrokSessionById,
+
+  /** slug 分组缺 `.cwd` / `.cwd` 不可用：这些会话不会出现在任何目录的列表里（见 build.ts） */
+  unattributable: () => grokUnattributableGroups(),
 
   resumeCommand(ref: SessionRef, windows?: boolean): string {
     return `grok -r ${quoteCommandArg(ref.sessionId, windows)}`;

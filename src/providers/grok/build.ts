@@ -1,8 +1,8 @@
-import { mkdir, open, readdir, readFile, stat, writeFile } from 'node:fs/promises';
+import { lstat, mkdir, open, readdir, readFile, stat, writeFile } from 'node:fs/promises';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { resolveCli } from '../../core/platform.js';
-import { escapeControlChars } from '../../core/display.js';
+import { escapeControlChars, hasControlChars } from '../../core/display.js';
 import { createHash, randomUUID } from 'node:crypto';
 import { homedir } from 'node:os';
 import path from 'node:path';
@@ -25,6 +25,162 @@ export function grokSessionsRoot(): string {
 /** `/Users/foo/bar` → `%2FUsers%2Ffoo%2Fbar`（与 Grok 会话目录一致） */
 export function encodeGrokProjectDir(cwd: string): string {
   return encodeURIComponent(cwd);
+}
+
+/**
+ * Grok 分组目录名的字节上限。内置文档（grok 1.0.77 `docs/user-guide/17-sessions.md`）：
+ * 分组名是工作目录的 URL 编码；编码名超过 255 字节时改用「slug + hash」，并在分组里写 `.cwd` 记录原路径。
+ * slug / hash 的算法没有公开，Watch 不猜：只认已有分组里的 `.cwd`。
+ */
+const GROK_GROUP_NAME_MAX_BYTES = 255;
+const GROK_CWD_FILE = '.cwd';
+
+/** 分组名按 URL 编码解出的工作目录；解不出或不是绝对路径（slug 分组）返回 null。 */
+function decodeGrokGroupName(name: string): string | null {
+  try {
+    const decoded = decodeURIComponent(name);
+    return path.isAbsolute(decoded) ? decoded : null;
+  } catch {
+    return null;
+  }
+}
+
+/** `.cwd` 只用来记一行路径；上限之外的既不是它写出来的，也不该整份读进内存 */
+const GROK_CWD_FILE_MAX_BYTES = 4096;
+
+/**
+ * 读分组里的 `.cwd`。没有这个文件返回 null（URL 编码分组的常态）；
+ * 读不出、内容不是可用的绝对路径、或不是普通文件时抛出只含原因的错误，由调用方决定披露方式。
+ * `.cwd` 是磁盘上的不可信输入：相对路径会被当成工作目录交给 resume 命令；
+ * 符号链接可能指向 FIFO（`readFile` 会永久阻塞）或 `/dev/zero`（一直读到内存上限），
+ * 所以先 `lstat` 要求是普通文件并限制大小，再读。
+ */
+async function readGrokGroupCwdFile(groupDir: string): Promise<string | null> {
+  const filePath = path.join(groupDir, GROK_CWD_FILE);
+  let info;
+  try {
+    info = await lstat(filePath);
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === 'ENOENT' || code === 'ENOTDIR') return null;
+    throw new Error(`读不出 ${escapeControlChars(filePath)}：${describePathReadFailureReason(error)}`);
+  }
+  if (!info.isFile()) {
+    throw new Error(
+      info.isSymbolicLink()
+        ? `${escapeControlChars(filePath)} 是符号链接，不是普通文件`
+        : `${escapeControlChars(filePath)} 不是普通文件`,
+    );
+  }
+  if (info.size > GROK_CWD_FILE_MAX_BYTES) {
+    throw new Error(`${escapeControlChars(filePath)} 有 ${info.size} 字节，超过 ${GROK_CWD_FILE_MAX_BYTES} 字节上限`);
+  }
+  let raw: string;
+  try {
+    raw = await readFile(filePath, 'utf8');
+  } catch (error) {
+    throw new Error(`读不出 ${escapeControlChars(filePath)}：${describePathReadFailureReason(error)}`);
+  }
+  // 前后空白不是 Windows / POSIX 上合法的目录名首尾字符（用户目录里带尾随空格的路径同样不可用），
+  // CRLF 与多写一个换行都按同一份路径处理。
+  const value = raw.trim();
+  if (!path.isAbsolute(value)) throw new Error('内容不是绝对路径');
+  if (hasControlChars(value)) throw new Error('内容含控制字符');
+  return value;
+}
+
+type GrokGroupProblem = { path: string; reason: string };
+
+/**
+ * 找出属于某个工作目录的全部分组目录名。判定不依赖「Watch 的编码与原生逐字节相同」：
+ * 分组名解码后等于该目录、或分组里的 `.cwd` 记录的是该目录，都算。
+ * 顺序即写入偏好：`.cwd` 声明的分组 → 其它编码写法的分组 → `encodeURIComponent` 的分组。
+ * `problems` 是「可能是这个目录的 slug 分组、但 `.cwd` 读不出或不可用」，调用方必须披露：
+ * 原生用的是哪一种转义写法没有公开，所以不能把「无法归属」当成「不属于这个目录」。
+ */
+async function findGrokGroupDirs(root: string, cwd: string): Promise<{ dirs: string[]; problems: GrokGroupProblem[] }> {
+  let names: string[];
+  try {
+    // 只认目录：根下的杂项文件不是分组；`findGrokSessionById` 同样按 `isDirectory()` 过滤。
+    // 软链分组两者都跳过，口径一致。
+    names = (await readdir(root, { withFileTypes: true })).filter((d) => d.isDirectory()).map((d) => d.name);
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    // 根目录不存在 = 从没用过 grok（空列表是事实）；读不出来必须抛出
+    if (code === 'ENOENT' || code === 'ENOTDIR') return { dirs: [], problems: [] };
+    throw new Error(`无法读取 Grok 会话目录 ${escapeControlChars(root)}：${describePathReadFailureReason(error)}`);
+  }
+  const exact = encodeGrokProjectDir(cwd);
+  const declared: string[] = [];
+  const otherEncodings: string[] = [];
+  const problems: GrokGroupProblem[] = [];
+  let hasExact = false;
+  for (const name of names) {
+    if (name === exact) {
+      hasExact = true;
+      continue;
+    }
+    const decoded = decodeGrokGroupName(name);
+    if (decoded !== null) {
+      if (decoded === cwd) otherEncodings.push(name);
+      continue;
+    }
+    try {
+      const value = await readGrokGroupCwdFile(path.join(root, name));
+      if (value === cwd) declared.push(name);
+      // 原生给 slug 分组总会写 `.cwd`；缺失说明这个分组已经无法归属，
+      // 不能因为「读不到归属」就把它算成「属于别的目录」。
+      else if (value === null) {
+        problems.push({ path: path.join(root, name, GROK_CWD_FILE), reason: '分组里没有 .cwd，无法确认它属于哪个目录' });
+      }
+    } catch (error) {
+      problems.push({ path: path.join(root, name, GROK_CWD_FILE), reason: (error as Error).message });
+    }
+  }
+  return { dirs: [...declared.sort(), ...otherEncodings.sort(), ...(hasExact ? [exact] : [])], problems };
+}
+
+function formatGrokGroupProblem(problem: GrokGroupProblem): string {
+  return `${escapeControlChars(problem.path)}（${problem.reason}）`;
+}
+
+/**
+ * 无法归属到任何工作目录的分组（slug 分组缺 `.cwd`、或 `.cwd` 读不出 / 不可用）。
+ *
+ * 这些分组里的会话不会出现在任何目录的 `listSessions` 里——不是「这些目录没聊过」，而是
+ * 「不知道它们属于哪个目录」。走适配器的 `unattributable()`，由 `sessions` / `recent` /
+ * `status` / `doctor` / `search` 统一披露；`listSessions` 自己只在空列表时另说一次。
+ */
+export async function grokUnattributableGroups(
+  sessionsRoot?: string,
+): Promise<{ count: number; samples: string[]; summary?: string }> {
+  const root = sessionsRoot ?? grokSessionsRoot();
+  let names: string[];
+  try {
+    names = (await readdir(root, { withFileTypes: true })).filter((d) => d.isDirectory()).map((d) => d.name);
+  } catch {
+    return { count: 0, samples: [] }; // 从没用过 grok / 整片读不出：由 listSessions 的失败通道说
+  }
+  const samples: string[] = [];
+  for (const name of names.sort()) {
+    if (decodeGrokGroupName(name) !== null) continue;
+    const groupPath = escapeControlChars(path.join(root, name));
+    let reason: string;
+    try {
+      const declared = await readGrokGroupCwdFile(path.join(root, name));
+      if (declared !== null) continue; // `.cwd` 可用：属于某个具体目录，由那个目录的列表负责
+      reason = '分组里没有 .cwd';
+    } catch (error) {
+      reason = (error as Error).message;
+    }
+    samples.push(`${groupPath}（${reason}）`);
+  }
+  if (samples.length === 0) return { count: 0, samples: [] };
+  return {
+    count: samples.length,
+    samples,
+    summary: '分组名不是 URL 编码的绝对路径，分组里的 .cwd 也缺失或不可用；原生把长路径目录放进这种分组并用 .cwd 记原路径',
+  };
 }
 
 type ChatLine =
@@ -274,7 +430,33 @@ export async function listGrokSessions(
   sessionsRoot?: string,
 ): Promise<{ ref: SessionRef; updatedAt: number; preview?: string; previewError?: string }[]> {
   const root = sessionsRoot ?? grokSessionsRoot();
-  const dir = path.join(root, encodeGrokProjectDir(cwd));
+  const { dirs, problems } = await findGrokGroupDirs(root, cwd);
+  if (dirs.length === 0 && problems.length > 0) {
+    // 原生的转义字符集没有公开：这些分组的 `.cwd` 读不出时，无法确认它们是不是属于这个目录，
+    // 空列表会被读成「这个目录没聊过」。
+    throw new Error(
+      `无法确认 Grok 是否有这个目录的会话：${problems.length} 个分组的 .cwd 读不出或内容不可用，无法判断它们是否属于该目录：${formatGrokGroupProblem(problems[0]!)}`,
+    );
+  }
+  // 有已认领的分组时不因为 `.cwd` 读不出的分组抛错——那会把能列出的会话也挡掉；这些分组
+  // 属于哪个目录尚不确定，由适配器 unattributable() 在 sessions / recent / status / doctor 里披露。
+  // 同一个 session id 可能同时出现在旧 Watch 分组与原生分组里（复制、恢复、手工搬动），
+  // 按 id 去重并保留较新的那一份，否则 `sessions` 会印两遍、`doctor` 计数重复。
+  const byId = new Map<string, { ref: SessionRef; updatedAt: number; preview?: string; previewError?: string }>();
+  for (const group of dirs) {
+    for (const item of await listGrokGroupSessions(path.join(root, group), cwd)) {
+      const existing = byId.get(item.ref.sessionId);
+      if (!existing || item.updatedAt > existing.updatedAt) byId.set(item.ref.sessionId, item);
+    }
+  }
+  return [...byId.values()].sort((a, b) => b.updatedAt - a.updatedAt);
+}
+
+/** 列出一个分组目录里的会话（未排序）；分组目录不存在返回空。 */
+async function listGrokGroupSessions(
+  dir: string,
+  cwd: string,
+): Promise<{ ref: SessionRef; updatedAt: number; preview?: string; previewError?: string }[]> {
   let entries: string[] = [];
   try {
     entries = (await readdir(dir, { withFileTypes: true }))
@@ -362,7 +544,6 @@ export async function listGrokSessions(
       ...(previewError ? { previewError } : {}),
     });
   }
-  items.sort((a, b) => b.updatedAt - a.updatedAt);
   return items;
 }
 
@@ -390,14 +571,9 @@ export async function findGrokSessionById(
   }
   const unreadable: string[] = [];
   const notRegularFile: string[] = [];
+  const unresolved: string[] = [];
   for (const d of dirs) {
     if (!d.isDirectory()) continue;
-    let dirCwd: string;
-    try {
-      dirCwd = decodeURIComponent(d.name);
-    } catch {
-      continue;
-    }
     const sessionDir = path.join(root, d.name, sessionId);
     const chatPath = path.join(sessionDir, 'chat_history.jsonl');
     try {
@@ -410,7 +586,27 @@ export async function findGrokSessionById(
       }
       const summary = await readSummary(path.join(sessionDir, 'summary.json'));
       const summaryCwd = asJsonObject(summary?.info)?.cwd;
-      const cwd = typeof summaryCwd === 'string' && summaryCwd ? summaryCwd : dirCwd;
+      // summary 的 cwd 同样是磁盘上的不可信输入：相对路径 / 控制字符会让 resume 命令 cd 到
+      // 别的地方或把转义序列打进终端。不可用时按「没记录」处理，回退到分组名与 .cwd。
+      const summaryUsable =
+        typeof summaryCwd === 'string' && path.isAbsolute(summaryCwd) && !hasControlChars(summaryCwd);
+      let cwd = summaryUsable ? (summaryCwd as string) : decodeGrokGroupName(d.name);
+      if (cwd === null) {
+        // slug 分组（或分组名不是合法 URL 编码）：工作目录只能来自分组里的 .cwd。
+        // 把分组名当路径会让 resume 命令 cd 到一个不存在的相对目录。
+        let why = '分组里也没有 .cwd';
+        try {
+          cwd = await readGrokGroupCwdFile(path.join(root, d.name));
+        } catch (error) {
+          why = `分组里的 .cwd 不可用（${(error as Error).message}）`;
+        }
+        if (cwd === null) {
+          // 同名会话可能也在后面的分组里（复制 / 恢复 / 手工搬动）：这里只记下，扫完再决定。
+          // 立即抛出会让一条本可打开的会话被前面一个坏分组挡住。
+          unresolved.push(`找到了会话 ${escapeControlChars(sessionId)}（${escapeControlChars(chatPath)}），但无法确定它的工作目录：summary.json 读不出或没有可用的 cwd，分组目录名不是 URL 编码的绝对路径，${why}`);
+          continue;
+        }
+      }
       const preview =
         typeof summary?.generated_title === 'string'
           ? summary.generated_title
@@ -434,13 +630,16 @@ export async function findGrokSessionById(
   if (notRegularFile.length) {
     throw new SessionLookupFailureError(
       'found-unreadable',
-      `会话 ${sessionId} 的路径现在不是普通文件（被同名目录或设备文件占住了）：${notRegularFile[0]}；无法把它当作会话读取，请先恢复该路径再重试`,
+      `会话 ${escapeControlChars(sessionId)} 的路径现在不是普通文件（被同名目录或设备文件占住了）：${notRegularFile[0]}；无法把它当作会话读取，请先恢复该路径再重试`,
     );
+  }
+  if (unresolved.length) {
+    throw new SessionLookupFailureError('found-unreadable', unresolved[0]!);
   }
   if (unreadable.length) {
     throw new SessionLookupFailureError(
       'incomplete',
-      `在 ${escapeControlChars(root)} 下没找到会话 ${sessionId}，但有 ${unreadable.length} 个位置读不出来，无法确认它是否存在：${unreadable[0]}`,
+      `在 ${escapeControlChars(root)} 下没找到会话 ${escapeControlChars(sessionId)}，但有 ${unreadable.length} 个位置读不出来，无法确认它是否存在：${unreadable[0]}`,
     );
   }
   return null;
@@ -457,9 +656,26 @@ export async function createEmptyGrokSession(
   }
   const sessionId = randomUUID();
   const root = sessionsRoot ?? grokSessionsRoot();
+  // 优先写进已属于这个目录的分组（.cwd 声明的 slug 分组、或原生用另一种转义写法建的分组），
+  // 这样原生按目录列会话时能看到；都没有才用 encodeURIComponent 新建。
+  const { dirs: groups, problems } = await findGrokGroupDirs(root, cwd);
+  let group = groups[0];
+  if (group === undefined) {
+    const encoded = encodeGrokProjectDir(cwd);
+    const bytes = Buffer.byteLength(encoded, 'utf8');
+    if (bytes > GROK_GROUP_NAME_MAX_BYTES) {
+      const detail = problems.length
+        ? `（另有 ${problems.length} 个分组的 .cwd 读不出或内容不可用：${formatGrokGroupProblem(problems[0]!)}）`
+        : '';
+      throw new Error(
+        `这个目录的 URL 编码名有 ${bytes} 字节，超过 ${GROK_GROUP_NAME_MAX_BYTES} 字节：Grok 对这种目录改用「slug + hash」命名分组，并在分组里用 .cwd 记录原路径。Watch 不猜这个名字，也没在 ${escapeControlChars(root)} 下找到 .cwd 指向该目录的分组${detail}。请先在该目录用 grok 启动一次会话，让原生建好分组后再重试；未写入任何内容`,
+      );
+    }
+    group = encoded;
+  }
   // 身份只探测一次并传进来：否则刚建的空会话会成为“最新会话”而掩盖真正的本机身份
   const identity = identityOverride ?? (await detectGrokIdentity(root));
-  const dir = path.join(root, encodeGrokProjectDir(cwd), sessionId);
+  const dir = path.join(root, group, sessionId);
   await mkdir(dir, { recursive: true });
   const now = isoNow();
   const chatPath = path.join(dir, 'chat_history.jsonl');
