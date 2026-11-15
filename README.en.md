@@ -20,7 +20,13 @@ The steps are on the site [guides](https://relay.bobochang.cn/en/#guides): [Clau
 
 It does not provide models, bypass usage limits, replace native agent chat, or move permissions, credentials and plugins by default. What it transfers is the recorded session, not the model's unrecorded internal state. Today the implementation is centred on CLI sessions and terminal resume; the product direction includes validated desktop entry points, but **official interoperability does not mean Watch has integrated it**.
 
-### Latest release ([v0.1.60](https://github.com/can4hou6joeng4/Watch/releases/tag/v0.1.60))
+### Latest release ([v0.1.61](https://github.com/can4hou6joeng4/Watch/releases/tag/v0.1.61))
+
+v0.1.61 fixes directory configuration failures displayed as zero sessions. All six directory variables now receive a read-only path type check: a file at the configured path, or an ancestor occupied by a file, reports the variable and the path failure. Claude, Grok, Kimi and Pi previously treated this `ENOTDIR` as absent history; Codex also reported an obstructed ancestor as a missing directory. Aggregate lists now disclose these failures through `unavailable` and `warnings`. Missing directories retain each provider's existing rules; the shared check creates no directory.
+
+- **Validation scope**: 15 new isolated checks cover non-directory values and ancestors for all six variables, CLI aggregate warnings, valid and missing paths, and control-character escaping. Full isolated regression: 1992 passing, zero failures and zero skips. Typecheck, desktop build, site build and share-image checks pass. No real agent history or model was used. Path type checks do not establish write permissions, native resume or cross-platform client acceptance.
+
+### Previous release ([v0.1.60](https://github.com/can4hou6joeng4/Watch/releases/tag/v0.1.60))
 
 v0.1.60 fixes the layout of explicit custom Pi session directories. Pinned upstream `SessionManager.create(cwd, sessionDir)` stores files directly in the specified directory; only the default location groups them by project. Watch added an extra encoded-cwd directory, missing native sessions and writing new sessions into the wrong subdirectory. It now scans and creates files directly under `PI_CODING_AGENT_SESSION_DIR`, filtering a shared directory by the cwd in each session header. Lookup by ID also handles flat files. Old Watch project subdirectories remain readable, with native flat files preferred for duplicate IDs; old files are neither moved nor rewritten. Damaged headers or unknown cwd values disclose an incomplete list.
 
