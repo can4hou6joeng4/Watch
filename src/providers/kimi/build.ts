@@ -52,6 +52,19 @@ export function kimidir(): string {
   return path.join(homedir(), '.kimi-code');
 }
 
+const KIMI_INDEX_PATH_CONTROL = /[\u0000-\u001f\u007f]/;
+
+/**
+ * 索引里的 `sessionDir` 是不可信输入：只接受绝对路径且不含控制字符。
+ * 相对路径会按 Watch 进程 cwd 解析（桌面端子进程 cwd 是固定仓库根），
+ * 随后的截断 / 追加会写到错误位置甚至覆盖同名文件。返回中文原因，`null` = 可用。
+ */
+export function indexSessionDirProblem(sessionDir: string): string | null {
+  if (!path.isAbsolute(sessionDir)) return '不是绝对路径';
+  if (KIMI_INDEX_PATH_CONTROL.test(sessionDir)) return '含控制字符';
+  return null;
+}
+
 /**
  * 新建会话后确定它 wire.jsonl 的真实位置：优先用 Kimi 自己写进 `session_index.jsonl` 的
  * `sessionDir`，索引里还没有这条（写入滞后 / 索引不存在 / 读不出来）才退回按原生规则编码的目录。
@@ -91,8 +104,9 @@ export async function resolveCreatedKimiWire(
       }
       // 索引是不可信输入：相对路径会按 Watch 进程 cwd 解析（桌面端子进程 cwd 是仓库根），
       // 随后 truncateToHeader 会重写它；上游始终写绝对路径，拒绝不会误伤原生数据。
-      if (!path.isAbsolute(sessionDir) || sessionDir.includes('\0')) {
-        indexProblems.push(`索引里的 sessionDir 不是绝对路径或含非法字符：${escapeControlChars(sessionDir)}`);
+      const dirProblem = indexSessionDirProblem(sessionDir);
+      if (dirProblem) {
+        indexProblems.push(`索引里的 sessionDir 非法（${dirProblem}）：${escapeControlChars(sessionDir)}`);
         continue;
       }
       const wirePath = path.join(sessionDir, 'agents', 'main', 'wire.jsonl');
@@ -113,6 +127,7 @@ export async function resolveCreatedKimiWire(
   const describeIndexState = (): string => {
     if (indexFailure) return `会话索引没读出来（${indexFailure}），其中可能记录了另一个位置`;
     if (badLines > 0) return `索引里有 ${badLines} 行无法解析，刚建会话的记录可能随坏行丢失`;
+    if (indexProblems.length > 0) return '索引里有这条会话的记录，但都不可用';
     return '索引里没有这条会话的记录';
   };
   const indexDetail = (): string =>
@@ -123,9 +138,8 @@ export async function resolveCreatedKimiWire(
   } catch (error) {
     throw new Error(
       [
-        `kimi 报告创建了会话 ${escapeControlChars(sessionId)}，但按原生规则推出的目录里没有它的 wire.jsonl`,
+        `kimi 报告创建了会话 ${escapeControlChars(sessionId)}，但按原生规则推出的路径不可用：${escapeControlChars(computedWire)}（${describePathReadFailureReason(error)}）`,
         `${describeIndexState()}${indexDetail()}`,
-        `按规则推出的路径：${escapeControlChars(computedWire)}（${describePathReadFailureReason(error)}）`,
       ].join('；'),
     );
   }
@@ -294,6 +308,14 @@ export async function listKimiSessionsByCwd(
     const sessionDir = typeof rec.sessionDir === 'string' ? rec.sessionDir : '';
     const sessionId = typeof rec.sessionId === 'string' ? rec.sessionId : '';
     if (!sessionDir || !sessionId) continue;
+    // 读取侧同样不能把相对路径交出去：它会被 handoff 选中后进入写路径
+    const dirProblem = indexSessionDirProblem(sessionDir);
+    if (dirProblem) {
+      throw new Error(
+        `Kimi 会话索引 ${escapeControlChars(indexPath)} 里会话 ${escapeControlChars(sessionId)} 的 sessionDir 非法（${dirProblem}）：` +
+          `${escapeControlChars(sessionDir)}；为避免读写落到进程工作目录，Watch 不会使用这个路径，请检查或恢复该索引`,
+      );
+    }
     const wirePath = path.join(sessionDir, 'agents', 'main', 'wire.jsonl');
     try {
       const st = await stat(wirePath);
@@ -705,6 +727,10 @@ export async function importTurnsToKimi(
 ): Promise<SessionRef> {
   if (!path.isAbsolute(cwd)) {
     throw new Error(`cwd 必须是绝对路径: ${escapeControlChars(cwd)}`);
+  }
+  // 兜底：ref 可能来自索引或外部调用，写入前不允许相对路径落到进程 cwd
+  if (into && !path.isAbsolute(into.filePath)) {
+    throw new Error(`目标会话路径必须是绝对路径: ${escapeControlChars(into.filePath)}`);
   }
   if (into && !opts?.replace) {
     const reason = assistantOnlyIncrementReason(turns);

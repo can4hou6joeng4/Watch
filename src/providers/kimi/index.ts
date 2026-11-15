@@ -22,6 +22,7 @@ import {
   encodeKimiWorkspaceDir,
   findKimiSessionDirOnDisk,
   importTurnsToKimi,
+  indexSessionDirProblem,
   kimidir,
   kimiIndexLoss,
   kimiSessionsRoot,
@@ -206,6 +207,13 @@ export async function findKimiSessionById(
     const workDir = typeof rec.workDir === 'string' ? rec.workDir : '';
     if (!sessionDir || !workDir) {
       unreadable.push(`${escapeControlChars(idxFile)} 里该会话缺少 sessionDir / workDir`);
+      continue;
+    }
+    const dirProblem = indexSessionDirProblem(sessionDir);
+    if (dirProblem) {
+      unreadable.push(
+        `${escapeControlChars(idxFile)} 里该会话的 sessionDir 非法（${dirProblem}）：${escapeControlChars(sessionDir)}`,
+      );
       continue;
     }
     const wirePath = path.join(sessionDir, 'agents', 'main', 'wire.jsonl');
