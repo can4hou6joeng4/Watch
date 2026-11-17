@@ -60,22 +60,22 @@ Setting WATCH_OPENCODE_DB=/tmp/isolated.db routes writes to a separate SQLite da
 2. Tool call representations: Tool records map across schemas; unsupported proprietary parameters degrade into structured text representations.
 3. Model continuation: Watch writes the saved session record and working directory. It does not guarantee that every tool event is preserved. Later replies depend on the model you configure.</p></div>
       </article>
-      
+
     <section class="guide-faq">
       <h2>Frequently Asked Questions</h2>
       <div class="faq-list">
         <details><summary>What is the advantage of OpenCode&#39;s SQLite storage over JSONL?<svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><use href="/icons.svg#plus"></use></svg></summary><p>A SQLite transaction commits a session write as a unit and rolls it back on failure. SQLite does not provide row-level write locks; concurrent writers can still contend for the database. WATCH_OPENCODE_DB redirects Watch&#39;s reads and writes to a separate test database; it does not automatically change the database used by the native OpenCode client.</p></details><details><summary>Are custom model reasoning thoughts retained when handing off out of OpenCode?<svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><use href="/icons.svg#plus"></use></svg></summary><p>Watch copies the saved user prompts, assistant text, thinking traces, and tool outputs it can map. Unsupported tool fields become text, so the copy is not a complete replica of the OpenCode row.</p></details><details><summary>How does Watch prevent working directory mismatch?<svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><use href="/icons.svg#plus"></use></svg></summary><p>Watch records the selected absolute cwd and returns a complete resume command that changes directory before running opencode -s &lt;session-id&gt;. Verify the working directory and use that complete command; opencode -s alone does not include Watch&#39;s directory change. A cwd record is not a file-access sandbox, so check paths and permissions in the destination tool as well.</p></details>
       </div>
     </section>
-  
-      
+
+
     <section class="guide-sources">
       <h2>Official Sources &amp; Acceptance Records</h2>
       <ul>
         <li><a href="https://opencode.ai/docs/server/" target="_blank" rel="noopener noreferrer">OpenCode Documentation: Server &amp; Sessions</a> <span class="eyebrow">(Checked 2026-09-21)</span></li><li><a href="https://opencode.ai/docs/cli/" target="_blank" rel="noopener noreferrer">OpenCode Documentation: CLI reference</a> <span class="eyebrow">(Checked 2026-09-21)</span></li><li><a href="https://github.com/can4hou6joeng4/Watch/blob/main/docs/ARCHITECTURE.md" target="_blank" rel="noopener noreferrer">Watch System Architecture &amp; Storage</a> <span class="eyebrow">(Checked 2026-09-21)</span></li><li><a href="https://github.com/can4hou6joeng4/Watch/blob/main/docs/COMPATIBILITY.md" target="_blank" rel="noopener noreferrer">Watch Client Compatibility Evidence</a> <span class="eyebrow">(Checked 2026-09-21)</span></li>
       </ul>
     </section>
-  
+
       <div class="guide-nav-footer">
         <a href="/en/" class="secondary-button"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><use href="/icons.svg#arrow-right"></use></svg>Return to Watch Home</a>
         <a href="https://github.com/can4hou6joeng4/Watch/releases" target="_blank" rel="noopener noreferrer">Download Watch Desktop<svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><use href="/icons.svg#arrow-up-right"></use></svg></a>

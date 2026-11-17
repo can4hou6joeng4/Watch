@@ -53,22 +53,22 @@ npm run watch -- chain new &lt;new-chain-name&gt;                       # start 
 npm run watch -- switch &lt;provider&gt;" title="Copy command" aria-label="Copy command"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><use href="/icons.svg#copy"></use></svg></button></div></div>
 <div class="guide-callout warning"><strong>Boundaries</strong><p>1. Watch does not rebuild history: a 0-turn session can only come back from your own backup. 2. Watch never deletes or repairs a zero-byte file on its own; that is your native session file, and the decision to restore or abandon it is yours. 3. A readable 0-turn session is not necessarily cleared content: watch new creates exactly that shape, so judge by context, not by the number alone. 4. These disclosures come from reading local files; they do not guarantee that the native client will open the session, and client acceptance stays recorded per version and platform.</p></div>
       </article>
-      
+
     <section class="guide-faq">
       <h2>Frequently Asked Questions</h2>
       <div class="faq-list">
         <details><summary>Did Watch lose the history when resume opened an empty session?<svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><use href="/icons.svg#plus"></use></svg></summary><p>Usually not. Watch reads the source first and appends to the target with write guards and atomic writes; a 0-turn session is usually empty from the start (a new session from watch new) or was cleared or truncated earlier. To check whether a Watch write caused it, compare the turn count and warnings in the handoff result with your backup file.</p></details><details><summary>What is the difference between 0 turns and 0 bytes?<svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><use href="/icons.svg#plus"></use></svg></summary><p>0 turns means the file is readable and has a valid session header but no conversation; it may be a new session or only a placeholder header left behind. 0 bytes means the file itself is empty, from a killed process, a full disk or a half write, and even the session metadata may be gone. The first may just not have started; the second should send you to backups first.</p></details><details><summary>Can Watch restore a cleared session automatically?<svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><use href="/icons.svg#plus"></use></svg></summary><p>No. Watch only reads and writes local session files. It has no history backup and does not invent conversation. Recovery comes from your own backup (Time Machine, copies outside the repo, editor history), and you resume after restoring the file.</p></details>
       </div>
     </section>
-  
-      
+
+
     <section class="guide-sources">
       <h2>Official Sources &amp; Acceptance Records</h2>
       <ul>
         <li><a href="https://github.com/can4hou6joeng4/Watch" target="_blank" rel="noopener noreferrer">Watch repository</a> <span class="eyebrow">(Checked 2026-11-17)</span></li><li><a href="https://github.com/can4hou6joeng4/Watch/releases" target="_blank" rel="noopener noreferrer">Watch releases</a> <span class="eyebrow">(Checked 2026-11-17)</span></li>
       </ul>
     </section>
-  
+
       <div class="guide-nav-footer">
         <a href="/en/" class="secondary-button"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><use href="/icons.svg#arrow-right"></use></svg>Return to Watch Home</a>
         <a href="https://github.com/can4hou6joeng4/Watch/releases" target="_blank" rel="noopener noreferrer">Download Watch Desktop<svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><use href="/icons.svg#arrow-up-right"></use></svg></a>

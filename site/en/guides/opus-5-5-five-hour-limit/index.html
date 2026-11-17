@@ -38,22 +38,22 @@
 <ol class="guide-steps"><li id="step-1"><h3>Step 1: Read which limit the product is reporting</h3><p>A message that you have exceeded the current usage limit, with a reset time, is an account limit. /compact does not restore that quota. A message about conversation length is a context-window limit. Compact inside Claude Code. Switching the model name is not the fix for either case.</p></li><li id="step-2"><h3>Step 2: Use the plan’s own five-hour limit and saved reset</h3><p>The higher five-hour limit applies to Pro, Max, Team, and seat-based Enterprise. The savable reset belongs to the Claude subscription. Watch has not verified a CLI flag that stores it, so do not assume a Watch command has banked the reset for you. If you are still blocked after the reset Anthropic provides, then consider another agent.</p></li><li id="step-3"><h3>Step 3: Hand off only if Claude is still blocked</h3><p>Watch does not read, raise, or bypass Claude quota. It copies a session already saved on disk into Codex, keeping the working directory. Follow the existing guide, Continuing in Codex after Claude Code reaches its usage limit: check the session id and directory, then prepare, confirm, and open Codex separately.</p></li></ol>
 <div class="guide-callout warning"><strong>What a trending query does not establish</strong><p>The query “opus 5.5” appeared in Singapore and Australia trending searches over 48 hours. That is an approximate trending bucket, not a global ranking of search volume, and it does not show that weekly limits, context length, or session files changed. Other model names in the same news cycle are unrelated to this handoff. Tool calls may still be degraded to text on the Codex side.</p></div>
       </article>
-      
+
     <section class="guide-faq">
       <h2>Frequently Asked Questions</h2>
       <div class="faq-list">
         <details><summary>Does Claude Opus 5.5 remove the five-hour usage limit?<svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><use href="/icons.svg#plus"></use></svg></summary><p>No. Anthropic increased the five-hour limit on Pro, Max, Team, and seat-based Enterprise. The limit still exists, and hitting it still shows a reset time.</p></details><details><summary>Can Watch spend the savable rate-limit reset for me?<svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><use href="/icons.svg#plus"></use></svg></summary><p>No. That control belongs to the Claude subscription. Watch does not sign in to a Claude account, and it neither stores nor spends the reset.</p></details><details><summary>Do I still hand the session to Codex after the limit increase?<svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><use href="/icons.svg#plus"></use></svg></summary><p>Only when the official reset is not enough and Codex still has quota. The handoff steps did not change with Opus 5.5.</p></details>
       </div>
     </section>
-  
-      
+
+
     <section class="guide-sources">
       <h2>Official Sources &amp; Acceptance Records</h2>
       <ul>
         <li><a href="https://www.anthropic.com/claude-opus-5-5" target="_blank" rel="noopener noreferrer">Anthropic: Introducing Claude Opus 5.5</a> <span class="eyebrow">(Checked 2026-09-23)</span></li><li><a href="https://support.claude.com/en/articles/11647753-how-do-usage-and-length-limits-work" target="_blank" rel="noopener noreferrer">Anthropic Support: How do usage and length limits work?</a> <span class="eyebrow">(Checked 2026-09-23)</span></li><li><a href="https://relay.bobochang.cn/en/guides/claude-code-limit-to-codex/" target="_blank" rel="noopener noreferrer">Watch: Continue in Codex when Claude Code hits its limit</a> <span class="eyebrow">(Checked 2026-09-23)</span></li>
       </ul>
     </section>
-  
+
       <div class="guide-nav-footer">
         <a href="/en/" class="secondary-button"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><use href="/icons.svg#arrow-right"></use></svg>Return to Watch Home</a>
         <a href="https://github.com/can4hou6joeng4/Watch/releases" target="_blank" rel="noopener noreferrer">Download Watch Desktop<svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><use href="/icons.svg#arrow-up-right"></use></svg></a>

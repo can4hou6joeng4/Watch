@@ -60,22 +60,22 @@ npm run watch -- open &lt;opencode-session-id&gt; --to claude --json" title="复
 2. 工具调用映射：OpenCode 的 tool 记录在跨转时按 schema 映射，不支持的专有工具参数将降级为结构化文本展示。
 3. 模型继续：Watch 写入已保存的会话记录和工作目录，不保证工具事件完整保留。启动 OpenCode 后的续写质量由你所配置的模型决定。</p></div>
       </article>
-      
+
     <section class="guide-faq">
       <h2>常见问题与限制</h2>
       <div class="faq-list">
         <details><summary>OpenCode 的本地 SQLite 存储相比 JSONL 有何优势？<svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><use href="/icons.svg#plus"></use></svg></summary><p>SQLite 的事务可以让一次会话写入在提交时整体生效，失败时回滚；它不提供行级写锁，多个写入者仍可能争用数据库。WATCH_OPENCODE_DB 可将 Watch 的读写指向独立测试库；它不自动改变 OpenCode 原生客户端使用的数据库。</p></details><details><summary>反向转出时，OpenCode 中的自定义模型推理记录会丢失吗？<svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><use href="/icons.svg#plus"></use></svg></summary><p>Watch 会复制能映射的用户指令、助手文本、思考链和工具输出。不支持的工具字段降级为文本，所以这不是 OpenCode 原行的完整副本。</p></details><details><summary>如何确认恢复时的工作目录没有错乱？<svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><use href="/icons.svg#plus"></use></svg></summary><p>Watch 将选定的绝对 cwd 写入会话记录，并在完整恢复命令中先切换目录、再运行 opencode -s &lt;session-id&gt;。请核对返回的工作目录并使用完整命令；只运行 opencode -s 不包含 Watch 的切目录步骤。cwd 记录不是文件访问沙箱，仍需在目标工具中核对路径与权限。</p></details>
       </div>
     </section>
-  
-      
+
+
     <section class="guide-sources">
       <h2>官方事实与验证来源</h2>
       <ul>
         <li><a href="https://opencode.ai/docs/server/" target="_blank" rel="noopener noreferrer">OpenCode Documentation: Server &amp; Sessions</a> <span class="eyebrow">(Checked 2026-09-21)</span></li><li><a href="https://opencode.ai/docs/cli/" target="_blank" rel="noopener noreferrer">OpenCode Documentation: CLI reference</a> <span class="eyebrow">(Checked 2026-09-21)</span></li><li><a href="https://github.com/can4hou6joeng4/Watch/blob/main/docs/ARCHITECTURE.md" target="_blank" rel="noopener noreferrer">Watch System Architecture &amp; Storage</a> <span class="eyebrow">(Checked 2026-09-21)</span></li><li><a href="https://github.com/can4hou6joeng4/Watch/blob/main/docs/COMPATIBILITY.md" target="_blank" rel="noopener noreferrer">Watch Client Compatibility Evidence</a> <span class="eyebrow">(Checked 2026-09-21)</span></li>
       </ul>
     </section>
-  
+
       <div class="guide-nav-footer">
         <a href="/" class="secondary-button"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><use href="/icons.svg#arrow-right"></use></svg>返回会话接力首页</a>
         <a href="https://github.com/can4hou6joeng4/Watch/releases" target="_blank" rel="noopener noreferrer">下载 Watch 桌面端<svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><use href="/icons.svg#arrow-up-right"></use></svg></a>

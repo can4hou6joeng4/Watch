@@ -56,22 +56,22 @@ npm run watch -- switch &lt;provider&gt;" title="复制命令" aria-label="复�
 3. 可读 0 轮不一定等于「被清空」：watch new 建出来的合法空会话就是这个形状，判断依据是上下文而不是轮数本身。
 4. 这些披露只是读取本地文件得出的结论，不代表原生客户端一定能打开该会话；客户端验收仍按各自的版本与平台单独记录。</p></div>
       </article>
-      
+
     <section class="guide-faq">
       <h2>常见问题与限制</h2>
       <div class="faq-list">
         <details><summary>resume 打开什么也没有，是 Watch 把历史弄丢了吗？<svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><use href="/icons.svg#plus"></use></svg></summary><p>通常不是。Watch 在交接时会先读来源、再用写前守卫与原子写追加到目标；0 轮会话多数是本来就空的（watch new 建出的空会话）或在此之前就被清空 / 截断的。要确认是不是 Watch 写入导致，先看交接结果里的轮数与 warnings，再对比备份文件。</p></details><details><summary>0 轮和 0 字节有什么区别？<svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><use href="/icons.svg#plus"></use></svg></summary><p>0 轮是文件可读、有合法会话头但没有对话，可能是新会话或只剩占位头；0 字节是文件本身空了，进程被杀、磁盘满或只写了一半都会造成，连会话元数据都可能一起丢失。前者可能只是还没开始，后者要优先找备份。</p></details><details><summary>Watch 能帮我自动恢复被清空的会话吗？<svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><use href="/icons.svg#plus"></use></svg></summary><p>不能。Watch 只读写本地会话文件，没有历史备份能力，也不会凭空重建对话。恢复只能来自你自己的备份（Time Machine、git 之外的副本、编辑器历史等），恢复文件后再 resume 即可。</p></details>
       </div>
     </section>
-  
-      
+
+
     <section class="guide-sources">
       <h2>官方事实与验证来源</h2>
       <ul>
         <li><a href="https://github.com/can4hou6joeng4/Watch" target="_blank" rel="noopener noreferrer">Watch repository</a> <span class="eyebrow">(Checked 2026-11-17)</span></li><li><a href="https://github.com/can4hou6joeng4/Watch/releases" target="_blank" rel="noopener noreferrer">Watch releases</a> <span class="eyebrow">(Checked 2026-11-17)</span></li>
       </ul>
     </section>
-  
+
       <div class="guide-nav-footer">
         <a href="/" class="secondary-button"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><use href="/icons.svg#arrow-right"></use></svg>返回会话接力首页</a>
         <a href="https://github.com/can4hou6joeng4/Watch/releases" target="_blank" rel="noopener noreferrer">下载 Watch 桌面端<svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><use href="/icons.svg#arrow-up-right"></use></svg></a>

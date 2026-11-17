@@ -383,7 +383,8 @@ writeIfChanged(path.join(site, 'style.css'), fs.readFileSync(path.join(site, 'in
 for (const { page, html } of renderedPages) {
   const dir = path.join(site, page.path.slice(1));
   fs.mkdirSync(dir, { recursive: true });
-  writeIfChanged(path.join(dir, 'index.html'), html);
+  // 模板里的空缩进行会留行尾空白，`git diff --check` 会拒收：写盘前统一去掉（对 <pre> 也无损）
+  writeIfChanged(path.join(dir, 'index.html'), html.replace(/[ \t]+$/gm, ''));
 }
 const notFound = Object.entries(publishedLocales).map(([locale, meta]) => { const t = content[locale]; return `<section lang="${meta.hreflang}"><span class="eyebrow">404 / NOT FOUND</span><h1>${t.notFound}</h1><p>${t.notFoundText}</p><a href="${meta.path}" class="primary-button">${t.back}${icon('arrow-right')}</a></section>`; }).join('');
 writeIfChanged(path.join(site, '404.html'), `<!DOCTYPE html><html lang="${publishedLocales.zh.hreflang}"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex"><title>404 · Watch</title><link rel="stylesheet" href="/style.css"><link rel="icon" href="/favicon.svg" type="image/svg+xml"><link rel="icon" href="/favicon.ico" sizes="any"></head><body class="not-found"><a class="brand" href="/"><img class="brand-mark" src="/watch-mark.svg" alt="" width="30" height="15">Watch</a><main>${notFound}</main></body></html>`);

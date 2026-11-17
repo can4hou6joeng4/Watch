@@ -38,22 +38,22 @@
 <ol class="guide-steps"><li id="step-1"><h3>步骤 1：先看提示是哪一种限制</h3><p>若提示超出当前使用限额并带有重置时间，这是账户限额。此时 /compact 不能恢复额度。若提示的是会话长度或上下文已满，先在 Claude Code 内压缩，不要把模型升级当成解法。</p></li><li id="step-2"><h3>步骤 2：使用套餐自己的 5 小时限额和可保存重置</h3><p>公告说明提高后的 5 小时限额适用于 Pro、Max、Team 和按席位的 Enterprise。可保存的限额重置由订阅产品提供，Watch 没有核验过对应的 CLI 开关，因此不要假设某条命令已经替你存下重置。用尽官方给出的重置之后若仍然被拦住，再考虑换工具。</p></li><li id="step-3"><h3>步骤 3：仍然被拦住时，再做会话接力</h3><p>Watch 不读取、不增加、也不绕过 Claude 额度。它只把本机已经保存的会话记录转入仍有额度的 Codex，并保留工作目录。操作沿用《Claude Code 达到使用限额后转入 Codex》指南：先核对会话 ID 与目录，再 prepare、confirm，最后单独打开 Codex。</p></li></ol>
 <div class="guide-callout warning"><strong>不要从热搜推断出的结论</strong><p>新加坡和澳大利亚的 48 小时趋势里出现过查询 “opus 5.5”，这只说明有人在搜这个名字，不是全球搜索量排行，也不能证明周限额、上下文长度或会话格式已经改变。GPT-6 等同时出现的模型名称与 Watch 的接力步骤无关。工具调用在 Codex 侧仍可能降级为文本。</p></div>
       </article>
-      
+
     <section class="guide-faq">
       <h2>常见问题与限制</h2>
       <div class="faq-list">
         <details><summary>升级到 Claude Opus 5.5 之后，还会遇到 5 小时限额吗？<svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><use href="/icons.svg#plus"></use></svg></summary><p>会。公告是提高 Pro、Max、Team 和按席位 Enterprise 的 5 小时限额，不是取消限额。到顶时仍然会看到重置时间。</p></details><details><summary>可保存的限额重置能不能由 Watch 自动使用？<svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><use href="/icons.svg#plus"></use></svg></summary><p>不能。那是 Claude 订阅自己的额度控制。Watch 不登录 Claude 账户，也不代为消耗或保存重置。</p></details><details><summary>限额提高后，还需要把会话转入 Codex 吗？<svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><use href="/icons.svg#plus"></use></svg></summary><p>官方重置仍然不够用、而 Codex 一侧还有额度时才需要。转入步骤没有因为 Opus 5.5 改变。</p></details>
       </div>
     </section>
-  
-      
+
+
     <section class="guide-sources">
       <h2>官方事实与验证来源</h2>
       <ul>
         <li><a href="https://www.anthropic.com/claude-opus-5-5" target="_blank" rel="noopener noreferrer">Anthropic: Introducing Claude Opus 5.5</a> <span class="eyebrow">(Checked 2026-09-23)</span></li><li><a href="https://support.claude.com/en/articles/11647753-how-do-usage-and-length-limits-work" target="_blank" rel="noopener noreferrer">Anthropic Support: How do usage and length limits work?</a> <span class="eyebrow">(Checked 2026-09-23)</span></li><li><a href="https://relay.bobochang.cn/guides/claude-code-limit-to-codex/" target="_blank" rel="noopener noreferrer">Watch: Claude Code 限额后转入 Codex</a> <span class="eyebrow">(Checked 2026-09-23)</span></li>
       </ul>
     </section>
-  
+
       <div class="guide-nav-footer">
         <a href="/" class="secondary-button"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><use href="/icons.svg#arrow-right"></use></svg>返回会话接力首页</a>
         <a href="https://github.com/can4hou6joeng4/Watch/releases" target="_blank" rel="noopener noreferrer">下载 Watch 桌面端<svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><use href="/icons.svg#arrow-up-right"></use></svg></a>

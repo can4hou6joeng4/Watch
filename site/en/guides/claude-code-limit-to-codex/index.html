@@ -61,22 +61,22 @@ In these scenarios, running /compact inside Claude Code cannot restore or free u
 2. Stop on uncertain state: If the process is interrupted or times out, the lock is retained. Inspect with the status command rather than forcibly deleting locks or re-submitting.
 3. Local conversion is not fully offline: While Watch operates without external servers, Codex invokes its own app-server daemon and authenticates with its upstream model provider.</p></div>
       </article>
-      
+
     <section class="guide-faq">
       <h2>Frequently Asked Questions</h2>
       <div class="faq-list">
         <details><summary>Does Watch bypass or reset Claude Code rate limits?<svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><use href="/icons.svg#plus"></use></svg></summary><p>No. Watch is a local handoff utility. It does not tamper with Anthropic accounts or inject credits; it transfers locally saved session artifacts into another agent that has active capacity.</p></details><details><summary>Can I immediately prompt Codex to continue coding?<svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><use href="/icons.svg#plus"></use></svg></summary><p>Codex will inspect the imported conversation history, but model performance on resumed tasks depends on the target agent&#39;s context capacity. We recommend asking Codex to summarize the current objective before assigning new code edits.</p></details><details><summary>What happens if I submit an import twice?<svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><use href="/icons.svg#plus"></use></svg></summary><p>Watch enforces persistent locks and plan idempotency. Duplicate prepare requests for the same source and directory return the existing plan without duplicating records.</p></details>
       </div>
     </section>
-  
-      
+
+
     <section class="guide-sources">
       <h2>Official Sources &amp; Acceptance Records</h2>
       <ul>
         <li><a href="https://support.claude.com/en/articles/11647753-how-do-usage-and-length-limits-work" target="_blank" rel="noopener noreferrer">Anthropic Support: How do usage and length limits work?</a> <span class="eyebrow">(Checked 2026-09-21)</span></li><li><a href="https://docs.anthropic.com/en/docs/claude-code/cli-usage" target="_blank" rel="noopener noreferrer">Anthropic Claude Code CLI Documentation</a> <span class="eyebrow">(Checked 2026-09-21)</span></li><li><a href="https://learn.chatgpt.com/docs/import" target="_blank" rel="noopener noreferrer">OpenAI ChatGPT: Import from another agent</a> <span class="eyebrow">(Checked 2026-09-21)</span></li><li><a href="https://github.com/can4hou6joeng4/Watch/blob/main/docs/import-codex.md" target="_blank" rel="noopener noreferrer">Watch Import Codex Specification &amp; Acceptance</a> <span class="eyebrow">(Checked 2026-09-21)</span></li>
       </ul>
     </section>
-  
+
       <div class="guide-nav-footer">
         <a href="/en/" class="secondary-button"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><use href="/icons.svg#arrow-right"></use></svg>Return to Watch Home</a>
         <a href="https://github.com/can4hou6joeng4/Watch/releases" target="_blank" rel="noopener noreferrer">Download Watch Desktop<svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><use href="/icons.svg#arrow-up-right"></use></svg></a>

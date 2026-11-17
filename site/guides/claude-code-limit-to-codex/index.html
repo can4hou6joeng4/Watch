@@ -61,22 +61,22 @@ npm run watch -- import-codex status &lt;plan-id&gt; --json" title="复制命令
 2. 遇到 uncertain 状态必须立即停止：若提交过程中断或网络超时，状态会保持锁定，请通过 status 命令只读排查，严禁强制删除锁或重复再次提交。
 3. 本地转换不等于全流程离线：Watch 自身无中继服务器，但在触发 Codex 原生接口时，Codex 会遵循其本地配置与模型云端鉴权。</p></div>
       </article>
-      
+
     <section class="guide-faq">
       <h2>常见问题与限制</h2>
       <div class="faq-list">
         <details><summary>Claude Code 限额后，Watch 会帮我自动续订或绕过限制吗？<svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><use href="/icons.svg#plus"></use></svg></summary><p>不会。Watch 是本地会话接力工具，不接触用户账户、不提供额度注入、也不破解官方限制。它的作用是将您此前已保存在本地的调试足迹转录给另一个有可用额度的 Agent。</p></details><details><summary>转入 Codex 后，是否可以直接继续提问模型？<svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><use href="/icons.svg#plus"></use></svg></summary><p>Codex 会加载此前会话的消息记录，但模型针对接力会话的续写质量受目标 Agent 自身上下文长度和 Prompt 解释能力影响。建议在首轮提问中先要求 Codex 简要复述任务目标，确认理解后再分配代码编辑任务。</p></details><details><summary>如果不小心点了两次导入，会导致会话重复或冲突吗？<svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><use href="/icons.svg#plus"></use></svg></summary><p>不会。Watch 设计了持久锁与计划幂等机制。同一来源与工作目录在未完成前不会重复创建新计划；对已完成计划再次执行将保持原样并返回已导入的会话指向。</p></details>
       </div>
     </section>
-  
-      
+
+
     <section class="guide-sources">
       <h2>官方事实与验证来源</h2>
       <ul>
         <li><a href="https://support.claude.com/en/articles/11647753-how-do-usage-and-length-limits-work" target="_blank" rel="noopener noreferrer">Anthropic Support: How do usage and length limits work?</a> <span class="eyebrow">(Checked 2026-09-21)</span></li><li><a href="https://docs.anthropic.com/en/docs/claude-code/cli-usage" target="_blank" rel="noopener noreferrer">Anthropic Claude Code CLI Documentation</a> <span class="eyebrow">(Checked 2026-09-21)</span></li><li><a href="https://learn.chatgpt.com/docs/import" target="_blank" rel="noopener noreferrer">OpenAI ChatGPT: Import from another agent</a> <span class="eyebrow">(Checked 2026-09-21)</span></li><li><a href="https://github.com/can4hou6joeng4/Watch/blob/main/docs/import-codex.md" target="_blank" rel="noopener noreferrer">Watch Import Codex Specification &amp; Acceptance</a> <span class="eyebrow">(Checked 2026-09-21)</span></li>
       </ul>
     </section>
-  
+
       <div class="guide-nav-footer">
         <a href="/" class="secondary-button"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><use href="/icons.svg#arrow-right"></use></svg>返回会话接力首页</a>
         <a href="https://github.com/can4hou6joeng4/Watch/releases" target="_blank" rel="noopener noreferrer">下载 Watch 桌面端<svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><use href="/icons.svg#arrow-up-right"></use></svg></a>
