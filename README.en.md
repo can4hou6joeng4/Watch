@@ -20,7 +20,20 @@ The steps are on the site [guides](https://relay.bobochang.cn/en/#guides): [Clau
 
 It does not provide models, bypass usage limits, replace native agent chat, or move permissions, credentials and plugins by default. What it transfers is the recorded session, not the model's unrecorded internal state. Today the implementation is centred on CLI sessions and terminal resume; the product direction includes validated desktop entry points, but **official interoperability does not mean Watch has integrated it**.
 
-### Latest release ([v0.1.95](https://github.com/can4hou6joeng4/Watch/releases/tag/v0.1.95))
+### Latest release ([v0.1.96](https://github.com/can4hou6joeng4/Watch/releases/tag/v0.1.96))
+
+`watch usage` now requires content-side evidence before calling a parsed 0-turn session empty.
+
+v0.1.95 classified a 0-turn parse as an empty session, but 0 turns alone does not prove the session was empty: a truncated grok `chat_history.jsonl` still parses to 0 turns, and a Codex rollout reduced to `session_meta + compacted` (the pre-compaction history may be gone) does too. Both were reported as normal new sessions. In the opposite direction, a zero-byte grok content file whose sidecar `updates.jsonl` still carries usage skipped the whole content check, so the report showed a total without a single warning.
+
+- **Content bad lines first**: for sidecar usage providers, `chat_history.jsonl` is scanned separately; bad lines stay in `byProvider[].contentBadLines`, are not called an empty session and are not described as "no conversation".
+- **Compaction as counter-evidence**: a Codex log with only compaction records gets a `zeroTurnProblem` from the adapter, surfaced in `warnings` and `byProvider[].zeroTurnProblem`; the summary body is not copied.
+- **Content loss separate from usage**: readable sidecar usage still counts toward the total, but an empty or unusable content file now appears in `warnings` and `byProvider[].contentProblem`; `totalExcluded` and the total are unchanged.
+- **Legitimate empty sessions unaffected**: `watch new codex / grok / opencode` still counts in `totalEmptySessions`; healthy sessions gain no new warnings; text mode lists the three cases separately after the total.
+
+- **Validation scope**: 4 new isolated checks (grok bad content lines, grok content loss with healthy sidecar usage, Codex compaction records, healthy counterexample) pass 26/26 together with usage and compaction cases; the full isolated regression passes 2232 tests with zero failures and zero skips; typecheck and desktop build pass. No native-client acceptance claim is added: no native GUI or model was started this round.
+
+### Previous release ([v0.1.95](https://github.com/can4hou6joeng4/Watch/releases/tag/v0.1.95))
 
 `watch usage` now separates a 0-turn empty session from a session that has content but no recorded usage.
 

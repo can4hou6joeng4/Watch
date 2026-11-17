@@ -20,7 +20,20 @@ Watch 只做一件事：**把已保存的会话记录连同工作目录交到目
 
 它不提供模型、不绕过配额、不代替原生 Agent 聊天，也不默认搬迁权限、凭据或插件；接力的是已有记录，不是模型未记录的内部状态。当前实现以 CLI 会话与终端恢复为主，产品方向包含经过验证的桌面端入口，但**官方支持互通不等于 Watch 已经集成**。
 
-### 最新版本（[v0.1.95](https://github.com/can4hou6joeng4/Watch/releases/tag/v0.1.95)）
+### 最新版本（[v0.1.96](https://github.com/can4hou6joeng4/Watch/releases/tag/v0.1.96)）
+
+`watch usage` 的「空会话」判定补上内容侧反证，不再把坏掉的会话说成「还没聊过」。
+
+v0.1.95 把解析 0 轮单列为空会话，但 0 轮本身证明不了「这条会话本来就是空的」：grok 的 `chat_history.jsonl` 被截断半行时 parse 照样返回 0 轮；Codex 日志只剩 `session_meta + compacted`（压缩前原文可能已被销毁）时也是 0 轮。两个方向都把坏消息说成正常状态。反过来，grok 内容文件被截成 0 字节、旁路 `updates.jsonl` 的用量还完好时，用量分支跳过整个内容文件检查，报告照常给合计且一句警告都没有。
+
+- **内容坏行优先**：grok 用量在旁路时另扫 `chat_history.jsonl`；有坏行就保留 `byProvider[].contentBadLines`，不计空会话，也不把读不出来讲成「没有对话」。
+- **压缩记录是反证**：Codex 只剩压缩记录时由适配器的 `zeroTurnProblem` 给出反证，结果写进 `warnings` 与 `byProvider[].zeroTurnProblem`；摘要正文不复制。
+- **内容丢失与用量分开**：旁路用量读得到时仍计入合计，但内容文件为空 / 不可用会写进 `warnings` 与 `byProvider[].contentProblem`，不再完全沉默；`totalExcluded` 与合计口径不变。
+- **合法空会话不受影响**：`watch new codex / grok / opencode` 仍记 `totalEmptySessions`，健康会话不新增警告；文本模式把三类情况分别列在合计后的结果说明里。
+
+- **验证范围**：新增 4 项隔离检查（grok 内容坏行、grok 内容丢失但旁路用量完好、Codex 压缩记录、健康反例），与 usage / 压缩相关用例联合 26/26 通过；完整隔离回归 2232 项通过，0 失败、0 跳过；类型检查与桌面构建通过。不新增原生客户端验收结论：本轮未启动任何原生 GUI 或模型。
+
+### 上一版本（[v0.1.95](https://github.com/can4hou6joeng4/Watch/releases/tag/v0.1.95)）
 
 `watch usage` 把「解析出 0 轮的空会话」与「有内容却没记 usage」分档。
 
