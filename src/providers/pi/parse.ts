@@ -1,5 +1,6 @@
 import { ToolResultPairing } from '../../core/tool-pairing.js';
 import { escapeControlChars } from '../../core/display.js';
+import { asJsonObject } from '../../core/jsonl.js';
 import { iterateFileLines } from '../../core/read-text.js';
 import {
   ensureAssistant,
@@ -77,12 +78,18 @@ export async function parsePiSession(ref: SessionRef): Promise<UnifiedTurn[]> {
     } catch {
       continue;
     }
-    if (typeof record !== 'object' || record === null) continue;
-    const r = record as Record<string, unknown>;
-    const rawType = typeof r.type === 'string' ? r.type : '';
+    // 与 scanUnparsableJsonLines() 同一判据：null / 数组 / 标量是「坏行」，
+    // 由既有坏行通道披露，不能在这里再算成「缺 type 的顶层记录」。
+    const r = asJsonObject(record);
+    if (!r) continue;
+    const rawTypeValue = r.type;
+    const rawType = typeof rawTypeValue === 'string' ? rawTypeValue : '';
     if (!KNOWN_PI_TOP_LEVEL_TYPES.has(rawType)) {
-      const label = escapeControlChars(rawType.length > 64 ? `${rawType.slice(0, 64)}…` : rawType || '（缺 type）');
-      unknownTopLevel.set(label, (unknownTopLevel.get(label) ?? 0) + 1);
+      // 缺 type 与 type 不是字符串是两种不同形状，分开点名，避免把人引向错误的核对方向。
+      const label =
+        rawType || (rawTypeValue === undefined ? '（缺 type）' : '（type 不是字符串）');
+      const escaped = escapeControlChars(label.length > 64 ? `${label.slice(0, 64)}…` : label);
+      unknownTopLevel.set(escaped, (unknownTopLevel.get(escaped) ?? 0) + 1);
       continue;
     }
 
