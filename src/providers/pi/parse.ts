@@ -46,6 +46,19 @@ function unknownPiTopLevelNote(unknown: Map<string, number>): string {
   return `Pi 会话日志里有 ${total} 条未识别的顶层记录（${counts}），Watch 暂不解析：无法确认其中是否包含对话内容，这些记录没有并入交接；需要时请在原生 Pi 里核对。`;
 }
 
+function unparsedMessageNote(unknown: Map<string, number>): string {
+  if (unknown.size === 0) return '';
+  const total = [...unknown.values()].reduce((a, b) => a + b, 0);
+  const counts = [...unknown.entries()]
+    .map(([role, count]) => (count > 1 ? `${role}×${count}` : role))
+    .join('、');
+  return (
+    `Pi 会话日志里有 ${total} 条无法并入交接的 message 记录（role：${counts}），` +
+    '其中 bashExecution / custom 在原生 Pi 里可能作为用户上下文参与对话；' +
+    'Watch 不复制这类内容，也不伪造用户轮次，需要时请在原生 Pi 里核对。'
+  );
+}
+
 export async function parsePiSession(ref: SessionRef): Promise<UnifiedTurn[]> {
   const turns: UnifiedTurn[] = [];
   const pairing = new ToolResultPairing(turns, 'pi', 'Pi');
@@ -66,6 +79,9 @@ export async function parsePiSession(ref: SessionRef): Promise<UnifiedTurn[]> {
   // 顶层未知类型按 type×n 汇总；只计数、不复制记录正文，也不改轮次正文（否则旧轮次的
   // turnKey 会漂移，diffTurns 会把旧提问当新增重放）。与 Grok 的同类披露同口径。
   const unknownTopLevel = new Map<string, number>();
+  // `type: message` but a role outside the three parsed kinds is still model-visible in upstream
+  // Pi; count it here instead of dropping it silently.
+  const unparsedMessages = new Map<string, number>();
 
   // 逐行流式读取：本机会话最大 62 MB，整份 `readFile` 在超过 V8 字符串上限（约 512 MB）时
   // 会抛 `Invalid string length`，把完好的大会话讲成「读不出来」
@@ -127,9 +143,17 @@ export async function parsePiSession(ref: SessionRef): Promise<UnifiedTurn[]> {
     }
 
     if (r.type !== 'message') continue;
-    const msg = r.message as Record<string, unknown> | undefined;
+    const msg = asJsonObject(r.message);
     if (!msg) continue;
     const role = msg.role;
+    // 上游 `convertToLlm()` 会把 `bashExecution`（`!` 命令）与迁移后的 `custom`（原
+    // hookMessage）作为用户文本送进模型上下文。Watch 的 UnifiedTurn 没有对应类型，
+    // 以前这两类以及形状认不出的 message 都直接 `continue`，内容连计数都没有。
+    if (role !== 'user' && role !== 'assistant' && role !== 'toolResult') {
+      const label = typeof role === 'string' && role ? escapeControlChars(role.slice(0, 64)) : '（缺 role）';
+      unparsedMessages.set(label, (unparsedMessages.get(label) ?? 0) + 1);
+      continue;
+    }
     const timestamp =
       typeof r.timestamp === 'string'
         ? r.timestamp
@@ -273,6 +297,18 @@ export async function parsePiSession(ref: SessionRef): Promise<UnifiedTurn[]> {
       kind: 'text',
       summary: `${WATCH_CONTEXT_DISCLOSURE_PREFIX}${topLevelNote.slice(0, 120)}]`,
       detail: `${WATCH_CONTEXT_DISCLOSURE_PREFIX}${topLevelNote}]`,
+      timestamp: last.timestamp,
+      provider: 'pi',
+    });
+  }
+  const messageNote = unparsedMessageNote(unparsedMessages);
+  if (messageNote && stripped.length > 0) {
+    const last = stripped.at(-1)!;
+    const text = `${WATCH_CONTEXT_DISCLOSURE_PREFIX}${messageNote}]`;
+    pushEvent(last, {
+      kind: 'text',
+      summary: text.slice(0, 120),
+      detail: text,
       timestamp: last.timestamp,
       provider: 'pi',
     });
