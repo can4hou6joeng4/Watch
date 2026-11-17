@@ -20,7 +20,18 @@ The steps are on the site [guides](https://relay.bobochang.cn/en/#guides): [Clau
 
 It does not provide models, bypass usage limits, replace native agent chat, or move permissions, credentials and plugins by default. What it transfers is the recorded session, not the model's unrecorded internal state. Today the implementation is centred on CLI sessions and terminal resume; the product direction includes validated desktop entry points, but **official interoperability does not mean Watch has integrated it**.
 
-### Latest release ([v0.1.71](https://github.com/can4hou6joeng4/Watch/releases/tag/v0.1.71))
+### Latest release ([v0.1.72](https://github.com/can4hou6joeng4/Watch/releases/tag/v0.1.72))
+
+v0.1.72 fixes how a session that exists only as a Codex compressed copy is described across the chain. Codex compresses idle rollouts into a sibling `.jsonl.zst` and removes the plain copy; `status`, `switch`, `chain list` and `doctor` previously only stat'ed the original path and reported it as a missing file, with rebinding as the next step. `sessionFilePresence()` now probes the sibling `.zst` once in read-only mode when the original is absent (no decompression, no changes). On a hit it says the file was compressed by Codex and still exists, with the next step of continuing the session in Codex so it re-expands to `.jsonl`:
+
+- `status` warnings, the `switch` / `new` chain-tip refusal, `chain list` tips (new `error`) and `doctor` `brokenTips` (new `compressed`) all describe the compressed copy; the doctor summary counts it separately as a chain tip that exists only as a Codex compressed copy instead of a missing file.
+- `sessions --chain` separates "only a compressed copy remains" from "file no longer exists".
+- The global lookup walk now uses `lstat` and recognizes regular files only: symlinks (including dangling ones) are no longer treated as plain copies or as rollouts, matching the list side's `Dirent.isFile()` behaviour.
+- The same round fixes mixed-count advice: when a bad header and a compressed copy are counted together, Watch no longer calls the damaged file intact, and `adopt` / `open` no longer pair compressed guidance with contradictory "restore from backup" or "start a new session" advice.
+
+- **Validation scope**: all 11 new isolated checks pass (8 wording checks plus 3 compressed-copy presence checks); related Codex and disclosure-channel regressions also pass. Final full isolated regression: 2151 passing, zero failures and zero skips. Typecheck, desktop build, site build and share-image checks pass. The `.zst` probe is a single `lstat`; the file is never read, decompressed or modified, and compressed content is still not read.
+
+### Previous release ([v0.1.71](https://github.com/can4hou6joeng4/Watch/releases/tag/v0.1.71))
 
 v0.1.71 fixes how Kimi workspace-group read faults are disclosed. Kimi stores sessions under `sessions/<workspaceId>/<sessionId>/agents/main/wire.jsonl`. When a group directory could not be read (permissions revoked, a file occupying the path, or a directory that lists but cannot stat its sessions), the unattributable count used to skip it silently. Now:
 

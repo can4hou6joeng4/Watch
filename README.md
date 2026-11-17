@@ -20,7 +20,18 @@ Watch 只做一件事：**把已保存的会话记录连同工作目录交到目
 
 它不提供模型、不绕过配额、不代替原生 Agent 聊天，也不默认搬迁权限、凭据或插件；接力的是已有记录，不是模型未记录的内部状态。当前实现以 CLI 会话与终端恢复为主，产品方向包含经过验证的桌面端入口，但**官方支持互通不等于 Watch 已经集成**。
 
-### 最新版本（[v0.1.71](https://github.com/can4hou6joeng4/Watch/releases/tag/v0.1.71)）
+### 最新版本（[v0.1.72](https://github.com/can4hou6joeng4/Watch/releases/tag/v0.1.72)）
+
+v0.1.72 修正「只剩 Codex 压缩副本」的会话在链路上的说法。Codex 会把闲置 rollout 压成同名 `.jsonl.zst` 并删除普通副本；以前 `status` / `switch` / `chain list` / `doctor` 只对原路径 `stat`，把它讲成「文件已不存在」，下一步还让人重新绑定。现在 `sessionFilePresence()` 在缺失时只读探一次同名 `.zst`（不解压、不改动），命中就说「已被 Codex 压缩，文件还在」，并给出「在 Codex 里继续该会话会重新展开为 .jsonl」的下一步：
+
+- `status` 警告、`switch` / `new` 的链尾拒绝、`chain list` 的 tip（新增 `error`）与 `doctor` 的 `brokenTips`（新增 `compressed`）都改说压缩副本；doctor 摘要行单独计「链尾只剩 Codex 压缩副本」，不再算作缺失。
+- `sessions --chain` 把「只剩压缩副本」从「文件已不存在」里拆出来单独披露。
+- 全局反查的目录遍历改用 `lstat`，只认普通文件：符号链接（含悬空链接）不再被当成普通副本，也不会被当成 rollout，与列表侧的 `Dirent.isFile()` 口径一致。
+- 同一轮修正混合计数的建议：坏首行与压缩副本同时出现时不再说「文件本身是完好的」；`adopt` / `open` 不再同时给出「从备份恢复」「开一次新会话」这类与压缩口径相反的指引。
+
+- **验证范围**：新增 11 项隔离检查全部通过（文案 8 项 + 压缩副本探测 3 项）；另有 Codex 与披露通道相关回归通过。最终完整隔离回归 2151 项通过，0 失败、0 跳过；类型检查、桌面构建、站点与分享图检查通过。`.zst` 只做一次 `lstat` 探测，不读取、不解压、不修改；压缩内容本身仍未读取。
+
+### 上一版本（[v0.1.71](https://github.com/can4hou6joeng4/Watch/releases/tag/v0.1.71)）
 
 v0.1.71 修正 Kimi 工作区分组读取故障的披露。Kimi 的会话按 `sessions/<workspaceId>/<sessionId>/agents/main/wire.jsonl` 存放；某个分组目录读不出来（权限被收走、路径被同名文件占住、目录能列出但里面的会话 stat 不了）时，以前的「无法归属」统计会静默跳过它。现在：
 
