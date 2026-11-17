@@ -23,6 +23,8 @@ export type UnattributableStat = {
   cause?: string;
   /** 覆盖默认的「可能是被截断，能从备份恢复就别直接删」建议；压缩副本不是损坏，不能沿用 */
   advice?: string;
+  /** 这一档的原因分类，供写路径给分档的下一步（见 `ProviderAdapter.unattributable`） */
+  kinds?: ('damaged' | 'compressed')[];
   /**
    * 读不出来的容器位置（如 Kimi 的工作区分组目录）。
    * `count` 只数会话文件；一个分组里可能有 0 到几十条会话，混进同一个数字会少报，
@@ -79,6 +81,7 @@ export async function collectUnattributable(
         // 家自定义的原因 / 建议要原样带到文案层，否则压缩副本会落回「元数据损坏」的默认句
         ...(result.cause ? { cause: result.cause } : {}),
         ...(result.advice ? { advice: result.advice } : {}),
+        ...(result.kinds?.length ? { kinds: [...result.kinds] } : {}),
         ...(locations.length ? { locations } : {}),
       });
     } catch {

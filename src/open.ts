@@ -14,12 +14,14 @@ import { describeBadLinesScanFailure, scanUnparsableJsonLines } from './core/jso
 import { usageBadLinesReason, usageSidecarProblem } from './core/usage-integrity.js';
 import { collectUnattributable, unattributablePickWarning } from './core/session-coverage.js';
 import {
+  compressedSessionNote,
   describePathReadFailureReason,
   describeReadFailureOrSelf,
   describeSessionReadFailure,
   describeSessionReadFailureReason,
   isEmptySessionFileReason,
   probeSessionReadable,
+  sessionFilePresence,
 } from './core/read-text.js';
 import { sessionCwdProblem } from './core/cwd.js';
 import { escapeControlChars } from './core/display.js';
@@ -162,9 +164,13 @@ export function lookupMissHeadline(
     const list = found.map((m) => `${m.provider}：${m.reason}`).join('；');
     // 尾句不能预设「文件坏了」：压缩副本那一档文件完好，只是本版不读压缩格式，
     // 说「先修好这条会话」会与原因里的「不要直接删除或改名」自相矛盾。
+    // 0 字节文件的下一步又和权限相反（内容已丢失，只能恢复或重开），单独补一句。
+    const anyEmpty = found.some((m) => isEmptySessionFileReason(m.reason));
     return (
       `${subject} ${escapeControlChars(id)} 找到了，但读不出来${scope}：${list}。` +
-      '这不是 id 写错——按上面的原因处理后再重试，或用原生 CLI 确认它还能不能打开'
+      (anyEmpty
+        ? '这不是 id 写错——其中 0 字节文件的内容已丢失，只能从备份恢复或重新开一次会话；其余按上面的原因处理后再重试'
+        : '这不是 id 写错——按上面的原因处理后再重试，或用原生 CLI 确认它还能不能打开')
     );
   }
   const incomplete = misses.filter((m) => m.kind === 'incomplete');
@@ -1107,14 +1113,15 @@ async function planOpenInProvider(
       try {
         pairTurns = await target.parse(chainPaired);
       } catch (error) {
-        // 链上配对会话的文件可能已被删掉或截断（doctor 的 brokenTips 报的正是这种情况）：
-        // 退回内容匹配 / 新建，并把原因写进 notes，而不是让整个转入抛出去。
-        // 原因按 errno 说清楚：权限问题会被「已不存在」引去白换一次绑定。
+        // 链上配对会话的文件可能已被删掉、截断或只剩压缩副本（doctor 的 brokenTips 报的正是
+        // 这几种）：退回内容匹配 / 新建，并把原因写进 notes，而不是让整个转入抛出去。
+        // 原因按 errno 说清楚：权限问题会被「已不存在」引去白换一次绑定；压缩副本又相反，
+        // 它还在、只是本版不读，必须说「让原生展开」而不是让人重建历史。
+        const compressed = compressedSessionNote(await sessionFilePresence(chainPaired.filePath));
         diagnostics?.push(
-          `链上 ${target.displayName} 会话 ${chainPaired.sessionId} 本次不沿用：${describeSessionReadFailure(
-            chainPaired.filePath,
-            error,
-          )}（改用内容匹配或新建）`,
+          `链上 ${target.displayName} 会话 ${chainPaired.sessionId} 本次不沿用：${
+            compressed ?? describeSessionReadFailure(chainPaired.filePath, error)
+          }（改用内容匹配或新建）`,
         );
       }
     }

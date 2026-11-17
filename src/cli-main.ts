@@ -2110,13 +2110,13 @@ async function cmdDoctor(cwd: string, json: boolean, strict: boolean): Promise<v
       }
     }
     if (report.store.available) {
-      const compressed = report.store.brokenTips.filter((b) => b.compressed).length;
-      const broken = report.store.brokenTips.filter((b) => b.missing && !b.compressed).length;
+      const compressed = report.store.brokenTips.filter((b) => b.compressedPath).length;
+      const broken = report.store.brokenTips.filter((b) => b.missing && !b.compressedPath).length;
       const unreadable = report.store.brokenTips.filter((b) => b.unreadable).length;
       const unknown = report.store.brokenTips.length - broken - compressed - unreadable;
       const drifted = report.store.driftedPairs.length;
       console.log(
-        `本地库: 可用，本目录 ${report.store.chains} 条链（${report.store.activeChains} 条活跃${broken ? `，${broken} 条链尾缺失` : ''}${compressed ? `，${compressed} 条链尾只剩 Codex 压缩副本` : ''}${unreadable ? `，${unreadable} 条链尾读不出来` : ''}${unknown ? `，${unknown} 条链尾状态无法确认` : ''}${drifted ? `，${drifted} 条链尾内容落后于来源` : ''}）`,
+        `本地库: 可用，本目录 ${report.store.chains} 条链（${report.store.activeChains} 条活跃${broken ? `，${broken} 条链尾缺失` : ''}${compressed ? `，${compressed} 条链尾只剩压缩副本` : ''}${unreadable ? `，${unreadable} 条链尾读不出来` : ''}${unknown ? `，${unknown} 条链尾状态无法确认` : ''}${drifted ? `，${drifted} 条链尾内容落后于来源` : ''}）`,
       );
       // 上一行是结论：本目录没有链。别处有链时必须接着指路，否则会被当成链丢了 / 没建成功。
       // 「同一个目录的另一种写法」不是「别的目录」：两种说法分开，否则用户会以为链不在这个项目里
@@ -2135,8 +2135,8 @@ async function cmdDoctor(cwd: string, json: boolean, strict: boolean): Promise<v
       // 读不出来 ≠ 已删除：EACCES 等状态下让人 adopt 等于白换一次绑定
       for (const b of report.store.brokenTips) {
         console.log(
-          b.compressed
-            ? `  链「${escapeControlChars(b.chainName)}」: ${b.provider}:${b.sessionId} 链尾只剩 Codex 压缩副本（${escapeControlChars(b.filePath)}）；在 Codex 里继续该会话会重新展开为 .jsonl，或 ${rebindHint(b.provider)}`
+          b.compressedPath
+            ? `  链「${escapeControlChars(b.chainName)}」: ${b.provider}:${b.sessionId} 链尾只剩压缩副本（${escapeControlChars(b.compressedPath)}）；本版不读压缩格式——先让它重新展开再重试（若是 Codex 压缩的，在 Codex 里继续该会话即可），或 ${rebindHint(b.provider)}`
             : b.missing
             ? `  链「${escapeControlChars(b.chainName)}」: ${b.provider}:${b.sessionId} 链尾文件已不存在（${escapeControlChars(b.filePath)}），${rebindHint(b.provider)}`
             : b.unreadable
@@ -2496,7 +2496,7 @@ async function cmdChain(cwd: string, json: boolean, action?: string, a?: string,
         if (missing && c.status === 'active') {
           warnings.push(
             compressed
-              ? `链「${escapeControlChars(c.name)}」的链尾会话文件${compressed}（${last.toRef.provider}:${last.toRef.sessionId}）：下次切换会失败——先在 Codex 里继续该会话让它重新展开，再重试，或${rebindHint(last.toRef.provider)}`
+              ? `链「${escapeControlChars(c.name)}」的链尾会话文件${compressed}（${last.toRef.provider}:${last.toRef.sessionId}）：下次切换会失败——先让它重新展开再重试，或${rebindHint(last.toRef.provider)}`
               : `链「${escapeControlChars(c.name)}」的链尾会话文件已不存在（${last.toRef.provider}:${last.toRef.sessionId}）：下次切换会失败，${rebindHint(last.toRef.provider)}`,
           );
         } else if (readProblem && c.status === 'active') {

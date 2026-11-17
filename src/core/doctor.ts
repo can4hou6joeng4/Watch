@@ -24,10 +24,11 @@ export type BrokenTip = {
   /** true = 文件确认不在（ENOENT / ENOTDIR）；false = 读不出来，无法确认是否还在 */
   missing: boolean;
   /**
-   * true = 原文件不在、但同名 `.jsonl.zst` 压缩副本在（Codex 的本地线程压缩）。
+   * 原文件不在、但同名 `.jsonl.zst` 压缩副本在时的副本路径（Codex 的本地线程压缩）。
    * 这时说「已不存在」会把人引去重新绑定，而会话其实还在——本版只是不读压缩格式。
+   * 存路径而不是布尔值：逐链行要打印真正存在的那个文件，打印不存在的 `.jsonl` 会误导排障。
    */
-  compressed?: boolean;
+  compressedPath?: string;
   /**
    * true = 文件在、是普通文件，但打不开（`chmod 000` 之类）。
    *
@@ -243,11 +244,15 @@ async function pathPresence(filePath: string): Promise<PathPresence> {
   } catch (error) {
     const code = (error as NodeJS.ErrnoException).code;
     if (code === 'ENOENT' || code === 'ENOTDIR') {
-      // 与 `sessionFilePresence()` 同一判定：Codex 压缩过时原路径不在、`.jsonl.zst` 在
+      // 与 `sessionFilePresence()` 同一判定：Codex 压缩过时原路径不在、`.jsonl.zst` 在。
+      // 这一次复查可能撞上 TOCTOU（第一次 stat 与这次之间文件被换成不可读的路径），
+      // unknown 时照实返回 unknown——按 missing 讲会把「读不出来」说成「已被删除」。
       const presence = await sessionFilePresence(filePath);
-      return presence.state === 'missing' && presence.compressed
-        ? { state: 'missing', code, compressed: presence.compressed }
-        : { state: 'missing', code };
+      if (presence.state === 'missing') {
+        return { state: 'missing', code, ...(presence.compressed ? { compressed: presence.compressed } : {}) };
+      }
+      if (presence.state === 'unknown') return { state: 'unknown', reason: presence.reason };
+      return { state: 'present' };
     }
     return { state: 'unknown', reason: describeSessionReadFailureReason(error) };
   }
@@ -458,15 +463,15 @@ export async function doctorReport(cwd: string, deps: DoctorDeps): Promise<Docto
             filePath: tip.filePath,
             error,
             missing,
-            ...(compressed ? { compressed: true } : {}),
+            ...(compressed ? { compressedPath: compressed } : {}),
             ...(unreadable ? { unreadable: true } : {}),
           });
           failures.push(
-            `链「${escapeControlChars(chain.name)}」的链尾不可用（${compressed ? '只剩 Codex 压缩副本' : missing ? '文件已不存在' : unreadable ? '读不出来' : '文件状态无法确认'}）`,
+            `链「${escapeControlChars(chain.name)}」的链尾不可用（${compressed ? '只剩压缩副本' : missing ? '文件已不存在' : unreadable ? '读不出来' : '文件状态无法确认'}）`,
           );
           if (compressed) {
             warnings.push(
-              `链「${escapeControlChars(chain.name)}」的链尾会话${compressedSessionNote({ state: 'missing', compressed })}（${tip.provider}）；下次切换会失败——先在 Codex 里继续该会话让它重新展开，再重试，或${rebindHint(tip.provider)}`,
+              `链「${escapeControlChars(chain.name)}」的链尾会话${compressedSessionNote({ state: 'missing', compressed })}（${tip.provider}）；下次切换会失败——先让它重新展开再重试，或${rebindHint(tip.provider)}`,
             );
           } else if (missing) {
             warnings.push(
@@ -523,7 +528,7 @@ export async function doctorReport(cwd: string, deps: DoctorDeps): Promise<Docto
             : null;
           warnings.push(
             compressed
-              ? `链「${escapeControlChars(chain.name)}」的来源会话${compressed}（${from.provider}）；链尾仍在，但无法再做内容对账——先在 Codex 里继续该会话让它重新展开，再重跑 watch doctor`
+              ? `链「${escapeControlChars(chain.name)}」的来源会话${compressed}（${from.provider}）；链尾仍在，但无法再做内容对账——先让它重新展开再重跑 watch doctor`
               : `链「${escapeControlChars(chain.name)}」的来源会话文件已不存在：${from.filePath}（${from.provider}）；链尾仍在，但无法再做内容对账`,
           );
           continue;

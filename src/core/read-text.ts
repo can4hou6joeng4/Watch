@@ -242,7 +242,10 @@ export type SessionFilePresence =
 async function compressedSiblingPath(filePath: string): Promise<string | undefined> {
   const compressedPath = `${filePath}.zst`;
   try {
-    return (await lstat(compressedPath)).isFile() ? compressedPath : undefined;
+    const info = await lstat(compressedPath);
+    // 0 字节的 `.zst` 不是「压缩副本还在」：它同样解不出内容，说「继续会话会展开」是假承诺。
+    // 可读性在这里判不了（要打开文件），措辞改说「副本完好时」。
+    return info.isFile() && info.size > 0 ? compressedPath : undefined;
   } catch {
     return undefined;
   }
@@ -255,9 +258,12 @@ async function compressedSiblingPath(filePath: string): Promise<string | undefin
  */
 export function compressedSessionNote(presence: SessionFilePresence): string | null {
   if (presence.state !== 'missing' || !presence.compressed) return null;
+  // 不把「Codex」当事实：`.zst` 也可能是用户自己归档的。压缩语义只在 Codex 成立时给出，
+  // 同时用「副本完好时」限定——这里只 stat 过一次，不打开、不解压，无法保证内容可解。
   return (
-    `已被 Codex 压缩为 ${escapeControlChars(presence.compressed)}（本版不读压缩格式，文件还在；` +
-    `在 Codex 里继续该会话会重新展开为 .jsonl，之后 Watch 即可读到，不要直接删除或改名）`
+    `已被压缩为 ${escapeControlChars(presence.compressed)}（本版不读压缩格式，原 .jsonl 不在；` +
+    `若是 Codex 的本地线程压缩且副本完好，在 Codex 里继续该会话会重新展开为 .jsonl，之后 Watch 即可读到；` +
+    `不要直接删除或改名）`
   );
 }
 

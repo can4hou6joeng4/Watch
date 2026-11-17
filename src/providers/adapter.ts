@@ -226,6 +226,12 @@ export interface ProviderAdapter {
     summary?: string;
     cause?: string;
     advice?: string;
+    /**
+     * 这一档的原因分类：`damaged` 是归属元数据坏掉（可能要恢复），`compressed` 是只剩
+     * 本版不读的压缩副本（让原生重新展开即可）。消费方（`adopt` 零结果）据此给不同的
+     * 下一步，**不能靠匹配 `advice` 文案**——文案改一个字就会把建议分错档。
+     */
+    kinds?: ('damaged' | 'compressed')[];
     locations?: { description: string; count: number; samples: string[] }[];
   }>;
 

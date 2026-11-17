@@ -316,7 +316,14 @@ export async function listCodexRollouts(
  */
 export async function codexUnattributableRollouts(
   sessionsRoot?: string,
-): Promise<{ count: number; samples: string[]; summary: string; cause?: string; advice?: string }> {
+): Promise<{
+  count: number;
+  samples: string[];
+  summary: string;
+  cause?: string;
+  advice?: string;
+  kinds?: ('damaged' | 'compressed')[];
+}> {
   const root = sessionsRoot ?? path.join(codexDir(), 'sessions');
   const compressed: string[] = [];
   const files = await collectRecentRolloutFiles(root, undefined, compressed);
@@ -330,7 +337,10 @@ export async function codexUnattributableRollouts(
   }
   // summary 直接点名那一行：共用文案不写死 provider 名，但用户需要知道「修的是首行」
   const summary = 'session_meta 首行';
-  if (!compressed.length) return { count, samples, summary };
+  const kinds: ('damaged' | 'compressed')[] = [];
+  if (count > 0) kinds.push('damaged');
+  if (compressed.length) kinds.push('compressed');
+  if (!compressed.length) return { count, samples, summary, kinds };
   // 压缩副本是另一种原因：文件没有损坏，只是本版不读 `.jsonl.zst`。混用「可能是被截断」会把用户
   // 引去反复查文件内容，必须换掉原因与建议两句话。
   // 混合计数时 advice 要分开说：压缩副本「文件是完好的」，而坏首行那部分可能真的被截断了——
@@ -342,6 +352,7 @@ export async function codexUnattributableRollouts(
     count: count + compressedCount,
     samples: [...samples, ...compressed.slice(0, Math.max(0, 3 - samples.length)).map((f) => `${escapeControlChars(f)}（只有 .jsonl.zst 压缩副本）`)],
     summary,
+    kinds,
     cause: count > 0
       ? `${summary}缺失或损坏，另有 ${compressedCount} 个已被 Codex 压缩为 .jsonl.zst，本版 Watch 只读取未压缩的 .jsonl`
       : '这些文件已被 Codex 压缩为 .jsonl.zst，本版 Watch 只读取未压缩的 .jsonl',

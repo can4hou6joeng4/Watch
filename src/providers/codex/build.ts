@@ -159,6 +159,15 @@ async function newestJsonlPaths(
             if (!plainIsFile) compressed?.push(p);
           } else if (info.isFile() && entry.endsWith('.jsonl')) {
             collected.push(p);
+          } else if (info.isSymbolicLink()) {
+            // `lstat` 不跟随链接（防环、与列表侧 `Dirent.isFile()` 同口径），但名字匹配的会话
+            // 是符号链接时不能静默滑过去：反查会回一个干净的「没有这个会话」。记进 errors，
+            // 让 `findCodexSessionById` 改说「无法确认」——用户至少知道去查那条链接。
+            if (entry.startsWith('rollout-') && (entry.endsWith('.jsonl') || entry.endsWith('.jsonl.zst'))) {
+              errors?.push(`${escapeControlChars(p)}（是符号链接；本版只识别普通文件，不跟随链接）`);
+            } else if (datePath) {
+              errors?.push(`${escapeControlChars(p)}（日期路径是符号链接；本版不跟随链接）`);
+            }
           }
         }
       } catch (error) {
