@@ -1162,6 +1162,16 @@ async function planOpenInProvider(
           },
         };
       }
+      if (pairTurns.length === 0) {
+        // 文件在、parse 也成功，却解析不出任何对话（只剩 rollout 头 / 内容被清空）：
+        // 决策 1 的内容校验必然不通过，静默退到内容匹配或新建。链绑定仍指向这条空会话，
+        // 下一次 switch 会再次撞上——与 0 字节副本同一类，不能当作「正常换用」。
+        diagnostics?.push(
+          `链上 ${target.displayName} 会话 ${chainPaired.sessionId} 解析出 0 轮（文件在，但没有可复用的对话）；本次不沿用，改用内容匹配或新建——` +
+            `链绑定仍指向它，本次改用内容匹配或新建不会改动链记录，之后的 switch 仍会落回这条会话；` +
+            `可先在 ${target.displayName} 里继续它确认是否可用，或 watch adopt ${target.id} --session <另一个会话 id> 换绑，或用 watch chain new <新名字> 另起一条链`,
+        );
+      }
     }
   }
 

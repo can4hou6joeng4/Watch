@@ -301,7 +301,7 @@ function pushPreviewErrorWarning(
   if (empty.length) {
     warnings.push(
       `有 ${empty.length} 条会话的文件是空的（0 字节，进程被杀或只写了一半，内容已丢失）：${detail(empty)}；` +
-        `列表照常列出，但 open / switch 读不出任何内容——这些会话没有可恢复的对话，只能重新开一次会话或从备份恢复`,
+        `列表照常列出，但 open / switch 读不出任何内容——这些会话没有可恢复的对话，只能从备份恢复；没有备份就只能重新开一次会话（那是另一条会话）`,
     );
   }
   if (denied.length) {

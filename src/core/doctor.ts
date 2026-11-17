@@ -680,7 +680,7 @@ export async function doctorReport(cwd: string, deps: DoctorDeps): Promise<Docto
   if (emptyFiles.length > 0) {
     warnings.push(
       `有 ${emptyFiles.length} 条会话文件是空的（0 字节，进程被杀或只写了一半，内容已丢失）：${sample(emptyFiles)}；` +
-        `列得出来，但 open / switch 读不出任何内容——只能重新开一次会话或从备份恢复`,
+        `列得出来，但 open / switch 读不出任何内容——内容补不回来，只能从备份恢复；没有备份就只能重新开一次会话（那是另一条会话）`,
     );
   }
   if (deniedFiles.length > 0) {
