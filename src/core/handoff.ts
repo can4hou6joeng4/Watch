@@ -1031,6 +1031,16 @@ export type HandoffResult = {
    * 不再一律印「已从 X 交接 → Y（0 轮）」。
    */
   zeroIncrementReason?: 'source-empty' | 'up-to-date';
+  /**
+   * 结果说明（与 `warnings` 的降级原因分开，同 `open` 的 notes / warnings 分法）。
+   *
+   * 目前只有一条：目标会话解析出 0 轮（可读、不是 0 字节）时说明「本次并入的 N 轮
+   * 就是它的全部内容」。`open --from` 从 v0.1.82 起就在 notes 层说这句；`switch` 是
+   * 首条链最常用的入口，同样的话以前只有「已从 X 交接 → Y（N 轮）」，看不出目标原本是空的。
+   * 放在 notes 而不是 warnings：`watch new` 之后第一次切到那条空会话是正常路径，
+   * 不该每次都冒一条降级警告。
+   */
+  notes?: string[];
   /** 全部 catch-继续路径的降级披露（recordSwitch/parse/rewrite 失败等） */
   warnings: string[];
   /** 内容处置披露（追加/去重/重写计数） */
@@ -1790,6 +1800,17 @@ export async function handoff(
         `——如果这条会话本该有更早的历史，先从备份恢复那次丢失的内容（Watch 不会替你重建历史）`,
     );
   }
+  // 目标解析出 0 轮、文件却不是 0 字节：可能是刚建出来的空会话（本次并入就是它的第一批内容），
+  // 也可能是内容被清空只剩占位头的会话。与 `open <目标> --from <来源>` 同一句口径（notes 层，
+  // 不是 warning）：首条链「new 一个空会话再切过去」是正常路径，不该每次都冒降级警告；
+  // 但「本该有更早历史」的人得知道这条会话现在只有这 N 轮。
+  const notes: string[] = [];
+  if (into && destTurns.length === 0 && !emptiedTarget && outgoing.length > 0) {
+    notes.push(
+      `目标会话 ${into.sessionId}（${target.displayName}）解析出 0 轮（没有可复用的对话），本次并入的 ${outgoing.length} 轮就是它的全部内容` +
+        `——如果它本该有更早的历史，先从备份恢复该文件再重试（Watch 不会替你重建历史）`,
+    );
+  }
   if (replace) addFinding(findings, 'handoff.rewrite', 'degraded', destTurns.length);
   else addFinding(findings, 'handoff.append', 'exact', outgoing.length);
   // 追加之后最后一条 turn 已是并入的内容，「最后停在用户消息上」不再成立（merged > 0 只报
@@ -1819,6 +1840,7 @@ export async function handoff(
     resumeCommand: target.resumeCommand(newRef),
     fromProvider: sourceTip.provider,
     turnCount: outgoing.length,
+    ...(notes.length ? { notes } : {}),
     warnings,
     findings,
   };

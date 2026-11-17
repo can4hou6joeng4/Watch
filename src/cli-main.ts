@@ -889,6 +889,9 @@ async function cmdSwitch(cwd: string, targetId: string, json: boolean, chain?: s
     }
     console.log(`新会话: ${escapeControlChars(result.newRef.sessionId)}`);
     console.log(`文件:   ${escapeControlChars(result.newRef.filePath)}`);
+    // 结果说明走 stdout（与 warnings 的降级原因分开）：目标原本是条空会话时，
+    // 「这 N 轮就是它的全部内容」是事实，不是错误。
+    for (const note of result.notes ?? []) console.log(`\n${escapeControlChars(note)}`);
     console.log('');
     console.log(`resume: ${escapeControlChars(result.resumeCommand)}`);
     // 结果说明走 stdout（同 chain new / chain archive 的位置），不是降级警告
