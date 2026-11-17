@@ -20,7 +20,17 @@ Watch 只做一件事：**把已保存的会话记录连同工作目录交到目
 
 它不提供模型、不绕过配额、不代替原生 Agent 聊天，也不默认搬迁权限、凭据或插件；接力的是已有记录，不是模型未记录的内部状态。当前实现以 CLI 会话与终端恢复为主，产品方向包含经过验证的桌面端入口，但**官方支持互通不等于 Watch 已经集成**。
 
-### 最新版本（[v0.1.96](https://github.com/can4hou6joeng4/Watch/releases/tag/v0.1.96)）
+### 最新版本（[v0.1.97](https://github.com/can4hou6joeng4/Watch/releases/tag/v0.1.97)）
+
+`watch usage` 在旁路用量仍可读时，也会披露 grok 内容文件已经不存在。
+
+v0.1.96 补上了内容坏行、Codex 压缩记录与内容文件 0 字节三档反证，但「内容文件被删掉」与「内容文件被同名目录占住」在 `usage !== null` 的分支里仍会落到 `usageContentFileProblem()` 的 `missing` 早退：报告照常给出旁路用量合计，既不警告也不给 `contentProblem`。这一次把 `missing` 与已有的 0 字节 / 非普通文件 / 读不出来合并成同一档披露，合计与 `totalExcluded` 不变。
+
+- **不把删除说成沉默**：grok 的 `updates.jsonl` 仍有用量、而 `chat_history.jsonl` 已不存在时，`warnings` 与 `byProvider[].contentProblem` 明说对话内容已丢失、用量仍计入合计，并提示先从备份恢复。
+- **不改统计口径**：用量确实读到了，因此合计、`totalExcluded` 与合法空会话判定都不变；健康会话不新增字段或警告。
+- **验证范围**：新增 1 项隔离检查，与 r179 / r180 / codex 压缩相关用例联合 18/18 通过；完整隔离回归 2233 项通过，0 失败、0 跳过；类型检查、桌面构建、站点四项测试 16/16 与分享图摘要检查通过。不涉及原生客户端验收。
+
+### 上一版本（[v0.1.96](https://github.com/can4hou6joeng4/Watch/releases/tag/v0.1.96)）
 
 `watch usage` 的「空会话」判定补上内容侧反证，不再把坏掉的会话说成「还没聊过」。
 

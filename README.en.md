@@ -20,7 +20,17 @@ The steps are on the site [guides](https://relay.bobochang.cn/en/#guides): [Clau
 
 It does not provide models, bypass usage limits, replace native agent chat, or move permissions, credentials and plugins by default. What it transfers is the recorded session, not the model's unrecorded internal state. Today the implementation is centred on CLI sessions and terminal resume; the product direction includes validated desktop entry points, but **official interoperability does not mean Watch has integrated it**.
 
-### Latest release ([v0.1.96](https://github.com/can4hou6joeng4/Watch/releases/tag/v0.1.96))
+### Latest release ([v0.1.97](https://github.com/can4hou6joeng4/Watch/releases/tag/v0.1.97))
+
+`watch usage` now discloses a missing grok content file even when sidecar usage is still readable.
+
+v0.1.96 added counter-evidence for bad content lines, Codex compaction records and zero-byte content files, but a deleted content file and a content path occupied by a directory still hit the early `missing` return in `usageContentFileProblem()` when `usage !== null`. The report showed the sidecar usage total without a warning or `contentProblem`. This release folds `missing` into the same disclosure tier as zero-byte, non-file and unreadable states; the total and `totalExcluded` do not change.
+
+- **No silent deletion**: when grok `updates.jsonl` still carries usage but `chat_history.jsonl` is gone, `warnings` and `byProvider[].contentProblem` say the conversation is lost, the usage is still counted, and a backup restore is the next step.
+- **No accounting change**: usage really was read, so the total, `totalExcluded` and empty-session classification stay unchanged; healthy sessions gain no fields or warnings.
+- **Validation scope**: 1 new isolated check, 18/18 with the r179 / r180 / Codex compaction cases, 2233 full isolated tests with zero failures and zero skips, plus typecheck, desktop build, 16/16 site tests and the share-image digest check. No native-client acceptance claim is added.
+
+### Previous release ([v0.1.96](https://github.com/can4hou6joeng4/Watch/releases/tag/v0.1.96))
 
 `watch usage` now requires content-side evidence before calling a parsed 0-turn session empty.
 
