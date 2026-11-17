@@ -24,7 +24,7 @@ It does not provide models, bypass usage limits, replace native agent chat, or m
 
 `watch usage` now discloses a missing grok content file even when sidecar usage is still readable.
 
-v0.1.96 added counter-evidence for bad content lines, Codex compaction records and zero-byte content files, but a deleted content file and a content path occupied by a directory still hit the early `missing` return in `usageContentFileProblem()` when `usage !== null`. The report showed the sidecar usage total without a warning or `contentProblem`. This release folds `missing` into the same disclosure tier as zero-byte, non-file and unreadable states; the total and `totalExcluded` do not change.
+v0.1.96 added counter-evidence for bad content lines, Codex compaction records and zero-byte content files, but a deleted content file still hits the early `missing` return in `usageContentFileProblem()` when `usage !== null`. The report showed the sidecar usage total without a warning or `contentProblem`. This release folds `missing` into the same disclosure tier as zero-byte, non-file and unreadable states; the total and `totalExcluded` do not change.
 
 - **No silent deletion**: when grok `updates.jsonl` still carries usage but `chat_history.jsonl` is gone, `warnings` and `byProvider[].contentProblem` say the conversation is lost, the usage is still counted, and a backup restore is the next step.
 - **No accounting change**: usage really was read, so the total, `totalExcluded` and empty-session classification stay unchanged; healthy sessions gain no fields or warnings.

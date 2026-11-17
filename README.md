@@ -24,7 +24,7 @@ Watch 只做一件事：**把已保存的会话记录连同工作目录交到目
 
 `watch usage` 在旁路用量仍可读时，也会披露 grok 内容文件已经不存在。
 
-v0.1.96 补上了内容坏行、Codex 压缩记录与内容文件 0 字节三档反证，但「内容文件被删掉」与「内容文件被同名目录占住」在 `usage !== null` 的分支里仍会落到 `usageContentFileProblem()` 的 `missing` 早退：报告照常给出旁路用量合计，既不警告也不给 `contentProblem`。这一次把 `missing` 与已有的 0 字节 / 非普通文件 / 读不出来合并成同一档披露，合计与 `totalExcluded` 不变。
+v0.1.96 补上了内容坏行、Codex 压缩记录与内容文件 0 字节三档反证，但「内容文件被删掉」在 `usage !== null` 的分支里仍会落到 `usageContentFileProblem()` 的 `missing` 早退：报告照常给出旁路用量合计，既不警告也不给 `contentProblem`。这一次把 `missing` 与已有的 0 字节 / 非普通文件 / 读不出来合并成同一档披露，合计与 `totalExcluded` 不变。
 
 - **不把删除说成沉默**：grok 的 `updates.jsonl` 仍有用量、而 `chat_history.jsonl` 已不存在时，`warnings` 与 `byProvider[].contentProblem` 明说对话内容已丢失、用量仍计入合计，并提示先从备份恢复。
 - **不改统计口径**：用量确实读到了，因此合计、`totalExcluded` 与合法空会话判定都不变；健康会话不新增字段或警告。
