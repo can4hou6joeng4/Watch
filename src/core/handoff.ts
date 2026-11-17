@@ -1108,6 +1108,12 @@ export async function chainStatus(
    */
   chainTipUnusable: boolean;
   /**
+   * 链尾会话文件可读、parse 成功却解析出 0 轮（合法空会话 / 内容被清空只剩占位头）。
+   * 文本模式在 `← 链尾` 那一行旁边标出来；与 `chainTipUnusable` 分开：文件本身没问题，
+   * 只是没有可继续的对话。
+   */
+  chainTipEmpty: boolean;
+  /**
    * 这次根本没读成的 provider（findLatestSession 抛错）。
    * 文本模式靠它区分「这个目录真没聊过」与「有几家没查成」——后者不能给出
    * 「请先在任一受支持的 Agent 里开聊」这类结论性建议。
@@ -1154,6 +1160,12 @@ export async function chainStatus(
   // 链尾只以当前链的 switch_events 最后一条为准；不再 fallback 到目录全局最新会话
   let chainTip: ProviderTip | null = null;
   let chainTipUnusable = false;
+  // 链尾文件可读、parse 成功却解析出 0 轮：`watch new codex` / `watch new grok` 建出的
+  // 合法空会话与「内容被清空、只剩占位头」都是这个形状。上面四档只判「文件在不在 / 是不是
+  // 普通文件 / 读不读得出来」，0 轮的一条照样被标成 `← 链尾` 推荐给用户，照抄 resume 打开
+  // 的是空会话。v0.1.84–v0.1.88 把 open / switch / new 各分支补齐后，`status` 是最后一个
+  // 会说「这就是你的链尾」却不说它是空的入口。
+  let chainTipEmpty = false;
   if (history.length) {
     const last = history.at(-1)!;
     chainTip = { provider: last.toProvider, ref: last.toRef, updatedAt: last.createdAt, onChain: true };
@@ -1193,6 +1205,26 @@ export async function chainStatus(
             `resume 与下一次 switch 都会失败——先修好这个文件（权限或内容），` +
             `或 watch adopt ${last.toProvider} --session <另一个会话 id> 换绑，或用 watch chain new <新名字> 另起一条链`,
         );
+      } else {
+        // 读得出来不等于有内容：0 轮（合法空会话 / 内容被清空只剩占位头）时下面那条
+        // `← 链尾` 的 resume 打开的是空会话，必须在概览里就说出。parse 失败不在这档——
+        // 读不出来上面刚说过，格式损坏由 open / switch 的预检披露，status 不重复猜
+        const tipAdapter = adapters.find((a) => a.id === last.toProvider);
+        if (tipAdapter) {
+          try {
+            const turns = await tipAdapter.parse(last.toRef);
+            if (turns.length === 0) {
+              chainTipEmpty = true;
+              warnings.push(
+                `链尾会话 ${last.toProvider} ${last.toRef.sessionId} 解析出 0 轮（没有可继续的对话）：` +
+                  `可能是刚建出来的空会话，也可能内容已被清空；按这个链尾 resume 打开的是空会话——` +
+                  `如果它本该有历史，先在 ${tipAdapter.displayName} 里打开它确认，或从备份恢复该文件（Watch 不会替你重建历史）`,
+              );
+            }
+          } catch {
+            // 具体原因不在这里重复：文件读不出来已由上面那档说，内容解析失败由 open / switch 报
+          }
+        }
       }
     }
   }
@@ -1227,7 +1259,7 @@ export async function chainStatus(
       ...(readProblem ? { unreadable: true } : {}),
     });
   }
-  return { tips, chainTip, chainTipUnusable, unreadable, history, historyFailed, chain, chains, warnings };
+  return { tips, chainTip, chainTipUnusable, chainTipEmpty, unreadable, history, historyFailed, chain, chains, warnings };
 }
 
 /** 把链尾会话转换到 targetId，落 switch_events（store 可选）；opts.forceNew 强制新建目标会话（不追加既有配对） */
