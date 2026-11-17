@@ -767,4 +767,168 @@ export const guides = [
       },
     },
   },
+  {
+    id: 'empty-session-resume-check',
+    published: '2026-11-17',
+    modified: '2026-11-17',
+    status: 'published',
+    locales: {
+      zh: {
+        slug: 'empty-session-resume-check',
+        title: '为什么 resume 打开是空会话：0 轮会话的识别与恢复 | Watch 指南',
+        description: 'resume 命令只是打开一条既有会话，能不能接着聊取决于那条会话文件里有没有对话。本指南说明 0 轮可读会话与 0 字节文件的区别、Watch 在 status / switch / new 里的披露，以及备份恢复、换绑与另起一条链三条恢复路径。',
+        h1: '为什么 resume 打开是空会话：0 轮会话的识别与恢复',
+        summary: 'Watch 会把链尾会话连同工作目录交到目标工具，resume 命令本身只负责打开。本指南从 status 的链尾行读起，区分 0 轮可读会话与 0 字节文件，并给出备份恢复、adopt 换绑与另起一条链三条路径。',
+        answer: 'resume 打开空会话，通常是因为这条会话文件里没有可继续的对话：可能是 watch new 建出的合法空会话、内容被清空只剩占位头，也可能是 0 字节文件。用 watch status 看链尾行的轮数即可判断；Watch 不会替你重建历史，只能从备份恢复、换绑到另一条会话，或另起一条链。',
+        blocks: [
+          {
+            type: 'callout',
+            tone: 'info',
+            title: '核心判断依据',
+            body: 'resume（以及各家的原生恢复命令）只做一件事：打开指定的那条会话。它能不能接着聊，取决于那条会话文件里还有多少对话。文件在、读得出来，不等于有内容——这正是「看起来一切正常，打开什么也没有」的来源。Watch 从 v0.1.84 起在 open / switch / new / status 各入口分别披露这一档，两者要分开看。',
+          },
+          {
+            type: 'paragraph',
+            text: '会话文件有两种「空」：一种是 0 轮可读——文件里有合法的会话头（Claude Code 的占位 user 行、Codex rollout 的 session_meta），但没有任何对话轮次；另一种是 0 字节——进程被杀、磁盘写满或只写了一半，文件本身空了。两者的下一步不同：0 轮可读可能只是刚建出来的新会话，也可能内容被清空；0 字节则连会话元数据都可能一起丢了，Codex 的归属写在 rollout 首行，截成 0 字节后连反查都会失败。',
+          },
+          {
+            type: 'steps',
+            items: [
+              {
+                title: '步骤 1：看 status 的链尾行',
+                body: '执行 watch status。链尾那一行在 v0.1.90 起会显示轮数，例如「← 链尾（12 轮）」；解析出 0 轮时写「（解析出 0 轮，原因见上方警告）」；文件读不出来或不存在时不给轮数。JSON 输出里对应 chainTipTurns 与 chainTipEmpty 两个字段，chainTipTurns 只在解析成功时存在。',
+              },
+              {
+                title: '步骤 2：按警告分档读原因',
+                body: '同一份结果里，警告会区分：0 字节（「会话文件是空的」）、可读 0 轮（「解析出 0 轮（没有可继续的对话）」）、文件读不出来（权限或内容问题）、文件不存在（被删或被移走）。四档的下一步不同，不要只看到「空」就去换绑：文件不存在时先找文件，0 字节时先确认有没有备份。',
+              },
+              {
+                title: '步骤 3：确认是不是刚建出来的空会话',
+                body: 'watch new <provider> 建出来的会话本来就是空的，这是首条链的正常起点：下一次 switch 或 open --to 会把它当作目标，把来源内容并进去。如果链尾是这条新会话、你还没切过去，它就是 0 轮，不是损坏。',
+              },
+              {
+                title: '步骤 4：按原因恢复',
+                body: '内容被清空：从备份恢复该文件，再重试 resume（Watch 不替你重建历史）。会话选错了：watch adopt <provider> --session <另一个会话 id> 换绑链尾。两边都要保留：watch chain new <新名字> 另起一条链，原链记录不动。0 字节且没有备份：这条会话已经没有可恢复的内容，按新会话处理。',
+              },
+            ],
+          },
+          {
+            type: 'code',
+            language: 'sh',
+            code: '# 1. 看链尾轮数与警告（v0.1.90 起链尾行带轮数）\nnpm run watch -- status --json\n\n# 2. 链尾是空会话时的三条路\nnpm run watch -- adopt <provider> --session <another-session-id>   # 换绑到另一条会话\nnpm run watch -- chain new <new-chain-name>                       # 另起一条链\n# 3. 有备份时先恢复文件，再重试 resume\nnpm run watch -- switch <provider>',
+          },
+          {
+            type: 'callout',
+            tone: 'warning',
+            title: '边界与安全限制',
+            body: '1. Watch 不重建历史：0 轮会话只能从备份恢复，工具不会替你补写对话内容。\n2. Watch 不会自动删除或修复 0 字节文件：那是你的原生会话文件，需要你自己决定恢复还是放弃。\n3. 可读 0 轮不一定等于「被清空」：watch new 建出来的合法空会话就是这个形状，判断依据是上下文而不是轮数本身。\n4. 这些披露只是读取本地文件得出的结论，不代表原生客户端一定能打开该会话；客户端验收仍按各自的版本与平台单独记录。',
+          },
+        ],
+        faq: [
+          {
+            question: 'resume 打开什么也没有，是 Watch 把历史弄丢了吗？',
+            answer: '通常不是。Watch 在交接时会先读来源、再用写前守卫与原子写追加到目标；0 轮会话多数是本来就空的（watch new 建出的空会话）或在此之前就被清空 / 截断的。要确认是不是 Watch 写入导致，先看交接结果里的轮数与 warnings，再对比备份文件。',
+          },
+          {
+            question: '0 轮和 0 字节有什么区别？',
+            answer: '0 轮是文件可读、有合法会话头但没有对话，可能是新会话或只剩占位头；0 字节是文件本身空了，进程被杀、磁盘满或只写了一半都会造成，连会话元数据都可能一起丢失。前者可能只是还没开始，后者要优先找备份。',
+          },
+          {
+            question: 'Watch 能帮我自动恢复被清空的会话吗？',
+            answer: '不能。Watch 只读写本地会话文件，没有历史备份能力，也不会凭空重建对话。恢复只能来自你自己的备份（Time Machine、git 之外的副本、编辑器历史等），恢复文件后再 resume 即可。',
+          },
+        ],
+        sources: [
+          {
+            label: 'Watch repository',
+            url: 'https://github.com/can4hou6joeng4/Watch',
+            accessed: '2026-11-17',
+          },
+          {
+            label: 'Watch releases',
+            url: 'https://github.com/can4hou6joeng4/Watch/releases',
+            accessed: '2026-11-17',
+          },
+        ],
+      },
+      en: {
+        slug: 'empty-session-resume-check',
+        title: 'Why resume Opens an Empty Session: Detecting and Recovering 0-Turn Sessions | Watch Guide',
+        description: 'A resume command only opens an existing session. Whether it continues depends on whether that session file still has turns. This guide separates readable 0-turn sessions from zero-byte files, explains what Watch discloses in status, switch and new, and gives three recovery paths: backup restore, rebinding and a new chain.',
+        h1: 'Why resume Opens an Empty Session: Detecting and Recovering 0-Turn Sessions',
+        summary: 'Watch hands the chain-tip session and its working directory to the target tool; the resume command itself only opens the session. This guide starts from the chain-tip row in status, separates readable 0-turn sessions from zero-byte files, and gives three recovery paths: backup restore, rebinding with adopt, and a new chain.',
+        answer: 'An empty session after resume usually means the file has no turns left: a legitimate empty session created by watch new, content cleared with only a placeholder header left, or a zero-byte file. Check the turn count on the chain-tip row in watch status. Watch does not rebuild history for you; restore the file from backup, rebind to another session, or start a new chain.',
+        blocks: [
+          {
+            type: 'callout',
+            tone: 'info',
+            title: 'Key Distinction',
+            body: 'A resume command, and the native resume command of each client, does one thing: open the specified session. Whether it can continue depends on how many turns remain in that file. Existing and readable do not mean it has content, which is exactly how a resume opens into an empty session while everything looks fine. Since v0.1.84 Watch discloses this case separately in open, switch, new and status.',
+          },
+          {
+            type: 'paragraph',
+            text: 'There are two kinds of empty. A readable 0-turn file still has a valid session header (the placeholder user line in Claude Code, the session_meta line in a Codex rollout) but no conversation turns. A zero-byte file was killed mid-write, ran out of disk, or was truncated, so even the session metadata may be gone; Codex stores attribution in the first rollout line, so truncating to zero bytes also breaks lookup.',
+          },
+          {
+            type: 'steps',
+            items: [
+              {
+                title: 'Step 1: Read the chain-tip row in status',
+                body: 'Run watch status. Since v0.1.90 the chain-tip row shows its turn count, for example a chain tip with 12 turns; a 0-turn parse says it parsed 0 turns and points at the warning above; an unreadable or missing file carries no count. In JSON the fields are chainTipTurns and chainTipEmpty, and chainTipTurns exists only when the parse succeeds.',
+              },
+              {
+                title: 'Step 2: Read the four warning cases',
+                body: 'The same result separates zero bytes (the session file is empty), readable 0 turns (parsed 0 turns, nothing to continue), unreadable content (permissions or content), and a missing file (deleted or moved). Each case has a different next step; do not rebind just because you saw the word empty.',
+              },
+              {
+                title: 'Step 3: Check whether it is a brand-new empty session',
+                body: 'A session created by watch new is empty by design. It is the normal starting point for a first chain: the next switch or open --to uses it as the target and merges the source content in. If the chain tip is that new session and you have not switched yet, 0 turns is expected, not damage.',
+              },
+              {
+                title: 'Step 4: Recover according to the case',
+                body: 'Content cleared: restore the file from backup and retry resume; Watch does not rebuild history. Wrong session: rebind the chain tip with watch adopt <provider> --session <another-session-id>. Keep both sides: start another chain with watch chain new <new-chain-name> and leave the original records untouched. Zero bytes with no backup: nothing is left to recover, treat it as a new session.',
+              },
+            ],
+          },
+          {
+            type: 'code',
+            language: 'sh',
+            code: '# 1. Read the chain-tip turn count and warnings (since v0.1.90)\nnpm run watch -- status --json\n\n# 2. Three paths when the chain tip is an empty session\nnpm run watch -- adopt <provider> --session <another-session-id>   # rebind to another session\nnpm run watch -- chain new <new-chain-name>                       # start another chain\n# 3. Restore from backup first, then retry resume\nnpm run watch -- switch <provider>',
+          },
+          {
+            type: 'callout',
+            tone: 'warning',
+            title: 'Boundaries',
+            body: '1. Watch does not rebuild history: a 0-turn session can only come back from your own backup. 2. Watch never deletes or repairs a zero-byte file on its own; that is your native session file, and the decision to restore or abandon it is yours. 3. A readable 0-turn session is not necessarily cleared content: watch new creates exactly that shape, so judge by context, not by the number alone. 4. These disclosures come from reading local files; they do not guarantee that the native client will open the session, and client acceptance stays recorded per version and platform.',
+          },
+        ],
+        faq: [
+          {
+            question: 'Did Watch lose the history when resume opened an empty session?',
+            answer: 'Usually not. Watch reads the source first and appends to the target with write guards and atomic writes; a 0-turn session is usually empty from the start (a new session from watch new) or was cleared or truncated earlier. To check whether a Watch write caused it, compare the turn count and warnings in the handoff result with your backup file.',
+          },
+          {
+            question: 'What is the difference between 0 turns and 0 bytes?',
+            answer: '0 turns means the file is readable and has a valid session header but no conversation; it may be a new session or only a placeholder header left behind. 0 bytes means the file itself is empty, from a killed process, a full disk or a half write, and even the session metadata may be gone. The first may just not have started; the second should send you to backups first.',
+          },
+          {
+            question: 'Can Watch restore a cleared session automatically?',
+            answer: 'No. Watch only reads and writes local session files. It has no history backup and does not invent conversation. Recovery comes from your own backup (Time Machine, copies outside the repo, editor history), and you resume after restoring the file.',
+          },
+        ],
+        sources: [
+          {
+            label: 'Watch repository',
+            url: 'https://github.com/can4hou6joeng4/Watch',
+            accessed: '2026-11-17',
+          },
+          {
+            label: 'Watch releases',
+            url: 'https://github.com/can4hou6joeng4/Watch/releases',
+            accessed: '2026-11-17',
+          },
+        ],
+      },
+    },
+  },
 ];
