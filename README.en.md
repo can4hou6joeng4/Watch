@@ -20,7 +20,17 @@ The steps are on the site [guides](https://relay.bobochang.cn/en/#guides): [Clau
 
 It does not provide models, bypass usage limits, replace native agent chat, or move permissions, credentials and plugins by default. What it transfers is the recorded session, not the model's unrecorded internal state. Today the implementation is centred on CLI sessions and terminal resume; the product direction includes validated desktop entry points, but **official interoperability does not mean Watch has integrated it**.
 
-### Latest release ([v0.1.83](https://github.com/can4hou6joeng4/Watch/releases/tag/v0.1.83))
+### Latest release ([v0.1.84](https://github.com/can4hou6joeng4/Watch/releases/tag/v0.1.84))
+
+v0.1.84 completes the 0-turn readable-session disclosure in `open`. Plain `open <id>`, the `open <id> --to <same provider>` fast path, and the rejection from `open <id> --to <other provider>` used to distinguish only zero-byte files; a readable file that parses to 0 turns (a legitimate empty session from `watch new`, or content cleared with only a placeholder header left) got no explanation, leaving a resume that looks completely normal or a bare no content to transfer message:
+
+- Plain open and `--to` the same provider now name the 0-turn parse with nothing to continue, say the resumed session is empty, and offer opening it to check or restoring from backup; `--check` consumes the same diagnostics, so preflight says it before execution.
+- The `--to` another provider error keeps the no content to transfer (0 turns) conclusion while separating a freshly created empty session from cleared content, and offers opening it to check or restoring from backup.
+- Non-zero-byte files are never described as zero-byte or content-is-lost; healthy sessions with turns do not get this warning.
+
+- **Validation scope**: 4 new isolated checks (plain open, `--to` same provider with `--check`, `--to` another provider, healthy counterexample) pass 115/115 together with r165, `cli-open-*`, `open.test` and other open cases; the full isolated regression passes 2195 tests with zero failures and zero skips; typecheck, desktop build, site build and share-image checks pass. No native-client acceptance claim is added.
+
+### Previous release ([v0.1.83](https://github.com/can4hou6joeng4/Watch/releases/tag/v0.1.83))
 
 v0.1.83 closes the empty-session disclosure gap in `adopt`. `adopt` only writes the chain record and never reports a turn count; binding a session whose file is readable but parses to 0 turns (a legitimate empty session from `watch new`, or content cleared with only a placeholder header left) still printed a successful bind plus a resume command, with no way to see the resumed session is empty:
 
