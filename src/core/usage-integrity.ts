@@ -114,7 +114,6 @@ export async function usageSidecarProblem(
   );
 }
 
-
 /**
  * 内容文件（`parse()` 读的那份）坏行扫描：只在用量来自旁路文件时调用。
  *
