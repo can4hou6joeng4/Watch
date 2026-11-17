@@ -715,7 +715,7 @@ async function cmdStatus(cwd: string, json: boolean, chain?: string): Promise<vo
     }));
     return;
   }
-  const { tips, chainTip, chainTipUnusable, chainTipEmpty, unreadable, history, historyFailed, chain: current, warnings } = result;
+  const { tips, chainTip, chainTipUnusable, chainTipEmpty, chainTipTurns, unreadable, history, historyFailed, chain: current, warnings } = result;
   for (const warning of warnings) console.error(`警告: ${escapeControlChars(warning)}`);
   // 链名是用户输入、库里可能留着写入守卫上线前的坏名字：进终端前转义，别把 ESC / 换行打出去
   if (current) console.log(`链: ${escapeControlChars(current.name)}${current.status === 'archived' ? ' [归档]' : ''}  (${current.id})`);
@@ -768,8 +768,16 @@ async function cmdStatus(cwd: string, json: boolean, chain?: string): Promise<vo
       // 文件读不出来时必须标在行上：这一行本身就是「最新原生会话」的推荐，读者不会去猜
       // 一条看起来正常的 mtime 背后打不开（原因已由上方警告给出）
       const readMark = tip.unreadable ? '（文件读不出来，原因见上方警告）' : '';
-      // 0 轮链尾：这一行就是「你的链尾」的推荐，光有 `← 链尾` 会让人以为 resume 打开的是有内容的会话
-      const emptyMark = mark && chainTipEmpty ? '（解析出 0 轮，原因见上方警告）' : '';
+      // 链尾这一行就是「你的链尾」的推荐：0 轮要说出空会话（原因在上方警告里），
+      // 有内容时给出轮数，让「链尾还剩多少」在概览里看得见（`chainTipTurns` 只在 parse 成功时存在，
+      // 读不出来 / 解析失败时保持沉默，由上面几档警告承担）
+      const emptyMark = mark
+        ? chainTipEmpty
+          ? '（解析出 0 轮，原因见上方警告）'
+          : chainTipTurns !== undefined
+            ? `（${chainTipTurns} 轮）`
+            : ''
+        : '';
       console.log(
         `  ${tip.provider.padEnd(8)} ${escapeControlChars(tip.ref.sessionId)}  mtime=${fmtTime(tip.updatedAt)}${chainMark}${mark}${emptyMark}${readMark}`,
       );

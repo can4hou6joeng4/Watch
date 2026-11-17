@@ -1114,6 +1114,11 @@ export async function chainStatus(
    */
   chainTipEmpty: boolean;
   /**
+   * 链尾会话解析出的轮数；`undefined` 表示没解析成功（文件不可读 / 适配器未注册 / parse 抛错）。
+   * 0 与 `chainTipEmpty` 同时为真；与它分开是因为文本模式要用不同的说法。
+   */
+  chainTipTurns?: number;
+  /**
    * 这次根本没读成的 provider（findLatestSession 抛错）。
    * 文本模式靠它区分「这个目录真没聊过」与「有几家没查成」——后者不能给出
    * 「请先在任一受支持的 Agent 里开聊」这类结论性建议。
@@ -1166,6 +1171,10 @@ export async function chainStatus(
   // 的是空会话。v0.1.84–v0.1.88 把 open / switch / new 各分支补齐后，`status` 是最后一个
   // 会说「这就是你的链尾」却不说它是空的入口。
   let chainTipEmpty = false;
+  // 链尾解析出的轮数：`status` 的 `← 链尾` 那一行直接显示它。0 轮时与 `chainTipEmpty`
+  // 同时为真，文本模式换成「解析出 0 轮」的说明；有内容时用户能一眼看到链尾还剩多少。
+  // 只在 parse 成功时给值（undefined = 没解析 / 解析失败），不拿 0 冒充
+  let chainTipTurns: number | undefined;
   if (history.length) {
     const last = history.at(-1)!;
     chainTip = { provider: last.toProvider, ref: last.toRef, updatedAt: last.createdAt, onChain: true };
@@ -1213,6 +1222,7 @@ export async function chainStatus(
         if (tipAdapter) {
           try {
             const turns = await tipAdapter.parse(last.toRef);
+            chainTipTurns = turns.length;
             if (turns.length === 0) {
               chainTipEmpty = true;
               warnings.push(
@@ -1259,7 +1269,7 @@ export async function chainStatus(
       ...(readProblem ? { unreadable: true } : {}),
     });
   }
-  return { tips, chainTip, chainTipUnusable, chainTipEmpty, unreadable, history, historyFailed, chain, chains, warnings };
+  return { tips, chainTip, chainTipUnusable, chainTipEmpty, chainTipTurns, unreadable, history, historyFailed, chain, chains, warnings };
 }
 
 /** 把链尾会话转换到 targetId，落 switch_events（store 可选）；opts.forceNew 强制新建目标会话（不追加既有配对） */
