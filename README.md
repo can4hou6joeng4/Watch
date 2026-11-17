@@ -20,7 +20,16 @@ Watch 只做一件事：**把已保存的会话记录连同工作目录交到目
 
 它不提供模型、不绕过配额、不代替原生 Agent 聊天，也不默认搬迁权限、凭据或插件；接力的是已有记录，不是模型未记录的内部状态。当前实现以 CLI 会话与终端恢复为主，产品方向包含经过验证的桌面端入口，但**官方支持互通不等于 Watch 已经集成**。
 
-### 最新版本（[v0.1.78](https://github.com/can4hou6joeng4/Watch/releases/tag/v0.1.78)）
+### 最新版本（[v0.1.79](https://github.com/can4hou6joeng4/Watch/releases/tag/v0.1.79)）
+
+v0.1.79 修正「0 字节压缩副本」的下一步。v0.1.75–v0.1.78 已在重试类文案里改掉「重新开一次会话」，但 `sessions --chain` 的压缩档与 `doctor` 链尾行仍留着它——重开得到的是另一条会话，链绑定仍指向这条死副本，下次 `switch` 照样撞上：
+
+- `sessions --chain` 与 `doctor` 链尾行改为「只能从备份恢复；可先 `watch switch …` 重新绑定 / `watch adopt … --session <会话 id>` 指定会话」，压缩档补上此前缺失的换绑路径。
+- `open --to` 链上配对目标为 0 字节普通文件时，除恢复备份外也补 `watch adopt …` 换绑与 `watch chain new` 另起一条链。
+
+- **验证范围**：新增 3 项隔离检查（`sessions --chain` 压缩档、`doctor` 链尾文本、`open --to` 配对空文件），与 r157–r162 及 `open.test`、`cli-sessions-chain`、doctor 相关用例联合 82/82 通过；完整隔离回归 2180 项通过，0 失败、0 跳过；类型检查、桌面构建、站点与分享图检查通过。仍只做一次 `lstat`，不读取、不解压、不修改 `.zst`；不新增原生客户端验收结论。
+
+### 上一版本（[v0.1.78](https://github.com/can4hou6joeng4/Watch/releases/tag/v0.1.78)）
 
 v0.1.78 把 v0.1.77 的链绑定披露扩到 `open --to` 链上配对目标的另外两档：文件已删除、读不出来。诊断以前只说「本次不沿用（改用内容匹配或新建）」——但 `open` 不写链记录，链仍指向这条不可用会话，下一次 `switch` 会再次撞上：
 

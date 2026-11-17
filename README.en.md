@@ -20,7 +20,16 @@ The steps are on the site [guides](https://relay.bobochang.cn/en/#guides): [Clau
 
 It does not provide models, bypass usage limits, replace native agent chat, or move permissions, credentials and plugins by default. What it transfers is the recorded session, not the model's unrecorded internal state. Today the implementation is centred on CLI sessions and terminal resume; the product direction includes validated desktop entry points, but **official interoperability does not mean Watch has integrated it**.
 
-### Latest release ([v0.1.78](https://github.com/can4hou6joeng4/Watch/releases/tag/v0.1.78))
+### Latest release ([v0.1.79](https://github.com/can4hou6joeng4/Watch/releases/tag/v0.1.79))
+
+v0.1.79 fixes the next step for a zero-byte compressed copy. Versions v0.1.75 through v0.1.78 removed the reopen a session advice from retry messages, but the compressed tier of `sessions --chain` and the `doctor` chain-tip line still carried it. Reopening creates a different session: the chain binding still points at the dead copy and the next `switch` hits it again:
+
+- The `sessions --chain` and `doctor` chain-tip lines now say restore from backup, then rebind with `watch switch ...` or point at another session with `watch adopt ... --session <id>`; the compressed tier gains the rebinding path it was missing.
+- When the chain-paired target in `open --to` is a zero-byte plain file, it also adds rebinding with `watch adopt ...` and starting a new chain.
+
+- **Validation scope**: 3 new isolated checks (the `sessions --chain` compressed tier, the `doctor` chain-tip text, and the `open --to` empty paired file) pass 82/82 together with the r157 to r162 checks, `open.test`, `cli-sessions-chain` and the doctor cases; the full isolated regression passes 2180 tests with zero failures and zero skips; typecheck, desktop build, site build and share-image checks pass. The probe is still a single `lstat` with no reading, decompression or modification of `.zst`; this adds no native-client acceptance claim.
+
+### Previous release ([v0.1.78](https://github.com/can4hou6joeng4/Watch/releases/tag/v0.1.78))
 
 v0.1.78 extends the v0.1.77 chain-binding disclosure to two more cases where the chain-paired target in `open --to` is unusable: the file was deleted, or it cannot be read. The diagnostic used to say only that the session was not reused and a content match or new session would be used. But `open` does not write chain records, so the chain still points at the unusable session and the next `switch` hits it again:
 
