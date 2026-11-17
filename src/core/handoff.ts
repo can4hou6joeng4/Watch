@@ -1004,6 +1004,14 @@ export type HandoffResult = {
    */
   resumeUnreadable?: boolean;
   /**
+   * alreadyAtTarget 时这条 resume 指向的会话解析出 0 轮（文件可读、不是 0 字节）。
+   *
+   * `watch new codex` / `watch new grok` 建出的合法空会话与「内容被清空、只剩占位头」都长这样：
+   * 后者在正文说「直接打开即可」等于替一条空会话背书（打开进去什么也没有）。文本模式据此
+   * 把结论改成「直接打开的是空会话」，`warnings` 里另有完整说明与下一步。
+   */
+  resumeTargetEmpty?: boolean;
+  /**
    * `turnCount` 为 0（零增量，且非 alreadyAtTarget）时的两种来源：
    * `source-empty` = 来源解析出 0 轮（合法的空会话，或只剩占位头 / 内容被清空），
    * `up-to-date` = 目标已包含来源全部内容，本次未追加。文本模式据此给出准确结论，
@@ -1336,12 +1344,18 @@ export async function handoff(
   // 以前只在**来源**侧说（来源说得再清楚，也说的是另一条会话）。
   // 解析失败不在这里另报——读不出来已由 `probeSessionReadable` / 「目标会话无法沿用」说清，
   // 再补一句只会把同一件事讲两遍。
-  const warnResumeTarget = async (ref: SessionRef, displayName: string, merged: number): Promise<void> => {
+  //
+  // 返回「这条 resume 目标解析出 0 轮」（可读、不是 0 字节）。`alreadyAtTarget` 分支据此把
+  // 正文那句「直接打开即可」换成「直接打开的是空会话」：`watch new codex` / `watch new grok`
+  // 建出来的合法空会话与「内容被清空、只剩占位头」都解析出 0 轮，而对着一份空日志说
+  // 「直接打开即可」等于替它背书——用户打开进去什么也没有，却没有任何一句话解释。
+  // 0 字节那一档不在这里说：`probeSessionReadable` 已由调用方报过「会话文件是空的」。
+  const warnResumeTarget = async (ref: SessionRef, displayName: string, merged: number): Promise<boolean> => {
     let resumeTurns: UnifiedTurn[];
     try {
       resumeTurns = await target.parse(ref);
     } catch {
-      return;
+      return false;
     }
     warnings.push(
       ...describeResumeTargetUnfinished(resumeTurns, `目标会话 ${ref.sessionId}（${displayName}）`, merged),
@@ -1350,6 +1364,7 @@ export async function handoff(
     // 用户复制的是这条 resume 命令，而这份日志的差异不会出现在链记录或 resume 命令里。
     const context = findContextDisclosure(resumeTurns);
     if (context) warnings.push(context.summary);
+    return resumeTurns.length === 0;
   };
 
   let chainBoundToTarget = false;
@@ -1447,7 +1462,19 @@ export async function handoff(
       }
       // 这条链尾会话马上就要被 resume：可它自己停在做了一半的一轮上时，`open <同一个 id>`
       // 会说、`switch` 以前一句话都不提——而 resume 正是从 `switch` 这里复制的。
-      await warnResumeTarget(resumeRef, target.displayName, 0);
+      const resumeTargetEmpty = await warnResumeTarget(resumeRef, target.displayName, 0);
+      // 0 字节已由上面那条 resumeReadProblem 说清（文件是空的、内容已丢失），这里只补
+      // 「文件可读却 0 轮」那一档：`watch new codex` / `watch new grok` 建出的合法空会话，
+      // 或内容被清空只剩占位头。不补的话正文会说「直接打开即可」——打开进去什么也没有
+      // （与 `open` 纯打开 / `adopt` / `switch` 其它分支的 0 轮披露同一口径）。
+      const resumeTargetReadableEmpty = resumeTargetEmpty && !resumeReadProblem;
+      if (resumeTargetReadableEmpty) {
+        warnings.push(
+          `目标会话 ${resumeRef.sessionId}（${target.displayName}）解析出 0 轮（没有可继续的对话）：` +
+            `可能是刚建出来的空会话，也可能内容已被清空；下面这条 resume 打开的是空会话——` +
+            `如果它本该有历史，先在 ${target.displayName} 里打开它确认，或从备份恢复该文件（Watch 不会替你重建历史）`,
+        );
+      }
       return {
         newRef: resumeRef,
         resumeCommand: target.resumeCommand(resumeRef),
@@ -1456,6 +1483,7 @@ export async function handoff(
         alreadyAtTarget: true,
         chainTipState,
         ...(resumeReadProblem ? { resumeUnreadable: true } : {}),
+        ...(resumeTargetReadableEmpty ? { resumeTargetEmpty: true } : {}),
         warnings,
         findings,
       };

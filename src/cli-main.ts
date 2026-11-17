@@ -848,12 +848,17 @@ async function cmdSwitch(cwd: string, targetId: string, json: boolean, chain?: s
     if (result.alreadyAtTarget) {
       // 链记录里可能根本没有链尾（chain new 之后没切过），也可能读不出来：这时一律说
       // 「链尾已在 X」会让人以为链已经绑到 X，而 status 里还是空的
+      //
+      // 「直接打开即可」还隐含一个前提：那条会话打得开**且有内容**。0 轮可读（`watch new codex`
+      // 建出的合法空会话，或内容被清空只剩占位头）时打开进去什么也没有——原因与下一步写在
+      // stderr 的警告里，正文的结论句也得跟着改，否则同一份结果里正文与警告互相矛盾。
+      const emptyMark = '，但这条会话解析出 0 轮，打开的是空会话（原因见上方警告）';
       if (result.chainTipState === 'empty') {
         console.log('当前链还没有绑定任何会话（没有可交接的来源，本次未写入链记录）。');
         console.log(
           result.resumeUnreadable
             ? `已找到 ${targetId} 的最新会话，但它的文件现在读不出来（原因见上方警告）；要让链记录指向它，可用 watch adopt ${targetId} --session ${escapeControlChars(result.newRef.sessionId)}`
-            : `已找到 ${targetId} 的最新会话，可直接打开；要让链记录指向它，可用 watch adopt ${targetId} --session ${escapeControlChars(result.newRef.sessionId)}`,
+            : `已找到 ${targetId} 的最新会话，可直接打开${result.resumeTargetEmpty ? emptyMark : ''}；要让链记录指向它，可用 watch adopt ${targetId} --session ${escapeControlChars(result.newRef.sessionId)}`,
         );
       } else if (result.chainTipState === 'recorded') {
         // 链尾确实停在这家，但文件读不出来时「直接打开即可」是错的下一步：
@@ -861,13 +866,13 @@ async function cmdSwitch(cwd: string, targetId: string, json: boolean, chain?: s
         console.log(
           result.resumeUnreadable
             ? `链尾已在 ${targetId}，但这条会话的文件现在读不出来，直接打开会失败（原因见上方警告）。`
-            : `链尾已在 ${targetId}，直接打开即可。`,
+            : `链尾已在 ${targetId}，${result.resumeTargetEmpty ? `直接打开即可${emptyMark}` : '直接打开即可'}。`,
         );
       } else {
         console.log(
           result.resumeUnreadable
             ? `无法确认链尾（本次未写入链记录），已找到 ${targetId} 的最新会话，但它的文件现在读不出来（原因见上方警告）。`
-            : `无法确认链尾（本次未写入链记录），已找到 ${targetId} 的最新会话，可直接打开。`,
+            : `无法确认链尾（本次未写入链记录），已找到 ${targetId} 的最新会话，${result.resumeTargetEmpty ? `可直接打开${emptyMark}` : '可直接打开'}。`,
         );
       }
       console.log(`resume: ${escapeControlChars(result.resumeCommand)}`);
