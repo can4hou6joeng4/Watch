@@ -761,9 +761,9 @@ export async function chainUsage(
      * 且适配器没有给出相反证据）：`usage: null` 不是统计缺失，而是还没有对话内容。
      */
     emptySession?: true;
-    /** `parse()` 读的内容文件有坏行：解析 0 轮不能当作空会话 */
+    /** 内容文件有无法解析的行：内容可能不完整；`usage === null` 时解析 0 轮不能当作空会话 */
     contentBadLines?: number;
-    /** 内容文件坏行没扫完：连「是不是空会话」都无法确认 */
+    /** 内容文件坏行没扫完：连「内容是否完整 / 是不是空会话」都无法确认 */
     contentBadLinesScanError?: string;
     /** 适配器给出的「0 轮但不是合法空会话」反证（如 Codex 只剩压缩记录） */
     zeroTurnProblem?: string;
@@ -824,9 +824,9 @@ export async function chainUsage(
      * 且适配器没有给出相反证据）：`usage: null` 不是统计缺失，而是还没有对话内容。
      */
     emptySession?: true;
-    /** `parse()` 读的内容文件有坏行：解析 0 轮不能当作空会话 */
+    /** 内容文件有无法解析的行：内容可能不完整；`usage === null` 时解析 0 轮不能当作空会话 */
     contentBadLines?: number;
-    /** 内容文件坏行没扫完：连「是不是空会话」都无法确认 */
+    /** 内容文件坏行没扫完：连「内容是否完整 / 是不是空会话」都无法确认 */
     contentBadLinesScanError?: string;
     /** 适配器给出的「0 轮但不是合法空会话」反证（如 Codex 只剩压缩记录） */
     zeroTurnProblem?: string;
@@ -982,8 +982,10 @@ export async function chainUsage(
     let nowContentBad: Awaited<ReturnType<typeof usageContentBadLinesDetail>> = null;
     if (usage !== null) {
       nowContentBad = await usageContentBadLinesDetail(adapter, ref, `${adapter.id} 会话 ${ref.sessionId}`);
-      if (nowContentBad && !nowContentBad.scanFailed) {
+      if (nowContentBad) {
         // usage === null 的分支会在上面推警告；这里补的是「用量已读到」的路径。
+        // 扫描失败也必须披露：字段本身能说明原因，但文本与只看 warnings 的调用方
+        // 不能把「坏行数未知」读成「没有坏行」。
         warnings.push(nowContentBad.reason);
       }
       contentProblem = (await usageContentFileProblem(adapter, ref, `${adapter.id} 会话 ${ref.sessionId}`)) ?? undefined;

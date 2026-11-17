@@ -3130,10 +3130,32 @@ async function cmdUsage(cwd: string, json: boolean, chain?: string): Promise<voi
     }
     // 这些是「内容侧」的事实，与用量坏行/读取失败分列：
     // 内容坏行只说明内容可能不完整——0 轮路径不能当空会话，已读到用量的路径合计照算；
+    // 扫描失败时连「坏行有多少」都不知道，必须与确认为坏行的两档分开说。
     // 压缩记录由 zeroTurnProblem 单列；旁路用量完好但内容文件已空时，只提醒内容已丢失。
-    const contentBadLineSessions = result.byProvider.filter((item) => item.contentBadLines || item.contentBadLinesScanError).length;
-    if (contentBadLineSessions) {
-      console.log(`  注：${contentBadLineSessions} 个会话的内容文件有无法解析的行，不能据此当作空会话；用量仍可读取时已计入合计`);
+    const contentBadLineSessions = result.byProvider.filter((item) => item.contentBadLines || item.contentBadLinesScanError);
+    const contentBadLineEmptyKnown = contentBadLineSessions.filter(
+      (item) => item.usage === null && !item.contentBadLinesScanError,
+    ).length;
+    const contentBadLineEmptyUnknown = contentBadLineSessions.filter(
+      (item) => item.usage === null && item.contentBadLinesScanError,
+    ).length;
+    const contentBadLineWithUsageKnown = contentBadLineSessions.filter(
+      (item) => item.usage !== null && !item.contentBadLinesScanError,
+    ).length;
+    const contentBadLineWithUsageUnknown = contentBadLineSessions.filter(
+      (item) => item.usage !== null && item.contentBadLinesScanError,
+    ).length;
+    if (contentBadLineEmptyKnown) {
+      console.log(`  注：${contentBadLineEmptyKnown} 个会话的内容文件有无法解析的行，0 轮不能当作空会话；用量仍可读取时已计入合计`);
+    }
+    if (contentBadLineEmptyUnknown) {
+      console.log(`  注：${contentBadLineEmptyUnknown} 个会话的内容文件坏行无法统计，0 轮不能当作空会话；先确认内容文件可读再重试`);
+    }
+    if (contentBadLineWithUsageKnown) {
+      console.log(`  注：${contentBadLineWithUsageKnown} 个会话的内容文件有无法解析的行，内容可能不完整；用量来自旁路文件并已计入合计`);
+    }
+    if (contentBadLineWithUsageUnknown) {
+      console.log(`  注：${contentBadLineWithUsageUnknown} 个会话的内容文件坏行无法统计，内容完整性未知；用量来自旁路文件并已计入合计`);
     }
     const zeroTurnProblemSessions = result.byProvider.filter((item) => item.zeroTurnProblem).length;
     if (zeroTurnProblemSessions) {
