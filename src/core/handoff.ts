@@ -732,6 +732,12 @@ export async function chainUsage(
   totalExcluded: number;
   /** 没有 usage 数据（原生无该字段 / 文件读不出，`sessionUsage` 返回 null）、同样没计入 total 的会话数：不说明会被当成「用量就是这么多」 */
   totalMissingUsage: number;
+  /**
+   * 文件在、非 0 字节、可读，但解析出 0 轮的合法空会话数（`watch new codex` / `grok` / `opencode`
+   * 建出来的就是这种）：它们同样没有用量，但「还没有对话内容」与「有内容却没记 usage」下一步不同，
+   * 不能再混进 `totalMissingUsage` 说成「无 usage 数据的会话」。
+   */
+  totalEmptySessions: number;
   byProvider: {
     provider: string;
     sessionId: string;
@@ -750,6 +756,8 @@ export async function chainUsage(
      * 它说明「合计是下界」这件事本身都没确认，不能按「没有坏行」显示。
      */
     usageBadLinesScanError?: string;
+    /** 已确认解析出 0 轮（空会话）：`usage: null` 不是统计缺失，而是还没有对话内容 */
+    emptySession?: true;
   }[];
   /** 链上有绑定、但适配器根本不给用量（未实现 `sessionUsage`；当前六家都已实现，留给将来新增的适配器）：不列出来会被当成「这一家没有用量」 */
   unsupported: string[];
@@ -773,6 +781,7 @@ export async function chainUsage(
       total: empty,
       totalExcluded: 0,
       totalMissingUsage: 0,
+      totalEmptySessions: 0,
       byProvider: [],
       unsupported: [],
       warnings: [storeUnavailableWarning('无法确定当前链与各家用量', storeError)],
@@ -799,10 +808,13 @@ export async function chainUsage(
     error?: string;
     usageBadLines?: number;
     usageBadLinesScanError?: string;
+    /** 已确认解析出 0 轮（空会话）：`usage: null` 不是统计缺失，而是还没有对话内容 */
+    emptySession?: true;
   }[] = [];
   let total = { ...empty };
   let totalExcluded = 0;
   let totalMissingUsage = 0;
+  let totalEmptySessions = 0;
   // 链上绑定了也没法统计的 provider（适配器未实现 sessionUsage；当前六家都有）：
   // 直接 continue 会让「按会话」里少一行，用户看成分家没有用量
   const unsupported: string[] = [];
@@ -831,17 +843,13 @@ export async function chainUsage(
     }
     // null 在适配器里同时表示「这家原生没有 usage 字段」与「文件读不出」（各家的读失败被吞成 null）：
     // 再 stat 一次分开，否则 `usage` 的合计会把「链尾文件已经没了」讲成「这些会话没有用量数据」
+    // 用量数据源里有坏行时，`sessionUsage` 一律 `continue` 跳过：合计静默偏少，而这份报告
+    // 分不出「少算了」与「本来就这么多」。内容那一侧（`handoff()` / `open`）早已用
+    // `scanUnparsableJsonLines()` 披露过，这里补的是同一条线上没接上的一半。
+    // 必须在判空会话**之前**算：全行损坏的文件 `parse` 同样返回 0 轮，先判空会把
+    // 「读不出内容」讲成「本来就是空会话」，还会把那两行坏行数一起吞掉。
+    const badUsage = await usageBadLinesDetail(adapter, ref, `${adapter.id} 会话 ${ref.sessionId}`);
     if (usage === null) {
-      // 用量来自旁路文件时（grok 的 `updates.jsonl`），`ref.filePath` 是另一份文件：
-      // 拿后者去判会把「用量文件被截成 0 字节」照常判成 present + 有内容，
-      // 于是整份报告说「1 个无 usage 数据的会话」——内容已丢失被讲成「这家没有用量数据」
-      const sidecar = await usageSidecarProblem(adapter, ref, `${adapter.id} 会话 ${ref.sessionId}`);
-      if (sidecar) {
-        warnings.push(`${adapter.id} 用量读取失败：${sidecar}`);
-        byProvider.push({ provider: adapter.id, sessionId: ref.sessionId, usage: null, error: sidecar });
-        totalExcluded += 1;
-        continue;
-      }
       const presence = await sessionFilePresence(ref.filePath);
       // 路径被同名目录 / 设备文件占住（present 但 isFile 为假）既不是「没有 usage 数据」，
       // 也不是可读文件：以前落进 totalMissingUsage，把「读不出内容」讲成「这家原生没有 usage」
@@ -882,11 +890,36 @@ export async function chainUsage(
         totalExcluded += 1;
         continue;
       }
+      // 「文件在、不是 0 字节、却解析出 0 轮」是 `watch new codex` / `grok` / `opencode` 建出的
+      // 合法空会话，与「有内容却原生没记 usage」在 `sessionUsage` 里都是 `null`：以前它计入
+      // `totalMissingUsage`，报告说「1 个无 usage 数据的会话」——刚建出来的空链听起来像统计漏了一份。
+      // 空会话本来就没有对话，旁路文件为空是它的正常形状（grok 新建的 `updates.jsonl` 就是 0 字节），
+      // 所以这一档要**先于**旁路检查判定，否则会把正常的新会话报成「用量数据源内容已丢失」。
+      // 解析失败不改口径（仍按无 usage 数据算），不能把「读不出来」讲成「空会话」。
+      let emptySession = false;
+      if (!badUsage) {
+        try {
+          emptySession = (await adapter.parse(ref)).length === 0;
+        } catch {
+          emptySession = false;
+        }
+      }
+      if (emptySession) {
+        totalEmptySessions += 1;
+        byProvider.push({ provider: adapter.id, sessionId: ref.sessionId, usage: null, emptySession: true });
+        continue;
+      }
+      // 用量来自旁路文件时（grok 的 `updates.jsonl`），`ref.filePath` 是另一份文件：
+      // 拿后者去判会把「用量文件被截成 0 字节」照常判成 present + 有内容，
+      // 于是整份报告说「1 个无 usage 数据的会话」——内容已丢失被讲成「这家没有用量数据」
+      const sidecar = await usageSidecarProblem(adapter, ref, `${adapter.id} 会话 ${ref.sessionId}`);
+      if (sidecar) {
+        warnings.push(`${adapter.id} 用量读取失败：${sidecar}`);
+        byProvider.push({ provider: adapter.id, sessionId: ref.sessionId, usage: null, error: sidecar });
+        totalExcluded += 1;
+        continue;
+      }
     }
-    // 用量数据源里有坏行时，`sessionUsage` 一律 `continue` 跳过：合计静默偏少，而这份报告
-    // 分不出「少算了」与「本来就这么多」。内容那一侧（`handoff()` / `open`）早已用
-    // `scanUnparsableJsonLines()` 披露过，这里补的是同一条线上没接上的一半。
-    const badUsage = await usageBadLinesDetail(adapter, ref, `${adapter.id} 会话 ${ref.sessionId}`);
     if (badUsage) warnings.push(badUsage.reason);
     byProvider.push({
       provider: adapter.id,
@@ -932,7 +965,7 @@ export async function chainUsage(
       }
     }
   }
-  return { chain, total, totalExcluded, totalMissingUsage, byProvider, unsupported, warnings, notes };
+  return { chain, total, totalExcluded, totalMissingUsage, totalEmptySessions, byProvider, unsupported, warnings, notes };
 }
 
 export type ProviderTip = {

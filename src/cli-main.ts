@@ -3110,6 +3110,8 @@ async function cmdUsage(cwd: string, json: boolean, chain?: string): Promise<voi
     // 合计只是「已知用量之和」：读取失败与「原生没有 usage 字段」都不在其中，两种都要说出来
     const missing: string[] = [];
     if (result.totalExcluded) missing.push(`${result.totalExcluded} 个读取失败的会话`);
+    // 空会话与「有内容却没记 usage」两档分开：前者还没有任何对话，后者才是统计缺失
+    if (result.totalEmptySessions) missing.push(`${result.totalEmptySessions} 个空会话`);
     if (result.totalMissingUsage) missing.push(`${result.totalMissingUsage} 个无 usage 数据的会话`);
     if (result.unsupported?.length) missing.push(`${result.unsupported.join('、')}（适配器不提供用量）`);
     console.log(
@@ -3133,6 +3135,7 @@ async function cmdUsage(cwd: string, json: boolean, chain?: string): Promise<voi
       // 用「；」拼接而不是嵌套括注：`（读取失败: …（…））` 读起来分不清哪层在解释哪层
       const notes: string[] = [];
       if (item.error) notes.push(`读取失败: ${item.error}`);
+      else if (item.emptySession) notes.push('解析出 0 轮的空会话');
       else if (item.usage === null && !item.usageBadLines && !item.usageBadLinesScanError) notes.push('无 usage 字段');
       else if (item.usage === null && (item.usageBadLines || item.usageBadLinesScanError)) notes.push('未读出有效用量');
       if (item.usageBadLines) {
