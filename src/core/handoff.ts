@@ -633,10 +633,17 @@ export async function createChainSession(
     // 解析失败也不能当成「没问题」：`probeSessionReadable` 只证明打得开，不代表读得出内容。
     const tipAdapter = resolve(providerId);
     let tipUnfinished: string[] = [];
+    // 「直接 resume 即可」还隐含第二个前提：这条会话有内容。`watch new codex` / `watch new grok`
+    // 建出来的合法空会话与「内容被清空、只剩占位头」都解析出 0 轮、文件却可读，以前照样建议
+    // resume——用户打开进去什么也没有，而 `open <同一个 id>` / `switch <同一家>` 从 v0.1.84/86
+    // 起都已在说这件事。解析失败（读不出内容）走下面的 tipUnfinished，不猜轮数。
+    let tipEmpty = false;
     if (tipAdapter) {
       try {
+        const tipTurns = await tipAdapter.parse(tail.toRef);
+        tipEmpty = tipTurns.length === 0;
         tipUnfinished = describeResumeTargetUnfinished(
-          await tipAdapter.parse(tail.toRef),
+          tipTurns,
           // 前半句刚印过会话 id，这里不再重复一遍
           `链尾会话（${tipAdapter.displayName}）`,
           0,
@@ -648,8 +655,14 @@ export async function createChainSession(
       }
     }
     const resume = tipAdapter ? tipAdapter.resumeCommand(tail.toRef) : `resume 会话 ${tail.toRef.sessionId}`;
+    const display = tipAdapter?.displayName ?? providerId;
     throw new Error(
-      `链尾已是 ${providerId}：会话 ${tail.toRef.sessionId}（${resume}），直接 resume 即可；要开新对话请先切到另一侧` +
+      `链尾已是 ${providerId}：会话 ${tail.toRef.sessionId}（${resume}），` +
+        (tipEmpty
+          ? `但这条会话解析出 0 轮（没有可继续的对话）——可能是刚建出来的空会话，也可能内容已被清空；` +
+            `直接 resume 打开的是空会话。如果它本该有内容，先在 ${display} 里打开它确认，或从备份恢复该文件` +
+            `（Watch 不会替你重建历史）；要开新对话请先切到另一侧`
+          : `直接 resume 即可；要开新对话请先切到另一侧`) +
         (tipUnfinished.length ? `。注意：${tipUnfinished.join('；')}` : ''),
     );
   }
