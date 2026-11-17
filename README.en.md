@@ -20,7 +20,16 @@ The steps are on the site [guides](https://relay.bobochang.cn/en/#guides): [Clau
 
 It does not provide models, bypass usage limits, replace native agent chat, or move permissions, credentials and plugins by default. What it transfers is the recorded session, not the model's unrecorded internal state. Today the implementation is centred on CLI sessions and terminal resume; the product direction includes validated desktop entry points, but **official interoperability does not mean Watch has integrated it**.
 
-### Latest release ([v0.1.79](https://github.com/can4hou6joeng4/Watch/releases/tag/v0.1.79))
+### Latest release ([v0.1.80](https://github.com/can4hou6joeng4/Watch/releases/tag/v0.1.80))
+
+v0.1.80 covers the case where the chain-paired target in `open --to` exists and parses but contains no conversation at all (only a rollout header, or cleared content). The content check in decision 1 necessarily failed and open silently fell back to a content match or a new session, while the chain binding still pointed at the empty session and the next `switch` hit it again:
+
+- It now discloses that 0 turns were parsed and offers continuing the session natively to check it, rebinding with `watch adopt ... --session <another session id>`, or starting a new chain.
+- The zero-byte next step in `doctor` and `sessions` now says restore from backup first; starting another session is only a fallback and yields a different session, so it no longer suggests reopening repairs the original.
+
+- **Validation scope**: 1 new isolated check (an `open --to` preflight whose chain-paired target is a header-only rollout) passes 110/110 together with r162, r163, `open.test`, doctor, degrade and the zero-byte listing cases; the full isolated regression passes 2181 tests with zero failures and zero skips; typecheck, desktop build, site build and share-image checks pass. The probe is still a single `lstat` with no reading, decompression or modification of `.zst`; this adds no native-client acceptance claim.
+
+### Previous release ([v0.1.79](https://github.com/can4hou6joeng4/Watch/releases/tag/v0.1.79))
 
 v0.1.79 fixes the next step for a zero-byte compressed copy. Versions v0.1.75 through v0.1.78 removed the reopen a session advice from retry messages, but the compressed tier of `sessions --chain` and the `doctor` chain-tip line still carried it. Reopening creates a different session: the chain binding still points at the dead copy and the next `switch` hits it again:
 
