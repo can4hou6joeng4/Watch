@@ -153,8 +153,8 @@ export async function usageContentBadLinesDetail(
  * `parse()` 读的内容文件本身的可用性：只在用量来自旁路文件、且 `usage !== null` 时调用。
  *
  * `chainUsage()` 的 presence / 0 字节检查原先整块挂在 `usage === null` 分支里：
- * grok 的内容文件被截成 0 字节，只要 `updates.jsonl` 还留着用量，报告就照常给出合计、
- * 一句警告都没有——「对话已经没了」在 usage 这条线上完全看不见。
+ * grok 的内容文件被截成 0 字节、被删掉或被同名目录占住，只要 `updates.jsonl` 还留着用量，
+ * 报告就照常给出合计、一句警告都没有——「对话已经没了」在 usage 这条线上完全看不见。
  * 这里复用 `sessionFilePresence()` 的同一套分档，但结果只进 warnings /
  * `byProvider[].contentProblem`，不改 count、不动 total：用量确实读到了，
  * 不能把「内容丢了」说成「用量也没统计」。
@@ -167,8 +167,14 @@ export async function usageContentFileProblem(
   const usagePath = adapter.sessionUsagePath?.(ref);
   if (!usagePath || usagePath === ref.filePath) return null;
   const presence = await sessionFilePresence(ref.filePath);
-  if (presence.state === 'missing') return null;
   const description = escapeControlChars(ref.filePath);
+  if (presence.state === 'missing') {
+    return (
+      `${label}的内容文件 ${description} 已不存在；对话内容已丢失，` +
+      `这条会话的用量仍来自旁路文件并已计入合计——如果它本该有内容，` +
+      `先从备份恢复该文件再重试（Watch 不会替你重建对话内容）`
+    );
+  }
   if (presence.state === 'unknown') {
     return (
       `${label}的内容文件 ${description} 状态无法确认：${presence.reason}；` +
