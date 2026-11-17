@@ -44,6 +44,21 @@ export type BrokenTip = {
   unreadable?: boolean;
 };
 
+/**
+ * 链尾文件在、也读得出来，但解析结果是 0 轮：`resume` 打开就是空会话。
+ *
+ * 这不是「不可用」（`brokenTips`），也不是「内容落后于来源」（`driftedPairs`）：
+ * 文件本身没问题，只是里面没有可继续的对话。`status` 用 `chainTipEmpty` 说同一档，
+ * 排障入口不能说成一切正常；`watch new` 刚建出来的空链尾也属于这一档（通常无需处理）。
+ */
+export type EmptyTip = {
+  chainId: string;
+  chainName: string;
+  provider: string;
+  sessionId: string;
+  filePath: string;
+};
+
 /** 报告来源：贴到 issue 里要能定位「哪一版、什么环境、看的是哪个库」 */
 export type DoctorEnvironment = {
   watchVersion: string | null;
@@ -148,6 +163,7 @@ export type DoctorReport = {
         chainsElsewhere: ChainsElsewhere[];
         brokenTips: BrokenTip[];
         driftedPairs: DriftedPair[];
+        emptyTips: EmptyTip[];
       }
     | { available: false; error: string };
   imports:
@@ -445,6 +461,12 @@ export async function doctorReport(cwd: string, deps: DoctorDeps): Promise<Docto
       const chains = deps.store.listChains(cwd);
       const activeChains = chains.filter((c) => c.status === 'active');
       const brokenTips: BrokenTip[] = [];
+      // 可读 0 轮链尾（`chainTipEmpty` 的 doctor 同档）：不在 brokenTips 里——
+      // 文件没坏，坏的是「resume 打开是空会话」这个预期
+      const emptyTips: EmptyTip[] = [];
+      // 内容对账里 parse 成功过的链：链尾轮数已经在那边判断过，补漏循环不再读一次
+      const reconciledTips = new Set<string>();
+      const adapterById = new Map(adapters.map((a) => [a.id, a]));
       const listEvents = deps.store.listSwitchEvents?.bind(deps.store);
       for (const chain of activeChains) {
         if (!listEvents) break;
@@ -512,7 +534,6 @@ export async function doctorReport(cwd: string, deps: DoctorDeps): Promise<Docto
       }
       // 内容对账：链尾文件还在，不代表它也还在内容上承接来源（手动改过、客户端截断、resume 重写都会让两者漂移）
       const driftedPairs: DriftedPair[] = [];
-      const adapterById = new Map(adapters.map((a) => [a.id, a]));
       for (const chain of activeChains) {
         if (!listEvents) break;
         let last: { fromRef?: SessionRef | null; toRef?: SessionRef | null } | undefined;
@@ -598,6 +619,23 @@ export async function doctorReport(cwd: string, deps: DoctorDeps): Promise<Docto
         if (toBadFailure) warnings.push(toBadFailure);
         try {
           const [fromTurns, toTurns] = await Promise.all([fromAdapter.parse(from), toAdapter.parse(to)]);
+          reconciledTips.add(chain.id);
+          // 0 轮空链尾：文件可读、parse 成功，但没有可继续的对话。这一档不走
+          // 「比来源少 N 条记录」——那是内容漂移的说法；链尾本来就空时，说漂移会把
+          // 人引去 switch / adopt 重新对齐，而真正该做的是把内容补回来或另起一条链。
+          if (toTurns.length === 0) {
+            emptyTips.push({
+              chainId: chain.id,
+              chainName: chain.name,
+              provider: to.provider,
+              sessionId: to.sessionId,
+              filePath: to.filePath,
+            });
+            warnings.push(
+              `链「${escapeControlChars(chain.name)}」的链尾会话 ${to.provider} ${to.sessionId} 是空的（解析出 0 轮，没有可继续的对话）：下次切换会「成功」，但打开的是空会话——如果它本该有历史，先在 ${to.provider} 里打开确认，或从备份恢复该文件；也可 watch switch ${to.provider} 重新绑定，或 watch chain new <新名字> 另起一条链`,
+            );
+            continue;
+          }
           const missingTurns = diffTurns(fromTurns, toTurns).length;
           if (missingTurns > 0) {
             driftedPairs.push({
@@ -623,6 +661,52 @@ export async function doctorReport(cwd: string, deps: DoctorDeps): Promise<Docto
           } else {
             const message = error instanceof Error ? error.message : String(error);
             warnings.push(`链「${escapeControlChars(chain.name)}」的内容对账失败：${message}`);
+          }
+        }
+      }
+      // 对账只覆盖「有来源、且链尾 parse 成功」的链：`watch new` 建出的链没有 fromRef，
+      // 从没走进上面的循环。补一遍——文件在、读得出来、却解析出 0 轮的链尾，正是
+      // resume 打开空会话的直接原因，排障入口不能对它沉默（与 status 的 chainTipEmpty 同档）。
+      if (listEvents) {
+        for (const chain of activeChains) {
+          if (reconciledTips.has(chain.id)) continue;
+          let tip: SessionRef | null | undefined;
+          try {
+            tip = listEvents(chain.id).at(-1)?.toRef;
+          } catch {
+            continue; // 上面已按链警告过切换记录读取失败
+          }
+          if (!tip) continue;
+          const tipAdapter = adapterById.get(tip.provider);
+          if (!tipAdapter?.parse) continue;
+          const presence = await pathPresence(tip.filePath);
+          // missing / unreadable / unknown 已由 brokenTips 逐条说过，这里不重复
+          if (presence.state !== 'present') continue;
+          try {
+            const turns = await tipAdapter.parse(tip);
+            if (turns.length === 0) {
+              emptyTips.push({
+                chainId: chain.id,
+                chainName: chain.name,
+                provider: tip.provider,
+                sessionId: tip.sessionId,
+                filePath: tip.filePath,
+              });
+              warnings.push(
+                `链「${escapeControlChars(chain.name)}」的链尾会话 ${tip.provider} ${tip.sessionId} 是空的（解析出 0 轮，没有可继续的对话）：resume 打开就是空会话——如果刚 watch new 建出来还没聊过属正常，先在该会话里继续；否则从备份恢复该文件，或 watch switch ${tip.provider} 重新绑定，或 watch chain new <新名字> 另起一条链`,
+              );
+            }
+          } catch (error) {
+            // parse 抛错说明内容整体读不出来（坏行由上面的 scanUnparsableJsonLines 单独说）：
+            // 这一条链的链尾刚好没进内容对账，不能让 doctor 只字不提
+            const detail = isFileSystemErrorCode((error as NodeJS.ErrnoException).code)
+              ? describeSessionReadFailureReason(error)
+              : error instanceof Error
+                ? error.message
+                : String(error);
+            warnings.push(
+              `链「${escapeControlChars(chain.name)}」的链尾会话内容解析失败（${tip.provider} ${tip.sessionId}）：${detail}；resume 与下次切换都会失败——先确认该文件内容是否完整，或 watch switch ${tip.provider} 重新绑定`,
+            );
           }
         }
       }
@@ -653,6 +737,7 @@ export async function doctorReport(cwd: string, deps: DoctorDeps): Promise<Docto
         chainsElsewhere,
         brokenTips,
         driftedPairs,
+        emptyTips,
       };
     } catch (error) {
       const reason = describeStoreErrorReason(error);

@@ -2179,8 +2179,9 @@ async function cmdDoctor(cwd: string, json: boolean, strict: boolean): Promise<v
       const unreadable = report.store.brokenTips.filter((b) => b.unreadable).length;
       const unknown = report.store.brokenTips.length - broken - compressed - compressedEmpty - unreadable;
       const drifted = report.store.driftedPairs.length;
+      const empty = report.store.emptyTips.length;
       console.log(
-        `本地库: 可用，本目录 ${report.store.chains} 条链（${report.store.activeChains} 条活跃${broken ? `，${broken} 条链尾缺失` : ''}${compressed ? `，${compressed} 条链尾只剩压缩副本` : ''}${compressedEmpty ? `，${compressedEmpty} 条链尾只剩 0 字节压缩副本（内容已丢失）` : ''}${unreadable ? `，${unreadable} 条链尾读不出来` : ''}${unknown ? `，${unknown} 条链尾状态无法确认` : ''}${drifted ? `，${drifted} 条链尾内容落后于来源` : ''}）`,
+        `本地库: 可用，本目录 ${report.store.chains} 条链（${report.store.activeChains} 条活跃${broken ? `，${broken} 条链尾缺失` : ''}${compressed ? `，${compressed} 条链尾只剩压缩副本` : ''}${compressedEmpty ? `，${compressedEmpty} 条链尾只剩 0 字节压缩副本（内容已丢失）` : ''}${unreadable ? `，${unreadable} 条链尾读不出来` : ''}${unknown ? `，${unknown} 条链尾状态无法确认` : ''}${drifted ? `，${drifted} 条链尾内容落后于来源` : ''}${empty ? `，${empty} 条链尾是空的（0 轮）` : ''}）`,
       );
       // 上一行是结论：本目录没有链。别处有链时必须接着指路，否则会被当成链丢了 / 没建成功。
       // 「同一个目录的另一种写法」不是「别的目录」：两种说法分开，否则用户会以为链不在这个项目里
@@ -2208,6 +2209,13 @@ async function cmdDoctor(cwd: string, json: boolean, strict: boolean): Promise<v
             : b.unreadable
               ? `  链「${escapeControlChars(b.chainName)}」: ${b.provider}:${b.sessionId} 链尾文件读不出来（${escapeControlChars(b.filePath)}，${b.error}）；resume 与下次切换都会失败——先修好这个文件（权限或内容），或 watch switch ${b.provider} 重新绑定`
               : `  链「${escapeControlChars(b.chainName)}」: ${b.provider}:${b.sessionId} 链尾文件状态无法确认（${escapeControlChars(b.filePath)}，${b.error}）；先确认文件是否还在，再决定是否需要 adopt`,
+        );
+      }
+      // 摘要里已经报了个数；这里给出是哪条链尾、为什么打开是空的，以及下一步。
+      // 不给 provider:sessionId，用户照「watch switch」也无法定位到具体会话
+      for (const e of report.store.emptyTips) {
+        console.log(
+          `  链「${escapeControlChars(e.chainName)}」: ${e.provider}:${e.sessionId} 链尾是空的（解析出 0 轮）；resume 打开就是空会话——如果在原生客户端里还没聊过属正常，否则从备份恢复该文件，或 watch switch ${e.provider} 重新绑定，或 watch chain new <新名字> 另起一条链`,
         );
       }
     } else {
