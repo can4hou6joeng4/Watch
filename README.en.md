@@ -20,7 +20,17 @@ The steps are on the site [guides](https://relay.bobochang.cn/en/#guides): [Clau
 
 It does not provide models, bypass usage limits, replace native agent chat, or move permissions, credentials and plugins by default. What it transfers is the recorded session, not the model's unrecorded internal state. Today the implementation is centred on CLI sessions and terminal resume; the product direction includes validated desktop entry points, but **official interoperability does not mean Watch has integrated it**.
 
-### Latest release ([v0.1.81](https://github.com/can4hou6joeng4/Watch/releases/tag/v0.1.81))
+### Latest release ([v0.1.82](https://github.com/can4hou6joeng4/Watch/releases/tag/v0.1.82))
+
+v0.1.82 closes the 0-turn disclosure gap in `open <target> --from <source>`. That path only distinguished zero-byte files before; when the file is not zero bytes but parses to 0 turns (a legitimate empty session from `watch new`, or content cleared with only a placeholder header left), the zero-increment branch used to word it as everything from the source is already in the target, while nothing was merged at all:
+
+- A 0-turn source is now named as parsed 0 turns with nothing to merge; the note says nothing was written and the target was not modified, and offers opening the session to check, restoring from backup, or rechecking the `--from` session id.
+- A 0-turn target now gets a note saying the N merged turns are its entire content, with restore-from-backup advice if it should have had older history. When the source is empty and the target is zero-byte, the warning says nothing was written instead of the contradictory line that only the source content was merged.
+- Healthy empty sessions are still never called zero-byte or content-is-lost, matching the existing rule that a legitimate 0-turn session must not raise that warning.
+
+- **Validation scope**: 3 new isolated checks (0-turn source, 0-turn target, and a 0-turn source with a zero-byte target) pass 100/100 together with `cli-open-zero-byte-session`, `open-from-process-events`, `open.test`, `cli-resume-target-unfinished`, `r63-opencode-revert` and other open cases (the 3 in r165 are included); the full isolated regression passes 2188 tests with zero failures and zero skips; typecheck, desktop build, site build and share-image checks pass. This adds no native-client acceptance claim.
+
+### Previous release ([v0.1.81](https://github.com/can4hou6joeng4/Watch/releases/tag/v0.1.81))
 
 v0.1.81 closes a silent success in the zero-increment branch of `switch`. When the source session parsed to 0 turns (a legitimate empty session from `watch new`, or content cleared with only a placeholder header left) and the chain already had a reusable target, it used to return `ok:true` with `turnCount:0` and no warnings at all, and text mode even printed handed off X to Y (0 turns) as if a real handoff had happened:
 
