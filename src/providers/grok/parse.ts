@@ -3,6 +3,7 @@ import { ToolResultPairing } from '../../core/tool-pairing.js';
 import { iterateFileLines } from '../../core/read-text.js';
 import { dirname, join } from 'node:path';
 import { ensureAssistant, normalizeUserText, pushEvent, stripEmptyEvents, summarize, WATCH_CONTEXT_DISCLOSURE_PREFIX } from '../../core/rich.js';
+import { escapeControlChars } from '../../core/display.js';
 import { asJsonObject, parseJsonObject } from '../../core/jsonl.js';
 import type { ProcessEvent, SessionRef, UnifiedTurn } from '../../core/types.js';
 import { grokFailureDisclosure, grokTailFailed } from './failure.js';
@@ -68,6 +69,25 @@ function unknownBlockNote(unknown: Map<string, number>): string {
   return `[Grok 记录里有 ${total} 个未识别的消息块（${counts}），Watch 暂不解析：这部分原始内容没有并入交接，需要时请在原生 Grok 里查看]`;
 }
 
+/**
+ * `chat_history.jsonl` 顶层记录类型里 Watch 明确认识的五种。
+ *
+ * `system` 只承载系统提示，解析时本来就不进入对话；其余四种各有分支。未知类型以前直接
+ * 落到循环末尾 `continue`，连同其中的内容一起消失——与消息块未知类型同一类问题，只是
+ * 发生在更外层。`plan` 等记录是否属于正常元数据没有公开契约，所以不猜它「一定不重要」：
+ * 只计数、在交接披露里点名类型，让读者自己去原生 Grok 核对。
+ */
+const KNOWN_TOP_LEVEL_TYPES = new Set(['system', 'user', 'assistant', 'tool_result', 'reasoning']);
+
+function unknownTopLevelNote(unknown: Map<string, number>): string {
+  if (unknown.size === 0) return '';
+  const total = [...unknown.values()].reduce((a, b) => a + b, 0);
+  const counts = [...unknown.entries()]
+    .map(([type, n]) => (n > 1 ? `${type}×${n}` : type))
+    .join('、');
+  return `Grok 的 chat_history.jsonl 有 ${total} 条未识别的顶层记录（${counts}），Watch 暂不解析：无法确认其中是否包含对话内容，这些记录没有并入交接；需要时请在原生 Grok 里核对。`;
+}
+
 function parseToolArguments(raw: unknown): unknown {
   if (typeof raw === 'string') {
     try {
@@ -92,6 +112,9 @@ export async function parseGrokSession(ref: SessionRef): Promise<UnifiedTurn[]> 
   const turns: UnifiedTurn[] = [];
   const pairing = new ToolResultPairing(turns, 'grok', 'Grok');
   let sawUser = false;
+  // 顶层未知类型按 type×n 汇总，解析结束后写成一条上下文披露；不改轮次正文，
+  // 否则来源日志只多一条元数据时 turnKey 会漂移，diffTurns 会把旧提问当成新增重放。
+  const unknownTopLevel = new Map<string, number>();
   // 会话级按 callId 去重：CLI 会在行内重复登记调用，resume 重放还会让同一调用跨代再现，
   // 同一 callId 语义上就是一次调用，只保留首次
   const seenCallIds = new Set<string>();
@@ -115,6 +138,13 @@ export async function parseGrokSession(ref: SessionRef): Promise<UnifiedTurn[]> 
     const r = records[lineIndex];
     const type = typeof r.type === 'string' ? r.type : '';
     const timestamp = grokTimestamp(base, lineIndex);
+
+    if (!KNOWN_TOP_LEVEL_TYPES.has(type)) {
+      const rawLabel = type || '（缺 type）';
+      const label = escapeControlChars(rawLabel.length > 64 ? `${rawLabel.slice(0, 64)}…` : rawLabel);
+      unknownTopLevel.set(label, (unknownTopLevel.get(label) ?? 0) + 1);
+      continue;
+    }
 
     if (type === 'user') {
       const extractedContent = extractContent(r.content);
@@ -223,7 +253,7 @@ export async function parseGrokSession(ref: SessionRef): Promise<UnifiedTurn[]> 
   }
 
   pairing.finish();
-  return attachGrokSidecars(ref.filePath, stripEmptyEvents(turns));
+  return attachGrokSidecars(ref.filePath, stripEmptyEvents(turns), unknownTopLevel);
 }
 
 /**
@@ -248,7 +278,11 @@ export async function parseGrokSession(ref: SessionRef): Promise<UnifiedTurn[]> 
  * 读不出来同样不挂且不抛：用量是辅助数据，`updates.jsonl` 坏了不该让可读的内容交接失败；
  * 信息层 `grokSessionUsage()` 会在 `usage` / `open` 的 `warnings` 里单独报这个读取失败。
  */
-async function attachGrokSidecars(chatPath: string, turns: UnifiedTurn[]): Promise<UnifiedTurn[]> {
+async function attachGrokSidecars(
+  chatPath: string,
+  turns: UnifiedTurn[],
+  unknownTopLevel: Map<string, number>,
+): Promise<UnifiedTurn[]> {
   // 不让纯工具轮的空正文被披露文本替换；有真实用户轮或非空助手正文才挂载声明。
   const carrier = [...turns].reverse().find((turn) => turn.role === 'user' || turn.text.trim());
   const disclose = (message: string): void => {
@@ -256,6 +290,10 @@ async function attachGrokSidecars(chatPath: string, turns: UnifiedTurn[]): Promi
     const text = `${WATCH_CONTEXT_DISCLOSURE_PREFIX}${message}]`;
     pushEvent(carrier, { kind: 'text', summary: text, detail: text, timestamp: carrier.timestamp, provider: 'grok' });
   };
+  // 先挂顶层未知类型：`updates.jsonl` 读失败时本函数会提前返回，若放在旁路扫描之后，
+  // 这条只依赖 chat_history 的事实也会跟着消失。
+  const unknownNote = unknownTopLevelNote(unknownTopLevel);
+  if (unknownNote) disclose(unknownNote);
   let scan: Awaited<ReturnType<typeof grokUpdateScan>>;
   try {
     scan = await grokUpdateScan(join(dirname(chatPath), 'updates.jsonl'));
