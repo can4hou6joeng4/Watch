@@ -20,7 +20,20 @@ Watch 只做一件事：**把已保存的会话记录连同工作目录交到目
 
 它不提供模型、不绕过配额、不代替原生 Agent 聊天，也不默认搬迁权限、凭据或插件；接力的是已有记录，不是模型未记录的内部状态。当前实现以 CLI 会话与终端恢复为主，产品方向包含经过验证的桌面端入口，但**官方支持互通不等于 Watch 已经集成**。
 
-### 最新版本（[v0.1.91](https://github.com/can4hou6joeng4/Watch/releases/tag/v0.1.91)）
+### 最新版本（[v0.1.92](https://github.com/can4hou6joeng4/Watch/releases/tag/v0.1.92)）
+
+`watch doctor` 对可读 0 轮链尾给出与 `status` 同口径的披露。
+
+v0.1.89 / v0.1.90 让 `status` 说「链尾解析出 0 轮」并显示轮数，但排障入口一直在说另一套：`watch new` 建出的链没有来源，内容对账整条跳过，doctor 报「一切正常」；有来源的链只说「链尾比来源少 N 条记录」，那是内容漂移的说法。
+
+- **新增 `emptyTips`**：doctor 对文件在、读得出来、却解析出 0 轮的链尾单列一档，`--json` 的 `store.emptyTips` 给出 `chainName` / `provider` / `sessionId` / `filePath`。
+- **摘要与逐条**：文本模式摘要行计数「N 条链尾是空的（0 轮）」，逐条行给出 `provider:sessionId` 与下一步；`watch new` 刚建出的空链提示「还没聊过属正常」。
+- **不再误标漂移**：有来源的 0 轮链尾改说「下次切换会「成功」，但打开的是空会话」，不再记入 `driftedPairs`。
+- **退出码沿用既有口径**：空链尾是警告不是硬失败，默认 exit 0，`--strict` 才升红——与其他 doctor 警告一致。
+
+- **验证范围**：新增 3 项隔离检查（无来源链、有来源链、健康链反例），与 doctor / status 相关用例联合 62 项通过；完整隔离回归 2216 项通过，0 失败、0 跳过；类型检查、桌面构建、站点四项测试与分享图检查通过。不新增原生客户端验收结论：本轮未启动任何原生 GUI 或模型。
+
+### 上一版本（[v0.1.91](https://github.com/can4hou6joeng4/Watch/releases/tag/v0.1.91)）
 
 v0.1.91 新增中英双语指南[《为什么 resume 打开是空会话：0 轮会话的识别与恢复》](https://relay.bobochang.cn/guides/empty-session-resume-check/)。v0.1.84–v0.1.90 陆续补齐了 `open` / `switch` / `new` / `status` 四个入口的 0 轮披露，这一版把判断方式与恢复路径写成可独立阅读的文档。
 

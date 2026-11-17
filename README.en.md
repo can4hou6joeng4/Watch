@@ -20,7 +20,20 @@ The steps are on the site [guides](https://relay.bobochang.cn/en/#guides): [Clau
 
 It does not provide models, bypass usage limits, replace native agent chat, or move permissions, credentials and plugins by default. What it transfers is the recorded session, not the model's unrecorded internal state. Today the implementation is centred on CLI sessions and terminal resume; the product direction includes validated desktop entry points, but **official interoperability does not mean Watch has integrated it**.
 
-### Latest release ([v0.1.91](https://github.com/can4hou6joeng4/Watch/releases/tag/v0.1.91))
+### Latest release ([v0.1.92](https://github.com/can4hou6joeng4/Watch/releases/tag/v0.1.92))
+
+`watch doctor` now discloses a readable 0-turn chain tip the same way `status` does.
+
+v0.1.89 and v0.1.90 taught `status` to report a 0-turn chain tip and show its turn count, but the troubleshooting entry point still told another story: chains created by `watch new` have no source session, so content reconciliation skipped them entirely and doctor reported everything as fine; chains with a source only said the tip is missing N records, which is the wording for content drift.
+
+- **New `emptyTips`**: doctor reports a tip that exists, reads fine yet parses to 0 turns as its own category, with `chainName`, `provider`, `sessionId` and `filePath` under `store.emptyTips` in `--json`.
+- **Summary and per-chain rows**: the text summary counts "N chain tips are empty (0 turns)" and each row names the `provider:sessionId` plus the next step; a tip just created by `watch new` is noted as normal before any conversation.
+- **No more false drift**: a 0-turn tip with a source now reads as "the next switch will succeed but open an empty session" instead of being recorded in `driftedPairs`.
+- **Same exit-code convention**: an empty tip is a warning, not a hard failure, so the default exit code stays 0 and only `--strict` turns it red, like every other doctor warning.
+
+- **Validation scope**: 3 new isolated checks (a chain without a source, a chain with a source, and a healthy tip as the counter-example) pass 62/62 together with the doctor and status cases; the full isolated regression passes 2216 tests with zero failures and zero skips; typecheck, desktop build, the four site test files and the share-image checks pass. No native-client acceptance claim is added: no native GUI or model was started this round.
+
+### Previous release ([v0.1.91](https://github.com/can4hou6joeng4/Watch/releases/tag/v0.1.91))
 
 v0.1.91 adds a bilingual guide on [why resume opens an empty session and how to detect and recover 0-turn sessions](https://relay.bobochang.cn/en/guides/empty-session-resume-check/). Versions v0.1.84 through v0.1.90 filled in the 0-turn disclosures across `open`, `switch`, `new` and `status`; this release turns the detection rules and recovery paths into a standalone guide.
 
