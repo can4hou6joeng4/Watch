@@ -257,6 +257,8 @@ async function compressedSibling(filePath: string): Promise<{ path: string; empt
 
 /** `missing` 且找到压缩副本时的说明与下一步；没有压缩副本返回 `null`（调用方沿用自己的「已不存在」）。 */
 export type CompressedCopyNote = {
+  /** 副本形态：`intact` 可让原生重新展开；`empty` 是 0 字节，内容已丢失 */
+  kind: 'intact' | 'empty';
   /** 嵌进「会话文件${note}」这类句子的说明（不含下一步动作） */
   note: string;
   /** 下一步该做什么，**不含**「再重试」等各调用点自补的动作 */
@@ -274,6 +276,7 @@ export function compressedCopy(presence: SessionFilePresence): CompressedCopyNot
   if (presence.state !== 'missing') return null;
   if (presence.emptyCompressed) {
     return {
+      kind: 'empty',
       note: `只剩一个 0 字节的同名压缩副本 ${escapeControlChars(presence.emptyCompressed)}（内容已丢失，重新展开也拿不回内容）`,
       advice: '从备份恢复或重新开一次会话',
     };
@@ -282,6 +285,7 @@ export function compressedCopy(presence: SessionFilePresence): CompressedCopyNot
   // 不把「Codex」当事实：`.zst` 也可能是用户自己归档的。压缩语义只在 Codex 成立时给出，
   // 同时用「副本完好时」限定——这里只 stat 过一次，不打开、不解压，无法保证内容可解。
   return {
+    kind: 'intact',
     note:
       `已被压缩为 ${escapeControlChars(presence.compressed)}（本版不读压缩格式，原 .jsonl 不在；` +
       `若是 Codex 的本地线程压缩且副本完好，在 Codex 里继续该会话会重新展开为 .jsonl，之后 Watch 即可读到；` +

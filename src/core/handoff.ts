@@ -593,9 +593,13 @@ export async function createChainSession(
     const tipPresence = await sessionFilePresence(tail.toRef.filePath);
     const compressedTip = compressedCopy(tipPresence);
     if (compressedTip) {
+      // 0 字节副本不能沿用「重新开一次会话再重试」：链尾仍指向这条副本，重试会再次撞上同一处；
+      // 只能备份恢复后再试，或另起一条链。完好副本则先让原生展开。
       throw new Error(
         `链尾已是 ${providerId}，但链尾会话 ${tail.toRef.sessionId} 的文件${compressedTip.note}；` +
-          `本次无法交接也无法 resume——${compressedTip.advice}，再重试，或用 watch chain new <新名字> 另起一条链`,
+          (compressedTip.kind === 'empty'
+            ? `本次无法交接也无法 resume——从备份恢复后再试，或用 watch chain new <新名字> 另起一条链`
+            : `本次无法交接也无法 resume——${compressedTip.advice}，再重试，或用 watch chain new <新名字> 另起一条链`),
       );
     }
     const broken =
@@ -1425,7 +1429,10 @@ export async function handoff(
       if (resumeReadProblem) {
         warnings.push(
           resumeCompressed
-            ? `链尾会话 ${resumeRef.sessionId}（${targetId}）的文件${resumeCompressed.note}；下面那条 resume 命令一执行就会失败——${resumeCompressed.advice}，再重试，或 watch adopt ${targetId} --session <另一个会话 id> 换绑，或用 watch chain new <新名字> 另起一条链`
+            ? `链尾会话 ${resumeRef.sessionId}（${targetId}）的文件${resumeCompressed.note}；下面那条 resume 命令一执行就会失败——` +
+              (resumeCompressed.kind === 'empty'
+                ? `从备份恢复后再试，或 watch adopt ${targetId} --session <另一个会话 id> 换绑，或用 watch chain new <新名字> 另起一条链`
+                : `${resumeCompressed.advice}，再重试，或 watch adopt ${targetId} --session <另一个会话 id> 换绑，或用 watch chain new <新名字> 另起一条链`)
             : `链尾会话 ${resumeRef.sessionId}（${targetId}）的文件现在读不出来：${resumeReadProblem}；` +
                 `下面那条 resume 命令一执行就会失败——先修好这个文件（权限或内容）再重试` +
                 `，或 watch adopt ${targetId} --session <另一个会话 id> 换绑，或用 watch chain new <新名字> 另起一条链`,
