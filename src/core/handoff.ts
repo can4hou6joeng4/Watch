@@ -1629,7 +1629,8 @@ export async function handoff(
           `没有任何可交接的内容（0 轮），${tipAfter}。` +
           `如果这条会话本该有内容，先从备份恢复该文件（Watch 不会替你重建历史）再重试；`
         : `来源会话 ${sourceTip.ref.sessionId}（${source.displayName}）没有任何可交接的内容（0 轮）：` +
-          `${tipAfter}。`;
+          `${tipAfter}。` +
+          `如果这条会话本该有内容，先在 ${source.displayName} 里打开它确认（可能已被清空），或从备份恢复该文件（Watch 不会替你重建历史）。`;
       throw new Error(
         lead +
           zeroTurnNextStep({ target, targetId, store, history, historyFailed }),
