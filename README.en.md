@@ -20,7 +20,17 @@ The steps are on the site [guides](https://relay.bobochang.cn/en/#guides): [Clau
 
 It does not provide models, bypass usage limits, replace native agent chat, or move permissions, credentials and plugins by default. What it transfers is the recorded session, not the model's unrecorded internal state. Today the implementation is centred on CLI sessions and terminal resume; the product direction includes validated desktop entry points, but **official interoperability does not mean Watch has integrated it**.
 
-### Latest release ([v0.1.86](https://github.com/can4hou6joeng4/Watch/releases/tag/v0.1.86))
+### Latest release ([v0.1.87](https://github.com/can4hou6joeng4/Watch/releases/tag/v0.1.87))
+
+v0.1.87 closes the empty-session gap when `watch new` finds the chain tip already on the target provider. `new` refuses to create another session and answers that the existing one is ready to resume. That line only checked whether the file exists, is readable, and stopped mid-turn; it never checked whether the session has content. A legitimate empty session from `watch new codex` or `watch new grok`, or content cleared with only a placeholder header left, parses to 0 turns, yet the answer said it is ready to resume, and opening it shows nothing.
+
+- That case now names the 0-turn parse and the possibility that content was cleared, offers opening it in the native client to check or restoring the file from backup, and keeps the switch-to-the-other-side suggestion.
+- A tip with turns keeps the plain ready-to-resume wording; a tip stopped mid-turn still reports the unfinished turn first. Neither adds the 0-turn line or makes a false empty-session claim.
+- Same rule as the `open` work in v0.1.84 and the `switch` work in v0.1.86: a readable file is never described as content-is-lost.
+
+- **Validation scope**: 3 new isolated checks (readable 0-turn tip, counterexample with a healthy tip, mid-turn tip without the extra line) pass 87/87 together with r169, r168, `cli-new-*`, `cli-switch-*`, `handoff` and other new and switch cases; the full isolated regression passes 2204 tests with zero failures and zero skips; typecheck, desktop build, the four site test files (16/16) and the share-image check pass. No native-client acceptance claim is added.
+
+### Previous release ([v0.1.86](https://github.com/can4hou6joeng4/Watch/releases/tag/v0.1.86))
 
 v0.1.86 closes the empty-session gap in the `switch` fallback that says the session is ready to open. When there is no source to hand over and the chain tip already sits on the target provider, `switch` only prints one conclusion line plus a resume command. But that tip session may parse to 0 turns — a legitimate empty session from `watch new codex` or `watch new grok`, or content cleared with only a placeholder header left. The file is readable, yet the conclusion says it is ready to open, and opening it shows nothing.
 
