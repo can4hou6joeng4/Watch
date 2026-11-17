@@ -20,7 +20,17 @@ The steps are on the site [guides](https://relay.bobochang.cn/en/#guides): [Clau
 
 It does not provide models, bypass usage limits, replace native agent chat, or move permissions, credentials and plugins by default. What it transfers is the recorded session, not the model's unrecorded internal state. Today the implementation is centred on CLI sessions and terminal resume; the product direction includes validated desktop entry points, but **official interoperability does not mean Watch has integrated it**.
 
-### Latest release ([v0.1.85](https://github.com/can4hou6joeng4/Watch/releases/tag/v0.1.85))
+### Latest release ([v0.1.86](https://github.com/can4hou6joeng4/Watch/releases/tag/v0.1.86))
+
+v0.1.86 closes the empty-session gap in the `switch` fallback that says the session is ready to open. When there is no source to hand over and the chain tip already sits on the target provider, `switch` only prints one conclusion line plus a resume command. But that tip session may parse to 0 turns — a legitimate empty session from `watch new codex` or `watch new grok`, or content cleared with only a placeholder header left. The file is readable, yet the conclusion says it is ready to open, and opening it shows nothing.
+
+- That case now names the 0-turn parse and the possibility that content was cleared, offers opening it in the native client to check or restoring the file from backup, and changes the conclusion to say the resume opens an empty session (reason in the warning above).
+- A zero-byte tip still only reports the empty session file, without this extra line; a tip with turns keeps the plain ready-to-open wording and no extra warning.
+- Same rule as the `open` work in v0.1.84 and the `switch` rejection in v0.1.85: a readable file is never described as content-is-lost, and `--json` carries a `resumeTargetEmpty` flag.
+
+- **Validation scope**: 3 new isolated checks (readable 0-turn tip, counterexample with a healthy tip, zero-byte tip without the extra line) pass 119/119 together with `cli-switch-*`, `cli-zero-byte-tip-session`, `cli-new-at-tip-unfinished`, `switch-empty-chain-tip`, r156, r164, r168 and other switch and chain-tip cases; the full isolated regression passes 2201 tests with zero failures and zero skips; typecheck, desktop build, the four site test files (16/16) and the share-image check pass. No native-client acceptance claim is added.
+
+### Previous release ([v0.1.85](https://github.com/can4hou6joeng4/Watch/releases/tag/v0.1.85))
 
 v0.1.85 closes the last silent 0-turn path in `switch`. When the source session parses to 0 turns and there is no existing target session to carry over, `switch` refuses the handoff, but that error used to separate only zero-byte files from sessions with no content: a readable file parsing to 0 turns (a legitimate empty session from `watch new`, or content cleared with only a placeholder header left) got a single no content to hand over line and no next step.
 
