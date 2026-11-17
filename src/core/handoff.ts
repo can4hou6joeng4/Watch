@@ -1003,6 +1003,13 @@ export type HandoffResult = {
    * 但结论句本身也得改，否则用户复制的那条命令一执行就失败却找不到矛盾在哪。
    */
   resumeUnreadable?: boolean;
+  /**
+   * `turnCount` 为 0（零增量，且非 alreadyAtTarget）时的两种来源：
+   * `source-empty` = 来源解析出 0 轮（合法的空会话，或只剩占位头 / 内容被清空），
+   * `up-to-date` = 目标已包含来源全部内容，本次未追加。文本模式据此给出准确结论，
+   * 不再一律印「已从 X 交接 → Y（0 轮）」。
+   */
+  zeroIncrementReason?: 'source-empty' | 'up-to-date';
   /** 全部 catch-继续路径的降级披露（recordSwitch/parse/rewrite 失败等） */
   warnings: string[];
   /** 内容处置披露（追加/去重/重写计数） */
@@ -1639,6 +1646,29 @@ export async function handoff(
           `——如果这条会话本该有内容，先从备份恢复该文件再重试（Watch 不会替你重建历史）`,
       );
     }
+    // 来源 0 轮、文件却不是 0 字节：合法空会话（`watch new` / `adopt` 进来的新会话）与
+    // 「内容被清空、只剩占位头」两种形状都落在这里。以前既不拒绝也不披露，直接回 ok +
+    // turnCount:0，文本模式还印「已从 X 交接 → Y（0 轮）」——与「来源 0 轮必须拒绝或披露」相悖。
+    // 有 `into` 时不能拒绝（用户就是要切到目标那一侧），所以披露；目标同样不改动。
+    if (into && turns.length === 0) {
+      if (!emptiedSourceFile) {
+        warnings.push(
+          `来源会话 ${sourceTip.ref.sessionId}（${source.displayName}）解析出 0 轮，没有可接力的对话；` +
+            `本次只把链尾切到 ${target.displayName}，目标会话 ${into.sessionId}（${target.displayName}）未被改动` +
+            `——如果这条会话本该有内容，先在 ${source.displayName} 里打开它确认（可能已被清空），或从备份恢复该文件（Watch 不会替你重建历史）；` +
+            `如果只是挑错了会话，用 watch adopt ${sourceTip.provider} --session <另一个会话 id> 换绑`,
+        );
+      }
+      // 目标也可能同时是 0 字节（两边都没内容）：这次 resume 打开的就是一条空会话，
+      // 不能只说「目标未被改动」。非零增量分支有一模一样的披露（`emptiedTarget`）。
+      const targetPresence = await probeSessionReadable(into.filePath);
+      if (targetPresence && isEmptySessionFileReason(targetPresence)) {
+        warnings.push(
+          `目标会话 ${into.sessionId}（${target.displayName}）的${targetPresence}；` +
+            `它原有的历史已经没了，这条 resume 打开的是空会话——先从备份恢复那次丢失的内容（Watch 不会替你重建历史）`,
+        );
+      }
+    }
     // 这次零增量：目标会话已包含全部内容，结果里那条 resume 落在 `into` 自己身上。
     // 它停在做了一半的一轮上时要说——与 `open` 的目标侧同一口径（`merged = 0`，两种形状都说）。
     if (into) {
@@ -1684,6 +1714,7 @@ export async function handoff(
       resumeCommand: target.resumeCommand(resumeRef),
       fromProvider: sourceTip?.provider ?? targetId,
       turnCount: 0,
+      zeroIncrementReason: turns.length === 0 ? 'source-empty' : 'up-to-date',
       warnings,
       findings,
     };

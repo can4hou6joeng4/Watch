@@ -873,7 +873,15 @@ async function cmdSwitch(cwd: string, targetId: string, json: boolean, chain?: s
       console.log(`resume: ${escapeControlChars(result.resumeCommand)}`);
       return;
     }
-    console.log(`已从 ${result.fromProvider} 交接 → ${targetId}（${result.turnCount} 轮）`);
+    // 零增量不是「交接了 0 轮」：来源可能是 0 轮空会话，也可能目标已包含全部内容。
+    // 两种都只更新了链尾，结论必须与事实一致（旧的「已从 X 交接 → Y（0 轮）」两边都不像）。
+    if (result.turnCount === 0 && result.zeroIncrementReason === 'source-empty') {
+      console.log(`已切到 ${targetId}（链尾已更新；来源会话没有可交接的内容，本次未写入会话文件）`);
+    } else if (result.turnCount === 0 && result.zeroIncrementReason === 'up-to-date') {
+      console.log(`已切到 ${targetId}（链尾已更新；目标会话已包含全部内容，本次未追加）`);
+    } else {
+      console.log(`已从 ${result.fromProvider} 交接 → ${targetId}（${result.turnCount} 轮）`);
+    }
     console.log(`新会话: ${escapeControlChars(result.newRef.sessionId)}`);
     console.log(`文件:   ${escapeControlChars(result.newRef.filePath)}`);
     console.log('');
