@@ -773,6 +773,14 @@ export async function openSession(
             `会话 ${target.found.ref.sessionId}（${target.adapter.displayName}）的${empty}；` +
               `下面这条 resume 命令虽然能打开它，但历史内容已经没有了——如果它本该有内容，先从备份恢复这个文件（Watch 不会替你重建历史）`,
           );
+        } else {
+          // 文件可读、parse 也成功，却 0 轮：`watch new` 建出的合法空会话与「内容被清空只剩占位头」
+          // 都长这样。不说这一句时，下面那条 resume 看起来与正常会话完全一样（0 字节档已在上面说清）。
+          warnings.push(
+            `会话 ${target.found.ref.sessionId}（${target.adapter.displayName}）解析出 0 轮（没有可继续的对话）：` +
+              `可能是刚建出来的空会话，也可能内容已被清空；` +
+              `下面这条 resume 命令打开的是空会话——如果它本该有历史，先在 ${target.adapter.displayName} 里打开它确认，或从备份恢复该文件（Watch 不会替你重建历史）`,
+          );
         }
       }
       // 即将 resume 的这个会话本身就停在做了一半的工具调用上：resume 后客户端多半也停在那里
@@ -1053,6 +1061,14 @@ async function planOpenInProvider(
             `目标会话 ${sourceRef.sessionId}（${target.displayName}）的${empty}；` +
               `这次要 resume 的就是它，历史内容已经没有了——如果它本该有内容，先从备份恢复这个文件再重试（Watch 不会替你重建历史）`,
           );
+        } else {
+          // 与 `open <id>` 单独打开同一档：可读、parse 成功却 0 轮，可能刚建出来，也可能内容已被清空。
+          // `--check` 也吃这份 diagnostics，所以预检会提前说，不会等 resume 打开空会话才发现。
+          diagnostics?.push(
+            `目标会话 ${sourceRef.sessionId}（${target.displayName}）解析出 0 轮（没有可继续的对话）：` +
+              `可能是刚建出来的空会话，也可能内容已被清空；这次要 resume 的就是它——` +
+              `如果它本该有历史，先在 ${target.displayName} 里打开它确认，或从备份恢复该文件（Watch 不会替你重建历史）`,
+          );
         }
       }
       warnResumeTargetUnfinished(ownTurns, `目标会话 ${sourceRef.sessionId}（${target.displayName}）`, 0, (msg) =>
@@ -1109,7 +1125,9 @@ async function planOpenInProvider(
     const lead = empty
       ? `来源会话 ${escapeControlChars(sourceId)}（${source.adapter.displayName}）的${empty}；没有可转入的内容（0 轮）。` +
         `本次未写入任何内容——如果这条会话本该有内容，先从备份恢复该文件（Watch 不会替你重建历史）再重试`
-      : `来源会话 ${escapeControlChars(sourceId)} 没有可转入的内容（0 轮）；本次未写入任何内容`;
+      : `来源会话 ${escapeControlChars(sourceId)}（${source.adapter.displayName}）没有可转入的内容（0 轮）：` +
+        `可能是刚建出来的空会话，也可能内容已被清空；本次未写入任何内容——` +
+        `如果这条会话本该有历史，先在 ${source.adapter.displayName} 里打开它确认，或从备份恢复该文件（Watch 不会替你重建历史）再重试`;
     return {
       ok: false,
       error:
