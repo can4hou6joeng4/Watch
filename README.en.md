@@ -20,7 +20,17 @@ The steps are on the site [guides](https://relay.bobochang.cn/en/#guides): [Clau
 
 It does not provide models, bypass usage limits, replace native agent chat, or move permissions, credentials and plugins by default. What it transfers is the recorded session, not the model's unrecorded internal state. Today the implementation is centred on CLI sessions and terminal resume; the product direction includes validated desktop entry points, but **official interoperability does not mean Watch has integrated it**.
 
-### Latest release ([v0.1.84](https://github.com/can4hou6joeng4/Watch/releases/tag/v0.1.84))
+### Latest release ([v0.1.85](https://github.com/can4hou6joeng4/Watch/releases/tag/v0.1.85))
+
+v0.1.85 closes the last silent 0-turn path in `switch`. When the source session parses to 0 turns and there is no existing target session to carry over, `switch` refuses the handoff, but that error used to separate only zero-byte files from sessions with no content: a readable file parsing to 0 turns (a legitimate empty session from `watch new`, or content cleared with only a placeholder header left) got a single no content to hand over line and no next step.
+
+- That case now names the 0-turn parse and the possibility that content was cleared, and offers two paths: open it in the native client to check, or restore the file from backup (Watch does not rebuild history for you). The `watch new <target>` suggestion for starting fresh is kept.
+- A zero-byte source still says plainly that the session file is empty and only offers backup restore, instead of sending you to look for something that is already gone. Neither case describes a readable file as content-is-lost.
+- The same release fixes a site regression: the v0.1.84 release overwrote the Chinese homepage `quickIntro` with English and dropped five fields (`requirements`, `cli`, `copyAll` and two more), which rendered as `undefined` on the live site. Both intros and all fields are restored.
+
+- **Validation scope**: 3 new isolated checks (readable 0-turn source, zero-byte source, counterexample with a healthy source) pass 36/36 together with `cli-switch-*`, `handoff-zero-rewrite-preserves-dest`, r156, r164 and other switch cases; the full isolated regression passes 2198 tests with zero failures and zero skips; typecheck, desktop build, the four site test files (16/16) and the share-image check pass. No native-client acceptance claim is added.
+
+### Previous release ([v0.1.84](https://github.com/can4hou6joeng4/Watch/releases/tag/v0.1.84))
 
 v0.1.84 completes the 0-turn readable-session disclosure in `open`. Plain `open <id>`, the `open <id> --to <same provider>` fast path, and the rejection from `open <id> --to <other provider>` used to distinguish only zero-byte files; a readable file that parses to 0 turns (a legitimate empty session from `watch new`, or content cleared with only a placeholder header left) got no explanation, leaving a resume that looks completely normal or a bare no content to transfer message:
 
