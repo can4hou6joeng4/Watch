@@ -749,3 +749,45 @@ function stripCodexRequestWrapper(text: string): string {
     .join('\n')
     .trim();
 }
+
+
+/**
+ * `parse()` 返回 0 轮时，判断这份 rollout 有没有「曾经发生过对话」的反证。
+ *
+ * 合法空会话（`watch new codex`）只有 `session_meta`，不带压缩记录；`compacted` 的语义是
+ * 上下文压缩后写入的历史摘要，只可能出现在已有对话之后。真实 rollout 还可能被重建成
+ * 只剩 `session_meta + compacted`，这时 parse 返回 0 轮正是压缩前原文已不在的证据——
+ * 若被 `watch usage` 记成「合法空会话」，用户会以为这条会话从没聊过。
+ *
+ * 只认两类高置信度痕迹：顶层 `compacted` 与 response_item 的
+ * `compaction` / `context_compaction`。`session_meta + turn_context / token_count` 可能只是
+ * 一次启动或中断，证据不足，返回 null。摘要正文与 replacement_history 一律不复制。
+ */
+export async function codexZeroTurnProblem(ref: SessionRef): Promise<string | null> {
+  let total = 0;
+  let items = 0;
+  let readable = 0;
+  for await (const line of iterateFileLines(ref.filePath)) {
+    const r = parseJsonObject(line.trim());
+    if (!r) continue;
+    if (r.type === 'compacted') {
+      total += 1;
+      const message = asJsonObject(r.payload)?.message;
+      if (typeof message === 'string' && message.trim()) readable += 1;
+      continue;
+    }
+    if (r.type === 'response_item') {
+      const p = asJsonObject(r.payload);
+      if (p && (p.type === 'compaction' || p.type === 'context_compaction')) items += 1;
+    }
+  }
+  if (total === 0 && items === 0) return null;
+  const details: string[] = [];
+  if (total > 0) details.push(`${total} 条顶层压缩记录${readable > 0 ? `（${readable} 条带可读摘要）` : ''}`);
+  if (items > 0) details.push(`${items} 条压缩条目`);
+  return (
+    `这份 Codex 日志里有 ${details.join('、')}，但没有解析出任何对话轮次：` +
+    `不能当作合法空会话——压缩摘要与压缩前的历史都没有并入，` +
+    `需要时请在原生 Codex 里核对`
+  );
+}

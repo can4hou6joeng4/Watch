@@ -8,7 +8,7 @@ import { describeWriteFailureReason, type FileDigest } from './atomic.js';
 import { addFinding, type Finding } from './findings.js';
 import { escapeControlChars } from './display.js';
 import { describeBadLinesScanFailure, scanUnparsableJsonLines } from './jsonl.js';
-import { usageBadLinesDetail, usageSidecarProblem } from './usage-integrity.js';
+import { usageBadLinesDetail, usageContentBadLinesDetail, usageContentFileProblem, usageSidecarProblem } from './usage-integrity.js';
 import { cwdAliasHint, splitElsewhereByDirectory } from './cwd.js';
 import { compressedCopy, compressedRetryAdvice, describePathReadFailureReason, describeReadFailureOrSelf, emptySessionFileReasonFromStat, isEmptySessionFileReason, probeSessionReadable, sessionFilePresence } from './read-text.js';
 import { noSessionHint, unknownProviderMessage } from '../providers/registry.js';
@@ -756,8 +756,19 @@ export async function chainUsage(
      * 它说明「合计是下界」这件事本身都没确认，不能按「没有坏行」显示。
      */
     usageBadLinesScanError?: string;
-    /** 已确认解析出 0 轮（空会话）：`usage: null` 不是统计缺失，而是还没有对话内容 */
+    /**
+     * 已确认是合法空会话（主文件在、非 0 字节、无坏行、解析 0 轮、
+     * 且适配器没有给出相反证据）：`usage: null` 不是统计缺失，而是还没有对话内容。
+     */
     emptySession?: true;
+    /** `parse()` 读的内容文件有坏行：解析 0 轮不能当作空会话 */
+    contentBadLines?: number;
+    /** 内容文件坏行没扫完：连「是不是空会话」都无法确认 */
+    contentBadLinesScanError?: string;
+    /** 适配器给出的「0 轮但不是合法空会话」反证（如 Codex 只剩压缩记录） */
+    zeroTurnProblem?: string;
+    /** 用量来自旁路文件、已计入合计，但 `parse()` 读的内容文件已空 / 不可用 */
+    contentProblem?: string;
   }[];
   /** 链上有绑定、但适配器根本不给用量（未实现 `sessionUsage`；当前六家都已实现，留给将来新增的适配器）：不列出来会被当成「这一家没有用量」 */
   unsupported: string[];
@@ -808,8 +819,19 @@ export async function chainUsage(
     error?: string;
     usageBadLines?: number;
     usageBadLinesScanError?: string;
-    /** 已确认解析出 0 轮（空会话）：`usage: null` 不是统计缺失，而是还没有对话内容 */
+    /**
+     * 已确认是合法空会话（主文件在、非 0 字节、无坏行、解析 0 轮、
+     * 且适配器没有给出相反证据）：`usage: null` 不是统计缺失，而是还没有对话内容。
+     */
     emptySession?: true;
+    /** `parse()` 读的内容文件有坏行：解析 0 轮不能当作空会话 */
+    contentBadLines?: number;
+    /** 内容文件坏行没扫完：连「是不是空会话」都无法确认 */
+    contentBadLinesScanError?: string;
+    /** 适配器给出的「0 轮但不是合法空会话」反证（如 Codex 只剩压缩记录） */
+    zeroTurnProblem?: string;
+    /** 用量来自旁路文件、已计入合计，但 `parse()` 读的内容文件已空 / 不可用 */
+    contentProblem?: string;
   }[] = [];
   let total = { ...empty };
   let totalExcluded = 0;
@@ -890,23 +912,58 @@ export async function chainUsage(
         totalExcluded += 1;
         continue;
       }
-      // 「文件在、不是 0 字节、却解析出 0 轮」是 `watch new codex` / `grok` / `opencode` 建出的
-      // 合法空会话，与「有内容却原生没记 usage」在 `sessionUsage` 里都是 `null`：以前它计入
-      // `totalMissingUsage`，报告说「1 个无 usage 数据的会话」——刚建出来的空链听起来像统计漏了一份。
-      // 空会话本来就没有对话，旁路文件为空是它的正常形状（grok 新建的 `updates.jsonl` 就是 0 字节），
+      // 「文件在、不是 0 字节、却解析出 0 轮」**不必然**是合法空会话：
+      // `watch new codex` / `grok` / `opencode` 建出的空会话当然是；但 grok 内容文件有半行截断时
+      // parse 也返回 0 轮，Codex 只剩压缩记录时同样如此。判据必须四个证据同时成立：
+      // 文件可读 + 用量数据源无坏行 + 内容文件无坏行 + 适配器没有「曾有对话」的反证。
+      // 空会话的旁路文件为空是正常形状（grok 新建的 `updates.jsonl` 就是 0 字节），
       // 所以这一档要**先于**旁路检查判定，否则会把正常的新会话报成「用量数据源内容已丢失」。
       // 解析失败不改口径（仍按无 usage 数据算），不能把「读不出来」讲成「空会话」。
-      let emptySession = false;
+      let parsedZero = false;
       if (!badUsage) {
         try {
-          emptySession = (await adapter.parse(ref)).length === 0;
+          parsedZero = (await adapter.parse(ref)).length === 0;
         } catch {
-          emptySession = false;
+          parsedZero = false;
         }
       }
+      let contentBad: Awaited<ReturnType<typeof usageContentBadLinesDetail>> = null;
+      if (parsedZero) contentBad = await usageContentBadLinesDetail(adapter, ref, `${adapter.id} 会话 ${ref.sessionId}`);
+      let zeroTurnProblem: string | undefined;
+      if (parsedZero && !badUsage && !contentBad) {
+        try {
+          zeroTurnProblem = (await adapter.zeroTurnProblem?.(ref)) ?? undefined;
+        } catch (error) {
+          zeroTurnProblem = `无法确认它是不是合法空会话：${describeReadFailureOrSelf(error)}`;
+        }
+      }
+      const emptySession = parsedZero && !badUsage && !contentBad && !zeroTurnProblem;
       if (emptySession) {
         totalEmptySessions += 1;
         byProvider.push({ provider: adapter.id, sessionId: ref.sessionId, usage: null, emptySession: true });
+        continue;
+      }
+      if (contentBad) {
+        const detail = {
+          provider: adapter.id,
+          sessionId: ref.sessionId,
+          usage: null,
+          ...(contentBad.count ? { contentBadLines: contentBad.count } : {}),
+          ...(contentBad.scanFailed ? { contentBadLinesScanError: contentBad.scanError } : {}),
+        };
+        if (contentBad.scanFailed) {
+          warnings.push(`${adapter.id} 用量读取失败：${contentBad.reason}`);
+          byProvider.push({ ...detail, error: contentBad.reason });
+          totalExcluded += 1;
+          continue;
+        }
+        warnings.push(contentBad.reason);
+        byProvider.push(detail);
+        continue;
+      }
+      if (zeroTurnProblem) {
+        warnings.push(`${adapter.id} 会话 ${ref.sessionId}：${zeroTurnProblem}`);
+        byProvider.push({ provider: adapter.id, sessionId: ref.sessionId, usage: null, zeroTurnProblem });
         continue;
       }
       // 用量来自旁路文件时（grok 的 `updates.jsonl`），`ref.filePath` 是另一份文件：
@@ -921,6 +978,11 @@ export async function chainUsage(
       }
     }
     if (badUsage) warnings.push(badUsage.reason);
+    let contentProblem: string | undefined;
+    if (usage !== null) {
+      contentProblem = (await usageContentFileProblem(adapter, ref, `${adapter.id} 会话 ${ref.sessionId}`)) ?? undefined;
+      if (contentProblem) warnings.push(contentProblem);
+    }
     byProvider.push({
       provider: adapter.id,
       sessionId: ref.sessionId,
@@ -929,6 +991,7 @@ export async function chainUsage(
       // 否则消费方会把「全行损坏读不出」当成「原生无 usage 字段」
       ...(badUsage ? { usageBadLines: badUsage.count } : {}),
       ...(badUsage?.scanFailed ? { usageBadLinesScanError: badUsage.scanError } : {}),
+      ...(contentProblem ? { contentProblem } : {}),
     });
     if (usage === null && !badUsage) totalMissingUsage += 1;
     if (usage) {

@@ -113,3 +113,84 @@ export async function usageSidecarProblem(
     `先从备份恢复该文件再重试（Watch 不会替你重建用量）`
   );
 }
+
+
+/**
+ * 内容文件（`parse()` 读的那份）坏行扫描：只在用量来自旁路文件时调用。
+ *
+ * `usageBadLinesDetail()` 扫的是 `sessionUsagePath()`，grok 指向 `updates.jsonl`；
+ * `chat_history.jsonl` 被截断的半行既不会被 parse 报错，也不会计入用量坏行——
+ * parse 返回 0 轮时 `chainUsage()` 会把它当成合法空会话，把「写了一半」讲成「还没聊过」。
+ * 同文件 provider 的坏行已由用量侧覆盖，不重复扫。
+ */
+export async function usageContentBadLinesDetail(
+  adapter: ProviderAdapter,
+  ref: SessionRef,
+  label: string,
+): Promise<{ count: number; reason: string; scanFailed?: boolean; scanError?: string } | null> {
+  const usagePath = adapter.sessionUsagePath?.(ref);
+  if (!usagePath || usagePath === ref.filePath) return null;
+  const scan = await scanUnparsableJsonLines(ref.filePath);
+  if (scan.error) {
+    return {
+      count: scan.count,
+      scanFailed: true,
+      scanError: scan.error,
+      reason:
+        `${label}的内容文件 ${escapeControlChars(ref.filePath)} 坏行无法统计：${scan.error}；` +
+        `无法确认它是不是合法空会话——先确认该文件可读再重试`,
+    };
+  }
+  if (scan.count === 0) return null;
+  return {
+    count: scan.count,
+    reason:
+      `${label}的内容文件 ${escapeControlChars(ref.filePath)} 有 ${scan.count} 行无法解析（截断或损坏），解析出 0 轮：` +
+      `不能当作合法空会话（Watch 无法确认它本来有内容还是没有）；可在原生 CLI 里打开确认，或从备份恢复该文件再重试`,
+  };
+}
+
+/**
+ * `parse()` 读的内容文件本身的可用性：只在用量来自旁路文件、且 `usage !== null` 时调用。
+ *
+ * `chainUsage()` 的 presence / 0 字节检查原先整块挂在 `usage === null` 分支里：
+ * grok 的内容文件被截成 0 字节，只要 `updates.jsonl` 还留着用量，报告就照常给出合计、
+ * 一句警告都没有——「对话已经没了」在 usage 这条线上完全看不见。
+ * 这里复用 `sessionFilePresence()` 的同一套分档，但结果只进 warnings /
+ * `byProvider[].contentProblem`，不改 count、不动 total：用量确实读到了，
+ * 不能把「内容丢了」说成「用量也没统计」。
+ */
+export async function usageContentFileProblem(
+  adapter: ProviderAdapter,
+  ref: SessionRef,
+  label: string,
+): Promise<string | null> {
+  const usagePath = adapter.sessionUsagePath?.(ref);
+  if (!usagePath || usagePath === ref.filePath) return null;
+  const presence = await sessionFilePresence(ref.filePath);
+  if (presence.state === 'missing') return null;
+  const description = escapeControlChars(ref.filePath);
+  if (presence.state === 'unknown') {
+    return (
+      `${label}的内容文件 ${description} 状态无法确认：${presence.reason}；` +
+      `无法确认对话内容是否完整——先确认该文件可读再重试`
+    );
+  }
+  if (!presence.isFile) {
+    return (
+      `${label}的内容文件 ${description} 现在不是普通文件（被同名目录或设备文件占住了）；` +
+      `无法确认对话内容是否完整——先恢复该路径再重试`
+    );
+  }
+  const emptied = emptySessionFileReasonFromStat(
+    { isFile: () => presence.isFile, size: presence.size },
+    ref.filePath,
+    '内容文件',
+  );
+  if (!emptied) return null;
+  return (
+    `${label}的${emptied}；对话内容已丢失，` +
+    `这条会话的用量仍来自旁路文件并已计入合计——如果它本该有内容，` +
+    `先从备份恢复该文件再重试（Watch 不会替你重建对话内容）`
+  );
+}

@@ -3128,6 +3128,21 @@ async function cmdUsage(cwd: string, json: boolean, chain?: string): Promise<voi
     if (badLineUnscanned) {
       console.log(`  注：${badLineUnscanned} 个会话的用量数据源坏行无法统计（文件读不出来），合计是下界且程度未知——先确认这些文件可读再重试`);
     }
+    // 这些是「内容侧」的事实，与用量坏行/读取失败分列：
+    // 内容坏行、压缩记录都使解析 0 轮不能当空会话，合计里没有它们的用量；
+    // 旁路用量完好但内容文件已空时，用量已计入合计，只提醒内容已丢失。
+    const contentBadLineSessions = result.byProvider.filter((item) => item.contentBadLines || item.contentBadLinesScanError).length;
+    if (contentBadLineSessions) {
+      console.log(`  注：${contentBadLineSessions} 个会话的内容文件有无法解析的行，解析出 0 轮也不能当作空会话，合计未包含它们的用量`);
+    }
+    const zeroTurnProblemSessions = result.byProvider.filter((item) => item.zeroTurnProblem).length;
+    if (zeroTurnProblemSessions) {
+      console.log(`  注：${zeroTurnProblemSessions} 个会话解析出 0 轮，但日志显示曾有内容，不是合法空会话，合计未包含它们的用量`);
+    }
+    const contentProblemSessions = result.byProvider.filter((item) => item.contentProblem).length;
+    if (contentProblemSessions) {
+      console.log(`  注：${contentProblemSessions} 个会话的内容文件已空或不可用，对话内容已丢失；用量来自旁路文件并已计入合计`);
+    }
     console.log('');
     console.log('按会话:');
     for (const item of result.byProvider) {
@@ -3136,8 +3151,13 @@ async function cmdUsage(cwd: string, json: boolean, chain?: string): Promise<voi
       const notes: string[] = [];
       if (item.error) notes.push(`读取失败: ${item.error}`);
       else if (item.emptySession) notes.push('解析出 0 轮的空会话');
+      else if (item.zeroTurnProblem) notes.push('解析出 0 轮，但不是合法空会话（见警告）');
+      else if (item.contentBadLines || item.contentBadLinesScanError) notes.push('内容文件无法完整解析，0 轮不能当作空会话');
       else if (item.usage === null && !item.usageBadLines && !item.usageBadLinesScanError) notes.push('无 usage 字段');
       else if (item.usage === null && (item.usageBadLines || item.usageBadLinesScanError)) notes.push('未读出有效用量');
+      if (item.contentBadLines) notes.push(`内容文件另有 ${item.contentBadLines} 行无法解析`);
+      if (item.contentBadLinesScanError) notes.push(`内容文件坏行无法统计（${item.contentBadLinesScanError}）`);
+      if (item.contentProblem) notes.push(`内容文件: ${item.contentProblem}`);
       if (item.usageBadLines) {
         notes.push(`用量数据源另有 ${item.usageBadLines} 行无法解析，这些行没计入，这个数是下界`);
       }

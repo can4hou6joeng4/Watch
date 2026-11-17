@@ -18,7 +18,7 @@ import { acquireThreadWriterLock, probeThreadWriterHolders, threadWriterLockPath
 export { threadWriterLockPath };
 import type { ProcessEvent, SessionRef, UnifiedTurn } from '../../core/types.js';
 import { streamCommand } from '../../core/streamCommand.js';
-import { parseCodexSession } from './parse.js';
+import { codexZeroTurnProblem, parseCodexSession } from './parse.js';
 import { codexSessionUsage } from './usage.js';
 import {
   CodexConfigError,
@@ -894,4 +894,6 @@ export const codexAdapter: ProviderAdapter = {
   acquireWriteLock: acquireCodexWriteLock,
 
   sessionUsage: codexSessionUsage,
+
+  zeroTurnProblem: codexZeroTurnProblem,
 };

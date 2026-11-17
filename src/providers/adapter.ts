@@ -261,6 +261,15 @@ export interface ProviderAdapter {
   sessionUsagePath?(ref: SessionRef): string;
 
   /**
+   * 可选：`parse()` 返回 0 轮时，给出「这不是合法空会话」的反证；null = 没有相反证据。
+   *
+   * 只用于 `watch usage` 的 0 轮归类，不得修改 parse 结果、不伪造轮次。
+   * 目前只有 Codex 实现：只剩压缩记录的 rollout 说明压缩前存在过历史，
+   * 不能与 `watch new codex` 建出的空会话混为一谈。
+   */
+  zeroTurnProblem?(ref: SessionRef): Promise<string | null>;
+
+  /**
    * 可选：这家原生记录里的逐轮时间戳**不是真实时间**时，用一句中文说清它是怎么来的。
    *
    * `watch prompt` 会在「时间范围」那一行把它当括注印出来。没有这一项的适配器表示
