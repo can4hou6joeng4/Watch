@@ -1054,15 +1054,27 @@ async function cmdAdopt(
     // 与 switch 对齐：接入之后用户下一步就是打开这个会话，resume 命令不能只给 --json
     const adoptedAdapter = listAdapters().find((a) => a.id === result.adoptedRef.provider);
     const resumeCommand = adoptedAdapter ? adoptedAdapter.resumeCommand(result.adoptedRef) : undefined;
+    // 链记录这次到底写没写：`unchanged` 时什么都没写（已绑定 / 自动挑到别条链两条空操作分支都会走到
+    // 这里），不能再沿用「链记录已写入」——接入一条读不出来或空着的会话时，这句话会变成假话。
+    const chainWriteNote = result.unchanged ? '这条会话本来就在链上，本次没有改动任何链记录' : '链记录已写入';
     // adopt 只写链记录、不读会话内容，所以「文件本身读不出来」在这里一点都看不出来：
     // `sessions` / `recent` 会为同一条会话警告「open / switch 读它时同样会失败」，
     // adopt 却回 ok:true 并给出一条一执行就失败的 resume。`stat` 对 `chmod 000` 照常成功
     // （列目录就能接入），因此接入之后单独 open 一次确认它真的读得出来。
     const readProblem = await probeSessionReadable(result.adoptedRef.filePath);
-    if (readProblem) {
+    // 0 字节与「读不出来」必须分档：空文件打得开、只是内容已经没了，resume 打开的是空会话，
+    // 不是「一执行就会失败」。以前共用一个「读不出来 + 注定失败」的结论，把空文件讲成了权限问题。
+    const emptyFileReason = readProblem && isEmptySessionFileReason(readProblem) ? readProblem : null;
+    if (emptyFileReason) {
       result.warnings.push(
-        `接入了会话 ${result.adoptedRef.sessionId}（${adoptedAdapter?.displayName ?? result.adoptedRef.provider}），但它的会话文件现在读不出来：${readProblem}；` +
-          `链记录已写入，本次没有改动会话文件——但 ${
+        `会话 ${result.adoptedRef.sessionId}（${adoptedAdapter?.displayName ?? result.adoptedRef.provider}）的${emptyFileReason}；` +
+          `${chainWriteNote}，本次没有改动会话文件——resume 打开的是空会话，历史内容已经没有了；` +
+          `如果它本该有内容，先从备份恢复这个文件（Watch 不会替你重建历史），或用 watch adopt <provider> --session <会话 id> 换成另一条会话`,
+      );
+    } else if (readProblem) {
+      result.warnings.push(
+        `会话 ${result.adoptedRef.sessionId}（${adoptedAdapter?.displayName ?? result.adoptedRef.provider}）的会话文件现在读不出来：${readProblem}；` +
+          `${chainWriteNote}，本次没有改动会话文件——但 ${
             resumeCommand ? `resume 命令（${resumeCommand}）` : '打开这条会话'
           }一执行就会失败，先修好这个文件再打开，或用 watch adopt <provider> --session <会话 id> 换成另一条会话`,
       );
@@ -1074,12 +1086,24 @@ async function cmdAdopt(
     // 文件本身读不出来已由上面那句说清（resume 一执行就失败），不再重复解析一遍。
     if (!readProblem && adoptedAdapter) {
       try {
+        const adoptedTurns = await adoptedAdapter.parse(result.adoptedRef);
         for (const warning of describeResumeTargetUnfinished(
-          await adoptedAdapter.parse(result.adoptedRef),
+          adoptedTurns,
           `目标会话 ${result.adoptedRef.sessionId}（${adoptedAdapter.displayName}）`,
           0,
         )) {
           result.warnings.push(warning);
+        }
+        // 读得出来、也解析成功，却 0 轮：`watch new` 建出的合法空会话与「内容被清空、只剩占位头」
+        // 都长这样。adopt 不打印轮数，不说这一句时，resume 打开的是空会话这件事在输出里看不出来
+        // （0 字节那一档已由上面的空文件警告说清，这里不重复）。
+        if (adoptedTurns.length === 0) {
+          result.warnings.push(
+            `会话 ${result.adoptedRef.sessionId}（${adoptedAdapter.displayName}）解析出 0 轮（没有可继续的对话）：` +
+              `可能是刚建出来的空会话，也可能内容已被清空；${chainWriteNote}，本次没有改动会话文件——resume 打开的是空会话；` +
+              `如果它本该有历史，先在 ${adoptedAdapter.displayName} 里打开它确认，或从备份恢复该文件（Watch 不会替你重建历史）；` +
+              `如果挑错了会话，用 watch adopt ${result.adoptedRef.provider} --session <另一个会话 id> 换绑`,
+          );
         }
       } catch (error) {
         // 解析不了不等于没问题：至少要说成「没能确认」，不能沉默
