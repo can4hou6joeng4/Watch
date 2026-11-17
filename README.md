@@ -20,7 +20,17 @@ Watch 只做一件事：**把已保存的会话记录连同工作目录交到目
 
 它不提供模型、不绕过配额、不代替原生 Agent 聊天，也不默认搬迁权限、凭据或插件；接力的是已有记录，不是模型未记录的内部状态。当前实现以 CLI 会话与终端恢复为主，产品方向包含经过验证的桌面端入口，但**官方支持互通不等于 Watch 已经集成**。
 
-### 最新版本（[v0.1.90](https://github.com/can4hou6joeng4/Watch/releases/tag/v0.1.90)）
+### 最新版本（[v0.1.91](https://github.com/can4hou6joeng4/Watch/releases/tag/v0.1.91)）
+
+v0.1.91 新增中英双语指南[《为什么 resume 打开是空会话：0 轮会话的识别与恢复》](https://relay.bobochang.cn/guides/empty-session-resume-check/)。v0.1.84–v0.1.90 陆续补齐了 `open` / `switch` / `new` / `status` 四个入口的 0 轮披露，这一版把判断方式与恢复路径写成可独立阅读的文档。
+
+- **区分两种「空」**：0 轮可读（`watch new` 建出的合法空会话、只剩占位头）与 0 字节（进程被杀、磁盘满、只写了一半）；Codex 的归属写在 rollout 首行，截成 0 字节后连反查都会失败。
+- **读 disclosures**：从 `watch status` 的链尾行读起（`← 链尾（N 轮）` / 「解析出 0 轮」），对应 `--json` 的 `chainTipTurns`、`chainTipEmpty`，以及 `switch` 的 `notes`、`resumeTargetEmpty`。
+- **三条恢复路径**：备份恢复后再 resume、`watch adopt <provider> --session <id>` 换绑、`watch chain new <新名字>` 另起一条链；Watch 不重建历史，也不自动删改 0 字节文件。
+
+- **验证范围**：站点新增 zh / en 两个页面，sitemap、`llms.txt` 与 IndexNow URL 列表同步；站点四项测试 16/16 通过，完整隔离回归 2213 项通过，0 失败、0 跳过；类型检查、桌面构建与分享图检查通过。不新增原生客户端验收结论。
+
+### 上一版本（[v0.1.90](https://github.com/can4hou6joeng4/Watch/releases/tag/v0.1.90)）
 
 v0.1.90 让 `watch status` 的链尾行带上轮数。v0.1.89 已经让 `status` 对可读 0 轮链尾披露；这一版把同一份 `parse` 结果里的轮数也显示出来，`← 链尾（N 轮）` 一眼看到链尾还剩多少，不用再跑 `switch` 或打开原生客户端才知道。
 

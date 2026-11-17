@@ -120,3 +120,25 @@ Watch (Chinese: 值更, also called AgentRelay) is a free, local-only CLI and ma
   A: Only when the official reset is not enough and Codex still has quota. The handoff steps did not change with Opus 5.5.
 
 ---
+
+### Guide: Why resume Opens an Empty Session: Detecting and Recovering 0-Turn Sessions (为什么 resume 打开是空会话：0 轮会话的识别与恢复)
+- URL (zh): https://relay.bobochang.cn/guides/empty-session-resume-check/
+- URL (en): https://relay.bobochang.cn/en/guides/empty-session-resume-check/
+- Direct Answer (en): An empty session after resume usually means the file has no turns left: a legitimate empty session created by watch new, content cleared with only a placeholder header left, or a zero-byte file. Check the turn count on the chain-tip row in watch status. Watch does not rebuild history for you; restore the file from backup, rebind to another session, or start a new chain.
+- 核心解答 (zh): resume 打开空会话，通常是因为这条会话文件里没有可继续的对话：可能是 watch new 建出的合法空会话、内容被清空只剩占位头，也可能是 0 字节文件。用 watch status 看链尾行的轮数即可判断；Watch 不会替你重建历史，只能从备份恢复、换绑到另一条会话，或另起一条链。
+
+#### Procedure Steps:
+1. **Step 1: Read the chain-tip row in status**: Run watch status. Since v0.1.90 the chain-tip row shows its turn count, for example a chain tip with 12 turns; a 0-turn parse says it parsed 0 turns and points at the warning above; an unreadable or missing file carries no count. In JSON the fields are chainTipTurns and chainTipEmpty, and chainTipTurns exists only when the parse succeeds.
+1. **Step 2: Read the four warning cases**: The same result separates zero bytes (the session file is empty), readable 0 turns (parsed 0 turns, nothing to continue), unreadable content (permissions or content), and a missing file (deleted or moved). Each case has a different next step; do not rebind just because you saw the word empty.
+1. **Step 3: Check whether it is a brand-new empty session**: A session created by watch new is empty by design. It is the normal starting point for a first chain: the next switch or open --to uses it as the target and merges the source content in. If the chain tip is that new session and you have not switched yet, 0 turns is expected, not damage.
+1. **Step 4: Recover according to the case**: Content cleared: restore the file from backup and retry resume; Watch does not rebuild history. Wrong session: rebind the chain tip with watch adopt <provider> --session <another-session-id>. Keep both sides: start another chain with watch chain new <new-chain-name> and leave the original records untouched. Zero bytes with no backup: nothing is left to recover, treat it as a new session.
+
+#### Frequently Asked Questions:
+- **Q: Did Watch lose the history when resume opened an empty session?**
+  A: Usually not. Watch reads the source first and appends to the target with write guards and atomic writes; a 0-turn session is usually empty from the start (a new session from watch new) or was cleared or truncated earlier. To check whether a Watch write caused it, compare the turn count and warnings in the handoff result with your backup file.
+- **Q: What is the difference between 0 turns and 0 bytes?**
+  A: 0 turns means the file is readable and has a valid session header but no conversation; it may be a new session or only a placeholder header left behind. 0 bytes means the file itself is empty, from a killed process, a full disk or a half write, and even the session metadata may be gone. The first may just not have started; the second should send you to backups first.
+- **Q: Can Watch restore a cleared session automatically?**
+  A: No. Watch only reads and writes local session files. It has no history backup and does not invent conversation. Recovery comes from your own backup (Time Machine, copies outside the repo, editor history), and you resume after restoring the file.
+
+---

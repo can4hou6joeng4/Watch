@@ -20,7 +20,17 @@ The steps are on the site [guides](https://relay.bobochang.cn/en/#guides): [Clau
 
 It does not provide models, bypass usage limits, replace native agent chat, or move permissions, credentials and plugins by default. What it transfers is the recorded session, not the model's unrecorded internal state. Today the implementation is centred on CLI sessions and terminal resume; the product direction includes validated desktop entry points, but **official interoperability does not mean Watch has integrated it**.
 
-### Latest release ([v0.1.90](https://github.com/can4hou6joeng4/Watch/releases/tag/v0.1.90))
+### Latest release ([v0.1.91](https://github.com/can4hou6joeng4/Watch/releases/tag/v0.1.91))
+
+v0.1.91 adds a bilingual guide on [why resume opens an empty session and how to detect and recover 0-turn sessions](https://relay.bobochang.cn/en/guides/empty-session-resume-check/). Versions v0.1.84 through v0.1.90 filled in the 0-turn disclosures across `open`, `switch`, `new` and `status`; this release turns the detection rules and recovery paths into a standalone guide.
+
+- **Two kinds of empty**: a readable 0-turn file (a legitimate empty session from `watch new`, or only a placeholder header left) versus a zero-byte file (killed process, full disk, half a write). Codex stores attribution in the first rollout line, so truncating to zero bytes also breaks lookup.
+- **Reading the disclosures**: start from the chain-tip row in `watch status` (a turn count, or a 0-turn note), which maps to `chainTipTurns` and `chainTipEmpty` in `--json`, plus `notes` and `resumeTargetEmpty` from `switch`.
+- **Three recovery paths**: restore from backup and resume, rebind with `watch adopt <provider> --session <id>`, or start another chain with `watch chain new <name>`. Watch does not rebuild history and never deletes or repairs a zero-byte file on its own.
+
+- **Validation scope**: two new pages, zh and en, with sitemap, `llms.txt` and the IndexNow URL list updated; the four site test files pass 16/16, the full isolated regression passes 2213 tests with zero failures and zero skips, and typecheck, desktop build and share-image checks pass. No native-client acceptance claim is added.
+
+### Previous release ([v0.1.90](https://github.com/can4hou6joeng4/Watch/releases/tag/v0.1.90))
 
 v0.1.90 adds the turn count to the chain-tip row in `watch status`. v0.1.89 made `status` disclose a readable 0-turn chain tip; this version also shows the turn count from the same `parse`, so the remaining content of the chain tip is visible at a glance instead of requiring a `switch` or opening the native client.
 
