@@ -796,7 +796,7 @@ export const guides = [
             items: [
               {
                 title: '步骤 1：看 status 的链尾行',
-                body: '执行 watch status。链尾那一行在 v0.1.90 起会显示轮数，例如「← 链尾（12 轮）」；解析出 0 轮时写「（解析出 0 轮，原因见上方警告）」；文件读不出来或不存在时不给轮数。JSON 输出里对应 chainTipTurns 与 chainTipEmpty 两个字段，chainTipTurns 只在解析成功时存在。多条链时 watch chain list 的链尾行同样带轮数（v0.1.93）；拿不准时 watch doctor 的 store.emptyTips 会列出解析出 0 轮的链尾（v0.1.92）。',
+                body: '执行 watch status。链尾那一行在 v0.1.90 起会显示轮数，例如「← 链尾（12 轮）」；解析出 0 轮时写「（解析出 0 轮，原因见上方警告）」；文件读不出来或不存在时不给轮数。JSON 输出里对应 chainTipTurns 与 chainTipEmpty 两个字段，chainTipTurns 只在解析成功时存在。多条链时 watch chain list 的链尾行同样带轮数（v0.1.93）；拿不准时 watch doctor 的 store.emptyTips 会列出解析出 0 轮的链尾（v0.1.92）。watch new 的 --json 也报实际解析出的轮数（v0.1.94）：claude / pi 会写出一条占位 user，所以显示 1 轮，codex / grok / opencode 是 0 轮。',
               },
               {
                 title: '步骤 2：按警告分档读原因',
@@ -874,7 +874,7 @@ export const guides = [
             items: [
               {
                 title: 'Step 1: Read the chain-tip row in status',
-                body: 'Run watch status. Since v0.1.90 the chain-tip row shows its turn count, for example a chain tip with 12 turns; a 0-turn parse says it parsed 0 turns and points at the warning above; an unreadable or missing file carries no count. In JSON the fields are chainTipTurns and chainTipEmpty, and chainTipTurns exists only when the parse succeeds. With several chains, the tip row in watch chain list carries the same count (v0.1.93); when in doubt, store.emptyTips in watch doctor lists tips that parse to 0 turns (v0.1.92).',
+                body: 'Run watch status. Since v0.1.90 the chain-tip row shows its turn count, for example a chain tip with 12 turns; a 0-turn parse says it parsed 0 turns and points at the warning above; an unreadable or missing file carries no count. In JSON the fields are chainTipTurns and chainTipEmpty, and chainTipTurns exists only when the parse succeeds. With several chains, the tip row in watch chain list carries the same count (v0.1.93); when in doubt, store.emptyTips in watch doctor lists tips that parse to 0 turns (v0.1.92). watch new --json also reports the actual parsed turn count (v0.1.94): claude and pi write a placeholder user message, so it shows 1 turn, while codex, grok and opencode show 0.',
               },
               {
                 title: 'Step 2: Read the four warning cases',
