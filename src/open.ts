@@ -1119,12 +1119,12 @@ async function planOpenInProvider(
         // 原因按 errno 说清楚：权限问题会被「已不存在」引去白换一次绑定；压缩副本又相反，
         // 它还在、只是本版不读，必须说「让原生展开」而不是让人重建历史。
         const copy = compressedCopy(await sessionFilePresence(chainPaired.filePath));
-        // 0 字节副本与 pairedEmpty 同理：本次改用内容匹配或新建，但链记录仍指向这条死副本，
-        // 下一次 switch 会再次撞上；只说「不沿用」会让用户以为链已经跟着走了。
-        const chainStillBound = copy?.kind === 'empty'
-          ? `；链绑定仍指向这条 0 字节副本——本次改用内容匹配或新建不会改动链记录，之后的 switch 仍会撞上它；` +
-            `从备份恢复后再试，或 watch adopt ${target.id} --session <另一个会话 id> 换绑，或用 watch chain new <新名字> 另起一条链`
-          : '';
+        // 与 pairedEmpty 同理：本次改用内容匹配或新建，但 open 不写链记录，链仍指向这条
+        // 不可用的会话，下一次 switch 会再次撞上。完好压缩副本除外——重新展开后同一会话可复用。
+        const chainStillBound = copy?.kind === 'intact'
+          ? ''
+          : `；链绑定仍指向${copy ? '这条 0 字节副本' : '它'}——本次改用内容匹配或新建不会改动链记录，之后的 switch 仍会落回这条会话；` +
+            `${copy ? '从备份恢复后再试' : '先按上面的原因处理后再试'}，或 watch adopt ${target.id} --session <另一个会话 id> 换绑，或用 watch chain new <新名字> 另起一条链`;
         diagnostics?.push(
           `链上 ${target.displayName} 会话 ${chainPaired.sessionId} 本次不沿用：${
             copy?.note ?? describeSessionReadFailure(chainPaired.filePath, error)
