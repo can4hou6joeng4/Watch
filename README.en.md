@@ -20,7 +20,17 @@ The steps are on the site [guides](https://relay.bobochang.cn/en/#guides): [Clau
 
 It does not provide models, bypass usage limits, replace native agent chat, or move permissions, credentials and plugins by default. What it transfers is the recorded session, not the model's unrecorded internal state. Today the implementation is centred on CLI sessions and terminal resume; the product direction includes validated desktop entry points, but **official interoperability does not mean Watch has integrated it**.
 
-### Latest release ([v0.1.88](https://github.com/can4hou6joeng4/Watch/releases/tag/v0.1.88))
+### Latest release ([v0.1.89](https://github.com/can4hou6joeng4/Watch/releases/tag/v0.1.89))
+
+v0.1.89 closes the 0-turn chain-tip gap in `watch status`. The chain-tip check only asked whether the file exists, is a regular file, has a confirmable state, and is readable. A readable tip that parses to 0 turns, such as a legitimate empty session from `watch new codex` / `watch new grok`, or content cleared with only a placeholder header left, was still marked as the chain tip and recommended to the user, and copying its resume command opened an empty session. After v0.1.84 through v0.1.88 covered the `open`, `switch` and `new` paths, `status` was the last entry that called a session your chain tip without checking its content.
+
+- That case now names the 0-turn parse and the possibility that content was cleared in `warnings`, offers opening it in the native client to check or restoring the file from backup, and adds a `chainTipEmpty` flag to the JSON result.
+- Text mode marks the chain-tip row with a note pointing at the warning above.
+- A zero-byte tip stays covered by the existing empty-file warning with no extra line; a parse failure does not enter this case, since format damage is reported by the `open` / `switch` prechecks.
+
+- **Validation scope**: 3 new isolated checks (readable 0-turn tip, healthy-tip counterexample, zero-byte tip without the extra line) pass 60/60 together with `cli-status-*`, `cli-doctor*`, `cli-store-reason-*`, `doctor-*` and other status and doctor cases; the full isolated regression passes 2210 tests with zero failures and zero skips; typecheck, desktop build, the four site test files (16/16), and the share-image checks pass. No native-client acceptance claim is added.
+
+### Previous release ([v0.1.88](https://github.com/can4hou6joeng4/Watch/releases/tag/v0.1.88))
 
 v0.1.88 closes the result-note gap when `watch switch` merges content into an empty target session. When the target parses to 0 turns while the file is readable and not zero bytes, `switch` merged the source content but only reported how many turns were handed over, so the user could not tell that those turns are now the whole session, nor where to look if it should have older history.
 
