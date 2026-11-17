@@ -20,7 +20,17 @@ The steps are on the site [guides](https://relay.bobochang.cn/en/#guides): [Clau
 
 It does not provide models, bypass usage limits, replace native agent chat, or move permissions, credentials and plugins by default. What it transfers is the recorded session, not the model's unrecorded internal state. Today the implementation is centred on CLI sessions and terminal resume; the product direction includes validated desktop entry points, but **official interoperability does not mean Watch has integrated it**.
 
-### Latest release ([v0.1.82](https://github.com/can4hou6joeng4/Watch/releases/tag/v0.1.82))
+### Latest release ([v0.1.83](https://github.com/can4hou6joeng4/Watch/releases/tag/v0.1.83))
+
+v0.1.83 closes the empty-session disclosure gap in `adopt`. `adopt` only writes the chain record and never reports a turn count; binding a session whose file is readable but parses to 0 turns (a legitimate empty session from `watch new`, or content cleared with only a placeholder header left) still printed a successful bind plus a resume command, with no way to see the resumed session is empty:
+
+- The warnings now name the 0-turn parse, say the resumed session is empty, and offer opening it to check, restoring from backup, or rebinding with `watch adopt … --session <another session id>`.
+- Zero-byte files are split from unreadable ones: an empty file opens fine and only lost its content, so it is no longer described as a permission problem or given a resume-will-fail claim.
+- The `unchanged` no-op path (the session was already bound) no longer says the chain record was written; the wording follows whether this run actually wrote anything.
+
+- **Validation scope**: 3 new isolated checks (0-turn readable session, zero-byte session, rebind to another 0-turn session) pass 19/19 together with the 10 existing `cli-adopt-*` cases; the full isolated regression passes 2191 tests with zero failures and zero skips; typecheck, desktop build, site build and share-image checks pass. No native-client acceptance claim is added.
+
+### Previous release ([v0.1.82](https://github.com/can4hou6joeng4/Watch/releases/tag/v0.1.82))
 
 v0.1.82 closes the 0-turn disclosure gap in `open <target> --from <source>`. That path only distinguished zero-byte files before; when the file is not zero bytes but parses to 0 turns (a legitimate empty session from `watch new`, or content cleared with only a placeholder header left), the zero-increment branch used to word it as everything from the source is already in the target, while nothing was merged at all:
 
