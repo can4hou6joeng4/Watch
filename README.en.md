@@ -20,7 +20,17 @@ The steps are on the site [guides](https://relay.bobochang.cn/en/#guides): [Clau
 
 It does not provide models, bypass usage limits, replace native agent chat, or move permissions, credentials and plugins by default. What it transfers is the recorded session, not the model's unrecorded internal state. Today the implementation is centred on CLI sessions and terminal resume; the product direction includes validated desktop entry points, but **official interoperability does not mean Watch has integrated it**.
 
-### Latest release ([v0.1.74](https://github.com/can4hou6joeng4/Watch/releases/tag/v0.1.74))
+### Latest release ([v0.1.75](https://github.com/can4hou6joeng4/Watch/releases/tag/v0.1.75))
+
+v0.1.75 fixes the next step v0.1.74 gave when the chain tip already belongs to the target provider. The `switch` already-at-target warning and the same-provider branch of `watch chain new` reused the shared advice "restore from backup or start a new session, then retry" for a zero-byte compressed copy. But the chain still points at that copy, starting a new session does not change the chain record, and the retry hits the same failure every time. `compressedCopy()` now returns a structured `kind: 'intact' | 'empty'`, so call sites no longer infer the tier from wording:
+
+- `watch chain new` for the tip's provider: a zero-byte copy now says "restore from backup and try again, or start a new chain with watch chain new <new name>"; an intact copy still says to let it re-expand first, then retry or start a new chain.
+- The `switch` already-at-target resume warning follows the same split: a zero-byte copy offers "restore from backup and try again, or rebind with watch adopt ..., or start a new chain", and drops the retry path that cannot succeed.
+- Every other call site (`status`, `chain list`, `doctor`, parse paths and so on) keeps its advice: their next step is not an immediate retry of the same chain, so starting a new session remains a valid rebuild.
+
+- **Validation scope**: 2 new isolated checks (chain new, empty and intact tiers) pass together with the 8 assertions from r157; the full isolated regression passes 2171 tests with zero failures and zero skips. The probe is still a single `lstat` with no reading, decompression or modification of `.zst`; this adds no native-client acceptance claim.
+
+### Previous release ([v0.1.74](https://github.com/can4hou6joeng4/Watch/releases/tag/v0.1.74))
 
 v0.1.74 adds the zero-byte compressed-copy tier. v0.1.73 made `switch`, `status`, `chain list`, `doctor`, `adopt` and Codex lookup probe the sibling `.jsonl.zst` first, but counted only non-empty regular files as compressed copies. A zero-byte `.zst` was silently treated as absent, so those paths fell back to "the file no longer exists" or told you to continue the session in Codex so it re-expands, which cannot return content from an empty copy. `sessionFilePresence()` now records it as `emptyCompressed`, and both the wording and the next step say the content is lost:
 

@@ -20,7 +20,17 @@ Watch 只做一件事：**把已保存的会话记录连同工作目录交到目
 
 它不提供模型、不绕过配额、不代替原生 Agent 聊天，也不默认搬迁权限、凭据或插件；接力的是已有记录，不是模型未记录的内部状态。当前实现以 CLI 会话与终端恢复为主，产品方向包含经过验证的桌面端入口，但**官方支持互通不等于 Watch 已经集成**。
 
-### 最新版本（[v0.1.74](https://github.com/can4hou6joeng4/Watch/releases/tag/v0.1.74)）
+### 最新版本（[v0.1.75](https://github.com/can4hou6joeng4/Watch/releases/tag/v0.1.75)）
+
+v0.1.75 修正 v0.1.74 在「链尾已是目标 provider」时给出的下一步。`switch` 的 already-at-target 警告与 `watch chain new` 的同家分支，对 0 字节压缩副本沿用了共用的 advice「从备份恢复或重新开一次会话，再重试」——但链尾仍指向这条副本，重新开一次会话不会改变链记录，重试会再次撞上同一处，必然失败。现在 `compressedCopy()` 的返回值带上结构化的 `kind: 'intact' | 'empty'`，调用点不必再靠文案判断：
+
+- `watch chain new <链尾同家>`：0 字节副本改为「从备份恢复后再试，或用 watch chain new <新名字> 另起一条链」；完好副本仍给「先让它重新展开」，再重试或另起链。
+- `switch` 的 already-at-target resume 警告同构：0 字节副本给「从备份恢复后再试，或 watch adopt … 换绑，或 watch chain new …」，不再给那条重试必然失败的路径。
+- 其余调用点（`status` / `chain list` / `doctor` / 解析路径等）的 advice 不变：它们的下一步不是「立刻重试同一条链」，重开会话仍是成立的重建方式。
+
+- **验证范围**：新增 2 项隔离检查（chain new 同家的 empty / intact 两档），与 r157 的 8 项断言一并通过；完整隔离回归 2171 项通过，0 失败、0 跳过。仍只做一次 `lstat`，不读取、不解压、不修改 `.zst`；不新增原生客户端验收结论。
+
+### 上一版本（[v0.1.74](https://github.com/can4hou6joeng4/Watch/releases/tag/v0.1.74)）
 
 v0.1.74 补齐「0 字节压缩副本」这一档。v0.1.73 把 `switch` / `status` / `chain list` / `doctor` / `adopt` / Codex 反查都改成先探同名 `.jsonl.zst`，但只把非空普通文件认作压缩副本——0 字节的 `.zst` 被静默当成「没有副本」，于是这些通道又说回「文件已不存在」，或让人「在 Codex 里继续该会话重新展开」一个拿不回任何内容的副本。现在 `sessionFilePresence()` 把它记成 `emptyCompressed`，说明与下一步统一按「内容已丢失」分档：
 
