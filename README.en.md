@@ -20,7 +20,20 @@ The steps are on the site [guides](https://relay.bobochang.cn/en/#guides): [Clau
 
 It does not provide models, bypass usage limits, replace native agent chat, or move permissions, credentials and plugins by default. What it transfers is the recorded session, not the model's unrecorded internal state. Today the implementation is centred on CLI sessions and terminal resume; the product direction includes validated desktop entry points, but **official interoperability does not mean Watch has integrated it**.
 
-### Latest release ([v0.1.72](https://github.com/can4hou6joeng4/Watch/releases/tag/v0.1.72))
+### Latest release ([v0.1.73](https://github.com/can4hou6joeng4/Watch/releases/tag/v0.1.73))
+
+v0.1.73 closes the gap on the main `switch` paths. v0.1.72 recognised `.jsonl.zst` only in the zero-result branch, while the common `switch` goes through the chain-paired target, the mtime fallback, already-at-target and source parsing. Those paths still called "original file absent, sibling `.zst` present" a missing file and silently rebound. They now probe `sessionFilePresence()` first, as does chain-pair reuse in `open --to`:
+
+- When the target exists only as a compressed copy, the warning says it was compressed and that this run creates a new session to carry the content, with the next step of letting the native client re-expand it. Already-at-target no longer tells you to repair the file; a source that exists only as `.zst` no longer produces a "no longer exists" error.
+- `chainUsage` now reaches the compressed wording for Codex too: `sessionUsage` throws on a missing file instead of returning null, so the catch branch checks presence.
+- `doctor` broken tips store `compressedPath`, so the per-chain line prints the `.zst` that actually exists, not the absent `.jsonl`; a TOCTOU in the recheck now yields unknown instead of missing.
+- `adopt` zero results are split by structured `kinds` (`damaged` / `compressed`): compressed copies get "adopt after re-expanding", damaged attribution gets "adopt after restoring" with the new-session alternative, and mixed counts say both. Advice text is no longer matched by substring.
+- A `.zst` counts only when it is a non-empty regular file, and the wording says "if this is Codex local-thread compression and the copy is intact". Codex lookup now records name-matching symlinked rollouts or date directories as diagnostics and says it cannot confirm the session exists, instead of a clean "not found".
+- The `open` found-unreadable headline adds "restore from backup or start a new session" for zero-byte files.
+
+- **Validation scope**: all 10 new isolated checks pass, covering three `switch` paths, `chainUsage`, three `adopt` tiers, an empty `.zst`, symlink lookup and the `open` headline; the final full isolated regression passes 2161 tests with zero failures and zero skips; typecheck, desktop build, site build and share-image checks pass. The `.zst` probe is still a single `lstat` with no reading, decompression or modification; code-block and native-client acceptance boundaries are unchanged.
+
+### Previous release ([v0.1.72](https://github.com/can4hou6joeng4/Watch/releases/tag/v0.1.72))
 
 v0.1.72 fixes how a session that exists only as a Codex compressed copy is described across the chain. Codex compresses idle rollouts into a sibling `.jsonl.zst` and removes the plain copy; `status`, `switch`, `chain list` and `doctor` previously only stat'ed the original path and reported it as a missing file, with rebinding as the next step. `sessionFilePresence()` now probes the sibling `.zst` once in read-only mode when the original is absent (no decompression, no changes). On a hit it says the file was compressed by Codex and still exists, with the next step of continuing the session in Codex so it re-expands to `.jsonl`:
 

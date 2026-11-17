@@ -20,7 +20,20 @@ Watch 只做一件事：**把已保存的会话记录连同工作目录交到目
 
 它不提供模型、不绕过配额、不代替原生 Agent 聊天，也不默认搬迁权限、凭据或插件；接力的是已有记录，不是模型未记录的内部状态。当前实现以 CLI 会话与终端恢复为主，产品方向包含经过验证的桌面端入口，但**官方支持互通不等于 Watch 已经集成**。
 
-### 最新版本（[v0.1.72](https://github.com/can4hou6joeng4/Watch/releases/tag/v0.1.72)）
+### 最新版本（[v0.1.73](https://github.com/can4hou6joeng4/Watch/releases/tag/v0.1.73)）
+
+v0.1.73 补齐压缩副本在 `switch` 主路径上的口径。v0.1.72 只在「一个会话都挑不到」的零结果分支认 `.jsonl.zst`，而最常见的 `switch` 会走链上配对目标、mtime 兜底、already-at-target 与来源解析这几条路径——它们仍把「原路径不在、同名 `.zst` 在」讲成「文件已不存在」并静默改绑。现在这几处以及 `open --to` 的链配对复用都先探一次 `sessionFilePresence()`：
+
+- 目标会话只剩压缩副本时，警告说「已被压缩、本次改为新建会话承接内容」，并给出让原生重新展开的下一步；already-at-target 不再劝人「先修好这个文件」；来源只剩压缩副本时，错误里不再出现「已不存在」。
+- `chainUsage` 的 Codex 分支以前走不到压缩说明（`sessionUsage` 对缺失文件是抛错而非返回 null），现在 catch 里也按 presence 分档。
+- `doctor` 的 `brokenTips` 用 `compressedPath` 记录真正存在的 `.zst`，逐链行不再打印不存在的 `.jsonl`；路径复查撞上 TOCTOU 时返回 unknown，不按缺失讲。
+- `adopt` 零结果按结构化的 `kinds`（`damaged` / `compressed`）分档：压缩副本给「展开后接入」，坏归属元数据给「恢复后接入」并保留开新会话的备选，混合档两者都说；不再靠匹配 advice 文案。
+- `.zst` 只认非空普通文件，措辞改为「若是 Codex 的本地线程压缩且副本完好」；Codex 反查遇到名字匹配的符号链接 rollout 或日期目录时记入诊断，改说「无法确认它是否存在」，不再干净地回「未找到」。
+- `open` 的 found-unreadable 第一句对 0 字节文件补上「从备份恢复或重新开一次会话」。
+
+- **验证范围**：新增 10 项隔离检查全部通过，覆盖 `switch` 三条路径、`chainUsage`、`adopt` 三档、`.zst` 空文件、符号链接反查与 `open` headline；最终完整隔离回归 2161 项通过，0 失败、0 跳过；类型检查、桌面构建、站点与分享图检查通过。`.zst` 仍只做一次 `lstat`，不读取、不解压、不修改；代码块与原生客户端验收边界不变。
+
+### 上一版本（[v0.1.72](https://github.com/can4hou6joeng4/Watch/releases/tag/v0.1.72)）
 
 v0.1.72 修正「只剩 Codex 压缩副本」的会话在链路上的说法。Codex 会把闲置 rollout 压成同名 `.jsonl.zst` 并删除普通副本；以前 `status` / `switch` / `chain list` / `doctor` 只对原路径 `stat`，把它讲成「文件已不存在」，下一步还让人重新绑定。现在 `sessionFilePresence()` 在缺失时只读探一次同名 `.zst`（不解压、不改动），命中就说「已被 Codex 压缩，文件还在」，并给出「在 Codex 里继续该会话会重新展开为 .jsonl」的下一步：
 
