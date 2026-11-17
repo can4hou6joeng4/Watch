@@ -20,7 +20,17 @@ The steps are on the site [guides](https://relay.bobochang.cn/en/#guides): [Clau
 
 It does not provide models, bypass usage limits, replace native agent chat, or move permissions, credentials and plugins by default. What it transfers is the recorded session, not the model's unrecorded internal state. Today the implementation is centred on CLI sessions and terminal resume; the product direction includes validated desktop entry points, but **official interoperability does not mean Watch has integrated it**.
 
-### Latest release ([v0.1.89](https://github.com/can4hou6joeng4/Watch/releases/tag/v0.1.89))
+### Latest release ([v0.1.90](https://github.com/can4hou6joeng4/Watch/releases/tag/v0.1.90))
+
+v0.1.90 adds the turn count to the chain-tip row in `watch status`. v0.1.89 made `status` disclose a readable 0-turn chain tip; this version also shows the turn count from the same `parse`, so the remaining content of the chain tip is visible at a glance instead of requiring a `switch` or opening the native client.
+
+- **With content**: the chain-tip row reads as a chain tip with N turns.
+- **0 turns**: it still reads as a 0-turn parse note pointing at the warning above, not as a plain zero count.
+- **No stand-in**: a zero-byte tip and a parse failure carry no turn count; the `chainTipTurns` field in `--json` exists only when the `parse` succeeds (`undefined` means it did not parse), and no zero is used as a substitute.
+
+- **Validation scope**: 3 new isolated checks (a tip with content showing its turn count, 0 turns phrased as a note rather than a count, a zero-byte tip without a count) pass 63/63 together with `cli-status-*`, `cli-doctor*`, `cli-store-reason-*`, `doctor-*` and other status and doctor cases; the full isolated regression passes 2213 tests with zero failures and zero skips; typecheck, desktop build, the four site test files (16/16), and the share-image checks pass. No native-client acceptance claim is added.
+
+### Previous release ([v0.1.89](https://github.com/can4hou6joeng4/Watch/releases/tag/v0.1.89))
 
 v0.1.89 closes the 0-turn chain-tip gap in `watch status`. The chain-tip check only asked whether the file exists, is a regular file, has a confirmable state, and is readable. A readable tip that parses to 0 turns, such as a legitimate empty session from `watch new codex` / `watch new grok`, or content cleared with only a placeholder header left, was still marked as the chain tip and recommended to the user, and copying its resume command opened an empty session. After v0.1.84 through v0.1.88 covered the `open`, `switch` and `new` paths, `status` was the last entry that called a session your chain tip without checking its content.
 
