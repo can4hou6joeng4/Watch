@@ -1108,7 +1108,7 @@ async function planOpenInProvider(
     if (pairedEmpty) {
       diagnostics?.push(
         `链上 ${target.displayName} 会话 ${chainPaired.sessionId} 的${pairedEmpty}；这次不沿用这条空会话（改用内容匹配或新建），` +
-          `但链绑定仍指向它——若它本该有内容，先从备份恢复该文件，否则之后的 switch 还会落回这条空会话`,
+          `但链绑定仍指向它——若它本该有内容，先从备份恢复该文件，否则之后的 switch 还会落回这条空会话；也可 watch adopt ${target.id} --session <另一个会话 id> 换绑，或用 watch chain new <新名字> 另起一条链`,
       );
     } else {
       try {

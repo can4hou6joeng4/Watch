@@ -1351,11 +1351,13 @@ async function cmdSessions(cwd: string, json: boolean, chain?: string): Promise<
             if (compressedFiles.length) {
               const hasIntact = compressedFiles.some((c) => !c.empty);
               const hasEmpty = compressedFiles.some((c) => c.empty);
+              // 「重新开一次会话」得到的是另一条会话，修不好这条链绑定：给了也会在下次 switch 再撞上。
+              // 与缺失档同一口径给 rebindHint（switch 重新绑定 / adopt 指定会话），空文件才谈得上恢复备份。
               const next = hasIntact
                 ? hasEmpty
-                  ? '——完好的副本先让它重新展开再试；0 字节副本的内容已丢失，只能从备份恢复或重新开一次会话'
+                  ? `——完好的副本先让它重新展开再试；0 字节副本的内容已丢失，只能从备份恢复；${rebindHint(a.id)}`
                   : '——先让它重新展开再试'
-                : '——0 字节副本的内容已丢失，只能从备份恢复或重新开一次会话';
+                : `——0 字节副本的内容已丢失，只能从备份恢复；${rebindHint(a.id)}`;
               warnings.push(
                 `链 ${escapeControlChars(chainRow.name)} 绑定的 ${a.id} 会话 ${compressedFiles.map((c) => `${c.id}：${c.note}`).join('；')}，本次未列出；下次切换会失败${next}`,
               );
@@ -2149,7 +2151,7 @@ async function cmdDoctor(cwd: string, json: boolean, strict: boolean): Promise<v
         console.log(
           b.compressedPath
             ? b.compressedEmpty
-              ? `  链「${escapeControlChars(b.chainName)}」: ${b.provider}:${b.sessionId} 链尾只剩 0 字节压缩副本（${escapeControlChars(b.compressedPath)}）；内容已丢失，重新展开也拿不回内容——从备份恢复或重新开一次会话，或 ${rebindHint(b.provider)}`
+              ? `  链「${escapeControlChars(b.chainName)}」: ${b.provider}:${b.sessionId} 链尾只剩 0 字节压缩副本（${escapeControlChars(b.compressedPath)}）；内容已丢失，重新展开也拿不回内容——从备份恢复；${rebindHint(b.provider)}`
               : `  链「${escapeControlChars(b.chainName)}」: ${b.provider}:${b.sessionId} 链尾只剩压缩副本（${escapeControlChars(b.compressedPath)}）；本版不读压缩格式——先让它重新展开再重试（若是 Codex 压缩的，在 Codex 里继续该会话即可），或 ${rebindHint(b.provider)}`
             : b.missing
             ? `  链「${escapeControlChars(b.chainName)}」: ${b.provider}:${b.sessionId} 链尾文件已不存在（${escapeControlChars(b.filePath)}），${rebindHint(b.provider)}`
