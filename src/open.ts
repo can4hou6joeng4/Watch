@@ -594,6 +594,10 @@ export async function openSession(
       // 目标中，无需并入」——看着像一次真的并入，实际来源的历史早就没了。
       const sourceZeroByte = srcTurns.length === 0 ? await zeroByteSessionReason(source.found.ref) : null;
       const targetZeroByte = dstTurns.length === 0 ? await zeroByteSessionReason(target.found.ref) : null;
+      // 解析出 0 轮、文件却不是 0 字节：合法空会话（`watch new` 建出的 / 刚在原生里新建的）与
+      // 「内容被清空、只剩占位头」两种形状都长这样。0 字节档从 283 轮起已有警告，这一档在
+      // 零增量时却会被写成「内容已全部包含」——来源什么都没并入，与「来源 0 轮必须披露」相悖。
+      const sourceZeroTurns = srcTurns.length === 0 && !sourceZeroByte;
       if (sourceZeroByte && targetZeroByte) {
         // 两条独立的「0 字节」警告会自相矛盾：一边说目标未被改动、没有可并入的内容，
         // 一边说「本次并入的只有来源的内容」——而来源同样是空的，实际什么都没写。
@@ -608,10 +612,20 @@ export async function openSession(
               `这次没有任何可并入的内容，目标会话 ${escapeControlChars(targetId)} 未被改动——如果这条会话本该有内容，先从备份恢复该文件再重试（Watch 不会替你重建历史）`,
           );
         }
+        if (sourceZeroTurns) {
+          warnings.push(
+            `来源会话 ${source.found.ref.sessionId}（${source.adapter.displayName}）解析出 0 轮，没有可并入的内容；` +
+              `本次未写入任何内容，目标会话 ${escapeControlChars(targetId)}（${target.adapter.displayName}）未被改动——` +
+              `如果这条会话本该有内容，先在 ${source.adapter.displayName} 里打开它确认（可能已被清空），或从备份恢复该文件（Watch 不会替你重建历史）；` +
+              `如果只是挑错了会话，核对 --from 的会话 id 是否真的要并进来`,
+          );
+        }
         if (targetZeroByte) {
           warnings.push(
             `目标会话 ${escapeControlChars(targetId)}（${target.adapter.displayName}）的${targetZeroByte}；` +
-              `它原有的历史已经没了，本次并入的只有来源的内容——如果目标会话本该有内容，先从备份恢复该文件再重试（Watch 不会替你重建历史）`,
+              (srcTurns.length === 0
+                ? `它原有的历史已经没了，而来源也没有可并入的内容——这次什么都没写；如果目标会话本该有内容，先从备份恢复该文件（Watch 不会替你重建历史）`
+                : `它原有的历史已经没了，本次并入的只有来源的内容——如果目标会话本该有内容，先从备份恢复该文件再重试（Watch 不会替你重建历史）`),
           );
         }
       }
@@ -658,7 +672,9 @@ export async function openSession(
         notes.push(
           sourceZeroByte
             ? `${escapeControlChars(from)} 的会话文件是空的（内容已丢失），没有可并入的内容`
-            : `${escapeControlChars(from)} 的内容已全部包含在 ${escapeControlChars(targetId)} 中，无需并入`,
+            : sourceZeroTurns
+              ? `${escapeControlChars(from)} 解析出 0 轮，没有可并入的内容`
+              : `${escapeControlChars(from)} 的内容已全部包含在 ${escapeControlChars(targetId)} 中，无需并入`,
         );
       } else {
         const dedup = dedupeCallEvents(outgoing);
@@ -676,6 +692,15 @@ export async function openSession(
           if (failureLoss) warnings.push(failureLoss);
           merged = dedup.length;
           notes.push(`已把 ${escapeControlChars(from)} 的 ${merged} 轮新内容并入 ${target.adapter.displayName} 会话 ${newRef.sessionId}`);
+          // 目标解析出 0 轮、文件却不是 0 字节：可能是刚建出来的空会话（并入即它的第一批内容），
+          // 也可能是内容被清空只剩占位头的会话。无法区分，按事实说清「这是它的全部内容」，
+          // 让「本该有更早历史」的人知道该去恢复备份。
+          if (targetZeroByte === null && dstTurns.length === 0) {
+            notes.push(
+              `目标会话 ${escapeControlChars(targetId)}（${target.adapter.displayName}）解析出 0 轮（没有可复用的对话），本次并入的 ${merged} 轮就是它的全部内容` +
+                `——如果它本该有更早的历史，先从备份恢复该文件再重试（Watch 不会替你重建历史）`,
+            );
+          }
           // 两个会话记录的工作目录不同：内容来自另一个项目，却写进了这一侧的会话。
           // 项目目录被移动 / 改名时这是对的（旧记录里的 cwd 已失效），但更常见的成因是 id 抄错。
           // 以前这里零披露——`--json` 连 warnings 都没有，用户不会发现自己刚把别处的项目并了进来。
