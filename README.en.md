@@ -20,7 +20,16 @@ The steps are on the site [guides](https://relay.bobochang.cn/en/#guides): [Clau
 
 It does not provide models, bypass usage limits, replace native agent chat, or move permissions, credentials and plugins by default. What it transfers is the recorded session, not the model's unrecorded internal state. Today the implementation is centred on CLI sessions and terminal resume; the product direction includes validated desktop entry points, but **official interoperability does not mean Watch has integrated it**.
 
-### Latest release ([v0.1.80](https://github.com/can4hou6joeng4/Watch/releases/tag/v0.1.80))
+### Latest release ([v0.1.81](https://github.com/can4hou6joeng4/Watch/releases/tag/v0.1.81))
+
+v0.1.81 closes a silent success in the zero-increment branch of `switch`. When the source session parsed to 0 turns (a legitimate empty session from `watch new`, or content cleared with only a placeholder header left) and the chain already had a reusable target, it used to return `ok:true` with `turnCount:0` and no warnings at all, and text mode even printed handed off X to Y (0 turns) as if a real handoff had happened:
+
+- It now names the source session as parsed 0 turns with no conversation to carry, says only the chain tip moved and the target session was not modified, and offers opening the session to check, restoring from backup, or rebinding with `watch adopt ... --session <another session id>`. When both sides are zero-byte, each side is named, including that the resume opens an empty session.
+- The text conclusion becomes switched to X (chain tip updated; ...); already-up-to-date and an empty source no longer share one sentence. JSON adds `zeroIncrementReason` (`source-empty` / `up-to-date`) to distinguish the two zero-increment shapes.
+
+- **Validation scope**: 4 new isolated checks (zero-increment with a 0-turn source in JSON and text, up-to-date in text, and both sides zero-byte) pass 43/43 together with r161 to r164, `cli-switch-*`, `handoff-zero-rewrite-*`, `switch-empty-chain-tip` and `cli-json-contract`; the full isolated regression passes 2185 tests with zero failures and zero skips; typecheck, desktop build, site build and share-image checks pass. This adds no native-client acceptance claim.
+
+### Previous release ([v0.1.80](https://github.com/can4hou6joeng4/Watch/releases/tag/v0.1.80))
 
 v0.1.80 covers the case where the chain-paired target in `open --to` exists and parses but contains no conversation at all (only a rollout header, or cleared content). The content check in decision 1 necessarily failed and open silently fell back to a content match or a new session, while the chain binding still pointed at the empty session and the next `switch` hit it again:
 
