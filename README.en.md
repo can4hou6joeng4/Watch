@@ -20,7 +20,19 @@ The steps are on the site [guides](https://relay.bobochang.cn/en/#guides): [Clau
 
 It does not provide models, bypass usage limits, replace native agent chat, or move permissions, credentials and plugins by default. What it transfers is the recorded session, not the model's unrecorded internal state. Today the implementation is centred on CLI sessions and terminal resume; the product direction includes validated desktop entry points, but **official interoperability does not mean Watch has integrated it**.
 
-### Latest release ([v0.1.92](https://github.com/can4hou6joeng4/Watch/releases/tag/v0.1.92))
+### Latest release ([v0.1.93](https://github.com/can4hou6joeng4/Watch/releases/tag/v0.1.93))
+
+The chain-tip row in `watch chain list` now shows its turn count, consistent with `status`.
+
+`status` has reported a 0-turn chain tip and shown its turn count since v0.1.89 and v0.1.90, and v0.1.92 closed the same gap in `doctor`; but the `chain list` tip row only said whether the file exists, is missing or cannot be read. With several chains, there was no way to tell which tip still has content and which sits on an empty session.
+
+- **With content**: the row ends with `-> claude:<id> (N turns)`, and `chains[].tip.turns` carries the same number in `--json`.
+- **0 turns**: it reads as a 0-turn parse note with an empty session, not as a plain zero count, and an active chain gets an extra warning that resume opens an empty session.
+- **No stand-in**: a zero-byte or unreadable tip carries no turn count (`turns` is absent) and keeps its existing unreadable marker; a parse failure also carries no count, leaving that case to the doctor content-parse warning and to open / switch errors.
+
+- **Validation scope**: 3 new isolated checks (content, 0 turns, zero bytes) pass 18/18 together with the chain-related cases; the full isolated regression passes 2219 tests with zero failures and zero skips; typecheck, desktop build, the four site test files and the share-image checks pass. No native-client acceptance claim is added: no native GUI or model was started this round.
+
+### Previous release ([v0.1.92](https://github.com/can4hou6joeng4/Watch/releases/tag/v0.1.92))
 
 `watch doctor` now discloses a readable 0-turn chain tip the same way `status` does.
 
