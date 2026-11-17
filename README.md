@@ -20,7 +20,19 @@ Watch 只做一件事：**把已保存的会话记录连同工作目录交到目
 
 它不提供模型、不绕过配额、不代替原生 Agent 聊天，也不默认搬迁权限、凭据或插件；接力的是已有记录，不是模型未记录的内部状态。当前实现以 CLI 会话与终端恢复为主，产品方向包含经过验证的桌面端入口，但**官方支持互通不等于 Watch 已经集成**。
 
-### 最新版本（[v0.1.94](https://github.com/can4hou6joeng4/Watch/releases/tag/v0.1.94)）
+### 最新版本（[v0.1.95](https://github.com/can4hou6joeng4/Watch/releases/tag/v0.1.95)）
+
+`watch usage` 把「解析出 0 轮的空会话」与「有内容却没记 usage」分档。
+
+`sessionUsage` 对两种情况都返回 null：`watch new codex / grok / opencode` 建出的合法空会话（0 轮），以及有对话但原生没写 usage 的会话。以前两者一起计进 `totalMissingUsage`，刚建出来的空链会被报成「1 个无 usage 数据的会话」——听起来像统计漏了一份。grok 更糟：新建空会话的旁路文件 `updates.jsonl` 本身就是 0 字节，而旁路检查先跑，于是报告直接说「用量数据源是空的（0 字节…内容已丢失）」，把一条正常的新会话讲成数据丢失。
+
+- **先判空会话**：主会话文件在、非 0 字节、解析出 0 轮时记为空会话（新的 `totalEmptySessions` 与 `byProvider[].emptySession`），不再计入 `totalMissingUsage`。
+- **旁路检查后移**：空会话的旁路文件为空是正常形状，不再报「内容已丢失」；有内容的会话仍按原口径检查 `updates.jsonl` 等旁路文件。
+- **不合并、不误报**：有 1 轮以上但没记 usage 的会话（如 claude / pi 的占位 user）仍按「无 usage 数据」计；全行损坏的文件保留坏行数与「未读出有效用量」，不判成空会话；解析失败同样不改口径，不把读不出来讲成空会话。
+
+- **验证范围**：新增 3 项隔离检查（codex / grok 空会话分档与文本、claude 占位反例），与 usage 相关用例联合 94/94 通过；完整隔离回归 2225 项通过，0 失败、0 跳过；类型检查、桌面构建、站点四项测试 16/16 与分享图渲染/摘要检查通过。不新增原生客户端验收结论：本轮未启动任何原生 GUI 或模型。
+
+### 上一版本（[v0.1.94](https://github.com/can4hou6joeng4/Watch/releases/tag/v0.1.94)）
 
 `watch new` 的 `turnCount` 改为会话实际解析出的轮数。
 

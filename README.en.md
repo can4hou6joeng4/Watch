@@ -20,7 +20,19 @@ The steps are on the site [guides](https://relay.bobochang.cn/en/#guides): [Clau
 
 It does not provide models, bypass usage limits, replace native agent chat, or move permissions, credentials and plugins by default. What it transfers is the recorded session, not the model's unrecorded internal state. Today the implementation is centred on CLI sessions and terminal resume; the product direction includes validated desktop entry points, but **official interoperability does not mean Watch has integrated it**.
 
-### Latest release ([v0.1.94](https://github.com/can4hou6joeng4/Watch/releases/tag/v0.1.94))
+### Latest release ([v0.1.95](https://github.com/can4hou6joeng4/Watch/releases/tag/v0.1.95))
+
+`watch usage` now separates a 0-turn empty session from a session that has content but no recorded usage.
+
+`sessionUsage` returns null for both: a legitimate empty session created by `watch new codex / grok / opencode` (0 turns), and a session with conversation but no native usage records. They were both counted into `totalMissingUsage`, so a freshly created chain was reported as `1 session without usage data`, reading like a statistics gap. grok was worse: the sidecar `updates.jsonl` of a new empty session is itself zero bytes, and the sidecar check ran first, so the report said the usage source is empty and the content was lost, describing a normal new session as data loss.
+
+- **Empty first**: when the main session file exists, is not zero bytes and parses to 0 turns, it is recorded as an empty session (the new `totalEmptySessions` and `byProvider[].emptySession`) instead of `totalMissingUsage`.
+- **Sidecar check after**: an empty sidecar is the normal shape of an empty session and no longer reports data loss; sessions with content still get the original `updates.jsonl` sidecar checks.
+- **No merge, no false alarm**: a session with one or more turns but no usage records (such as the claude / pi placeholder user) still counts as missing usage; a file whose lines are all unparsable keeps its bad-line count and the not-read wording instead of becoming an empty session; a parse failure likewise keeps the old wording.
+
+- **Validation scope**: 3 new isolated checks (codex / grok empty-session classification and text, the claude placeholder counterexample) pass 94/94 together with the usage-related cases; the full isolated regression passes 2225 tests with zero failures and zero skips; typecheck, desktop build, the four site test files (16/16) and the share-image render/digest checks pass. No native-client acceptance claim is added: no native GUI or model was started this round.
+
+### Previous release ([v0.1.94](https://github.com/can4hou6joeng4/Watch/releases/tag/v0.1.94))
 
 `watch new` now reports the turn count its session actually parses to.
 
