@@ -20,7 +20,16 @@ The steps are on the site [guides](https://relay.bobochang.cn/en/#guides): [Clau
 
 It does not provide models, bypass usage limits, replace native agent chat, or move permissions, credentials and plugins by default. What it transfers is the recorded session, not the model's unrecorded internal state. Today the implementation is centred on CLI sessions and terminal resume; the product direction includes validated desktop entry points, but **official interoperability does not mean Watch has integrated it**.
 
-### Latest release ([v0.1.76](https://github.com/can4hou6joeng4/Watch/releases/tag/v0.1.76))
+### Latest release ([v0.1.77](https://github.com/can4hou6joeng4/Watch/releases/tag/v0.1.77))
+
+v0.1.77 completes the disclosure when the chain-paired target in `open --to` has only a zero-byte `.jsonl.zst`. The diagnostic used to say only that the session was not reused and a content match or new session would be used. But `open` does not write chain records, so the binding still points at the dead copy and the next `switch` hits it again. The `pairedEmpty` branch for a zero-byte plain file already said this; the compressed tier was missing it:
+
+- A zero-byte compressed copy now adds that the chain binding still points at it, that this run does not change the chain record, and that a later switch will hit it again, together with restore from backup and retry, rebinding with `watch adopt ...`, or starting a new chain.
+- An intact compressed copy does not add this: once the native client re-expands it, the next `switch` can reuse the same on-chain session.
+
+- **Validation scope**: 1 new isolated check (an `open --to` preflight whose chain-paired target is a zero-byte compressed copy) passes with the 14 checks from r157, r158 and r159, 15/15 in total; the full isolated regression passes 2176 tests with zero failures and zero skips; typecheck, desktop build, site build and share-image checks pass. The probe is still a single `lstat` with no reading, decompression or modification of `.zst`; this adds no native-client acceptance claim.
+
+### Previous release ([v0.1.76](https://github.com/can4hou6joeng4/Watch/releases/tag/v0.1.76))
 
 v0.1.76 routes the restore-from-backup-then-retry step for zero-byte compressed copies through the seven remaining call sites. v0.1.75 only fixed the `switch` already-at-target branch and the same-provider branch of `watch chain new`; other sites still appended retry or rerun watch doctor directly to the shared advice. With a zero-byte copy, starting a new session produces a different session and restores neither the original path nor the chain binding, so the retry hits the same failure again:
 
