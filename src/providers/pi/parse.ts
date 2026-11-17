@@ -1,4 +1,5 @@
 import { ToolResultPairing } from '../../core/tool-pairing.js';
+import { escapeControlChars } from '../../core/display.js';
 import { iterateFileLines } from '../../core/read-text.js';
 import {
   ensureAssistant,
@@ -13,6 +14,36 @@ import {
 import type { ProcessEvent, SessionRef, TokenUsage, UnifiedTurn } from '../../core/types.js';
 import { isoFromEpochMs } from '../../core/time.js';
 import { createPiFailureCounts, piFailureDisclosure, readPiStopReason, type PiFailureCounts } from './failure.js';
+
+/**
+ * Pi v1.5.2 会话 JSONL 的顶层类型（上游 `packages/coding-agent/src/core/session-manager.ts`
+ * 的 `FileEntry` / `SessionEntry` 联合）。前七种是纯元数据：不进模型上下文，Watch 也不解析；
+ * 后五种才可能有内容语义，已有各自的分支。上游读取器并不校验 `type`，联合之外的记录仍可能为
+ * 未来格式或第三方写入器产生，所以不能只因为「不认识」就无声跳过。
+ */
+const KNOWN_PI_TOP_LEVEL_TYPES = new Set([
+  'session',
+  'thinking_level_change',
+  'model_change',
+  'usage',
+  'custom',
+  'label',
+  'session_info',
+  'message',
+  'compaction',
+  'branch_summary',
+  'custom_message',
+  'context_edit',
+]);
+
+function unknownPiTopLevelNote(unknown: Map<string, number>): string {
+  if (unknown.size === 0) return '';
+  const total = [...unknown.values()].reduce((a, b) => a + b, 0);
+  const counts = [...unknown.entries()]
+    .map(([type, count]) => (count > 1 ? `${type}×${count}` : type))
+    .join('、');
+  return `Pi 会话日志里有 ${total} 条未识别的顶层记录（${counts}），Watch 暂不解析：无法确认其中是否包含对话内容，这些记录没有并入交接；需要时请在原生 Pi 里核对。`;
+}
 
 export async function parsePiSession(ref: SessionRef): Promise<UnifiedTurn[]> {
   const turns: UnifiedTurn[] = [];
@@ -31,6 +62,9 @@ export async function parsePiSession(ref: SessionRef): Promise<UnifiedTurn[]> {
   const failures: PiFailureCounts = createPiFailureCounts();
   let tailFailure = false;
   let lastFailureTimestamp = '';
+  // 顶层未知类型按 type×n 汇总；只计数、不复制记录正文，也不改轮次正文（否则旧轮次的
+  // turnKey 会漂移，diffTurns 会把旧提问当新增重放）。与 Grok 的同类披露同口径。
+  const unknownTopLevel = new Map<string, number>();
 
   // 逐行流式读取：本机会话最大 62 MB，整份 `readFile` 在超过 V8 字符串上限（约 512 MB）时
   // 会抛 `Invalid string length`，把完好的大会话讲成「读不出来」
@@ -45,6 +79,12 @@ export async function parsePiSession(ref: SessionRef): Promise<UnifiedTurn[]> {
     }
     if (typeof record !== 'object' || record === null) continue;
     const r = record as Record<string, unknown>;
+    const rawType = typeof r.type === 'string' ? r.type : '';
+    if (!KNOWN_PI_TOP_LEVEL_TYPES.has(rawType)) {
+      const label = escapeControlChars(rawType.length > 64 ? `${rawType.slice(0, 64)}…` : rawType || '（缺 type）');
+      unknownTopLevel.set(label, (unknownTopLevel.get(label) ?? 0) + 1);
+      continue;
+    }
 
     // pi 把压缩 / 分支摘要写成独立条目（`sessionEntryToContextMessages()` 会把它们注入上下文），
     // 以前只认 `type: 'message'`，整段摘要连同「上下文被压缩过」这件事一起消失。还原成一轮
@@ -215,6 +255,17 @@ export async function parsePiSession(ref: SessionRef): Promise<UnifiedTurn[]> {
       kind: 'text',
       summary: disclosure,
       detail: disclosure,
+      timestamp: last.timestamp,
+      provider: 'pi',
+    });
+  }
+  const topLevelNote = unknownPiTopLevelNote(unknownTopLevel);
+  if (topLevelNote && stripped.length > 0) {
+    const last = stripped.at(-1)!;
+    pushEvent(last, {
+      kind: 'text',
+      summary: `${WATCH_CONTEXT_DISCLOSURE_PREFIX}${topLevelNote.slice(0, 120)}]`,
+      detail: `${WATCH_CONTEXT_DISCLOSURE_PREFIX}${topLevelNote}]`,
       timestamp: last.timestamp,
       provider: 'pi',
     });
