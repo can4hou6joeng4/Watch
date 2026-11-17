@@ -20,7 +20,16 @@ Watch 只做一件事：**把已保存的会话记录连同工作目录交到目
 
 它不提供模型、不绕过配额、不代替原生 Agent 聊天，也不默认搬迁权限、凭据或插件；接力的是已有记录，不是模型未记录的内部状态。当前实现以 CLI 会话与终端恢复为主，产品方向包含经过验证的桌面端入口，但**官方支持互通不等于 Watch 已经集成**。
 
-### 最新版本（[v0.1.75](https://github.com/can4hou6joeng4/Watch/releases/tag/v0.1.75)）
+### 最新版本（[v0.1.76](https://github.com/can4hou6joeng4/Watch/releases/tag/v0.1.76)）
+
+v0.1.76 把 0 字节压缩副本的「先恢复备份、再重试」口径接到其余七处调用点。v0.1.75 只修了 `switch` 的 already-at-target 与 `watch chain new` 的同家分支；其余位置仍在共用 advice 后直接拼「再重试 / 再重跑 watch doctor」——而 0 字节副本下「重新开一次会话」得到的是另一条会话，原路径与链记录里的绑定都不会恢复，重试必然再次撞上同一处：
+
+- 写前守卫的 message 与 hint、`status` 链尾、零结果链尾、`switch` 的来源解析、`doctor` 链尾、`doctor` 的来源内容对账、`chain list` 链尾全部改用新增的 `compressedRetryAdvice(copy, retry)`。
+- 0 字节副本给「从备份恢复后再重试」或「从备份恢复后再重跑 watch doctor」；完好副本仍给「先让它重新展开，再重试」。`open --to`、`chainUsage` 与「本次改为新建」等不要求重试同一操作的位置保持原 advice。
+
+- **验证范围**：新增 4 项隔离检查（helper 两档、doctor 来源对账、`switch` 来源解析、`chain list` 链尾），与 r157 / r158 的 10 项断言一并通过；完整隔离回归 2175 项通过，0 失败、0 跳过；类型检查、桌面构建、站点与分享图检查通过。仍只做一次 `lstat`，不读取、不解压、不修改 `.zst`；不新增原生客户端验收结论。
+
+### 上一版本（[v0.1.75](https://github.com/can4hou6joeng4/Watch/releases/tag/v0.1.75)）
 
 v0.1.75 修正 v0.1.74 在「链尾已是目标 provider」时给出的下一步。`switch` 的 already-at-target 警告与 `watch chain new` 的同家分支，对 0 字节压缩副本沿用了共用的 advice「从备份恢复或重新开一次会话，再重试」——但链尾仍指向这条副本，重新开一次会话不会改变链记录，重试会再次撞上同一处，必然失败。现在 `compressedCopy()` 的返回值带上结构化的 `kind: 'intact' | 'empty'`，调用点不必再靠文案判断：
 

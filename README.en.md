@@ -20,7 +20,16 @@ The steps are on the site [guides](https://relay.bobochang.cn/en/#guides): [Clau
 
 It does not provide models, bypass usage limits, replace native agent chat, or move permissions, credentials and plugins by default. What it transfers is the recorded session, not the model's unrecorded internal state. Today the implementation is centred on CLI sessions and terminal resume; the product direction includes validated desktop entry points, but **official interoperability does not mean Watch has integrated it**.
 
-### Latest release ([v0.1.75](https://github.com/can4hou6joeng4/Watch/releases/tag/v0.1.75))
+### Latest release ([v0.1.76](https://github.com/can4hou6joeng4/Watch/releases/tag/v0.1.76))
+
+v0.1.76 routes the restore-from-backup-then-retry step for zero-byte compressed copies through the seven remaining call sites. v0.1.75 only fixed the `switch` already-at-target branch and the same-provider branch of `watch chain new`; other sites still appended retry or rerun watch doctor directly to the shared advice. With a zero-byte copy, starting a new session produces a different session and restores neither the original path nor the chain binding, so the retry hits the same failure again:
+
+- The pre-write guard message and hint, the `status` tip, the zero-result tip, `switch` source parsing, the `doctor` tip, `doctor` source reconciliation and the `chain list` tip now all use the new `compressedRetryAdvice(copy, retry)`.
+- A zero-byte copy gets restore from backup, then retry (or then rerun watch doctor); an intact copy still gets let it re-expand, then retry. Sites that do not retry the same operation, such as `open --to`, `chainUsage` and rows that switch to a new session, keep their existing advice.
+
+- **Validation scope**: 4 new isolated checks (both helper tiers, doctor source reconciliation, `switch` source parsing and the chain list tip) pass together with the 10 assertions from r157 and r158; the full isolated regression passes 2175 tests with zero failures and zero skips; typecheck, desktop build, site build and share-image checks pass. The probe is still a single `lstat` with no reading, decompression or modification of `.zst`; this adds no native-client acceptance claim.
+
+### Previous release ([v0.1.75](https://github.com/can4hou6joeng4/Watch/releases/tag/v0.1.75))
 
 v0.1.75 fixes the next step v0.1.74 gave when the chain tip already belongs to the target provider. The `switch` already-at-target warning and the same-provider branch of `watch chain new` reused the shared advice "restore from backup or start a new session, then retry" for a zero-byte compressed copy. But the chain still points at that copy, starting a new session does not change the chain record, and the retry hits the same failure every time. `compressedCopy()` now returns a structured `kind: 'intact' | 'empty'`, so call sites no longer infer the tier from wording:
 
