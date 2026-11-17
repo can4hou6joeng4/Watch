@@ -20,7 +20,18 @@ The steps are on the site [guides](https://relay.bobochang.cn/en/#guides): [Clau
 
 It does not provide models, bypass usage limits, replace native agent chat, or move permissions, credentials and plugins by default. What it transfers is the recorded session, not the model's unrecorded internal state. Today the implementation is centred on CLI sessions and terminal resume; the product direction includes validated desktop entry points, but **official interoperability does not mean Watch has integrated it**.
 
-### Latest release ([v0.1.73](https://github.com/can4hou6joeng4/Watch/releases/tag/v0.1.73))
+### Latest release ([v0.1.74](https://github.com/can4hou6joeng4/Watch/releases/tag/v0.1.74))
+
+v0.1.74 adds the zero-byte compressed-copy tier. v0.1.73 made `switch`, `status`, `chain list`, `doctor`, `adopt` and Codex lookup probe the sibling `.jsonl.zst` first, but counted only non-empty regular files as compressed copies. A zero-byte `.zst` was silently treated as absent, so those paths fell back to "the file no longer exists" or told you to continue the session in Codex so it re-expands, which cannot return content from an empty copy. `sessionFilePresence()` now records it as `emptyCompressed`, and both the wording and the next step say the content is lost:
+
+- The shared note reads "only a 0-byte sibling compressed copy remains ... (content lost, re-expanding cannot recover it)", and the next step is "restore from backup or start a new session" instead of "let it re-expand".
+- The five parse and reuse paths in `switch`, `status`, `chain list` (both tips and bound-but-unlisted sessions), `doctor` (`brokenTips` gains `compressedEmpty`, and the summary and per-chain line count zero-byte copies separately), `chainUsage` and the `open --to` diagnostics all use the same tier.
+- A `HandoffBlockedError` from the pre-write guard can now carry its own `hint`: under the same `target_missing`, a deleted original, an intact compressed copy and a zero-byte copy need different next steps, so the CLI and `open` `blocked.hint` no longer fall back to "no longer exists".
+- Codex `unattributable` gains a `compressed-empty` kind: an empty `adopt` result says "adopt after restoring from backup" while keeping the new-session alternative, and lookup no longer promises that the session will re-expand.
+
+- **Validation scope**: all 8 new isolated checks pass (presence and wording, two `switch` paths, `chainUsage`, the pre-write guard hint, `adopt` zero results, Codex lookup and four CLI channels); the full isolated regression passes 2169 tests with zero failures and zero skips; typecheck, desktop build, site build and share-image checks pass. The probe is still a single `lstat` with no reading, decompression or modification of `.zst`; this adds no native-client acceptance claim.
+
+### Previous release ([v0.1.73](https://github.com/can4hou6joeng4/Watch/releases/tag/v0.1.73))
 
 v0.1.73 closes the gap on the main `switch` paths. v0.1.72 recognised `.jsonl.zst` only in the zero-result branch, while the common `switch` goes through the chain-paired target, the mtime fallback, already-at-target and source parsing. Those paths still called "original file absent, sibling `.zst` present" a missing file and silently rebound. They now probe `sessionFilePresence()` first, as does chain-pair reuse in `open --to`:
 

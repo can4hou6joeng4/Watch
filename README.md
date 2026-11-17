@@ -20,7 +20,18 @@ Watch 只做一件事：**把已保存的会话记录连同工作目录交到目
 
 它不提供模型、不绕过配额、不代替原生 Agent 聊天，也不默认搬迁权限、凭据或插件；接力的是已有记录，不是模型未记录的内部状态。当前实现以 CLI 会话与终端恢复为主，产品方向包含经过验证的桌面端入口，但**官方支持互通不等于 Watch 已经集成**。
 
-### 最新版本（[v0.1.73](https://github.com/can4hou6joeng4/Watch/releases/tag/v0.1.73)）
+### 最新版本（[v0.1.74](https://github.com/can4hou6joeng4/Watch/releases/tag/v0.1.74)）
+
+v0.1.74 补齐「0 字节压缩副本」这一档。v0.1.73 把 `switch` / `status` / `chain list` / `doctor` / `adopt` / Codex 反查都改成先探同名 `.jsonl.zst`，但只把非空普通文件认作压缩副本——0 字节的 `.zst` 被静默当成「没有副本」，于是这些通道又说回「文件已不存在」，或让人「在 Codex 里继续该会话重新展开」一个拿不回任何内容的副本。现在 `sessionFilePresence()` 把它记成 `emptyCompressed`，说明与下一步统一按「内容已丢失」分档：
+
+- 共用说明改为「只剩一个 0 字节的同名压缩副本 …（内容已丢失，重新展开也拿不回内容）」，下一步是「从备份恢复或重新开一次会话」，不再给「先让它重新展开」。
+- `switch` 的五处解析 / 复用路径、`status`、`chain list`（tip 与「绑定但未列出」）、`doctor`（`brokenTips` 新增 `compressedEmpty`，摘要与逐链行单独计「0 字节压缩副本」）、`chainUsage` 与 `open --to` 的 diagnostics 全部走同一分档。
+- 写前守卫抛出的 `HandoffBlockedError` 可以带自己的 `hint`：同一 `target_missing` 下，「原文件被删」「完好压缩副本」「0 字节副本」的下一步不同，CLI 与 `open` 的 `blocked.hint` 不再落回「已不存在」。
+- Codex 的 `unattributable` 新增 `compressed-empty` kind：`adopt` 零结果给「从备份恢复后接入」，并保留开新会话的备选；反查命中 0 字节副本时不再承诺「继续该会话会重新展开」。
+
+- **验证范围**：新增 8 项隔离检查全部通过（presence / 说明、`switch` 两条路径、`chainUsage`、写前守卫 hint、`adopt` 零结果、Codex 反查、CLI 四通道）；完整隔离回归 2169 项通过，0 失败、0 跳过；类型检查、桌面构建、站点与分享图检查通过。仍只做一次 `lstat`，不读取、不解压、不修改 `.zst`；不新增原生客户端验收结论。
+
+### 上一版本（[v0.1.73](https://github.com/can4hou6joeng4/Watch/releases/tag/v0.1.73)）
 
 v0.1.73 补齐压缩副本在 `switch` 主路径上的口径。v0.1.72 只在「一个会话都挑不到」的零结果分支认 `.jsonl.zst`，而最常见的 `switch` 会走链上配对目标、mtime 兜底、already-at-target 与来源解析这几条路径——它们仍把「原路径不在、同名 `.zst` 在」讲成「文件已不存在」并静默改绑。现在这几处以及 `open --to` 的链配对复用都先探一次 `sessionFilePresence()`：
 
