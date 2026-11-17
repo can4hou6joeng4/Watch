@@ -11,7 +11,7 @@ import { readWatchVersion } from './watch-version.js';
 import { cwdProblem, splitElsewhereByDirectory } from './cwd.js';
 import { escapeControlChars } from './display.js';
 import { describeBadLinesScanFailure, scanUnparsableJsonLines } from './jsonl.js';
-import { compressedCopy, describeSessionReadFailureReason, isEmptySessionFileReason, isFileSystemErrorCode, probeSessionReadable, sessionFilePresence } from './read-text.js';
+import { compressedCopy, compressedRetryAdvice, describeSessionReadFailureReason, isEmptySessionFileReason, isFileSystemErrorCode, probeSessionReadable, sessionFilePresence } from './read-text.js';
 import { collectUnattributable, unattributableWarning } from './session-coverage.js';
 
 export type BrokenTip = {
@@ -490,7 +490,7 @@ export async function doctorReport(cwd: string, deps: DoctorDeps): Promise<Docto
           );
           if (copy) {
             warnings.push(
-              `链「${escapeControlChars(chain.name)}」的链尾会话${copy.note}（${tip.provider}）；下次切换会失败——${copy.advice}，再重试，或${rebindHint(tip.provider)}`,
+              `链「${escapeControlChars(chain.name)}」的链尾会话${copy.note}（${tip.provider}）；下次切换会失败——${compressedRetryAdvice(copy, '再重试')}，或${rebindHint(tip.provider)}`,
             );
           } else if (missing) {
             warnings.push(
@@ -549,7 +549,7 @@ export async function doctorReport(cwd: string, deps: DoctorDeps): Promise<Docto
           });
           warnings.push(
             copy
-              ? `链「${escapeControlChars(chain.name)}」的来源会话${copy.note}（${from.provider}）；链尾仍在，但无法再做内容对账——${copy.advice}，再重跑 watch doctor`
+              ? `链「${escapeControlChars(chain.name)}」的来源会话${copy.note}（${from.provider}）；链尾仍在，但无法再做内容对账——${compressedRetryAdvice(copy, '再重跑 watch doctor')}`
               : `链「${escapeControlChars(chain.name)}」的来源会话文件已不存在：${from.filePath}（${from.provider}）；链尾仍在，但无法再做内容对账`,
           );
           continue;

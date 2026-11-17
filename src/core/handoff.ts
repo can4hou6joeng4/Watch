@@ -10,7 +10,7 @@ import { escapeControlChars } from './display.js';
 import { describeBadLinesScanFailure, scanUnparsableJsonLines } from './jsonl.js';
 import { usageBadLinesDetail, usageSidecarProblem } from './usage-integrity.js';
 import { cwdAliasHint, splitElsewhereByDirectory } from './cwd.js';
-import { compressedCopy, describePathReadFailureReason, describeReadFailureOrSelf, emptySessionFileReasonFromStat, isEmptySessionFileReason, probeSessionReadable, sessionFilePresence } from './read-text.js';
+import { compressedCopy, compressedRetryAdvice, describePathReadFailureReason, describeReadFailureOrSelf, emptySessionFileReasonFromStat, isEmptySessionFileReason, probeSessionReadable, sessionFilePresence } from './read-text.js';
 import { noSessionHint, unknownProviderMessage } from '../providers/registry.js';
 import { collectUnattributable, unattributableNoPickMessage, unattributablePickWarning } from './session-coverage.js';
 
@@ -205,9 +205,9 @@ export async function assertTargetUnchanged(
       throw new HandoffBlockedError(
         'target_missing',
         copy
-          ? `目标会话文件${copy.note}；已中止本次${action}（未写入任何内容）——${copy.advice}，再重试`
+          ? `目标会话文件${copy.note}；已中止本次${action}（未写入任何内容）——${compressedRetryAdvice(copy, '再重试')}`
           : `目标会话文件已不存在：${escapeControlChars(ref.filePath)}；已中止本次${action}（未写入任何内容），请重新选择目标会话`,
-        copy ? `本次未写入任何内容；${copy.advice}，再重试，或重新选择目标会话。` : undefined,
+        copy ? `本次未写入任何内容；${compressedRetryAdvice(copy, '再重试')}，或重新选择目标会话。` : undefined,
       );
     }
     if (presence.state === 'unknown') {
@@ -1128,7 +1128,7 @@ export async function chainStatus(
       const copy = compressedCopy(tipPresence);
       warnings.push(
         copy
-          ? `链尾会话文件${copy.note}（${last.toProvider} ${last.toRef.sessionId}）；下次切换会失败——${copy.advice}，再重试，或${rebindHint(last.toProvider)}`
+          ? `链尾会话文件${copy.note}（${last.toProvider} ${last.toRef.sessionId}）；下次切换会失败——${compressedRetryAdvice(copy, '再重试')}，或${rebindHint(last.toProvider)}`
           : `链尾会话文件已不存在：${escapeControlChars(last.toRef.filePath)}（${last.toProvider} ${last.toRef.sessionId}，文件不存在）；下次切换会失败，${rebindHint(last.toProvider)}`,
       );
     } else if (tipPresence.state === 'present' && !tipPresence.isFile) {
@@ -1260,7 +1260,7 @@ export async function handoff(
         throw new Error(
           copy
             ? `未发现原生会话；而链尾记录的 ${chainTipRef.provider} 会话 ${chainTipRef.sessionId} 的文件${copy.note}：` +
-                `${copy.advice}，再重试，或${rebindHint(chainTipRef.provider)}`
+                `${compressedRetryAdvice(copy, '再重试')}，或${rebindHint(chainTipRef.provider)}`
             : `未发现原生会话；而链尾记录的 ${chainTipRef.provider} 会话 ${chainTipRef.sessionId} 文件已不存在（${escapeControlChars(chainTipRef.filePath)}）：` +
                 `${rebindHint(chainTipRef.provider)}，或在原生 CLI 里新开一个会话`,
         );
@@ -1508,7 +1508,7 @@ export async function handoff(
     // 让原生继续一次就会展开，rebind 反而会丢掉这条会话的历史
     const copy = gone ? compressedCopy(await sessionFilePresence(sourceTip.ref.filePath)) : null;
     const reason = copy
-      ? `文件${copy.note}；链记录仍指向它——${copy.advice}，再重试，或${rebindHint(sourceTip.provider)}`
+      ? `文件${copy.note}；链记录仍指向它——${compressedRetryAdvice(copy, '再重试')}，或${rebindHint(sourceTip.provider)}`
       : gone
       ? `文件 ${escapeControlChars(sourceTip.ref.filePath)} 已不存在，而链记录仍指向它：${rebindHint(sourceTip.provider)}，或用 watch sessions 查看该目录还有哪些可接力的会话`
       : code === 'EACCES' || code === 'EPERM'

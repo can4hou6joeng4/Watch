@@ -295,6 +295,15 @@ export function compressedCopy(presence: SessionFilePresence): CompressedCopyNot
 }
 
 /**
+ * 「调用方接下来要重试同一操作」时的下一步。0 字节副本重开多少次会话都还是同一条路径 /
+ * 同一份链绑定——重开得到的是另一条会话，必须先恢复备份；完好副本则先让原生展开。
+ * `retry` 由调用点给（「再重试」「再重跑 watch doctor」），因为各命令的重试动词不同。
+ */
+export function compressedRetryAdvice(copy: CompressedCopyNote, retry: string): string {
+  return copy.kind === 'empty' ? `从备份恢复后${retry}` : `${copy.advice}，${retry}`;
+}
+
+/**
  * `stat` 一次会话文件，判断它「确实不在了」还是「只是读不出来」。
  *
  * 只有 `ENOENT` / `ENOTDIR` 是 missing；`EACCES` / `EIO` 等返回 unknown 并给出原因，

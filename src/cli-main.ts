@@ -29,7 +29,7 @@ import { escapeControlChars, hasControlChars } from './core/display.js';
 import { commandControlWarnings } from './core/terminal-command.js';
 import { trimUserKey } from './core/cli-input.js';
 import { describeResumeTargetUnfinished } from './core/rich.js';
-import { compressedCopy, describePathReadFailureReason, describeReadFailureOrSelf, describeSessionReadFailureReason, isEmptySessionFileReason, probeSessionReadable, sessionFilePresence } from './core/read-text.js';
+import { compressedCopy, compressedRetryAdvice, describePathReadFailureReason, describeReadFailureOrSelf, describeSessionReadFailureReason, isEmptySessionFileReason, probeSessionReadable, sessionFilePresence } from './core/read-text.js';
 import { describeWriteFailureReason } from './core/atomic.js';
 import { collectUnattributable, emptiedJson, emptiedSearchNote, emptiedSessionsWarning, unattributableEmptyNote, unattributableJson, unattributableNoPickMessage, unattributablePickWarning, unattributableSearchNote, unattributableWarning } from './core/session-coverage.js';
 import type { EmptiedSession } from './core/session-coverage.js';
@@ -2515,7 +2515,7 @@ async function cmdChain(cwd: string, json: boolean, action?: string, a?: string,
         if (missing && c.status === 'active') {
           warnings.push(
             copy
-              ? `链「${escapeControlChars(c.name)}」的链尾会话文件${copy.note}（${last.toRef.provider}:${last.toRef.sessionId}）：下次切换会失败——${copy.advice}，再重试，或${rebindHint(last.toRef.provider)}`
+              ? `链「${escapeControlChars(c.name)}」的链尾会话文件${copy.note}（${last.toRef.provider}:${last.toRef.sessionId}）：下次切换会失败——${compressedRetryAdvice(copy, '再重试')}，或${rebindHint(last.toRef.provider)}`
               : `链「${escapeControlChars(c.name)}」的链尾会话文件已不存在（${last.toRef.provider}:${last.toRef.sessionId}）：下次切换会失败，${rebindHint(last.toRef.provider)}`,
           );
         } else if (readProblem && c.status === 'active') {
