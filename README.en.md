@@ -20,7 +20,19 @@ The steps are on the site [guides](https://relay.bobochang.cn/en/#guides): [Clau
 
 It does not provide models, bypass usage limits, replace native agent chat, or move permissions, credentials and plugins by default. What it transfers is the recorded session, not the model's unrecorded internal state. Today the implementation is centred on CLI sessions and terminal resume; the product direction includes validated desktop entry points, but **official interoperability does not mean Watch has integrated it**.
 
-### Latest release ([v0.1.93](https://github.com/can4hou6joeng4/Watch/releases/tag/v0.1.93))
+### Latest release ([v0.1.94](https://github.com/can4hou6joeng4/Watch/releases/tag/v0.1.94))
+
+`watch new` now reports the turn count its session actually parses to.
+
+The empty-chain branch used to hard-code `turnCount: 0` for `createEmptySession`, but the claude and pi implementations write a placeholder user message. For the same freshly created session, `new --json` said 0 turns while the chain tip in `chain list` (`chains[].tip.turns`) and `status` (`chainTipTurns`) said 1, giving two answers for one fact. codex, grok and opencode only write a rollout header or an empty session, where 0 was already correct.
+
+- **Parsed, not assumed**: `new` parses the created session once, so `--json` `turnCount` matches the chain-tip counts from `chain list` and `status`.
+- **0 turns stated plainly**: text mode prints a 0-turn parse note with an empty session instead of a plain zero count, plus a line saying this is normal for a new session and resume opens it ready to chat.
+- **No zero stand-in**: if the parse fails, `--json` omits `turnCount` and a warning says the content cannot be read, so the already-created session is not reported as failed.
+
+- **Validation scope**: 3 new isolated checks (claude / pi turn counts matching the chain tip, codex 0 turns and its text note) pass 30/30 together with the new / JSON-contract cases; the full isolated regression passes 2222 tests with zero failures and zero skips; typecheck, desktop build, the four site test files (16/16) and the share-image render/digest checks pass. No native-client acceptance claim is added: no native GUI or model was started this round.
+
+### Previous release ([v0.1.93](https://github.com/can4hou6joeng4/Watch/releases/tag/v0.1.93))
 
 The chain-tip row in `watch chain list` now shows its turn count, consistent with `status`.
 

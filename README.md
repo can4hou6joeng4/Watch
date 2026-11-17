@@ -20,7 +20,19 @@ Watch 只做一件事：**把已保存的会话记录连同工作目录交到目
 
 它不提供模型、不绕过配额、不代替原生 Agent 聊天，也不默认搬迁权限、凭据或插件；接力的是已有记录，不是模型未记录的内部状态。当前实现以 CLI 会话与终端恢复为主，产品方向包含经过验证的桌面端入口，但**官方支持互通不等于 Watch 已经集成**。
 
-### 最新版本（[v0.1.93](https://github.com/can4hou6joeng4/Watch/releases/tag/v0.1.93)）
+### 最新版本（[v0.1.94](https://github.com/can4hou6joeng4/Watch/releases/tag/v0.1.94)）
+
+`watch new` 的 `turnCount` 改为会话实际解析出的轮数。
+
+空链分支对 `createEmptySession` 以前一律写 `turnCount: 0`，但 claude / pi 写出的是一条占位 user 消息（`我们开始吧。`）：同一条刚建好的会话，`new --json` 说 0 轮，`chain list` 的 `chains[].tip.turns` 与 `status` 的 `chainTipTurns` 说 1 轮——同一份数据两条命令两种结论。codex / grok / opencode 只写 rollout 头或空会话，0 轮本来就一致。
+
+- **以解析结果为准**：`new` 建完会话后 `parse` 一次，`--json` 的 `turnCount` 与 `chain list` / `status` 的链尾轮数同口径。
+- **0 轮照实说**：文本模式写「（解析出 0 轮，空会话）」，不写成「（0 轮）」；另补一句「这是新会话的正常状态，resume 打开后直接开始对话即可」。
+- **不拿 0 冒充**：解析失败时 `--json` 不出现 `turnCount`，并披露「读不出它的内容、无法确认轮数」，已建好的会话不会被报成失败。
+
+- **验证范围**：新增 3 项隔离检查（claude / pi 的轮数与链尾一致、codex 的 0 轮与文本说明），与 new / JSON 契约相关用例联合 30/30 通过；完整隔离回归 2222 项通过，0 失败、0 跳过；类型检查、桌面构建、站点四项测试 16/16 与分享图渲染/摘要检查通过。不新增原生客户端验收结论：本轮未启动任何原生 GUI 或模型。
+
+### 上一版本（[v0.1.93](https://github.com/can4hou6joeng4/Watch/releases/tag/v0.1.93)）
 
 `watch chain list` 的链尾行显示轮数，与 `status` 同口径。
 
