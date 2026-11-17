@@ -979,7 +979,13 @@ export async function chainUsage(
     }
     if (badUsage) warnings.push(badUsage.reason);
     let contentProblem: string | undefined;
+    let nowContentBad: Awaited<ReturnType<typeof usageContentBadLinesDetail>> = null;
     if (usage !== null) {
+      nowContentBad = await usageContentBadLinesDetail(adapter, ref, `${adapter.id} 会话 ${ref.sessionId}`);
+      if (nowContentBad && !nowContentBad.scanFailed) {
+        // usage === null 的分支会在上面推警告；这里补的是「用量已读到」的路径。
+        warnings.push(nowContentBad.reason);
+      }
       contentProblem = (await usageContentFileProblem(adapter, ref, `${adapter.id} 会话 ${ref.sessionId}`)) ?? undefined;
       if (contentProblem) warnings.push(contentProblem);
     }
@@ -991,6 +997,8 @@ export async function chainUsage(
       // 否则消费方会把「全行损坏读不出」当成「原生无 usage 字段」
       ...(badUsage ? { usageBadLines: badUsage.count } : {}),
       ...(badUsage?.scanFailed ? { usageBadLinesScanError: badUsage.scanError } : {}),
+      ...(nowContentBad?.count ? { contentBadLines: nowContentBad.count } : {}),
+      ...(nowContentBad?.scanFailed ? { contentBadLinesScanError: nowContentBad.scanError } : {}),
       ...(contentProblem ? { contentProblem } : {}),
     });
     if (usage === null && !badUsage) totalMissingUsage += 1;

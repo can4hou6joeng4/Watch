@@ -3133,11 +3133,11 @@ async function cmdUsage(cwd: string, json: boolean, chain?: string): Promise<voi
     // 旁路用量完好但内容文件已空时，用量已计入合计，只提醒内容已丢失。
     const contentBadLineSessions = result.byProvider.filter((item) => item.contentBadLines || item.contentBadLinesScanError).length;
     if (contentBadLineSessions) {
-      console.log(`  注：${contentBadLineSessions} 个会话的内容文件有无法解析的行，解析出 0 轮也不能当作空会话，合计未包含它们的用量`);
+      console.log(`  注：${contentBadLineSessions} 个会话的内容文件有无法解析的行，解析出 0 轮也不能当作空会话；用量仍可读取时已计入合计`);
     }
     const zeroTurnProblemSessions = result.byProvider.filter((item) => item.zeroTurnProblem).length;
     if (zeroTurnProblemSessions) {
-      console.log(`  注：${zeroTurnProblemSessions} 个会话解析出 0 轮，但日志显示曾有内容，不是合法空会话，合计未包含它们的用量`);
+      console.log(`  注：${zeroTurnProblemSessions} 个会话解析出 0 轮，但日志显示曾有内容，不是合法空会话；用量仍可读取时已计入合计`);
     }
     const contentProblemSessions = result.byProvider.filter((item) => item.contentProblem).length;
     if (contentProblemSessions) {
