@@ -2529,8 +2529,13 @@ async function cmdChain(cwd: string, json: boolean, action?: string, a?: string,
           compressedEmpty?: boolean;
           /** 文件在、但读不出来（`chmod 000` 之类）：`missing` 为假也不代表可用 */
           unreadable?: boolean;
+          /** 链尾解析出的轮数：只在 parse 成功时存在（undefined = 没解析 / 解析失败），不拿 0 冒充 */
+          turns?: number;
         }
       >();
+      // 与 status / doctor 同一口径：链尾文件在、读得出来时再 parse 一次，给出轮数。
+      // 链 list 只是一次查询，但「这条链的链尾还剩多少 / 是不是空的」正是选链要看的信息
+      const tipAdapters = new Map(listAdapters().map((a) => [a.id, a]));
       for (const c of chains) {
         let last: ReturnType<typeof store.listSwitchEvents>[number] | undefined;
         try {
@@ -2563,6 +2568,18 @@ async function cmdChain(cwd: string, json: boolean, action?: string, a?: string,
               : presence.state === 'present' && !presence.isFile
                 ? '该路径现在不是普通文件'
                 : null;
+        let turns: number | undefined;
+        const tipAdapter =
+          presence.state === 'present' && presence.isFile && !readProblem ? tipAdapters.get(last.toRef.provider) : undefined;
+        if (tipAdapter?.parse) {
+          try {
+            turns = (await tipAdapter.parse(last.toRef)).length;
+          } catch {
+            // 与 status 的链尾判定同构：文件读不出来由上面的 presence 档说，内容解析失败
+            // 由 doctor 的「内容解析失败」与 open / switch 的报错负责——chain list 是查询
+            // 命令，不在这里叠加第二种说法，也不拿 0 冒充「解析失败」
+          }
+        }
         tips.set(c.id, {
           provider: last.toRef.provider,
           sessionId: last.toRef.sessionId,
@@ -2571,6 +2588,7 @@ async function cmdChain(cwd: string, json: boolean, action?: string, a?: string,
           ...(tipError ? { error: tipError } : {}),
           ...(compressedEmpty ? { compressedEmpty: true } : {}),
           ...(readProblem ? { unreadable: true } : {}),
+          ...(turns !== undefined ? { turns } : {}),
         });
         if (missing && c.status === 'active') {
           warnings.push(
@@ -2588,6 +2606,11 @@ async function cmdChain(cwd: string, json: boolean, action?: string, a?: string,
           // 读不出来 ≠ 文件没了：不标 missing，也不能当成「一切正常」而不出声
           warnings.push(
             `链「${escapeControlChars(c.name)}」的链尾会话文件无法确认是否还在（${last.toRef.provider}:${last.toRef.sessionId}）：${tipError}`,
+          );
+        } else if (turns === 0 && c.status === 'active') {
+          // 0 轮与 status 的 chainTipEmpty 同档：文件没坏，坏的是「resume 打开是空会话」的预期
+          warnings.push(
+            `链「${escapeControlChars(c.name)}」的链尾会话 ${last.toRef.provider} ${last.toRef.sessionId} 解析出 0 轮（没有可继续的对话）：resume 打开就是空会话——可能刚建出来还没聊过，也可能内容已被清空；如果它本该有历史，先在原生客户端里打开确认，或从备份恢复该文件`,
           );
         }
       }
@@ -2635,7 +2658,12 @@ async function cmdChain(cwd: string, json: boolean, action?: string, a?: string,
                   ? '（链尾文件读不出来）'
                   : tip.error
                     ? '（链尾文件状态无法确认）'
-                    : ''
+                    : tip.turns === 0
+                      // 与 status 同一措辞：0 轮不写成「（0 轮）」那种像正常计数的写法
+                      ? '（解析出 0 轮，空会话）'
+                      : tip.turns !== undefined
+                        ? `（${tip.turns} 轮）`
+                        : ''
             }`
           : '';
         console.log(`  ${escapeControlChars(c.name)}${mark}${here}  ${c.id}  lastUsed=${fmtTime(c.lastUsedAt)}${tipText}`);
