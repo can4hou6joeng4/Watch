@@ -1,5 +1,5 @@
 import { createReadStream } from 'node:fs';
-import { open, readFile, stat } from 'node:fs/promises';
+import { lstat, open, readFile, stat } from 'node:fs/promises';
 import { createInterface } from 'node:readline';
 import { escapeControlChars } from './display.js';
 
@@ -221,9 +221,45 @@ export function describeReadFailureOrSelf(error: unknown): string {
 export type SessionFilePresence =
   // `size` 只在 present 时给出：调用方要在「文件在、是普通文件」之后继续区分
   // 「有内容」与「0 字节（内容已丢失）」，不必为了一个字节数再 stat 一次
-  | { state: 'present'; isFile: boolean; size?: number }
-  | { state: 'missing' }
+  | {
+      state: 'present';
+      isFile: boolean;
+      size?: number;
+    }
+  // `compressed`：原路径 stat 不到、但同名 `.jsonl.zst` 在（Codex 的
+  // `local_thread_store_compression` 压缩后删掉普通副本）。不是「会话丢了」，是「只剩压缩格式」。
+  | { state: 'missing'; compressed?: string }
   | { state: 'unknown'; reason: string };
+
+/**
+ * 原路径缺失时只读探一次同名 `.jsonl.zst`。
+ *
+ * Codex 会把闲置 rollout 压成 `<原名>.jsonl.zst` 并删除普通副本（上游固定提交
+ * `ee344ca9458351a6ea102795fa73110ad3ede5dc` 的 `compression.rs`）。Watch 本版不读压缩格式，
+ * 但「原路径 stat 不到」与「会话被删了」是两件事：前者文件还在、原生继续该会话就会展开回 `.jsonl`。
+ * 只 `lstat` 一次，不解压、不打开、不改动；符号链接不算（与扫描侧「只识别普通文件」一致）。
+ */
+async function compressedSiblingPath(filePath: string): Promise<string | undefined> {
+  const compressedPath = `${filePath}.zst`;
+  try {
+    return (await lstat(compressedPath)).isFile() ? compressedPath : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * `missing` 且找到同名 `.jsonl.zst` 时的说明；没有压缩副本返回 `null`（调用方沿用自己的「已不存在」）。
+ *
+ * 只说「文件已不存在」会把人引去重新绑定 / 重建历史，而它其实还在、只是本版不读压缩格式。
+ */
+export function compressedSessionNote(presence: SessionFilePresence): string | null {
+  if (presence.state !== 'missing' || !presence.compressed) return null;
+  return (
+    `已被 Codex 压缩为 ${escapeControlChars(presence.compressed)}（本版不读压缩格式，文件还在；` +
+    `在 Codex 里继续该会话会重新展开为 .jsonl，之后 Watch 即可读到，不要直接删除或改名）`
+  );
+}
 
 /**
  * `stat` 一次会话文件，判断它「确实不在了」还是「只是读不出来」。
@@ -238,7 +274,10 @@ export async function sessionFilePresence(filePath: string): Promise<SessionFile
     return { state: 'present', isFile: info.isFile(), size: info.size };
   } catch (error) {
     const code = (error as NodeJS.ErrnoException).code;
-    if (code === 'ENOENT' || code === 'ENOTDIR') return { state: 'missing' };
+    if (code === 'ENOENT' || code === 'ENOTDIR') {
+      const compressed = await compressedSiblingPath(filePath);
+      return compressed ? { state: 'missing', compressed } : { state: 'missing' };
+    }
     return { state: 'unknown', reason: describeSessionReadFailure(filePath, error) };
   }
 }

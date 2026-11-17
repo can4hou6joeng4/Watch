@@ -11,7 +11,7 @@ import { readWatchVersion } from './watch-version.js';
 import { cwdProblem, splitElsewhereByDirectory } from './cwd.js';
 import { escapeControlChars } from './display.js';
 import { describeBadLinesScanFailure, scanUnparsableJsonLines } from './jsonl.js';
-import { describeSessionReadFailureReason, isEmptySessionFileReason, isFileSystemErrorCode, probeSessionReadable } from './read-text.js';
+import { compressedSessionNote, describeSessionReadFailureReason, isEmptySessionFileReason, isFileSystemErrorCode, probeSessionReadable, sessionFilePresence } from './read-text.js';
 import { collectUnattributable, unattributableWarning } from './session-coverage.js';
 
 export type BrokenTip = {
@@ -23,6 +23,11 @@ export type BrokenTip = {
   error: string;
   /** true = 文件确认不在（ENOENT / ENOTDIR）；false = 读不出来，无法确认是否还在 */
   missing: boolean;
+  /**
+   * true = 原文件不在、但同名 `.jsonl.zst` 压缩副本在（Codex 的本地线程压缩）。
+   * 这时说「已不存在」会把人引去重新绑定，而会话其实还在——本版只是不读压缩格式。
+   */
+  compressed?: boolean;
   /**
    * true = 文件在、是普通文件，但打不开（`chmod 000` 之类）。
    *
@@ -213,7 +218,7 @@ export type DoctorDeps = {
 type PathPresence =
   | { state: 'present' }
   | { state: 'unreadable'; reason: string }
-  | { state: 'missing'; code: string }
+  | { state: 'missing'; code: string; compressed?: string }
   | { state: 'unknown'; reason: string };
 
 /**
@@ -237,7 +242,13 @@ async function pathPresence(filePath: string): Promise<PathPresence> {
     return { state: 'unknown', reason: '该路径现在不是普通文件（被同名目录或设备文件占住了）' };
   } catch (error) {
     const code = (error as NodeJS.ErrnoException).code;
-    if (code === 'ENOENT' || code === 'ENOTDIR') return { state: 'missing', code };
+    if (code === 'ENOENT' || code === 'ENOTDIR') {
+      // 与 `sessionFilePresence()` 同一判定：Codex 压缩过时原路径不在、`.jsonl.zst` 在
+      const presence = await sessionFilePresence(filePath);
+      return presence.state === 'missing' && presence.compressed
+        ? { state: 'missing', code, compressed: presence.compressed }
+        : { state: 'missing', code };
+    }
     return { state: 'unknown', reason: describeSessionReadFailureReason(error) };
   }
 }
@@ -437,6 +448,7 @@ export async function doctorReport(cwd: string, deps: DoctorDeps): Promise<Docto
         if (tipPresence.state !== 'present') {
           const unreadable = tipPresence.state === 'unreadable';
           const missing = tipPresence.state === 'missing';
+          const compressed = missing && tipPresence.compressed ? tipPresence.compressed : undefined;
           const error = missing ? tipPresence.code : tipPresence.reason;
           brokenTips.push({
             chainId: chain.id,
@@ -446,12 +458,17 @@ export async function doctorReport(cwd: string, deps: DoctorDeps): Promise<Docto
             filePath: tip.filePath,
             error,
             missing,
+            ...(compressed ? { compressed: true } : {}),
             ...(unreadable ? { unreadable: true } : {}),
           });
           failures.push(
-            `链「${escapeControlChars(chain.name)}」的链尾不可用（${missing ? '文件已不存在' : unreadable ? '读不出来' : '文件状态无法确认'}）`,
+            `链「${escapeControlChars(chain.name)}」的链尾不可用（${compressed ? '只剩 Codex 压缩副本' : missing ? '文件已不存在' : unreadable ? '读不出来' : '文件状态无法确认'}）`,
           );
-          if (missing) {
+          if (compressed) {
+            warnings.push(
+              `链「${escapeControlChars(chain.name)}」的链尾会话${compressedSessionNote({ state: 'missing', compressed })}（${tip.provider}）；下次切换会失败——先在 Codex 里继续该会话让它重新展开，再重试，或${rebindHint(tip.provider)}`,
+            );
+          } else if (missing) {
             warnings.push(
               `链「${escapeControlChars(chain.name)}」的链尾会话文件已不存在：${tip.filePath}（${tip.provider}）；下次切换会失败，${rebindHint(tip.provider)}`,
             );
@@ -501,7 +518,14 @@ export async function doctorReport(cwd: string, deps: DoctorDeps): Promise<Docto
         }
         const fromPresence = await pathPresence(from.filePath);
         if (fromPresence.state === 'missing') {
-          warnings.push(`链「${escapeControlChars(chain.name)}」的来源会话文件已不存在：${from.filePath}（${from.provider}）；链尾仍在，但无法再做内容对账`);
+          const compressed = fromPresence.compressed
+            ? compressedSessionNote({ state: 'missing', compressed: fromPresence.compressed })
+            : null;
+          warnings.push(
+            compressed
+              ? `链「${escapeControlChars(chain.name)}」的来源会话${compressed}（${from.provider}）；链尾仍在，但无法再做内容对账——先在 Codex 里继续该会话让它重新展开，再重跑 watch doctor`
+              : `链「${escapeControlChars(chain.name)}」的来源会话文件已不存在：${from.filePath}（${from.provider}）；链尾仍在，但无法再做内容对账`,
+          );
           continue;
         }
         // 来源会话读不出来：链尾没问题，但这一条链的内容对账做不成，来源侧也打不开

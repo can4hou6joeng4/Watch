@@ -10,7 +10,7 @@ import { escapeControlChars } from './display.js';
 import { describeBadLinesScanFailure, scanUnparsableJsonLines } from './jsonl.js';
 import { usageBadLinesDetail, usageSidecarProblem } from './usage-integrity.js';
 import { cwdAliasHint, splitElsewhereByDirectory } from './cwd.js';
-import { describePathReadFailureReason, describeReadFailureOrSelf, emptySessionFileReasonFromStat, isEmptySessionFileReason, probeSessionReadable, sessionFilePresence } from './read-text.js';
+import { compressedSessionNote, describePathReadFailureReason, describeReadFailureOrSelf, emptySessionFileReasonFromStat, isEmptySessionFileReason, probeSessionReadable, sessionFilePresence } from './read-text.js';
 import { noSessionHint, unknownProviderMessage } from '../providers/registry.js';
 import { collectUnattributable, unattributableNoPickMessage, unattributablePickWarning } from './session-coverage.js';
 
@@ -191,9 +191,14 @@ export async function assertTargetUnchanged(
   if (!current) {
     const presence = await sessionFilePresence(ref.filePath);
     if (presence.state === 'missing') {
+      // Codex 压缩过的 rollout：原路径不在、`.jsonl.zst` 在。说成「已不存在」会让人重新绑定，
+      // 而会话还在，只是本版不读压缩格式
+      const compressed = compressedSessionNote(presence);
       throw new HandoffBlockedError(
         'target_missing',
-        `目标会话文件已不存在：${escapeControlChars(ref.filePath)}；已中止本次${action}（未写入任何内容），请重新选择目标会话`,
+        compressed
+          ? `目标会话文件${compressed}；已中止本次${action}（未写入任何内容）——先在 Codex 里继续该会话让它重新展开，再重试`
+          : `目标会话文件已不存在：${escapeControlChars(ref.filePath)}；已中止本次${action}（未写入任何内容），请重新选择目标会话`,
       );
     }
     if (presence.state === 'unknown') {
@@ -367,15 +372,21 @@ export async function adoptIntoChain(
     // （Codex 的 `session_meta` 首行 0 字节 / 半截 JSON）：`findLatestSession` 只能跳过它们，
     // 于是照 `adoptNoSessionMessage()` 说「在这个目录还没有会话」就是一句假结论，
     // 与 `sessions` / `doctor` 早已披露的 unattributable 自相矛盾。
-    const hiddenNote = unattributableNoPickMessage(await collectUnattributable([adapter]));
+    const hiddenStats = await collectUnattributable([adapter]);
+    const hiddenNote = unattributableNoPickMessage(hiddenStats);
     const available = await providersWithSessionsHere(cwd, adapters, providerId);
     const others = available.length
       ? `；本目录现在可列出的有: ${available.join(' / ')}——可直接 watch adopt ${available[0]} --session <会话 id> 接入`
       : '';
     if (hiddenNote) {
+      // hiddenNote 已含「下一步」（按家自定义的 advice）。压缩副本那一档给的是「在 Codex 里继续该会话
+      // 会重新展开」——这时再劝「开一次新会话」是相反指引（新建的会话不会展开原会话）；
+      // 其它原因（归属元数据损坏）两条路都成立，保留「或开一条新的」备选。
+      const compressedOnly = hiddenStats.some((st) => (st.advice ?? '').includes('压缩'));
       throw new Error(
-        `${hiddenNote}；要接入 ${providerId}，先确认这些文件里是不是你要的那条（能从备份恢复就先恢复，` +
-          `恢复后用 watch adopt ${providerId} --session <会话 id> 接入），或在该家的原生 CLI 里开一次新会话再接入${others}`,
+        `${hiddenNote}；确认是你要的那条后，用 watch adopt ${providerId} --session <会话 id> 接入` +
+          (compressedOnly ? '' : '；或先在原生 CLI 里开一次新会话，再用 watch adopt 把它接入') +
+          others,
       );
     }
     // 「这家在这个目录没有会话」同样可能只是 `--cwd` 的写法不同：会话文件在，
@@ -555,6 +566,13 @@ export async function createChainSession(
     // 「直接 resume 即可」只在链尾文件真的还在时成立。文件被删 / 被同名目录占住 / 读不出来时
     // 照旧这么说，用户会在原生 CLI 里撞一个更含糊的错误；同一条链上 `switch` 早就分三档说清了。
     const tipPresence = await sessionFilePresence(tail.toRef.filePath);
+    const compressedTip = compressedSessionNote(tipPresence);
+    if (compressedTip) {
+      throw new Error(
+        `链尾已是 ${providerId}，但链尾会话 ${tail.toRef.sessionId} 的文件${compressedTip}；` +
+          `本次无法交接也无法 resume——先在 Codex 里继续该会话让它重新展开，再重试，或用 watch chain new <新名字> 另起一条链`,
+      );
+    }
     const broken =
       tipPresence.state === 'missing'
         ? '文件已不存在'
@@ -784,8 +802,11 @@ export async function chainUsage(
       if (presence.state !== 'present' || !presence.isFile) {
         // 只有 ENOENT / ENOTDIR 才能说「不存在」：EACCES 等读不出来时照实说，
         // 否则权限问题会被讲成会话丢了，用户会去重新绑定而不是修权限
+        const compressed = compressedSessionNote(presence);
         const msg =
-          presence.state === 'missing'
+          compressed
+            ? `会话文件${compressed}`
+            : presence.state === 'missing'
             ? `会话文件已不存在：${escapeControlChars(ref.filePath)}`
             : presence.state === 'present'
               ? `该路径现在不是普通文件（被同名目录或设备文件占住了）：${escapeControlChars(ref.filePath)}`
@@ -1071,8 +1092,11 @@ export async function chainStatus(
     const tipPresence = await sessionFilePresence(last.toRef.filePath);
     if (tipPresence.state === 'missing') {
       chainTipUnusable = true;
+      const compressed = compressedSessionNote(tipPresence);
       warnings.push(
-        `链尾会话文件已不存在：${escapeControlChars(last.toRef.filePath)}（${last.toProvider} ${last.toRef.sessionId}，文件不存在）；下次切换会失败，${rebindHint(last.toProvider)}`,
+        compressed
+          ? `链尾会话文件${compressed}（${last.toProvider} ${last.toRef.sessionId}）；下次切换会失败——先在 Codex 里继续该会话让它重新展开，再重试，或${rebindHint(last.toProvider)}`
+          : `链尾会话文件已不存在：${escapeControlChars(last.toRef.filePath)}（${last.toProvider} ${last.toRef.sessionId}，文件不存在）；下次切换会失败，${rebindHint(last.toProvider)}`,
       );
     } else if (tipPresence.state === 'present' && !tipPresence.isFile) {
       // 路径还在、只是不是普通文件：说成「文件已不存在」自相矛盾，还会把人引去 adopt；
@@ -1199,9 +1223,13 @@ export async function handoff(
       // 不能让人以为会话丢了、急着重新 adopt
       const tipPresence = await sessionFilePresence(chainTipRef.filePath);
       if (tipPresence.state === 'missing') {
+        const compressed = compressedSessionNote(tipPresence);
         throw new Error(
-          `未发现原生会话；而链尾记录的 ${chainTipRef.provider} 会话 ${chainTipRef.sessionId} 文件已不存在（${escapeControlChars(chainTipRef.filePath)}）：` +
-            `${rebindHint(chainTipRef.provider)}，或在原生 CLI 里新开一个会话`,
+          compressed
+            ? `未发现原生会话；而链尾记录的 ${chainTipRef.provider} 会话 ${chainTipRef.sessionId} 的文件${compressed}：` +
+                `先在 Codex 里继续该会话让它重新展开，再重试，或${rebindHint(chainTipRef.provider)}`
+            : `未发现原生会话；而链尾记录的 ${chainTipRef.provider} 会话 ${chainTipRef.sessionId} 文件已不存在（${escapeControlChars(chainTipRef.filePath)}）：` +
+                `${rebindHint(chainTipRef.provider)}，或在原生 CLI 里新开一个会话`,
         );
       }
       if (tipPresence.state === 'unknown') {

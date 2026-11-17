@@ -1,5 +1,5 @@
 import { statSync } from 'node:fs';
-import { mkdir, readdir, readFile, stat } from 'node:fs/promises';
+import { lstat, mkdir, readdir, readFile, stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
@@ -124,13 +124,16 @@ async function newestJsonlPaths(
       }
       return;
     }
-    // 同一次 readdir 先记下普通副本：`.zst` 只有在没有同名 `.jsonl` 时才算「只有压缩副本」，
+    // 同一次 readdir 先记下普通副本名：`.zst` 只有在没有同名 `.jsonl` 时才算「只有压缩副本」，
     // 与原生 `should_skip_compressed_sibling` 的优先级一致（普通副本永远优先读取）。
+    // 但名字不够：同名项可能是目录 / 悬空符号链接，那时普通副本并不存在，压缩副本不能因此被吞掉。
     const plainNames = new Set(entries.filter((entry) => entry.endsWith('.jsonl')));
     for (const entry of entries) {
       const p = path.join(dir, entry);
       try {
-        const info = await stat(p);
+        // `lstat` 而不是 `stat`：全局反查必须与列表侧（`Dirent.isFile()`）同一口径，
+        // 只认普通文件；跟随符号链接会让反查「找到一个」列表却列不出的会话，也可能绕进环。
+        const info = await lstat(p);
         if (info.isDirectory()) {
           await walk(p, depth + 1);
         } else {
@@ -138,9 +141,22 @@ async function newestJsonlPaths(
           const datePath = parts.length <= 3 && /^\d{4}$/.test(parts[0]) && parts.slice(1).every((part) => /^\d{2}$/.test(part));
           if (info.isFile() && datePath) {
             errors?.push(`${escapeControlChars(p)}（日期路径不是目录，被普通文件占住）`);
-          } else if (info.isFile() && entry.endsWith('.jsonl.zst')) {
+          } else if (info.isFile() && entry.endsWith('.jsonl.zst') && entry.startsWith('rollout-')) {
             // 普通副本也在时原生只读普通副本（`should_skip_compressed_sibling`），这里不重复计数。
-            if (!plainNames.has(entry.slice(0, -'.zst'.length))) compressed?.push(p);
+            // 同名项必须真的是普通文件；目录 / 符号链接（含悬空链接）都不算普通副本，
+            // 压缩副本仍要记下来，否则反查会回「未找到会话」，与列表侧口径相反。
+            // 用 `lstat`：`stat` 会跟随符号链接，把链接当成普通副本，与
+            // 「只识别普通文件、不跟随符号链接」的约定冲突（列表侧用 Dirent.isFile() 判）。
+            const plainName = entry.slice(0, -'.zst'.length);
+            let plainIsFile = false;
+            if (plainNames.has(plainName)) {
+              try {
+                plainIsFile = (await lstat(path.join(dir, plainName))).isFile();
+              } catch {
+                plainIsFile = false;
+              }
+            }
+            if (!plainIsFile) compressed?.push(p);
           } else if (info.isFile() && entry.endsWith('.jsonl')) {
             collected.push(p);
           }

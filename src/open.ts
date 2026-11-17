@@ -160,16 +160,17 @@ export function lookupMissHeadline(
   const found = misses.filter((m) => m.kind === 'found-unreadable');
   if (found.length) {
     const list = found.map((m) => `${m.provider}：${m.reason}`).join('；');
+    // 尾句不能预设「文件坏了」：压缩副本那一档文件完好，只是本版不读压缩格式，
+    // 说「先修好这条会话」会与原因里的「不要直接删除或改名」自相矛盾。
     return (
-      `${subject} ${id} 找到了，但读不出来${scope}：${list}。` +
-      '这不是 id 写错——先修好这条会话再重试（权限、路径是否还是普通文件、文件内容是否损坏），' +
-      '或用原生 CLI 确认它还能不能打开'
+      `${subject} ${escapeControlChars(id)} 找到了，但读不出来${scope}：${list}。` +
+      '这不是 id 写错——按上面的原因处理后再重试，或用原生 CLI 确认它还能不能打开'
     );
   }
   const incomplete = misses.filter((m) => m.kind === 'incomplete');
   if (incomplete.length) {
     const list = incomplete.map((m) => `${m.provider}：${m.reason}`).join('；');
-    return `无法确认${subject} ${id} 是否存在${scope}：${list}。先把这些会话存储修到可读再重试`;
+    return `无法确认${subject} ${escapeControlChars(id)} 是否存在${scope}：${list}。先把这些会话存储修到可读再重试`;
   }
   return null;
 }

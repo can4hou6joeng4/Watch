@@ -333,7 +333,11 @@ export async function codexUnattributableRollouts(
   if (!compressed.length) return { count, samples, summary };
   // 压缩副本是另一种原因：文件没有损坏，只是本版不读 `.jsonl.zst`。混用「可能是被截断」会把用户
   // 引去反复查文件内容，必须换掉原因与建议两句话。
+  // 混合计数时 advice 要分开说：压缩副本「文件是完好的」，而坏首行那部分可能真的被截断了——
+  // 一句「文件本身是完好的」会把后者讲成健康文件，还会丢掉「从备份恢复」的下一步。
   const compressedCount = compressed.length;
+  const compressedAdvice =
+    '已被压缩的那些 Watch 没有读取也没有改动，文件还在；在 Codex 里继续该会话会重新展开为 .jsonl（Watch 随后即可列出），不要直接删除或改名';
   return {
     count: count + compressedCount,
     samples: [...samples, ...compressed.slice(0, Math.max(0, 3 - samples.length)).map((f) => `${escapeControlChars(f)}（只有 .jsonl.zst 压缩副本）`)],
@@ -341,7 +345,9 @@ export async function codexUnattributableRollouts(
     cause: count > 0
       ? `${summary}缺失或损坏，另有 ${compressedCount} 个已被 Codex 压缩为 .jsonl.zst，本版 Watch 只读取未压缩的 .jsonl`
       : '这些文件已被 Codex 压缩为 .jsonl.zst，本版 Watch 只读取未压缩的 .jsonl',
-    advice: '文件本身是完好的；在 Codex 里继续该会话会把它重新展开为 .jsonl（Watch 随后即可列出），不要直接删除或改名',
+    advice: count > 0
+      ? `坏首行的那 ${count} 个先把内容确认清楚（可能是被截断），能从备份恢复就别直接删；${compressedAdvice}`
+      : compressedAdvice,
   };
 }
 
@@ -361,8 +367,8 @@ export async function findCodexSessionById(
     if (compressedMatch) {
       throw new SessionLookupFailureError(
         'found-unreadable',
-        `找到会话 ${sessionId} 的压缩副本 ${escapeControlChars(compressedMatch)}，但本版 Watch 只读取未压缩的 .jsonl：` +
-          '文件本身是完好的；在 Codex 里继续该会话会把它重新展开为 .jsonl，不要直接删除或改名',
+        `找到会话 ${escapeControlChars(sessionId)} 的压缩副本 ${escapeControlChars(compressedMatch)}，但本版 Watch 只读取未压缩的 .jsonl：` +
+          'Watch 没有读取也没有改动这个文件；在 Codex 里继续该会话会把它重新展开为 .jsonl，不要直接删除或改名',
       );
     }
     // 有目录读不出来时不能下「没有这个会话」的结论：抛出原因，由 resolveById 记进 diagnostics，

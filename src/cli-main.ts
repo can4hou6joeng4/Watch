@@ -29,7 +29,7 @@ import { escapeControlChars, hasControlChars } from './core/display.js';
 import { commandControlWarnings } from './core/terminal-command.js';
 import { trimUserKey } from './core/cli-input.js';
 import { describeResumeTargetUnfinished } from './core/rich.js';
-import { describePathReadFailureReason, describeReadFailureOrSelf, describeSessionReadFailureReason, isEmptySessionFileReason, probeSessionReadable, sessionFilePresence } from './core/read-text.js';
+import { compressedSessionNote, describePathReadFailureReason, describeReadFailureOrSelf, describeSessionReadFailureReason, isEmptySessionFileReason, probeSessionReadable, sessionFilePresence } from './core/read-text.js';
 import { describeWriteFailureReason } from './core/atomic.js';
 import { collectUnattributable, emptiedJson, emptiedSearchNote, emptiedSessionsWarning, unattributableEmptyNote, unattributableJson, unattributableNoPickMessage, unattributablePickWarning, unattributableSearchNote, unattributableWarning } from './core/session-coverage.js';
 import type { EmptiedSession } from './core/session-coverage.js';
@@ -1318,6 +1318,7 @@ async function cmdSessions(cwd: string, json: boolean, chain?: string): Promise<
           if (chainRow && ids) {
             const listed = new Set(sessions.map((s) => s.ref.sessionId));
             const missingFiles: string[] = [];
+            const compressedFiles: { id: string; note: string }[] = [];
             const unreadableFiles: { id: string; reason: string }[] = [];
             const occupiedFiles: string[] = [];
             const tooOld: string[] = [];
@@ -1328,8 +1329,12 @@ async function cmdSessions(cwd: string, json: boolean, chain?: string): Promise<
               // 路径被同名目录占住既不算「还在」也不算「没了」：混进 tooOld 会被报成
               // 「不在最近 N 个里（可能属于另一个目录）」，让人去核对 --cwd，而实际要恢复的是这个路径
               const presence = await sessionFilePresence(ref.filePath);
-              if (presence.state === 'missing') missingFiles.push(id);
-              else if (presence.state === 'unknown') unreadableFiles.push({ id, reason: presence.reason });
+              if (presence.state === 'missing') {
+                // 只剩 Codex 压缩副本不算「文件已不存在」：下次切换照样会失败，但下一步不同
+                const note = compressedSessionNote(presence);
+                if (note) compressedFiles.push({ id, note });
+                else missingFiles.push(id);
+              } else if (presence.state === 'unknown') unreadableFiles.push({ id, reason: presence.reason });
               else if (!presence.isFile) occupiedFiles.push(id);
               else tooOld.push(id);
             }
@@ -1337,6 +1342,11 @@ async function cmdSessions(cwd: string, json: boolean, chain?: string): Promise<
               warnings.push(
                 `链 ${escapeControlChars(chainRow.name)} 绑定的 ${a.id} 会话 ${missingFiles.join('、')} 文件已不存在，本次未列出；下次切换会失败，${rebindHint(a.id)}` +
                   (missingFiles.length > 1 ? `（另有 ${missingFiles.length - 1} 个同样缺失，见上）` : ''),
+              );
+            }
+            if (compressedFiles.length) {
+              warnings.push(
+                `链 ${escapeControlChars(chainRow.name)} 绑定的 ${a.id} 会话 ${compressedFiles.map((c) => `${c.id}：${c.note}`).join('；')}，本次未列出；下次切换会失败`,
               );
             }
             if (unreadableFiles.length) {
@@ -2100,12 +2110,13 @@ async function cmdDoctor(cwd: string, json: boolean, strict: boolean): Promise<v
       }
     }
     if (report.store.available) {
-      const broken = report.store.brokenTips.filter((b) => b.missing).length;
+      const compressed = report.store.brokenTips.filter((b) => b.compressed).length;
+      const broken = report.store.brokenTips.filter((b) => b.missing && !b.compressed).length;
       const unreadable = report.store.brokenTips.filter((b) => b.unreadable).length;
-      const unknown = report.store.brokenTips.length - broken - unreadable;
+      const unknown = report.store.brokenTips.length - broken - compressed - unreadable;
       const drifted = report.store.driftedPairs.length;
       console.log(
-        `本地库: 可用，本目录 ${report.store.chains} 条链（${report.store.activeChains} 条活跃${broken ? `，${broken} 条链尾缺失` : ''}${unreadable ? `，${unreadable} 条链尾读不出来` : ''}${unknown ? `，${unknown} 条链尾状态无法确认` : ''}${drifted ? `，${drifted} 条链尾内容落后于来源` : ''}）`,
+        `本地库: 可用，本目录 ${report.store.chains} 条链（${report.store.activeChains} 条活跃${broken ? `，${broken} 条链尾缺失` : ''}${compressed ? `，${compressed} 条链尾只剩 Codex 压缩副本` : ''}${unreadable ? `，${unreadable} 条链尾读不出来` : ''}${unknown ? `，${unknown} 条链尾状态无法确认` : ''}${drifted ? `，${drifted} 条链尾内容落后于来源` : ''}）`,
       );
       // 上一行是结论：本目录没有链。别处有链时必须接着指路，否则会被当成链丢了 / 没建成功。
       // 「同一个目录的另一种写法」不是「别的目录」：两种说法分开，否则用户会以为链不在这个项目里
@@ -2124,7 +2135,9 @@ async function cmdDoctor(cwd: string, json: boolean, strict: boolean): Promise<v
       // 读不出来 ≠ 已删除：EACCES 等状态下让人 adopt 等于白换一次绑定
       for (const b of report.store.brokenTips) {
         console.log(
-          b.missing
+          b.compressed
+            ? `  链「${escapeControlChars(b.chainName)}」: ${b.provider}:${b.sessionId} 链尾只剩 Codex 压缩副本（${escapeControlChars(b.filePath)}）；在 Codex 里继续该会话会重新展开为 .jsonl，或 ${rebindHint(b.provider)}`
+            : b.missing
             ? `  链「${escapeControlChars(b.chainName)}」: ${b.provider}:${b.sessionId} 链尾文件已不存在（${escapeControlChars(b.filePath)}），${rebindHint(b.provider)}`
             : b.unreadable
               ? `  链「${escapeControlChars(b.chainName)}」: ${b.provider}:${b.sessionId} 链尾文件读不出来（${escapeControlChars(b.filePath)}，${b.error}）；resume 与下次切换都会失败——先修好这个文件（权限或内容），或 watch switch ${b.provider} 重新绑定`
@@ -2455,6 +2468,9 @@ async function cmdChain(cwd: string, json: boolean, action?: string, a?: string,
         // 这里以前只认 ENOENT，ENOTDIR（路径中间那一层被同名文件占住）会被讲成「状态无法确认」，
         // 同一条链在 status 里却写着「已不存在」；原因还会把英文 errno 原文塞进 --json 与 stderr
         const presence = await sessionFilePresence(last.toRef.filePath);
+        // 只剩 Codex 压缩副本时 `missing` 仍为真（原路径确实不在、下次切换会失败），
+        // 但 `error` 要说清它还在、怎么展开，不能沿用「文件已不存在」的下一步
+        const compressed = compressedSessionNote(presence);
         const missing = presence.state === 'missing';
         // 同理，`stat` 成功也不代表读得出来：`chmod 000` 的链尾在 chain list 里看着一切正常，
         // 而 resume 与下一次 switch 一读内容就失败（status 走同一个探测，口径一致）
@@ -2462,11 +2478,13 @@ async function cmdChain(cwd: string, json: boolean, action?: string, a?: string,
           presence.state === 'present' && presence.isFile ? await probeSessionReadable(last.toRef.filePath) : null;
         const tipError = readProblem
           ? readProblem
-          : presence.state === 'unknown'
-            ? presence.reason
-            : presence.state === 'present' && !presence.isFile
-              ? '该路径现在不是普通文件'
-              : null;
+          : compressed
+            ? compressed
+            : presence.state === 'unknown'
+              ? presence.reason
+              : presence.state === 'present' && !presence.isFile
+                ? '该路径现在不是普通文件'
+                : null;
         tips.set(c.id, {
           provider: last.toRef.provider,
           sessionId: last.toRef.sessionId,
@@ -2477,7 +2495,9 @@ async function cmdChain(cwd: string, json: boolean, action?: string, a?: string,
         });
         if (missing && c.status === 'active') {
           warnings.push(
-            `链「${escapeControlChars(c.name)}」的链尾会话文件已不存在（${last.toRef.provider}:${last.toRef.sessionId}）：下次切换会失败，${rebindHint(last.toRef.provider)}`,
+            compressed
+              ? `链「${escapeControlChars(c.name)}」的链尾会话文件${compressed}（${last.toRef.provider}:${last.toRef.sessionId}）：下次切换会失败——先在 Codex 里继续该会话让它重新展开，再重试，或${rebindHint(last.toRef.provider)}`
+              : `链「${escapeControlChars(c.name)}」的链尾会话文件已不存在（${last.toRef.provider}:${last.toRef.sessionId}）：下次切换会失败，${rebindHint(last.toRef.provider)}`,
           );
         } else if (readProblem && c.status === 'active') {
           // 读不出来 ≠ 文件没了：不标 missing，也不能当成「一切正常」而不出声
@@ -2527,7 +2547,9 @@ async function cmdChain(cwd: string, json: boolean, action?: string, a?: string,
         const tipText = tip
           ? `  → ${tip.provider}:${tip.sessionId}${
               tip.missing
-                ? '（链尾文件已不存在）'
+                ? tip.error && !tip.unreadable
+                  ? '（链尾只剩压缩副本）'
+                  : '（链尾文件已不存在）'
                 : tip.unreadable
                   ? '（链尾文件读不出来）'
                   : tip.error

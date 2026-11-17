@@ -136,7 +136,7 @@ export function unattributableEmptyNote(stats: readonly UnattributableStat[]): s
   ].join('、');
   return (
     `未发现可列出的原生会话；但 ${names} 另有 ${what}（原因见上方警告），` +
-    `无法确认这个目录里是否还有它们的会话——${advice}，再重试`
+    `无法确认这个目录里是否还有它们的会话——${advice}`
   );
 }
 
@@ -176,7 +176,7 @@ function hiddenByAttribution(
       .join('、');
     parts.push(
       `另有 ${total} 个会话文件读不出目录归属（${causes.join(' / ')}），` +
-        `它们不属于任何目录、不会出现在会话列表里${samples ? `：${samples}` : ''}`,
+        `Watch 读不出它们属于哪个目录，因此不会出现在会话列表里${samples ? `：${samples}` : ''}`,
     );
   }
   if (locationTotal > 0) {
@@ -299,7 +299,7 @@ export function unattributableSearchNote(stats: readonly UnattributableStat[]): 
   ].join('、');
   return (
     `本次没有命中；但 ${names} 另有 ${what}（原因见上方警告），` +
-    '这些内容不属于任何目录，也就不会进任何目录的搜索索引——无法确认里面是否有你要找的内容，搜索没有覆盖到它们；' +
-    `${advice}，再重试`
+    '这些内容读不出属于哪个目录，也就不会进任何目录的搜索索引——无法确认里面是否有你要找的内容，搜索没有覆盖到它们；' +
+    `${advice}`
   );
 }
