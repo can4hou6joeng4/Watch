@@ -2358,7 +2358,12 @@ async function cmdNew(cwd: string, providerId: string, json: boolean, chain?: st
       // 空链也会写原生存储；与已有链交接一样，先检查本家已知的写入限制。
       await adapter.preflight?.({ cwd });
       let ref: import('./core/types.js').SessionRef;
-      let turnCount = 0;
+      // 轮数取**实际解析结果**，不写死。createEmptySession 各家写出的占位不同：claude / pi 写一条
+      // 占位 user 消息（parse 出 1 轮），codex / grok / opencode 只写 rollout 头或空会话（0 轮）。
+      // 以前这里恒为 0，于是同一条刚建好的 claude / pi 会话，`new` 说 0 轮、`chain list` / `status`
+      // 的链尾说 1 轮（2026-11-17 实测）——同一份数据两条命令两种结论，用户无从判断哪边对。
+      // 解析失败时保持 undefined（JSON 里不出现这个键）并披露，不拿 0 冒充「没有内容」。
+      let turnCount: number | undefined;
       // 两个分支都会写原生存储（kimi 还要真跑一次 CLI 建会话）：失败时抛的是 Node 原文，
       // 用户看不出是权限、磁盘还是命令没装。spawn 的 errno 与文件系统同码（都是 ENOENT / EACCES），
       // 所以先按 syscall 认 spawn，再按写盘翻译，剩下的（适配器自己的中文说明）原样带出。
@@ -2372,6 +2377,14 @@ async function cmdNew(cwd: string, providerId: string, json: boolean, chain?: st
       };
       if (adapter.createEmptySession) {
         ref = await create(adapter.createEmptySession(cwd));
+        try {
+          turnCount = (await adapter.parse(ref)).length;
+        } catch (error) {
+          // 会话已经建好：解析失败不能让整条命令报失败，但也不能报 0 轮——那是「没有内容」的说法。
+          warnings.push(
+            `新会话已创建，但读不出它的内容、无法确认轮数：${describeReadFailureOrSelf(error)}；resume 打开后可以先确认这条会话是否正常`,
+          );
+        }
       } else if (adapter.start) {
         const started = await create(adapter.start(cwd, '我们开始吧。'));
         ref = started.ref;
@@ -2416,9 +2429,18 @@ async function cmdNew(cwd: string, providerId: string, json: boolean, chain?: st
         );
         return;
       }
-      console.log(`新会话: ${escapeControlChars(ref.sessionId)}`);
+      console.log(
+        `新会话: ${escapeControlChars(ref.sessionId)}${turnCount === undefined ? '' : turnCount === 0 ? '（解析出 0 轮，空会话）' : `（${turnCount} 轮）`}`,
+      );
       console.log(`resume: ${escapeControlChars(resumeCommand)}`);
-      // 结果说明走 stdout（同 switch / adopt / chain new 的位置），不是降级警告
+      // 结果说明走 stdout（同 switch / adopt / chain new 的位置），不是降级警告。
+      // 0 轮是新会话的正常状态（createEmptySession 只写占位头），说清「打开后直接开聊」，
+      // 不让人以为建坏了；解析失败（turnCount 未定义）已由上面的警告说明。
+      if (turnCount === 0) {
+        console.log(
+          `\n这条会话里还没有对话内容；这是新会话的正常状态，resume 打开后在 ${adapter.displayName} 里直接开始对话即可`,
+        );
+      }
       if (shiftNote) console.log(`\n${shiftNote}`);
       return;
     }
