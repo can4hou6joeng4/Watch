@@ -928,7 +928,7 @@ export async function chainUsage(
         }
       }
       let contentBad: Awaited<ReturnType<typeof usageContentBadLinesDetail>> = null;
-      if (parsedZero) contentBad = await usageContentBadLinesDetail(adapter, ref, `${adapter.id} 会话 ${ref.sessionId}`);
+      if (parsedZero) contentBad = await usageContentBadLinesDetail(adapter, ref, `${adapter.id} 会话 ${ref.sessionId}`, { zeroTurn: true });
       let zeroTurnProblem: string | undefined;
       if (parsedZero && !badUsage && !contentBad) {
         try {

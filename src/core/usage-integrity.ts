@@ -118,34 +118,45 @@ export async function usageSidecarProblem(
  * 内容文件（`parse()` 读的那份）坏行扫描：只在用量来自旁路文件时调用。
  *
  * `usageBadLinesDetail()` 扫的是 `sessionUsagePath()`，grok 指向 `updates.jsonl`；
- * `chat_history.jsonl` 被截断的半行既不会被 parse 报错，也不会计入用量坏行——
- * parse 返回 0 轮时 `chainUsage()` 会把它当成合法空会话，把「写了一半」讲成「还没聊过」。
+ * `chat_history.jsonl` 被截断的半行既不会被 parse 报错，也不会计入用量坏行。
+ * `zeroTurn` 决定措辞：只有 `usage === null` 的 0 轮分支才能说「解析出 0 轮、不能当空会话」；
+ * 已经读到旁路用量时，内容坏行只说明对话可能不完整，不能反过来把用量说成没读到。
  * 同文件 provider 的坏行已由用量侧覆盖，不重复扫。
  */
 export async function usageContentBadLinesDetail(
   adapter: ProviderAdapter,
   ref: SessionRef,
   label: string,
+  options: { zeroTurn?: boolean } = {},
 ): Promise<{ count: number; reason: string; scanFailed?: boolean; scanError?: string } | null> {
   const usagePath = adapter.sessionUsagePath?.(ref);
   if (!usagePath || usagePath === ref.filePath) return null;
+  const zeroTurn = options.zeroTurn === true;
   const scan = await scanUnparsableJsonLines(ref.filePath);
+  const description = escapeControlChars(ref.filePath);
   if (scan.error) {
     return {
       count: scan.count,
       scanFailed: true,
       scanError: scan.error,
       reason:
-        `${label}的内容文件 ${escapeControlChars(ref.filePath)} 坏行无法统计：${scan.error}；` +
-        `无法确认它是不是合法空会话——先确认该文件可读再重试`,
+        `${label}的内容文件 ${description} 坏行无法统计：${scan.error}；` +
+        (zeroTurn
+          ? '无法确认它是不是合法空会话'
+          : '无法确认对话内容是否完整') +
+        '——先确认该文件可读再重试' +
+        (zeroTurn ? '' : '；这条会话的用量仍来自旁路文件并已计入合计'),
     };
   }
   if (scan.count === 0) return null;
   return {
     count: scan.count,
     reason:
-      `${label}的内容文件 ${escapeControlChars(ref.filePath)} 有 ${scan.count} 行无法解析（截断或损坏），解析出 0 轮：` +
-      `不能当作合法空会话（Watch 无法确认它本来有内容还是没有）；可在原生 CLI 里打开确认，或从备份恢复该文件再重试`,
+      `${label}的内容文件 ${description} 有 ${scan.count} 行无法解析（截断或损坏），` +
+      (zeroTurn
+        ? '解析出 0 轮：不能当作合法空会话（Watch 无法确认它本来有内容还是没有）'
+        : '对话内容可能不完整；这条会话的用量仍来自旁路文件并已计入合计') +
+      '——可在原生 CLI 里打开确认，或从备份恢复该文件再重试',
   };
 }
 
