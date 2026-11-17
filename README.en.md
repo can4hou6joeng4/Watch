@@ -20,7 +20,17 @@ The steps are on the site [guides](https://relay.bobochang.cn/en/#guides): [Clau
 
 It does not provide models, bypass usage limits, replace native agent chat, or move permissions, credentials and plugins by default. What it transfers is the recorded session, not the model's unrecorded internal state. Today the implementation is centred on CLI sessions and terminal resume; the product direction includes validated desktop entry points, but **official interoperability does not mean Watch has integrated it**.
 
-### Latest release ([v0.1.87](https://github.com/can4hou6joeng4/Watch/releases/tag/v0.1.87))
+### Latest release ([v0.1.88](https://github.com/can4hou6joeng4/Watch/releases/tag/v0.1.88))
+
+v0.1.88 closes the result-note gap when `watch switch` merges content into an empty target session. When the target parses to 0 turns while the file is readable and not zero bytes, `switch` merged the source content but only reported how many turns were handed over, so the user could not tell that those turns are now the whole session, nor where to look if it should have older history.
+
+- That case now adds a result note (`notes`, not a degradation warning): the merged turns are the entire content of the session, and if it should have older history, restore the file from backup first (Watch does not rebuild history for you). Creating an empty session with `watch new` and switching into it is the normal first-chain path, so it does not raise a degradation warning every time.
+- `--json` gains a `notes` field, printed to stdout in text mode; `warnings` keeps its meaning.
+- A zero-byte target stays covered by the existing empty-file warning with no extra note; a target that already has content or a zero-increment switch emits nothing.
+
+- **Validation scope**: 3 new isolated checks (readable 0-turn target, counterexample with a non-empty target, zero-byte target without the extra note) pass 113/113 together with r169, r170, `cli-switch-*`, `cli-new-*`, `handoff` and other switch, new and handoff cases; the full isolated regression passes 2207 tests with zero failures and zero skips; typecheck, desktop build, the four site test files (16/16), and the share-image checks pass. No native-client acceptance claim is added.
+
+### Previous release ([v0.1.87](https://github.com/can4hou6joeng4/Watch/releases/tag/v0.1.87))
 
 v0.1.87 closes the empty-session gap when `watch new` finds the chain tip already on the target provider. `new` refuses to create another session and answers that the existing one is ready to resume. That line only checked whether the file exists, is readable, and stopped mid-turn; it never checked whether the session has content. A legitimate empty session from `watch new codex` or `watch new grok`, or content cleared with only a placeholder header left, parses to 0 turns, yet the answer said it is ready to resume, and opening it shows nothing.
 
