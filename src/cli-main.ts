@@ -3146,7 +3146,7 @@ async function cmdUsage(cwd: string, json: boolean, chain?: string): Promise<voi
       (item) => item.usage !== null && item.contentBadLinesScanError,
     ).length;
     if (contentBadLineEmptyKnown) {
-      console.log(`  注：${contentBadLineEmptyKnown} 个会话的内容文件有无法解析的行，0 轮不能当作空会话；用量仍可读取时已计入合计`);
+      console.log(`  注：${contentBadLineEmptyKnown} 个会话的内容文件有无法解析的行，0 轮不能当作空会话`);
     }
     if (contentBadLineEmptyUnknown) {
       console.log(`  注：${contentBadLineEmptyUnknown} 个会话的内容文件坏行无法统计，0 轮不能当作空会话；先确认内容文件可读再重试`);
@@ -3159,7 +3159,7 @@ async function cmdUsage(cwd: string, json: boolean, chain?: string): Promise<voi
     }
     const zeroTurnProblemSessions = result.byProvider.filter((item) => item.zeroTurnProblem).length;
     if (zeroTurnProblemSessions) {
-      console.log(`  注：${zeroTurnProblemSessions} 个会话解析出 0 轮，但日志显示曾有内容，不是合法空会话；用量仍可读取时已计入合计`);
+      console.log(`  注：${zeroTurnProblemSessions} 个会话解析出 0 轮，但日志显示曾有内容，不是合法空会话`);
     }
     const contentProblemSessions = result.byProvider.filter((item) => item.contentProblem).length;
     if (contentProblemSessions) {
