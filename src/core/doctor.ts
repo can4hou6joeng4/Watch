@@ -11,7 +11,7 @@ import { readWatchVersion } from './watch-version.js';
 import { cwdProblem, splitElsewhereByDirectory } from './cwd.js';
 import { escapeControlChars } from './display.js';
 import { describeBadLinesScanFailure, scanUnparsableJsonLines } from './jsonl.js';
-import { compressedSessionNote, describeSessionReadFailureReason, isEmptySessionFileReason, isFileSystemErrorCode, probeSessionReadable, sessionFilePresence } from './read-text.js';
+import { compressedCopy, describeSessionReadFailureReason, isEmptySessionFileReason, isFileSystemErrorCode, probeSessionReadable, sessionFilePresence } from './read-text.js';
 import { collectUnattributable, unattributableWarning } from './session-coverage.js';
 
 export type BrokenTip = {
@@ -29,6 +29,11 @@ export type BrokenTip = {
    * 存路径而不是布尔值：逐链行要打印真正存在的那个文件，打印不存在的 `.jsonl` 会误导排障。
    */
   compressedPath?: string;
+  /**
+   * true = `compressedPath` 是 0 字节副本：文件还在原处，内容却已丢失。
+   * 下一步只能是备份恢复或重开会话，不能沿用「让它重新展开」。
+   */
+  compressedEmpty?: boolean;
   /**
    * true = 文件在、是普通文件，但打不开（`chmod 000` 之类）。
    *
@@ -219,7 +224,7 @@ export type DoctorDeps = {
 type PathPresence =
   | { state: 'present' }
   | { state: 'unreadable'; reason: string }
-  | { state: 'missing'; code: string; compressed?: string }
+  | { state: 'missing'; code: string; compressed?: string; emptyCompressed?: string }
   | { state: 'unknown'; reason: string };
 
 /**
@@ -249,7 +254,12 @@ async function pathPresence(filePath: string): Promise<PathPresence> {
       // unknown 时照实返回 unknown——按 missing 讲会把「读不出来」说成「已被删除」。
       const presence = await sessionFilePresence(filePath);
       if (presence.state === 'missing') {
-        return { state: 'missing', code, ...(presence.compressed ? { compressed: presence.compressed } : {}) };
+        return {
+          state: 'missing',
+          code,
+          ...(presence.compressed ? { compressed: presence.compressed } : {}),
+          ...(presence.emptyCompressed ? { emptyCompressed: presence.emptyCompressed } : {}),
+        };
       }
       if (presence.state === 'unknown') return { state: 'unknown', reason: presence.reason };
       return { state: 'present' };
@@ -453,7 +463,15 @@ export async function doctorReport(cwd: string, deps: DoctorDeps): Promise<Docto
         if (tipPresence.state !== 'present') {
           const unreadable = tipPresence.state === 'unreadable';
           const missing = tipPresence.state === 'missing';
-          const compressed = missing && tipPresence.compressed ? tipPresence.compressed : undefined;
+          const copy = missing
+            ? compressedCopy({
+                state: 'missing',
+                compressed: tipPresence.compressed,
+                emptyCompressed: tipPresence.emptyCompressed,
+              })
+            : null;
+          const compressed = missing ? (tipPresence.compressed ?? tipPresence.emptyCompressed) : undefined;
+          const compressedEmpty = missing && !!tipPresence.emptyCompressed;
           const error = missing ? tipPresence.code : tipPresence.reason;
           brokenTips.push({
             chainId: chain.id,
@@ -464,14 +482,15 @@ export async function doctorReport(cwd: string, deps: DoctorDeps): Promise<Docto
             error,
             missing,
             ...(compressed ? { compressedPath: compressed } : {}),
+            ...(compressedEmpty ? { compressedEmpty: true } : {}),
             ...(unreadable ? { unreadable: true } : {}),
           });
           failures.push(
-            `链「${escapeControlChars(chain.name)}」的链尾不可用（${compressed ? '只剩压缩副本' : missing ? '文件已不存在' : unreadable ? '读不出来' : '文件状态无法确认'}）`,
+            `链「${escapeControlChars(chain.name)}」的链尾不可用（${copy ? (compressedEmpty ? '只剩 0 字节压缩副本（内容已丢失）' : '只剩压缩副本') : missing ? '文件已不存在' : unreadable ? '读不出来' : '文件状态无法确认'}）`,
           );
-          if (compressed) {
+          if (copy) {
             warnings.push(
-              `链「${escapeControlChars(chain.name)}」的链尾会话${compressedSessionNote({ state: 'missing', compressed })}（${tip.provider}）；下次切换会失败——先让它重新展开再重试，或${rebindHint(tip.provider)}`,
+              `链「${escapeControlChars(chain.name)}」的链尾会话${copy.note}（${tip.provider}）；下次切换会失败——${copy.advice}，再重试，或${rebindHint(tip.provider)}`,
             );
           } else if (missing) {
             warnings.push(
@@ -523,12 +542,14 @@ export async function doctorReport(cwd: string, deps: DoctorDeps): Promise<Docto
         }
         const fromPresence = await pathPresence(from.filePath);
         if (fromPresence.state === 'missing') {
-          const compressed = fromPresence.compressed
-            ? compressedSessionNote({ state: 'missing', compressed: fromPresence.compressed })
-            : null;
+          const copy = compressedCopy({
+            state: 'missing',
+            compressed: fromPresence.compressed,
+            emptyCompressed: fromPresence.emptyCompressed,
+          });
           warnings.push(
-            compressed
-              ? `链「${escapeControlChars(chain.name)}」的来源会话${compressed}（${from.provider}）；链尾仍在，但无法再做内容对账——先让它重新展开再重跑 watch doctor`
+            copy
+              ? `链「${escapeControlChars(chain.name)}」的来源会话${copy.note}（${from.provider}）；链尾仍在，但无法再做内容对账——${copy.advice}，再重跑 watch doctor`
               : `链「${escapeControlChars(chain.name)}」的来源会话文件已不存在：${from.filePath}（${from.provider}）；链尾仍在，但无法再做内容对账`,
           );
           continue;

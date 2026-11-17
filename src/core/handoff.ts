@@ -10,13 +10,21 @@ import { escapeControlChars } from './display.js';
 import { describeBadLinesScanFailure, scanUnparsableJsonLines } from './jsonl.js';
 import { usageBadLinesDetail, usageSidecarProblem } from './usage-integrity.js';
 import { cwdAliasHint, splitElsewhereByDirectory } from './cwd.js';
-import { compressedSessionNote, describePathReadFailureReason, describeReadFailureOrSelf, emptySessionFileReasonFromStat, isEmptySessionFileReason, probeSessionReadable, sessionFilePresence } from './read-text.js';
+import { compressedCopy, describePathReadFailureReason, describeReadFailureOrSelf, emptySessionFileReasonFromStat, isEmptySessionFileReason, probeSessionReadable, sessionFilePresence } from './read-text.js';
 import { noSessionHint, unknownProviderMessage } from '../providers/registry.js';
 import { collectUnattributable, unattributableNoPickMessage, unattributablePickWarning } from './session-coverage.js';
 
 /** 写回被阻断（如 TOCTOU 检测到目标被外部修改）：一票否决，不产生部分写 */
 export class HandoffBlockedError extends Error {
-  constructor(public code: string, message: string) {
+  constructor(
+    public code: string,
+    message: string,
+    /**
+     * 覆盖 `blockedHint(code)` 的下一步：同一 `target_missing` 下，「原文件被删」与
+     * 「只剩压缩副本（完好 / 0 字节）」的下一步相反，凭 code 分不出来。
+     */
+    public hint?: string,
+  ) {
     super(message);
     this.name = 'HandoffBlockedError';
   }
@@ -193,12 +201,13 @@ export async function assertTargetUnchanged(
     if (presence.state === 'missing') {
       // Codex 压缩过的 rollout：原路径不在、`.jsonl.zst` 在。说成「已不存在」会让人重新绑定，
       // 而会话还在，只是本版不读压缩格式
-      const compressed = compressedSessionNote(presence);
+      const copy = compressedCopy(presence);
       throw new HandoffBlockedError(
         'target_missing',
-        compressed
-          ? `目标会话文件${compressed}；已中止本次${action}（未写入任何内容）——先在 Codex 里继续该会话让它重新展开，再重试`
+        copy
+          ? `目标会话文件${copy.note}；已中止本次${action}（未写入任何内容）——${copy.advice}，再重试`
           : `目标会话文件已不存在：${escapeControlChars(ref.filePath)}；已中止本次${action}（未写入任何内容），请重新选择目标会话`,
+        copy ? `本次未写入任何内容；${copy.advice}，再重试，或重新选择目标会话。` : undefined,
       );
     }
     if (presence.state === 'unknown') {
@@ -380,18 +389,25 @@ export async function adoptIntoChain(
       : '';
     if (hiddenNote) {
       // 下一步按结构化原因分档，不靠匹配 advice 文案：压缩副本要先让原生展开、
-      // 坏首行要先恢复，两者都不能直接说「用 adopt --session 接入」（现在接不了）。
-      // 混合档保留「或开一条新的」备选；只有压缩副本时那条是相反指引（新会话不会展开原会话）。
+      // 0 字节副本只能备份恢复、坏首行要先恢复；三者都不能直接说「用 adopt --session 接入」。
+      // 混合档保留「或开一条新的」备选；只有完好压缩副本时那条是相反指引（新会话不会展开原会话）。
       const kinds = new Set(hiddenStats.flatMap((st) => st.kinds ?? []));
       const compressed = kinds.has('compressed');
+      const compressedEmpty = kinds.has('compressed-empty');
       const damaged = kinds.has('damaged');
+      // 0 字节压缩副本内容已丢：能做的只有从备份恢复（或放弃它、另开新会话），
+      // 不能沿用「展开后」——展开一个 0 字节副本拿不回任何内容。
       const recovery = compressed
-        ? damaged
+        ? damaged || compressedEmpty
           ? '恢复或展开后'
           : '展开后'
-        : damaged
-          ? '恢复后'
-          : '按上面的建议处理后再';
+        : compressedEmpty
+          ? damaged
+            ? '恢复或重开会话后'
+            : '从备份恢复后'
+          : damaged
+            ? '恢复后'
+            : '按上面的建议处理后再';
       throw new Error(
         `${hiddenNote}；${recovery}确认是你要的那条，用 watch adopt ${providerId} --session <会话 id> 接入` +
           (compressed && !damaged ? '' : '；或先在原生 CLI 里开一次新会话，再用 watch adopt 把它接入') +
@@ -575,11 +591,11 @@ export async function createChainSession(
     // 「直接 resume 即可」只在链尾文件真的还在时成立。文件被删 / 被同名目录占住 / 读不出来时
     // 照旧这么说，用户会在原生 CLI 里撞一个更含糊的错误；同一条链上 `switch` 早就分三档说清了。
     const tipPresence = await sessionFilePresence(tail.toRef.filePath);
-    const compressedTip = compressedSessionNote(tipPresence);
+    const compressedTip = compressedCopy(tipPresence);
     if (compressedTip) {
       throw new Error(
-        `链尾已是 ${providerId}，但链尾会话 ${tail.toRef.sessionId} 的文件${compressedTip}；` +
-          `本次无法交接也无法 resume——先在 Codex 里继续该会话让它重新展开，再重试，或用 watch chain new <新名字> 另起一条链`,
+        `链尾已是 ${providerId}，但链尾会话 ${tail.toRef.sessionId} 的文件${compressedTip.note}；` +
+          `本次无法交接也无法 resume——${compressedTip.advice}，再重试，或用 watch chain new <新名字> 另起一条链`,
       );
     }
     const broken =
@@ -789,8 +805,8 @@ export async function chainUsage(
       // Codex 的 `sessionUsage` 对缺失文件是**抛错**而非返回 null，压缩副本只会走到这里：
       // 原路径不在、同名 .zst 在时要说「文件还在」，不能沿用「已不存在」。
       const raw = describeReadFailureOrSelf(error);
-      const compressed = compressedSessionNote(await sessionFilePresence(ref.filePath));
-      const msg = compressed ? `会话文件${compressed}` : raw;
+      const copy = compressedCopy(await sessionFilePresence(ref.filePath));
+      const msg = copy ? `会话文件${copy.note}` : raw;
       warnings.push(`${adapter.id} 用量读取失败：${msg}`);
       byProvider.push({ provider: adapter.id, sessionId: ref.sessionId, usage: null, error: msg });
       totalExcluded += 1;
@@ -815,10 +831,10 @@ export async function chainUsage(
       if (presence.state !== 'present' || !presence.isFile) {
         // 只有 ENOENT / ENOTDIR 才能说「不存在」：EACCES 等读不出来时照实说，
         // 否则权限问题会被讲成会话丢了，用户会去重新绑定而不是修权限
-        const compressed = compressedSessionNote(presence);
+        const copy = compressedCopy(presence);
         const msg =
-          compressed
-            ? `会话文件${compressed}`
+          copy
+            ? `会话文件${copy.note}`
             : presence.state === 'missing'
             ? `会话文件已不存在：${escapeControlChars(ref.filePath)}`
             : presence.state === 'present'
@@ -1105,10 +1121,10 @@ export async function chainStatus(
     const tipPresence = await sessionFilePresence(last.toRef.filePath);
     if (tipPresence.state === 'missing') {
       chainTipUnusable = true;
-      const compressed = compressedSessionNote(tipPresence);
+      const copy = compressedCopy(tipPresence);
       warnings.push(
-        compressed
-          ? `链尾会话文件${compressed}（${last.toProvider} ${last.toRef.sessionId}）；下次切换会失败——先在 Codex 里继续该会话让它重新展开，再重试，或${rebindHint(last.toProvider)}`
+        copy
+          ? `链尾会话文件${copy.note}（${last.toProvider} ${last.toRef.sessionId}）；下次切换会失败——${copy.advice}，再重试，或${rebindHint(last.toProvider)}`
           : `链尾会话文件已不存在：${escapeControlChars(last.toRef.filePath)}（${last.toProvider} ${last.toRef.sessionId}，文件不存在）；下次切换会失败，${rebindHint(last.toProvider)}`,
       );
     } else if (tipPresence.state === 'present' && !tipPresence.isFile) {
@@ -1236,11 +1252,11 @@ export async function handoff(
       // 不能让人以为会话丢了、急着重新 adopt
       const tipPresence = await sessionFilePresence(chainTipRef.filePath);
       if (tipPresence.state === 'missing') {
-        const compressed = compressedSessionNote(tipPresence);
+        const copy = compressedCopy(tipPresence);
         throw new Error(
-          compressed
-            ? `未发现原生会话；而链尾记录的 ${chainTipRef.provider} 会话 ${chainTipRef.sessionId} 的文件${compressed}：` +
-                `先在 Codex 里继续该会话让它重新展开，再重试，或${rebindHint(chainTipRef.provider)}`
+          copy
+            ? `未发现原生会话；而链尾记录的 ${chainTipRef.provider} 会话 ${chainTipRef.sessionId} 的文件${copy.note}：` +
+                `${copy.advice}，再重试，或${rebindHint(chainTipRef.provider)}`
             : `未发现原生会话；而链尾记录的 ${chainTipRef.provider} 会话 ${chainTipRef.sessionId} 文件已不存在（${escapeControlChars(chainTipRef.filePath)}）：` +
                 `${rebindHint(chainTipRef.provider)}，或在原生 CLI 里新开一个会话`,
         );
@@ -1345,10 +1361,10 @@ export async function handoff(
           into = undefined;
           // 「解析失败」把 ENOENT（文件被删）、压缩副本（原路径不在、同名 .zst 在）与格式问题
           // 讲成同一件事：压缩时文件还在，下一步是让原生展开，而不是重建历史
-          const compressed = compressedSessionNote(await sessionFilePresence(boundTarget.filePath));
+          const copy = compressedCopy(await sessionFilePresence(boundTarget.filePath));
           warnings.push(
-            compressed
-              ? `目标会话 ${boundTarget.sessionId} ${compressed}；本次改为新建 ${target.displayName} 会话承接内容`
+            copy
+              ? `目标会话 ${boundTarget.sessionId} ${copy.note}；本次改为新建 ${target.displayName} 会话承接内容`
               : `目标会话 ${boundTarget.sessionId} 无法沿用（${describeReadFailureOrSelf(error)}），改为新建会话承接内容`,
           );
         }
@@ -1404,12 +1420,12 @@ export async function handoff(
       // `probeSessionReadable()` 对原路径缺失只会说「已不存在」；只剩 .zst 时文件其实还在，
       // 这一步的下一步（让原生展开）与「被删」相反，必须单独说
       const resumeCompressed = resumeReadProblem
-        ? compressedSessionNote(await sessionFilePresence(resumeRef.filePath))
+        ? compressedCopy(await sessionFilePresence(resumeRef.filePath))
         : null;
       if (resumeReadProblem) {
         warnings.push(
           resumeCompressed
-            ? `链尾会话 ${resumeRef.sessionId}（${targetId}）的文件${resumeCompressed}；下面那条 resume 命令一执行就会失败——先让它重新展开再重试，或 watch adopt ${targetId} --session <另一个会话 id> 换绑，或用 watch chain new <新名字> 另起一条链`
+            ? `链尾会话 ${resumeRef.sessionId}（${targetId}）的文件${resumeCompressed.note}；下面那条 resume 命令一执行就会失败——${resumeCompressed.advice}，再重试，或 watch adopt ${targetId} --session <另一个会话 id> 换绑，或用 watch chain new <新名字> 另起一条链`
             : `链尾会话 ${resumeRef.sessionId}（${targetId}）的文件现在读不出来：${resumeReadProblem}；` +
                 `下面那条 resume 命令一执行就会失败——先修好这个文件（权限或内容）再重试` +
                 `，或 watch adopt ${targetId} --session <另一个会话 id> 换绑，或用 watch chain new <新名字> 另起一条链`,
@@ -1437,10 +1453,10 @@ export async function handoff(
         destDigest = (await target.contentFingerprint?.(mtimeTip.ref)) ?? null;
       } catch (error) {
         into = undefined;
-        const compressed = compressedSessionNote(await sessionFilePresence(mtimeTip.ref.filePath));
+        const copy = compressedCopy(await sessionFilePresence(mtimeTip.ref.filePath));
         warnings.push(
-          compressed
-            ? `目标会话 ${mtimeTip.ref.sessionId} ${compressed}；本次改为新建 ${target.displayName} 会话承接内容`
+          copy
+            ? `目标会话 ${mtimeTip.ref.sessionId} ${copy.note}；本次改为新建 ${target.displayName} 会话承接内容`
             : `目标会话 ${mtimeTip.ref.sessionId} 无法沿用（${describeReadFailureOrSelf(error)}），改为新建会话承接内容`,
         );
       }
@@ -1483,9 +1499,9 @@ export async function handoff(
     const gone = code === 'ENOENT' || code === 'ENOTDIR';
     // 原路径缺失时先分清「被删」与「只剩同名 .zst 压缩副本」：后者文件还在、
     // 让原生继续一次就会展开，rebind 反而会丢掉这条会话的历史
-    const compressed = gone ? compressedSessionNote(await sessionFilePresence(sourceTip.ref.filePath)) : null;
-    const reason = compressed
-      ? `文件${compressed}；链记录仍指向它——先让它重新展开再重试，或${rebindHint(sourceTip.provider)}`
+    const copy = gone ? compressedCopy(await sessionFilePresence(sourceTip.ref.filePath)) : null;
+    const reason = copy
+      ? `文件${copy.note}；链记录仍指向它——${copy.advice}，再重试，或${rebindHint(sourceTip.provider)}`
       : gone
       ? `文件 ${escapeControlChars(sourceTip.ref.filePath)} 已不存在，而链记录仍指向它：${rebindHint(sourceTip.provider)}，或用 watch sessions 查看该目录还有哪些可接力的会话`
       : code === 'EACCES' || code === 'EPERM'

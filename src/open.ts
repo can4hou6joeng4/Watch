@@ -14,7 +14,7 @@ import { describeBadLinesScanFailure, scanUnparsableJsonLines } from './core/jso
 import { usageBadLinesReason, usageSidecarProblem } from './core/usage-integrity.js';
 import { collectUnattributable, unattributablePickWarning } from './core/session-coverage.js';
 import {
-  compressedSessionNote,
+  compressedCopy,
   describePathReadFailureReason,
   describeReadFailureOrSelf,
   describeSessionReadFailure,
@@ -101,7 +101,8 @@ function blockedFrom(error: unknown): OpenSessionResult['blocked'] | undefined {
     return { code, sessionId, holders, hint };
   }
   if (error instanceof HandoffBlockedError) {
-    return { code: error.code, hint: blockedHint(error.code) };
+    // 压缩副本 / 0 字节副本的下一步与「文件被删」不同，异常自己带着更准确的那句
+    return { code: error.code, hint: error.hint ?? blockedHint(error.code) };
   }
   return undefined;
 }
@@ -1117,10 +1118,10 @@ async function planOpenInProvider(
         // 这几种）：退回内容匹配 / 新建，并把原因写进 notes，而不是让整个转入抛出去。
         // 原因按 errno 说清楚：权限问题会被「已不存在」引去白换一次绑定；压缩副本又相反，
         // 它还在、只是本版不读，必须说「让原生展开」而不是让人重建历史。
-        const compressed = compressedSessionNote(await sessionFilePresence(chainPaired.filePath));
+        const copy = compressedCopy(await sessionFilePresence(chainPaired.filePath));
         diagnostics?.push(
           `链上 ${target.displayName} 会话 ${chainPaired.sessionId} 本次不沿用：${
-            compressed ?? describeSessionReadFailure(chainPaired.filePath, error)
+            copy?.note ?? describeSessionReadFailure(chainPaired.filePath, error)
           }（改用内容匹配或新建）`,
         );
       }

@@ -29,7 +29,7 @@ import { escapeControlChars, hasControlChars } from './core/display.js';
 import { commandControlWarnings } from './core/terminal-command.js';
 import { trimUserKey } from './core/cli-input.js';
 import { describeResumeTargetUnfinished } from './core/rich.js';
-import { compressedSessionNote, describePathReadFailureReason, describeReadFailureOrSelf, describeSessionReadFailureReason, isEmptySessionFileReason, probeSessionReadable, sessionFilePresence } from './core/read-text.js';
+import { compressedCopy, describePathReadFailureReason, describeReadFailureOrSelf, describeSessionReadFailureReason, isEmptySessionFileReason, probeSessionReadable, sessionFilePresence } from './core/read-text.js';
 import { describeWriteFailureReason } from './core/atomic.js';
 import { collectUnattributable, emptiedJson, emptiedSearchNote, emptiedSessionsWarning, unattributableEmptyNote, unattributableJson, unattributableNoPickMessage, unattributablePickWarning, unattributableSearchNote, unattributableWarning } from './core/session-coverage.js';
 import type { EmptiedSession } from './core/session-coverage.js';
@@ -144,6 +144,9 @@ function safeActiveChain(store: Store | null, cwd: string, warnings: string[]): 
 function failBlocked(error: HandoffBlockedError | PreflightBlockedError, json: boolean): never {
   const block = error instanceof PreflightBlockedError ? error.block : undefined;
   const code = block?.code ?? (error instanceof HandoffBlockedError ? error.code : 'blocked');
+  const hint =
+    block?.hint ??
+    (error instanceof HandoffBlockedError ? (error.hint ?? blockedHint(error.code)) : blockedHint(code));
   const payload = {
     ok: false,
     error: error.message,
@@ -151,7 +154,7 @@ function failBlocked(error: HandoffBlockedError | PreflightBlockedError, json: b
     code,
     sessionId: block?.sessionId,
     holders: block?.holders,
-    hint: block?.hint ?? blockedHint(code),
+    hint,
   };
   if (json) console.log(JSON.stringify(payload));
   else console.error(`[blocked:${code}] ${error.message}\n${payload.hint}`);
@@ -1318,7 +1321,7 @@ async function cmdSessions(cwd: string, json: boolean, chain?: string): Promise<
           if (chainRow && ids) {
             const listed = new Set(sessions.map((s) => s.ref.sessionId));
             const missingFiles: string[] = [];
-            const compressedFiles: { id: string; note: string }[] = [];
+            const compressedFiles: { id: string; note: string; empty: boolean }[] = [];
             const unreadableFiles: { id: string; reason: string }[] = [];
             const occupiedFiles: string[] = [];
             const tooOld: string[] = [];
@@ -1330,9 +1333,10 @@ async function cmdSessions(cwd: string, json: boolean, chain?: string): Promise<
               // 「不在最近 N 个里（可能属于另一个目录）」，让人去核对 --cwd，而实际要恢复的是这个路径
               const presence = await sessionFilePresence(ref.filePath);
               if (presence.state === 'missing') {
-                // 只剩 Codex 压缩副本不算「文件已不存在」：下次切换照样会失败，但下一步不同
-                const note = compressedSessionNote(presence);
-                if (note) compressedFiles.push({ id, note });
+                // 只剩 Codex 压缩副本不算「文件已不存在」：下次切换照样会失败，但下一步不同；
+                // 0 字节副本是第三种状态（内容已丢失），下一步是备份恢复而不是重新展开
+                const copy = compressedCopy(presence);
+                if (copy) compressedFiles.push({ id, note: copy.note, empty: !!presence.emptyCompressed });
                 else missingFiles.push(id);
               } else if (presence.state === 'unknown') unreadableFiles.push({ id, reason: presence.reason });
               else if (!presence.isFile) occupiedFiles.push(id);
@@ -1345,8 +1349,15 @@ async function cmdSessions(cwd: string, json: boolean, chain?: string): Promise<
               );
             }
             if (compressedFiles.length) {
+              const hasIntact = compressedFiles.some((c) => !c.empty);
+              const hasEmpty = compressedFiles.some((c) => c.empty);
+              const next = hasIntact
+                ? hasEmpty
+                  ? '——完好的副本先让它重新展开再试；0 字节副本的内容已丢失，只能从备份恢复或重新开一次会话'
+                  : '——先让它重新展开再试'
+                : '——0 字节副本的内容已丢失，只能从备份恢复或重新开一次会话';
               warnings.push(
-                `链 ${escapeControlChars(chainRow.name)} 绑定的 ${a.id} 会话 ${compressedFiles.map((c) => `${c.id}：${c.note}`).join('；')}，本次未列出；下次切换会失败`,
+                `链 ${escapeControlChars(chainRow.name)} 绑定的 ${a.id} 会话 ${compressedFiles.map((c) => `${c.id}：${c.note}`).join('；')}，本次未列出；下次切换会失败${next}`,
               );
             }
             if (unreadableFiles.length) {
@@ -2110,13 +2121,14 @@ async function cmdDoctor(cwd: string, json: boolean, strict: boolean): Promise<v
       }
     }
     if (report.store.available) {
-      const compressed = report.store.brokenTips.filter((b) => b.compressedPath).length;
+      const compressed = report.store.brokenTips.filter((b) => b.compressedPath && !b.compressedEmpty).length;
+      const compressedEmpty = report.store.brokenTips.filter((b) => b.compressedPath && b.compressedEmpty).length;
       const broken = report.store.brokenTips.filter((b) => b.missing && !b.compressedPath).length;
       const unreadable = report.store.brokenTips.filter((b) => b.unreadable).length;
-      const unknown = report.store.brokenTips.length - broken - compressed - unreadable;
+      const unknown = report.store.brokenTips.length - broken - compressed - compressedEmpty - unreadable;
       const drifted = report.store.driftedPairs.length;
       console.log(
-        `本地库: 可用，本目录 ${report.store.chains} 条链（${report.store.activeChains} 条活跃${broken ? `，${broken} 条链尾缺失` : ''}${compressed ? `，${compressed} 条链尾只剩压缩副本` : ''}${unreadable ? `，${unreadable} 条链尾读不出来` : ''}${unknown ? `，${unknown} 条链尾状态无法确认` : ''}${drifted ? `，${drifted} 条链尾内容落后于来源` : ''}）`,
+        `本地库: 可用，本目录 ${report.store.chains} 条链（${report.store.activeChains} 条活跃${broken ? `，${broken} 条链尾缺失` : ''}${compressed ? `，${compressed} 条链尾只剩压缩副本` : ''}${compressedEmpty ? `，${compressedEmpty} 条链尾只剩 0 字节压缩副本（内容已丢失）` : ''}${unreadable ? `，${unreadable} 条链尾读不出来` : ''}${unknown ? `，${unknown} 条链尾状态无法确认` : ''}${drifted ? `，${drifted} 条链尾内容落后于来源` : ''}）`,
       );
       // 上一行是结论：本目录没有链。别处有链时必须接着指路，否则会被当成链丢了 / 没建成功。
       // 「同一个目录的另一种写法」不是「别的目录」：两种说法分开，否则用户会以为链不在这个项目里
@@ -2136,7 +2148,9 @@ async function cmdDoctor(cwd: string, json: boolean, strict: boolean): Promise<v
       for (const b of report.store.brokenTips) {
         console.log(
           b.compressedPath
-            ? `  链「${escapeControlChars(b.chainName)}」: ${b.provider}:${b.sessionId} 链尾只剩压缩副本（${escapeControlChars(b.compressedPath)}）；本版不读压缩格式——先让它重新展开再重试（若是 Codex 压缩的，在 Codex 里继续该会话即可），或 ${rebindHint(b.provider)}`
+            ? b.compressedEmpty
+              ? `  链「${escapeControlChars(b.chainName)}」: ${b.provider}:${b.sessionId} 链尾只剩 0 字节压缩副本（${escapeControlChars(b.compressedPath)}）；内容已丢失，重新展开也拿不回内容——从备份恢复或重新开一次会话，或 ${rebindHint(b.provider)}`
+              : `  链「${escapeControlChars(b.chainName)}」: ${b.provider}:${b.sessionId} 链尾只剩压缩副本（${escapeControlChars(b.compressedPath)}）；本版不读压缩格式——先让它重新展开再重试（若是 Codex 压缩的，在 Codex 里继续该会话即可），或 ${rebindHint(b.provider)}`
             : b.missing
             ? `  链「${escapeControlChars(b.chainName)}」: ${b.provider}:${b.sessionId} 链尾文件已不存在（${escapeControlChars(b.filePath)}），${rebindHint(b.provider)}`
             : b.unreadable
@@ -2451,6 +2465,8 @@ async function cmdChain(cwd: string, json: boolean, action?: string, a?: string,
           filePath: string;
           missing: boolean;
           error?: string;
+          /** `missing` 且只剩 0 字节压缩副本：内容已丢失，不能标成「只剩压缩副本」 */
+          compressedEmpty?: boolean;
           /** 文件在、但读不出来（`chmod 000` 之类）：`missing` 为假也不代表可用 */
           unreadable?: boolean;
         }
@@ -2469,17 +2485,19 @@ async function cmdChain(cwd: string, json: boolean, action?: string, a?: string,
         // 同一条链在 status 里却写着「已不存在」；原因还会把英文 errno 原文塞进 --json 与 stderr
         const presence = await sessionFilePresence(last.toRef.filePath);
         // 只剩 Codex 压缩副本时 `missing` 仍为真（原路径确实不在、下次切换会失败），
-        // 但 `error` 要说清它还在、怎么展开，不能沿用「文件已不存在」的下一步
-        const compressed = compressedSessionNote(presence);
+        // 但 `error` 要说清它还在、怎么展开，不能沿用「文件已不存在」的下一步；
+        // 0 字节副本是另一种状态（文件在、内容已丢），下一步是备份恢复而不是重新展开
+        const copy = compressedCopy(presence);
         const missing = presence.state === 'missing';
+        const compressedEmpty = missing && !!presence.emptyCompressed;
         // 同理，`stat` 成功也不代表读得出来：`chmod 000` 的链尾在 chain list 里看着一切正常，
         // 而 resume 与下一次 switch 一读内容就失败（status 走同一个探测，口径一致）
         const readProblem =
           presence.state === 'present' && presence.isFile ? await probeSessionReadable(last.toRef.filePath) : null;
         const tipError = readProblem
           ? readProblem
-          : compressed
-            ? compressed
+          : copy
+            ? copy.note
             : presence.state === 'unknown'
               ? presence.reason
               : presence.state === 'present' && !presence.isFile
@@ -2491,12 +2509,13 @@ async function cmdChain(cwd: string, json: boolean, action?: string, a?: string,
           filePath: last.toRef.filePath,
           missing,
           ...(tipError ? { error: tipError } : {}),
+          ...(compressedEmpty ? { compressedEmpty: true } : {}),
           ...(readProblem ? { unreadable: true } : {}),
         });
         if (missing && c.status === 'active') {
           warnings.push(
-            compressed
-              ? `链「${escapeControlChars(c.name)}」的链尾会话文件${compressed}（${last.toRef.provider}:${last.toRef.sessionId}）：下次切换会失败——先让它重新展开再重试，或${rebindHint(last.toRef.provider)}`
+            copy
+              ? `链「${escapeControlChars(c.name)}」的链尾会话文件${copy.note}（${last.toRef.provider}:${last.toRef.sessionId}）：下次切换会失败——${copy.advice}，再重试，或${rebindHint(last.toRef.provider)}`
               : `链「${escapeControlChars(c.name)}」的链尾会话文件已不存在（${last.toRef.provider}:${last.toRef.sessionId}）：下次切换会失败，${rebindHint(last.toRef.provider)}`,
           );
         } else if (readProblem && c.status === 'active') {
@@ -2548,7 +2567,9 @@ async function cmdChain(cwd: string, json: boolean, action?: string, a?: string,
           ? `  → ${tip.provider}:${tip.sessionId}${
               tip.missing
                 ? tip.error && !tip.unreadable
-                  ? '（链尾只剩压缩副本）'
+                  ? tip.compressedEmpty
+                    ? '（链尾只剩 0 字节压缩副本，内容已丢失）'
+                    : '（链尾只剩压缩副本）'
                   : '（链尾文件已不存在）'
                 : tip.unreadable
                   ? '（链尾文件读不出来）'

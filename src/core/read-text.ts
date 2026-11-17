@@ -226,9 +226,11 @@ export type SessionFilePresence =
       isFile: boolean;
       size?: number;
     }
-  // `compressed`：原路径 stat 不到、但同名 `.jsonl.zst` 在（Codex 的
+  // `compressed`：原路径 stat 不到、但同名 `.jsonl.zst` 是非空普通文件（Codex 的
   // `local_thread_store_compression` 压缩后删掉普通副本）。不是「会话丢了」，是「只剩压缩格式」。
-  | { state: 'missing'; compressed?: string }
+  // `emptyCompressed`：同名 `.jsonl.zst` 是 0 字节普通文件——副本还在原处，但内容已丢失。
+  // 两者都让原路径处于 missing；下一步完全不同，不能合成一句「文件已不存在」。
+  | { state: 'missing'; compressed?: string; emptyCompressed?: string }
   | { state: 'unknown'; reason: string };
 
 /**
@@ -238,33 +240,54 @@ export type SessionFilePresence =
  * `ee344ca9458351a6ea102795fa73110ad3ede5dc` 的 `compression.rs`）。Watch 本版不读压缩格式，
  * 但「原路径 stat 不到」与「会话被删了」是两件事：前者文件还在、原生继续该会话就会展开回 `.jsonl`。
  * 只 `lstat` 一次，不解压、不打开、不改动；符号链接不算（与扫描侧「只识别普通文件」一致）。
+ *
+ * 0 字节的 `.zst` 仍要返回（`empty: true`）：它不是可用副本，但也不是「没有」——文件就在
+ * 原处，说成「已不存在」会让人连同备份线索一起删掉，说成「继续会话会展开」又是假承诺。
  */
-async function compressedSiblingPath(filePath: string): Promise<string | undefined> {
+async function compressedSibling(filePath: string): Promise<{ path: string; empty: boolean } | undefined> {
   const compressedPath = `${filePath}.zst`;
   try {
     const info = await lstat(compressedPath);
-    // 0 字节的 `.zst` 不是「压缩副本还在」：它同样解不出内容，说「继续会话会展开」是假承诺。
-    // 可读性在这里判不了（要打开文件），措辞改说「副本完好时」。
-    return info.isFile() && info.size > 0 ? compressedPath : undefined;
+    if (!info.isFile()) return undefined;
+    return { path: compressedPath, empty: info.size === 0 };
   } catch {
     return undefined;
   }
 }
 
+/** `missing` 且找到压缩副本时的说明与下一步；没有压缩副本返回 `null`（调用方沿用自己的「已不存在」）。 */
+export type CompressedCopyNote = {
+  /** 嵌进「会话文件${note}」这类句子的说明（不含下一步动作） */
+  note: string;
+  /** 下一步该做什么，**不含**「再重试」等各调用点自补的动作 */
+  advice: string;
+};
+
 /**
- * `missing` 且找到同名 `.jsonl.zst` 时的说明；没有压缩副本返回 `null`（调用方沿用自己的「已不存在」）。
+ * `missing` 且找到同名 `.jsonl.zst` 时的说明与下一步；没有压缩副本返回 `null`。
  *
  * 只说「文件已不存在」会把人引去重新绑定 / 重建历史，而它其实还在、只是本版不读压缩格式。
+ * 0 字节副本是第三种状态：文件还在，内容却已经没了——这时「让原生展开」是假承诺，只能备份恢复
+ * 或重开会话；把下一步和说明放在同一个返回值里，调用点就不会只取说明、又补一句错的建议。
  */
-export function compressedSessionNote(presence: SessionFilePresence): string | null {
-  if (presence.state !== 'missing' || !presence.compressed) return null;
+export function compressedCopy(presence: SessionFilePresence): CompressedCopyNote | null {
+  if (presence.state !== 'missing') return null;
+  if (presence.emptyCompressed) {
+    return {
+      note: `只剩一个 0 字节的同名压缩副本 ${escapeControlChars(presence.emptyCompressed)}（内容已丢失，重新展开也拿不回内容）`,
+      advice: '从备份恢复或重新开一次会话',
+    };
+  }
+  if (!presence.compressed) return null;
   // 不把「Codex」当事实：`.zst` 也可能是用户自己归档的。压缩语义只在 Codex 成立时给出，
   // 同时用「副本完好时」限定——这里只 stat 过一次，不打开、不解压，无法保证内容可解。
-  return (
-    `已被压缩为 ${escapeControlChars(presence.compressed)}（本版不读压缩格式，原 .jsonl 不在；` +
-    `若是 Codex 的本地线程压缩且副本完好，在 Codex 里继续该会话会重新展开为 .jsonl，之后 Watch 即可读到；` +
-    `不要直接删除或改名）`
-  );
+  return {
+    note:
+      `已被压缩为 ${escapeControlChars(presence.compressed)}（本版不读压缩格式，原 .jsonl 不在；` +
+      `若是 Codex 的本地线程压缩且副本完好，在 Codex 里继续该会话会重新展开为 .jsonl，之后 Watch 即可读到；` +
+      `不要直接删除或改名）`,
+    advice: '先让它重新展开',
+  };
 }
 
 /**
@@ -281,8 +304,11 @@ export async function sessionFilePresence(filePath: string): Promise<SessionFile
   } catch (error) {
     const code = (error as NodeJS.ErrnoException).code;
     if (code === 'ENOENT' || code === 'ENOTDIR') {
-      const compressed = await compressedSiblingPath(filePath);
-      return compressed ? { state: 'missing', compressed } : { state: 'missing' };
+      const sibling = await compressedSibling(filePath);
+      if (!sibling) return { state: 'missing' };
+      return sibling.empty
+        ? { state: 'missing', emptyCompressed: sibling.path }
+        : { state: 'missing', compressed: sibling.path };
     }
     return { state: 'unknown', reason: describeSessionReadFailure(filePath, error) };
   }
