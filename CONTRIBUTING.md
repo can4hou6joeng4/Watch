@@ -6,7 +6,7 @@
 
 - **Node ≥ 22.13**：核心依赖 `node:sqlite`，更低版本会在模块加载阶段直接失败，不会降级。
 - 桌面端另需 Rust 工具链与 Tauri 的系统依赖。
-- 各 Agent CLI（Claude Code / Codex / OpenCode / Kimi / Pi）按需自行安装并认证；仓库不代管凭据。
+- 各 Agent CLI（Claude Code / Codex / OpenCode / Kimi / Pi / Grok）按需自行安装并认证；仓库不代管凭据。
 
 ## 安装与命令
 

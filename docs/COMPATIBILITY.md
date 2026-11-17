@@ -1,6 +1,6 @@
 # Watch · 客户端兼容性证据
 
-> 更新：2026-09-10。按路径、方向、客户端和版本记录，不按品牌笼统宣布支持。
+> 更新：2026-11-18。按路径、方向、客户端和版本记录，不按品牌笼统宣布支持。
 >
 > 本仓库不分发 `docs/evidence/` 下的原始 JSON 验收记录；正文提到的记录名仅作标识，对应文件保留在本地开发环境中。
 
@@ -16,16 +16,16 @@
 
 | 来源或目标入口 | 当前实现/官方依据 | Watch 状态与限制 |
 |---|---|---|
-| Claude Code CLI、Codex CLI、Kimi CLI、OpenCode CLI、Pi CLI | 本地解析、转入与恢复命令，桌面有五张目标卡 | 实现存在 / 待逐方向、版本验收；OpenCode 产品入口使用基础 CLI 适配器，不意味着五家全组合通过 |
+| Claude Code CLI、Codex CLI、Kimi CLI、OpenCode CLI、Pi CLI、Grok CLI | 本地解析、转入与恢复命令，桌面有六张目标卡 | 实现存在 / 待逐方向、版本验收；OpenCode 产品入口使用基础 CLI 适配器，不意味着六家全组合通过 |
 | Kimi 新建会话 | 【2026-09-16 决策 A：保持 fail-closed，不提供离线自建会话入口】无 `into` 时必须在目标 cwd 调用真实 `kimi -p .`（真实模型调用）才能拿到原生 session id 并登记 `session_index.jsonl`；**追加到既有会话不走 CLI，无 CLI 时也照常工作**（已由本地回归固定）。验证阻塞：本机未安装 kimi CLI、无 `~/.kimi-code`、仓库也无「无 prompt 建会话」文档证据，因此既无法验收也无法改为无副作用路径；Kimi 侧的模型继续同样未验收（本机无 CLI）。2026-09-16 额外检索了本机既有实现与缓存，看是否有可复用的离线创建逻辑：唯一另一份 Kimi wire 实现是同源上游项目 tongbu（第三方仓库 `czm15053/tongbu`，当时在本机保留只读副本，现已移除；其实现同样是 `kimi -p .`，无可复用新逻辑（且它仍带 Watch 已修的三处问题：缺 cwd 预检、错误分类、追加保留历史）；`boss-agent-cli` 文档只把 Moonshot 当 API provider，不含 CLI 会话格式；npm 缓存、全局 `node_modules`、常见 bin 目录与 Applications 均无 kimi CLI 或其包 | 已知限制；解除条件：装有 kimi CLI 后确认是否存在无 prompt 的会话创建方式（若存在再评估是否开设显式 opt-in 入口） |
-| Grok CLI | 适配器已注册，桌面已接入目标卡（`grok -r <id>`，YOLO `--always-approve`） | 实现存在；2026-09-14 隔离原生验收通过 `sessions list` / `export` / ACP `session/load` 回放（不发 prompt）。真实终端 TUI 画面与模型继续未验证 |
+| Grok CLI | 适配器已注册，桌面已接入目标卡（`grok -r <id>`，YOLO `--always-approve`） | 实现存在；2026-09-14 隔离原生验收通过 `sessions list` / `export` / ACP `session/load` 回放（不发 prompt）。2026-09-16 限定 PTY + 终端应答器样本确认 TUI 画面，并用真实凭据的单条合成会话完成单轮无工具模型继续；不推广到其它版本、平台或远程会话 |
 | Codex CLI → 桌面端 | S1 `/app`；S2 指定本地会话深链接 | Watch 已为官方导入的目标线程接入固定 deep link；其他来源仍待集成和验证 |
 | 已导入 Codex 会话 → 桌面项目成员 | S7 实验性项目查询与元数据接口；S8 当前 Desktop 私有筛选 | 后置 app-server 关联可验证后端成员关系，但不能解除 projectless 排除；不再作为 GUI 修复路径 |
 | Claude Code → 官方 Codex/桌面导入 | S3 用户流程；S6 官方 app-server；S8 当前 Desktop 私有筛选 | `--desktop-project` 要求项目先存在；真实合成样本已通过技术预检、项目列表及 Watch Tauri 预览/确认/两次独立打开验收。当前本机 CodexPilot 的既有续写失败仍阻止标记完整模型继续可用 |
 | Claude Code → Watch 转换 → Codex 桌面端 | 现有 Codex 构建器 + S2 候选入口 | 原生读回/resume 可用，但工具结果未出现在查询历史中；严格验收失败，不开放桌面入口，保留写入守卫 |
 | Codex 桌面会话 → 其他 Agent | Watch 扫描 Codex rollout，可能覆盖兼容的本地记录 | 来源版本、路径和内容覆盖待测；不推导远程会话支持 |
 | Claude Code CLI → Claude Desktop Code | S4 明确历史分离；S13 确认交互式 `/desktop` 的本地 handoff 顺序 | 官方有依据 / 待验收；仅 macOS、x64 Windows及订阅登录。直接 deep link 不会保存/flush 当前 transcript，不能作为 Watch 自动迁移入口；最终复核时本机 CLI 与 Desktop 均不存在 |
-| OpenCode CLI ↔ OpenCode Web/TUI | 基础适配器提供 SQLite 转入和 `opencode -s` 恢复；S5/S9/S12 覆盖官方多客户端增强 | 现有 OpenCode CLI 卡片继续沿用基础基线。Darwin arm64 / 1.18.29 的官方 import/export、server API、Web、独立 local TUI 与 attached TUI 历史可见已通过；单次无工具继续请求因 provider 429 未生成回复，因此只是不接入新的官方多客户端入口；当前官方索引未提供独立 Desktop 客户端契约。Watch 的 SQLite 适配器只在 1.x 布局（`session` / `message` / `part`）上验证；2.x 布局（`session_v2` / `session_message`，迁移库可能同时留着旧表）尚无实现，读写入口都会明确拒绝并披露，不宣称兼容 |
+| OpenCode CLI ↔ OpenCode Web/TUI | 基础适配器提供 SQLite 转入和 `opencode -s` 恢复；S5/S9/S12 覆盖官方多客户端增强 | 现有 OpenCode CLI 卡片继续沿用基础基线。Darwin arm64 / 1.18.29 的官方 import/export、server API、Web、独立 local TUI 与 attached TUI 历史可见已通过；单次无工具继续请求因 provider 429 未生成回复，因此只是不接入新的官方多客户端入口；当前官方索引未提供独立 Desktop 客户端契约。Watch 的 SQLite 适配器只在 1.x 布局（`session` / `message` / `part`）上验证；2.x 布局（`session_v2` / `session_message`，迁移库可能同时留着旧表）读取已实现（列表、反查与解析），写入口明确拒绝并披露，不宣称可写入兼容 |
 | OpenCode IDE 扩展 | S9 扩展在 IDE 集成终端启动或聚焦 OpenCode | 不是独立会话存储；不能由扩展安装推导外部历史已导入 |
 | Antigravity 2.0 → Antigravity CLI | S10 `/resume` 的 Antigravity 页签可确认后克隆 history、context 与 tool trajectories；S14 本机 CLI/官方文档复核 | 官方有依据 / 待验收；这是同产品交互式单向导入，不是其他 Agent → Antigravity 接口。本机有 `agy 1.1.26`，无 2.0/IDE 应用；未打开 picker |
 | Antigravity ↔ 其他 Agent | 当前 registry 无适配器；S11 SDK 是独立 Agent runtime | 未支持；未发现外部会话导入/导出契约，不生成目标入口 |
@@ -197,7 +197,7 @@ Grok 的桌面卡片曾因 `resume` 打开不正常而被移除。2026-09-14 定
 
 每条记录必须包含 Watch commit/工作区差异、OS/架构、CLI/桌面版本、源/目标客户端、测试样本来源、可保留与降级内容、实际 cwd、执行步骤、结果与日期。版本升级后保留旧证据，不自动扩展支持范围。
 
-2026-09-16 起 `tests/` 不随版本库分发（本地保留，已在 `.gitignore`）：`quality.yml` 不再运行回归测试（该文件后来内联进 `release.yml` 的 `quality` job），远程 `checks` 只覆盖根类型检查、前端构建与 Rust 测试。因此引用回归数量时必须注明「本地隔离回归」，不能把远程 checks 当作回归证据；本节及以下历史记录中的远程通过结论也仅对当时含测试步骤的提交成立。
+2026-09-16 起 `tests/` 不随版本库分发（本地保留，已在 `.gitignore`）：`quality.yml` 不再运行回归测试（该文件后来内联进 `release.yml` 的 `quality` job），远程 `checks` 覆盖根类型检查、前端与站点构建（含分享图摘要校验）以及 Rust 测试。因此引用回归数量时必须注明「本地隔离回归」，不能把远程 checks 当作回归证据；本节及以下历史记录中的远程通过结论也仅对当时含测试步骤的提交成立。
 
 Codex 原生实验与 P4 客户端扩展入口各有独立的分客户端门禁。P3 本地可靠性记录 证明隔离回归和本机构建门禁，P3 远程交付记录 证明对应 `main` 提交的 GitHub Actions `checks` 与 Linux `rust` job 通过；两者都不扩大任何客户端兼容性结论。Codex 人工 GUI 验收的两条无敏感合成线程仍保留。OpenCode 私有包 prefix、调研缓存和 `--keep` 隔离根已在验收完成后于 2026-09-09 删除，仓库 evidence 保留；报告中的 retained 字段描述生成报告时的历史状态。OpenCode 曾获一次受限合成 prompt 授权；该请求到达 provider 后以 429 明确失败，未生成文本、token 或工具调用，也未重试。
 

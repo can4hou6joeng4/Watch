@@ -1,6 +1,6 @@
 # Watch · 系统架构与安全边界
 
-> 更新：2026-09-10。区分现有实现、安全缺口与拟议扩展；产品范围以 [PLAN.md](PLAN.md) 为准。
+> 更新：2026-11-18。区分现有实现、安全缺口与拟议扩展；产品范围以 [PLAN.md](PLAN.md) 为准。
 
 业务逻辑在 TypeScript，Rust 只负责 CLI 桥接和原生系统操作。桌面路径为 `src/open.ts`，链式命令路径为 `src/core/handoff.ts`，两者共用适配器但安全覆盖不等价。
 
@@ -37,11 +37,13 @@
 │  - Codex:   ~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl    │
 │  - Kimi:    ~/.kimi-code/sessions/.../wire.jsonl             │
 │  - OpenCode:~/.local/share/opencode/opencode.db (SQLite)    │
-│  - Pi:      ~/.pi/agent/sessions/<enc-cwd>/...jsonl           │
+│  - Pi:       ~/.pi/agent/sessions/<enc-cwd>/...jsonl           │
+│  - Grok:     ~/.grok/sessions/<group>/<id>/chat_history.jsonl  │
+│              + updates.jsonl / summary.json                    │
 └─────────────────────────────────────────────────────────────┘
 ```
 
-这些路径是当前适配器默认值，不是所有客户端或版本的官方契约。Grok 在 CLI 注册，但不在桌面目标卡片中。相同品牌的桌面端、IDE 或远程实例不一定共享本机存储。
+这些路径是当前适配器默认值，不是所有客户端或版本的官方契约。Grok 已接入桌面第六张目标卡（`grok -r <id>`）；隔离原生验收通过 `sessions list` / `export` / ACP `session/load`，限定 PTY + 终端应答器样本确认 TUI 画面与单轮模型继续，不推广到其它版本、平台或远程会话。相同品牌的桌面端、IDE 或远程实例不一定共享本机存储。
 
 当前安装包包含 TS 源码、tsx 和 esbuild 依赖，不是混淆 bundle。Rust 子进程 cwd 是核心目录，新增依赖用户项目的命令必须显式传 cwd。CLI 的成功与失败均输出单行 JSON，诊断写入 stderr；当前桥接取最后一个以 `{` 开头的 stdout 行，不单独根据退出码判断结果。
 
@@ -103,7 +105,7 @@ export type ProcessEvent = {
 - **机制**：
   - 日期层级目录分片；首行带 `session_meta` 声明 `cwd`；
   - 工具调用使用 `command_execution` 或 `custom_tool_call`；
-  - **Desktop 进程检查**：macOS 匹配到 `Codex.app` 或 `ChatGPT.app` 进程时阻断写入；其他平台跳过，探测异常可能放行。这不是完整互斥锁或所有并发情况的保证。
+  - **并发写入防护**：macOS 上若 `Codex.app` / `ChatGPT.app` 正在运行，旧版会保守阻断；当前直接写文件的路径优先按目标会话的 per-thread writer 锁（`<CODEX_HOME>/thread-writer-locks/<thread-id>.lock`）用 `lsof` 判断活持有者，只阻断真实占用目标的情况，并以 `flock` 协作持有同一把锁；无目标上下文或 `lsof` 不可用时才回退到进程检查。锁路径读不出来按失败关闭，不算「没有锁」。这不是完整互斥锁或所有并发情况的保证。
 
 ### 3.3 Kimi Code
 - **路径**：`~/.kimi-code/sessions/<workspace>/<sessionId>/agents/main/wire.jsonl`
@@ -114,9 +116,17 @@ export type ProcessEvent = {
 ### 3.4 OpenCode
 - **路径**：`${XDG_DATA_HOME:-~/.local/share}/opencode/opencode.db`（SQLite 存储）
 - **机制**：
-  - 直接操作其原生的 `session`、`message`、`part` 表；
+  - 1.x 直接操作原生 `session`、`message`、`part` 表；2.x 只读 `session_v2` + `session_message`，写路径遇到 2.x 布局明确拒绝；
   - ID payload 为 12 位时间 hex + 14 位 Base62；session 使用 descending，message/part 使用 ascending。
-  - 产品适配器使用基础 `index.ts` 编排、`opencode run` 发送方式和 `opencode -s <id>` 恢复命令；Watch 保留环境变量、共享路径和原生 ID 兼容修复。
+  - 产品适配器使用基础 `index.ts` 编排、`opencode run --session <id> --auto` 发送方式和 `opencode -s <id>` 恢复命令；Watch 保留环境变量、共享路径和原生 ID 兼容修复。
+
+### 3.5 Pi
+- **路径**：`~/.pi/agent/sessions/<encoded-cwd>/...jsonl`（项目 `.pi/settings.json` 的 `sessionDir` 可改根）
+- **机制**：会话目录编码按 Pi 1.5.2 原生规则；assistant 消息必须带 `usage`；恢复命令为 `pi --session <id>`。
+
+### 3.6 Grok CLI
+- **路径**：`~/.grok/sessions/<group>/<id>/chat_history.jsonl`（内容）+ 同目录 `updates.jsonl`（ACP 用量 / 压缩 / 失败）+ `summary.json`（标题与时间锚点）
+- **机制**：一个 cwd 可能有多个原生分组，须按分组名或 `.cwd` 认领；原生 `/resume` 读 ACP `updates.jsonl`，只写 `chat_history.jsonl` 会「列表有、恢复无内容」。恢复命令为 `grok -r <id>`。
 
 ---
 
