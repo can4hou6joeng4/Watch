@@ -137,7 +137,7 @@ import-codex  prepare|confirm|status|project-prepare|project-confirm|project-sta
 
 `--check` is only used with `open ... --to <provider>`: a read-only precheck of whether the target is writable. Nothing is written.
 
-The `usage` total is only the sum of what could be read: failed reads, sessions without a usage field and adapters that do not provide usage are named in the total line. When a session's usage source has unparsable lines, a line under the total says the number is a lower bound, and that session's row is marked the same way — in `--json` this is `totalExcluded` / `totalMissingUsage` / `byProvider[].usageBadLines`. Bad lines in the content file are disclosed too, but they no longer discard sidecar usage that was already read; `byProvider[].contentBadLines` carries the count.
+The `usage` total is only the sum of what could be read: failed reads, sessions without a usage field and adapters that do not provide usage are named in the total line. When a session's usage source has unparsable lines, a line under the total says the number is a lower bound, and that session's row is marked the same way — in `--json` this is `totalExcluded` / `totalMissingUsage` / `byProvider[].usageBadLines`. Bad lines in the content file are disclosed too, but they no longer discard sidecar usage that was already read; `byProvider[].contentBadLines` carries the count. Only a genuine 0-turn parse is described as not being an empty session; with existing turns the warning says the content may be incomplete.
 
 The same holds for `search`: when a session file has unparsable lines, those lines never reach the index, and the search reports it in `warnings` — including on later runs that reuse the index — instead of just returning no results.
 
