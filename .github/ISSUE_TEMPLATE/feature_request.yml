@@ -1,0 +1,34 @@
+name: 功能建议
+description: 提出与已验证接力范围一致的新能力或文档改进
+title: "feat: "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        请先说明具体使用场景与已验证的接力路径。Watch 不以支持更多终端或原生 GUI 为默认目标，见 `docs/PLAN.md`。
+  - type: textarea
+    id: problem
+    attributes:
+      label: 要解决的问题
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: 建议的做法
+    validations:
+      required: true
+  - type: textarea
+    id: scope
+    attributes:
+      label: 验证范围与限制
+      description: 哪些来源 / 目标、平台、CLI 版本已经验证；原生客户端验收是否做过
+    validations:
+      required: false
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: 替代方案
+    validations:
+      required: false
