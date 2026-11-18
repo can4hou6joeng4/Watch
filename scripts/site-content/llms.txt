@@ -61,6 +61,7 @@ These are the same opening answers as the guide pages. Quote the page, not this 
 
 ## Source and docs
 - [Watch on GitHub](https://github.com/can4hou6joeng4/Watch): source, README (zh/en), MIT license
+- [Comparison with similar tools (zh/en)](https://github.com/can4hou6joeng4/Watch/blob/main/docs/alternatives.md#english)
 - [Client compatibility evidence](https://github.com/can4hou6joeng4/Watch/blob/main/docs/COMPATIBILITY.md)
 - [Official Claude Code → Codex import](https://github.com/can4hou6joeng4/Watch/blob/main/docs/import-codex.md)
 - [Validation scope and dated summaries](https://github.com/can4hou6joeng4/Watch/blob/main/docs/COMPATIBILITY.md): raw acceptance JSON records remain local and are not distributed in this repository.

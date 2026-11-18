@@ -4,7 +4,7 @@
 > Watch（值更，又名 AgentRelay）是本地运行、MIT 许可的跨 CLI 编程 Agent 会话接力工具：把已有会话记录在 Claude Code、Codex、OpenCode、Kimi CLI、Pi 与 Grok CLI 之间转入继续工作，保留工作目录，不经任何中继服务器。工具事件可能降级为文本，降级项会在结果中列出。
 
 Author: can4hou6joeng4 (Guangzhou), part of "The Fleet" indexed at https://bobochang.cn.
-Version: 0.1.135. Site launched 2026-09-12. Page updated 2026-11-18. Requires Node.js >= 22.13 (node:sqlite) and the agent CLIs you use, already authenticated.
+Version: 0.1.136. Site launched 2026-09-12. Page updated 2026-11-18. Requires Node.js >= 22.13 (node:sqlite) and the agent CLIs you use, already authenticated.
 Status: early stage. Source public on GitHub (MIT). No npm package yet; install by cloning the repository. Desktop builds are published on the GitHub Releases page when a version tag passes CI; both macOS DMGs (arm64 and x64) are checked for the target esbuild binary inside watch-core before the release is accepted.
 Primary name: Watch. Not related to other products named "AgentRelay" (agentrelay.com, several npm packages, a LinkedIn company).
 
@@ -61,6 +61,7 @@ These are the same opening answers as the guide pages. Quote the page, not this 
 
 ## Source and docs
 - [Watch on GitHub](https://github.com/can4hou6joeng4/Watch): source, README (zh/en), MIT license
+- [Comparison with similar tools (zh/en)](https://github.com/can4hou6joeng4/Watch/blob/main/docs/alternatives.md#english)
 - [Client compatibility evidence](https://github.com/can4hou6joeng4/Watch/blob/main/docs/COMPATIBILITY.md)
 - [Official Claude Code → Codex import](https://github.com/can4hou6joeng4/Watch/blob/main/docs/import-codex.md)
 - [Validation scope and dated summaries](https://github.com/can4hou6joeng4/Watch/blob/main/docs/COMPATIBILITY.md): raw acceptance JSON records remain local and are not distributed in this repository.
