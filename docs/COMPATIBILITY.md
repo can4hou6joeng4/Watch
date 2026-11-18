@@ -355,3 +355,5 @@ Computer Use 原生管道未能启动，因此此记录依赖真实窗口中的�
 **`watch prompt --json` 输出结构化工作树（2026-11-18，v0.1.147，隔离合成检查）**：`sourceBranch` 只覆盖普通仓库根，链接工作树此前在 `--json` 里没有任何结构化字段，脚本仍要解析「工作目录类型」正文。现在工作树探测命中时返回 `sourceWorktree: { mainWorktree, branch }`；主工作树或分支读不出来时对应字段为 `null`，不编造路径或分支；`unknown` 状态仍只保留正文说明，不输出假结论。工作树与 `sourceBranch` 互斥，避免同一来源出现两个分支形状。新增 1 项 CLI 合成断言（工作树字段、正文说明、互斥）；typecheck 与桌面前端构建通过；未运行原生客户端，不构成原生验收。
 
 **`watch prompt --json` 输出结构化来源漂移（2026-11-18，v0.1.148，隔离合成检查）**：来源在渲染期间被追加 / 改写时，此前只有 stderr 的 warning 与正文的「生成期间有变化」一行，脚本要拿方向与字节差只能解析正文。现在 `sourceChangeSince()` 成为可复用入口，同一份 stat 结论同时给出 `sourceDrift: { from, to, growth }`（仅字节数、增长方向；不暴露会话内容、不声称内容一定不同）与原有正文 / finding `prompt_source_changed_during_render`；快照拿不到时三者都不报，不把「没量到」写成「没变化」。新增 2 项合成断言（判据方向与 CLI 字段 / 正文 / findings 同步）；typecheck 与桌面前端构建通过；未运行原生客户端，不构成原生验收。
+
+**同类工具页补 Codex / Codex+Claude 交接插件（2026-11-18，未发版，`docs/alternatives.md` 中英双语）**：`yuzushi-dev/session-handoff`（67★）是 Claude Code / Codex 双端插件，生成可校验交接文档并迁移支持的可移植历史；其公开的恢复率来自 2026-09-08 的合成试点，不能等价为原生格式写回承诺。`Liu-Bot24/codex-session-handoff-skill`（46★）只面向 Codex，把目标、验证结果与下一步写成本机快照与索引，默认 `~/.handoffs`，不写项目目录。两者均为 Skill 形态，与 Watch 的本地原生会话接力是不同交付方式；仅作对照，不构成互通或验收。
