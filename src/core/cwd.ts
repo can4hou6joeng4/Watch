@@ -348,6 +348,68 @@ async function readHeadBranch(gitDir: string): Promise<string | null> {
   }
 }
 
+/**
+ * cwd 本身是普通仓库根时，`HEAD` 指向的分支。链接工作树 / 子模块的 `.git` 是文件，
+ * 由 `inspectWorktree` 负责，这里只认 `.git` 目录。只读，不启动 git。
+ *
+ * `detached` 与 `unknown` 必须分开：前者是读到了结论（HEAD 里是提交号），后者是没读成，
+ * 不能把权限或坏文件讲成「不在任何分支上」。
+ */
+export type RepoBranchInspection =
+  | { state: 'branch'; branch: string }
+  | { state: 'detached' }
+  | { state: 'not-repo' }
+  | { state: 'unknown'; reason: string };
+
+export async function inspectRepoBranch(cwd: string): Promise<RepoBranchInspection> {
+  const dotGit = join(cwd, '.git');
+  let entry;
+  try {
+    entry = await stat(dotGit);
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === 'ENOENT' || code === 'ENOTDIR') return { state: 'not-repo' };
+    return { state: 'unknown', reason: errnoReason(error) };
+  }
+  // 文件形式的 .git 属于链接工作树 / 子模块：那里的分支由工作树说明负责，这里不重复也不猜
+  if (!entry.isDirectory()) return { state: 'not-repo' };
+  let head: string;
+  try {
+    head = (await readFile(join(dotGit, 'HEAD'), 'utf8')).trim();
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === 'ENOENT' || code === 'ENOTDIR') return { state: 'unknown', reason: '.git 目录里没有 HEAD' };
+    return { state: 'unknown', reason: errnoReason(error) };
+  }
+  if (!head) return { state: 'unknown', reason: 'HEAD 为空' };
+  const match = /^ref:\s*refs\/heads\/(.+)$/.exec(head);
+  if (match) {
+    const branch = match[1]!.trim();
+    return branch ? { state: 'branch', branch } : { state: 'unknown', reason: 'HEAD 的分支名为空' };
+  }
+  return { state: 'detached' };
+}
+
+/**
+ * `watch prompt` 文档里的一行：来源会话的工作目录当前在哪个分支。
+ *
+ * 读者拿到的文档可能离开原机；分支名是开始动手前最省事的一次核对（baton / bb-plugin-handoff
+ * 同样在交接时带分支 / 提交信息）。普通目录返回 null；detached 与读不出来都要如实说，
+ * 不能把「没读到」写成「没有分支」。
+ */
+export function describeRepoBranchNote(probe: RepoBranchInspection): string | null {
+  switch (probe.state) {
+    case 'not-repo':
+      return null;
+    case 'branch':
+      return `当前分支 ${escapeControlChars(probe.branch)}；动手前先确认目标机 / 目录停在同一分支`;
+    case 'detached':
+      return '当前是 detached HEAD（HEAD 指向提交而不是分支）；接手后若要提交，先切回目标分支';
+    case 'unknown':
+      return `无法确认当前 git 分支（${probe.reason}）；接手前先自行核对`;
+  }
+}
+
 /** git 在 `.git` 文件里对含空格 / 特殊字符的路径会加引号并用 C 风格转义；能解就解，不能就原样。 */
 function unquoteGitPath(value: string): string {
   if (value.length >= 2 && value.startsWith('"') && value.endsWith('"')) {

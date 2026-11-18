@@ -25,7 +25,7 @@ import { officialImportJournalRoot } from './providers/codex/official-import.js'
 import { doctorReport } from './core/doctor.js';
 import type { StoreFootprint } from './core/doctor.js';
 import { CLAUDE_PROJECT_SETTINGS_RELATIVE_PATHS, type ClaudeRetentionProbe } from './providers/claude/retention.js';
-import { cwdAliasHint, cwdControlCharsNote, cwdProblem, describeCwdProblem, describeRecordedCwd, describeWorktreeNote, describeWriteCwd, inspectCwd, inspectWorktree, sameDirectorySync, splitElsewhereByDirectory } from './core/cwd.js';
+import { cwdAliasHint, cwdControlCharsNote, cwdProblem, describeCwdProblem, describeRecordedCwd, describeRepoBranchNote, describeWorktreeNote, describeWriteCwd, inspectCwd, inspectRepoBranch, inspectWorktree, sameDirectorySync, splitElsewhereByDirectory } from './core/cwd.js';
 import { escapeControlChars, hasControlChars } from './core/display.js';
 import { commandControlWarnings } from './core/terminal-command.js';
 import { trimUserKey } from './core/cli-input.js';
@@ -1951,6 +1951,10 @@ async function cmdPrompt(
   // 链接工作树和目录状态是两件事：目录还在，但它是 `git worktree add` 建出来的独立工作树时，
   // 文档读者从路径上看不出来，可能回主工作树改同一份文件——必须写进正文（PLAN §5）。
   let sourceWorktreeNote: string | undefined;
+  // 链接工作树的分支已在「工作目录类型」一行里；普通仓库根再补一行当前分支，
+  // 文档离开原机后读者能先核对分支再动手（baton / bb-plugin-handoff 同样带分支信息）。
+  let sourceBranchNote: string | undefined;
+  let sourceBranchUnreadable = false;
   if (foundRef.cwd.trim()) {
     const recordedProbe = await inspectCwd(foundRef.cwd);
     const recordedCwdNote = describeRecordedCwd(recordedProbe, foundRef.cwd);
@@ -1961,7 +1965,16 @@ async function cmdPrompt(
     // 目录不在时 `.git` 也无从读，此时探测只会得到「不是 worktree」这个假事实，索性不探
     if (recordedProbe.state === 'ok') {
       const worktreeNote = describeWorktreeNote(await inspectWorktree(foundRef.cwd));
-      if (worktreeNote) sourceWorktreeNote = worktreeNote;
+      if (worktreeNote) {
+        sourceWorktreeNote = worktreeNote;
+      } else {
+        const branchProbe = await inspectRepoBranch(foundRef.cwd);
+        const branchNote = describeRepoBranchNote(branchProbe);
+        if (branchNote) {
+          sourceBranchNote = branchNote;
+          if (branchProbe.state === 'unknown') sourceBranchUnreadable = true;
+        }
+      }
     }
   }
 
@@ -1992,6 +2005,8 @@ async function cmdPrompt(
       ...(sourceDrift ? { sourceDriftNote: sourceDrift } : {}),
       ...(sourceCwdNote ? { sourceCwdNote } : {}),
       ...(sourceWorktreeNote ? { sourceWorktreeNote } : {}),
+      ...(sourceBranchNote ? { sourceBranchNote } : {}),
+      ...(sourceBranchUnreadable ? { sourceBranchUnreadable: true } : {}),
     },
     profile,
     { ...(lastUserTurns !== undefined ? { lastUserTurns } : {}), ...(sinceCompact ? { sinceCompact: true } : {}) },

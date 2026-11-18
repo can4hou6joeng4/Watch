@@ -168,6 +168,16 @@ export type PromptSessionMeta = {
    * 所以这条也写进正文。普通目录 / 普通仓库根不需要这一行。
    */
   sourceWorktreeNote?: string;
+  /**
+   * 来源工作目录当前的 git 分支（普通仓库根；`inspectRepoBranch()` 的结论）。
+   *
+   * 与 `sourceWorktreeNote` 互补：链接工作树的分支写在那一行里，这里覆盖普通仓库根。
+   * 文档会被复制到另一台机器或另一天，接手前先核对分支是最省事的一步；detached HEAD
+   * 与读不出来都要如实说，不能把「没读到」写成「没有分支」。
+   */
+  sourceBranchNote?: string;
+  /** 分支探测整体失败（不是 detached）：正文已如实说明，这里供 `--json` 的 findings 计数 */
+  sourceBranchUnreadable?: boolean;
 };
 
 export type PromptStats = {
@@ -598,6 +608,11 @@ export function buildHandoffPrompt(
   // 这不是降级，是目录的**类型**：不说的话读者从路径上看不出它是独立工作树。
   if (meta.sourceWorktreeNote) {
     lines.push(`- 工作目录类型：${sanitizeBody(meta.sourceWorktreeNote).text}`);
+  }
+  // 普通仓库根的分支：工作树说明已经带了分支时不会同时出现；detached 与读不出来都如实写。
+  if (meta.sourceBranchNote) {
+    if (meta.sourceBranchUnreadable) addFinding(findings, 'prompt_source_branch_unreadable', 'degraded', 1);
+    lines.push(`- 工作目录分支：${sanitizeBody(meta.sourceBranchNote).text}`);
   }
   // 来源记录的上下文与来源 CLI 当前发给模型的不一致（目前由 Pi parse 写入）：这个事件在
   // 正文里默认不展开（standard 档位 eventsPerTurn = 0），所以必须在头部单独说一句。扫描发生在
