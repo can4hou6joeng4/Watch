@@ -631,8 +631,16 @@ export async function doctorReport(cwd: string, deps: DoctorDeps): Promise<Docto
               sessionId: to.sessionId,
               filePath: to.filePath,
             });
+            // 与未进入对账的链尾同档：toBadScan 已在上面算过，parse 跳过坏行时
+            // 「0 轮」不能讲成刚建出来 / 内容被清空；不要把人引去 switch / adopt 重新对齐。
+            const subject = `链「${escapeControlChars(chain.name)}」的链尾会话 ${to.provider} ${to.sessionId}`;
+            const tailReason = toBadScan.count > 0
+              ? `文件里有 ${toBadScan.count} 行无法解析（截断或损坏），这些内容已被跳过——更可能是文件被截断或损坏，不能当成「刚建出来的空会话」`
+              : toBadFailure ?? '如果刚 watch new 建出来还没聊过属正常，先在该会话里继续';
             warnings.push(
-              `链「${escapeControlChars(chain.name)}」的链尾会话 ${to.provider} ${to.sessionId} 是空的（解析出 0 轮，没有可继续的对话）：下次切换会「成功」，但打开的是空会话——如果它本该有历史，先在 ${to.provider} 里打开确认，或从备份恢复该文件；也可 watch switch ${to.provider} 重新绑定，或 watch chain new <新名字> 另起一条链`,
+              `${subject} 是空的（解析出 0 轮，没有可继续的对话）：${tailReason}${toBadFailure ? `；${toBadFailure}` : ''}；` +
+                `下次切换会「成功」，但打开的是空会话——若它本该有历史，先从备份恢复该文件（不属正常新建），` +
+                `或 watch switch ${to.provider} 重新绑定，或 watch chain new <新名字> 另起一条链`,
             );
             continue;
           }

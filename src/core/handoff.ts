@@ -1896,10 +1896,15 @@ export async function handoff(
     // 有 `into` 时不能拒绝（用户就是要切到目标那一侧），所以披露；目标同样不改动。
     if (into && turns.length === 0) {
       if (!emptiedSourceFile) {
+        const subject = `来源会话 ${sourceTip.ref.sessionId}（${source.displayName}）`;
+        const reason = sourceBadScan.count > 0
+          ? `文件里有 ${sourceBadScan.count} 行无法解析（截断或损坏），这些内容已被跳过——更可能是文件被截断或损坏，不能当成「刚建出来的空会话」`
+          : sourceBadScanFailure ?? '可能已被清空';
         warnings.push(
-          `来源会话 ${sourceTip.ref.sessionId}（${source.displayName}）解析出 0 轮，没有可接力的对话；` +
+          `${subject} 解析出 0 轮，没有可接力的对话：${reason}` +
+            `${sourceBadScanFailure ? `；${sourceBadScanFailure}` : ''}；` +
             `本次只把链尾切到 ${target.displayName}，目标会话 ${into.sessionId}（${target.displayName}）未被改动` +
-            `——如果这条会话本该有内容，先在 ${source.displayName} 里打开它确认（可能已被清空），或从备份恢复该文件（Watch 不会替你重建历史）；` +
+            `——如果这条会话本该有内容，先在 ${source.displayName} 里打开它确认，或从备份恢复该文件（Watch 不会替你重建历史）；` +
             `如果只是挑错了会话，用 watch adopt ${sourceTip.provider} --session <另一个会话 id> 换绑`,
         );
       }
