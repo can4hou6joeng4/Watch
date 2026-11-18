@@ -22,7 +22,7 @@ cargo check --manifest-path desktop/src-tauri/Cargo.toml   # 快速检查
 cargo test  --manifest-path desktop/src-tauri/Cargo.toml   # Rust 桥接单测
 ```
 
-仓库**不分发测试套件**：`tests/` 与本地测试运行器均不随版本库分发，根 `package.json` 也不提供 `test` 脚本。发布工作流 `.github/workflows/release.yml` 的 `quality` job 跑类型检查、前端构建、站点构建与分享图摘要校验，以及 Rust 测试（`cargo test`），远程通过不代表回归通过。贡献者改完 `src/` 后至少跑 `npm run typecheck` 与 `npm --prefix desktop run build`；手写原生验收器（`validate:*`）是可选的手动入口，参见兼容性文档。
+仓库**不分发测试套件**：`tests/` 与本地测试运行器均不随版本库分发，根 `package.json` 也不提供 `test` 脚本。PR 与推送到 `main` 由 `.github/workflows/ci.yml` 做类型检查、前端构建、站点构建与分享图摘要校验，以及 Ubuntu 上的 `cargo test`；推 `v*` tag 的 `.github/workflows/release.yml` 在打包前重复这些检查。两者都不跑本地回归，远程通过不代表回归通过。贡献者改完 `src/` 后至少跑 `npm run typecheck` 与 `npm --prefix desktop run build`；手写原生验收器（`validate:*`）是可选的手动入口，参见兼容性文档。
 
 仓库**没有 lint 脚本**（无 eslint / biome / prettier），代码风格靠约定与评审维护。
 
@@ -52,6 +52,7 @@ site/               官网静态资源
 - 相对导入**一律带 `.js` 后缀**指向 `.ts` 文件（如 `import { Store } from './core/store.js'`）。
 - Rust 使用 `rustfmt`。
 - `docs/` 与 `README.md` 为中文主稿，`README.en.md` 是英文镜像，共同内容需同步修改。
+- README 是产品文档，只写能力、用法、限制与文档入口；不写逐版本更新说明或临时发布状态。版本历史由 [GitHub Releases](https://github.com/can4hou6joeng4/Watch/releases) 维护。
 
 ## 提交规范
 
@@ -64,7 +65,7 @@ site/               官网静态资源
 - 使用 `node:test` 与 `node:assert/strict`，文件名 `<feature>.test.ts`，新增用例统一 strict。
 - 测试必须经 `scripts/run-tests.mjs` 运行：它会重建环境，只透传 `PATH` / `TERM` 等少数变量，把 `HOME`、`USERPROFILE`、`APPDATA`、`LOCALAPPDATA`、四个 `XDG_*`、`TMPDIR`、`WATCH_DB`、`WATCH_OPENCODE_DB` 全部指向临时根，并剔除 API key 与代理设置。
 - **测试不得读取真实 Agent 历史，也不得调用模型。** 用例内部同样自隔离：用临时目录，或通过可注入的根参数覆盖。
-- 发布工作流（`.github/workflows/release.yml`）的 `quality` job 跑类型检查、前端构建、站点构建与分享图摘要校验，以及在 Linux 上运行 Rust 桥接单测；仓库没有 PR/push CI，也没有远程回归套件。本地通过不等于对应平台的客户端验收通过。
+- `.github/workflows/ci.yml` 在 PR 与 `main` 推送上运行类型检查、前端构建、站点构建与分享图摘要校验，以及 Ubuntu 上的 Rust 桥接单测；`.github/workflows/release.yml` 的 `quality` job 在 tag 打包前重复这些检查。仓库没有 PR/push 回归套件，也没有远程原生客户端验收。
 
 ## 修改写入路径时的安全要求
 

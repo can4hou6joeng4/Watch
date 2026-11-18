@@ -3,6 +3,7 @@
   <h1>Watch · 值更</h1>
   <p><b>Relieving the watch. The voyage never stalls.</b></p>
   <a href="https://github.com/can4hou6joeng4/Watch/stargazers"><img src="https://img.shields.io/github/stars/can4hou6joeng4/Watch?style=flat-square" alt="Stars"></a>
+  <a href="https://github.com/can4hou6joeng4/Watch/actions/workflows/ci.yml"><img src="https://github.com/can4hou6joeng4/Watch/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
   <a href="https://github.com/can4hou6joeng4/Watch/releases"><img src="https://img.shields.io/github/v/tag/can4hou6joeng4/Watch?label=version&style=flat-square" alt="Version"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg?style=flat-square" alt="License"></a>
   <img src="https://img.shields.io/badge/node-%E2%89%A5%2022.13-3c873a?style=flat-square" alt="Node">

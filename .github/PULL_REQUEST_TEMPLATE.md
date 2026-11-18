@@ -7,6 +7,8 @@
 - [ ] `npm run typecheck`
 - [ ] `npm --prefix desktop run build`
 - [ ] 若涉及站点，运行 `npm run site:build`
+- [ ] README 未追加逐版本更新说明；版本记录留给 GitHub Releases
+- [ ] 中英 README 的同步内容保持一致（若改动了产品说明）
 - [ ] 若改写入路径，说明如何验证原子写、写前指纹与 round-trip；无本地回归套件时明确写出未覆盖范围
 
 ## 数据与隐私
