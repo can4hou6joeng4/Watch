@@ -70,7 +70,7 @@ Watch 只做一件事：**把已保存的会话记录连同工作目录交到目
 
 **同类工具对照**
 
-[catchup](https://github.com/wilbeibi/catchup) 以转录文本交接为主，也提供 `fork` 与 `fork --into`；[ThreadPort](https://github.com/Frankie-Xu/threadport) 用可校验的 Capsule 记录可观察的工作状态；[agent-sessions](https://github.com/jazzyalex/agent-sessions) 把索引、刷新、失败、筛选无结果与真正空库分成不同状态；[Möbius](https://github.com/TardisBooo/Mobius) 把重复交接记录为 persistent handoff graph，强调从交接回溯到来源会话与消息范围，而不是只给一份摘要；[cross_agent_session_resumer](https://github.com/Dicklesworthstone/cross_agent_session_resumer) 与 [session-migrate](https://github.com/xhluca/session-migrate) 都提供原生会话格式转换。Watch 提供启动器、链式交接、Codex 官方导入三条独立入口，以及只读摘要导出和路径级写入防护；`status --json` 还会从本链的切换记录派生只读血缘图（节点是已确认会话，边是切换记录），桌面接力记录页显示同一份计数；桌面端近期列表也区分扫描中、读取失败与真正空列表。不同工具的适配与验收范围需要逐项核对；Watch 的实现边界见[架构说明](docs/ARCHITECTURE.md)，方向与版本限制见[兼容性记录](docs/COMPATIBILITY.md)。
+[catchup](https://github.com/wilbeibi/catchup) 以转录文本交接为主，也提供 `fork` 与 `fork --into`；[ThreadPort](https://github.com/Frankie-Xu/threadport) 用可校验的 Capsule 记录可观察的工作状态；[agent-sessions](https://github.com/jazzyalex/agent-sessions) 把索引、刷新、失败、筛选无结果与真正空库分成不同状态；[Möbius](https://github.com/TardisBooo/Mobius) 把重复交接记录为 persistent handoff graph，强调从交接回溯到来源会话与消息范围，而不是只给一份摘要；[deja-vu](https://github.com/vshulcz/deja-vu) 提供只读的本地 Agent 存储审计，并点出 Claude Code `cleanupPeriodDays` 的 transcript 清理风险；[cross_agent_session_resumer](https://github.com/Dicklesworthstone/cross_agent_session_resumer) 与 [session-migrate](https://github.com/xhluca/session-migrate) 都提供原生会话格式转换。Watch 提供启动器、链式交接、Codex 官方导入三条独立入口，以及只读摘要导出和路径级写入防护；`status --json` 还会从本链的切换记录派生只读血缘图（节点是已确认会话，边是切换记录），桌面接力记录页显示同一份计数；`doctor` 只读核对 Claude Code 用户设置里的 `cleanupPeriodDays`，但不把它说成实际生效值（项目 / 管理设置可能覆盖）；桌面端近期列表也区分扫描中、读取失败与真正空列表。不同工具的适配与验收范围需要逐项核对；Watch 的实现边界见[架构说明](docs/ARCHITECTURE.md)，方向与版本限制见[兼容性记录](docs/COMPATIBILITY.md)。
 
 ## 安装
 
@@ -129,7 +129,7 @@ usage    [--cwd <path>] [--chain <id|name>]                 链上各会话的 t
 recent   [--cwd <path>] [--limit <n>]                       近期会话反查记录（默认 8 条，最多 50）
 providers                                                   各 Agent 的本机安装检测
 capabilities                                                各 Agent 的读写能力矩阵（代码事实，不探测本机 CLI）
-doctor   [--cwd <path>] [--strict]                          只读环境诊断（Agent 检测 / 本地库 / 本地库体积与索引规模 / 导入日志）；发现硬失败时退出码 1，--strict 让警告也算失败
+doctor   [--cwd <path>] [--strict]                          只读环境诊断（Agent 检测 / Claude 保留期 / 本地库 / 本地库体积与索引规模 / 导入日志）；发现硬失败时退出码 1，--strict 让警告也算失败
 open     <session-id> [--from <id>] [--provider <name>] [--to <provider>] [--check]
 prompt   [<session-id>] [--provider <name>] [--profile minimal|standard|verbose|full] [--last <n>] [--since-compact]   摘要交接：把会话渲染成可粘贴的 Markdown（降级方案，不写任何文件）
 import-codex  prepare|confirm|status|project-prepare|project-confirm|project-status
