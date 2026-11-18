@@ -258,7 +258,7 @@ export type DoctorDeps = {
 };
 
 type PathPresence =
-  | { state: 'present' }
+  | { state: 'present'; mtimeMs: number | null }
   | { state: 'unreadable'; reason: string }
   | { state: 'missing'; code: string; compressed?: string; emptyCompressed?: string }
   | { state: 'unknown'; reason: string };
@@ -279,7 +279,7 @@ async function pathPresence(filePath: string): Promise<PathPresence> {
       // 只按 `stat` 判 present 会让 doctor 对一条 resume 必然失败的链尾保持沉默。
       const readProblem = await probeSessionReadable(filePath);
       if (readProblem) return { state: 'unreadable', reason: readProblem };
-      return { state: 'present' };
+      return { state: 'present', mtimeMs: info.mtimeMs };
     }
     return { state: 'unknown', reason: '该路径现在不是普通文件（被同名目录或设备文件占住了）' };
   } catch (error) {
@@ -298,7 +298,8 @@ async function pathPresence(filePath: string): Promise<PathPresence> {
         };
       }
       if (presence.state === 'unknown') return { state: 'unknown', reason: presence.reason };
-      return { state: 'present' };
+      // 这里只可能是压缩副本还在：原文件没有 stat 结果，保留期风险判断跳过
+      return { state: 'present', mtimeMs: null };
     }
     return { state: 'unknown', reason: describeSessionReadFailureReason(error) };
   }
@@ -469,6 +470,17 @@ export async function doctorReport(cwd: string, deps: DoctorDeps): Promise<Docto
     }
   }
 
+  // 显式把保留期压到官方默认以下的设置里最短的那个。链尾会话如果比它还旧，
+  // 下一次 Claude Code 启动后的清理就可能把它删掉。没有显式短设置时只用默认值不报警：
+  // 老链尾很多时候是有意保留的归档，拿官方默认 30 天去喊会变成噪音。
+  const shortestRetentionDays =
+    [
+      claudeRetention.state === 'configured' ? claudeRetention.configuredDays : null,
+      ...claudeProjectRetention.map((probe) => (probe.state === 'configured' ? probe.configuredDays : null)),
+    ]
+      .filter((days): days is number => days !== null && days < CLAUDE_DEFAULT_CLEANUP_DAYS)
+      .sort((a, b) => a - b)[0] ?? null;
+
   // 原生会话列表只读；与 detect（只看 PATH）互补：装了但存储读不出，比「没装」更需要解释
   const storage: StorageProbe[] = [];
   // 列得出、但预览读不出来的会话。链尾由下面的 brokenTips 单独说（更具体、带下一步），
@@ -617,6 +629,19 @@ export async function doctorReport(cwd: string, deps: DoctorDeps): Promise<Docto
           } else {
             warnings.push(
               `链「${escapeControlChars(chain.name)}」的链尾会话文件状态无法确认：${tip.filePath}（${tip.provider}）；${error}；先确认它是否还在、是否是普通文件，再决定是否 adopt`,
+            );
+          }
+        } else if (
+          shortestRetentionDays !== null &&
+          tip.provider === 'claude' &&
+          tipPresence.mtimeMs !== null
+        ) {
+          // 只对 Claude 会话判断：cleanupPeriodDays 是 Claude Code 的设置。
+          // 用文件 mtime 估「最后一次写入」，而不是断言原生一定按这个时间清理。
+          const ageDays = Math.floor((Date.now() - tipPresence.mtimeMs) / 86_400_000);
+          if (ageDays > shortestRetentionDays) {
+            warnings.push(
+              `链「${escapeControlChars(chain.name)}」的链尾是 Claude Code 会话，文件已经有 ${ageDays} 天没有更新，而探测到的最短 cleanupPeriodDays 是 ${shortestRetentionDays} 天；若没有更高优先级的设置覆盖，Claude Code 启动后的清理可能删除它——先备份该文件，或调大保留期，或${rebindHint(tip.provider)}`,
             );
           }
         }
