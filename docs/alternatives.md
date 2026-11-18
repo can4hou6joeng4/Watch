@@ -22,6 +22,8 @@ Watch 从本机原生会话记录和工作目录出发，由用户发起接力�
 
 [herdr-agent-handoff](https://github.com/sanirudh17/herdr-agent-handoff) 从 Herdr 的源窗格定位会话，在另一个 Agent 的新窗格交接。完整转录放不进提示词时，它提供来源路径、行范围和 SHA-256 供核对。Watch 的 `prompt` 交付 Markdown 摘要，并比较读取前后的文件大小和修改时间来提示来源有变化。
 
+[ccompactor](https://github.com/ccompactor/ccompactor) 从 Claude Code、Codex 和 Pi 的本机记录生成带事件引用的交接包。`verify` 检查交接包的结构，并对照源转录核验引用。Watch 的 `prompt` 提供可复制的 Markdown 摘要和裁剪披露。
+
 ## English
 
 Choose by the handoff output and workflow you need. Third-party entries describe what each project documents publicly. See the [compatibility records](COMPATIBILITY.md) for Watch's validated scope.
@@ -41,3 +43,5 @@ Choose by the handoff output and workflow you need. Third-party entries describe
 Watch starts from local native session records and the working directory. The user initiates each handoff. The launcher, chained handoff and official Codex import have separate entry points and write protections. Use `watch prompt` for a read-only Markdown summary when the target lacks an adapter. `status --json` traces lineage from recorded switches, with the same counts in desktop handoff history. The desktop recent list distinguishes scanning, read failures and an empty list. See the [architecture](ARCHITECTURE.md) for the protection each route provides.
 
 [herdr-agent-handoff](https://github.com/sanirudh17/herdr-agent-handoff) locates a session from its source pane and hands it off to a fresh agent pane in Herdr. If the full transcript exceeds the prompt budget, the plugin provides the source path, line bounds and SHA-256 for verification. Watch `prompt` produces a Markdown summary and compares file size and modification time before and after reading to flag source changes.
+
+[ccompactor](https://github.com/ccompactor/ccompactor) creates handoff packages with event references from local Claude Code, Codex, and Pi records. Its `verify` command checks package structure and checks quotes against the source transcript. Watch `prompt` provides a Markdown summary with disclosures about trimmed content.
