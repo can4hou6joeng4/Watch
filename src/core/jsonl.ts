@@ -126,7 +126,13 @@ export type LineageNode = { key: string; provider: string; sessionId: string };
  */
 export type LineageEdge = { from: string; to: string; at: number | null };
 
-export type LineageGraph = { nodes: LineageNode[]; edges: LineageEdge[] };
+/**
+ * `skipped` 是引用损坏、没能进入图的切换记录数。
+ *
+ * 0 以外必须由调用方披露：图少了一条边仍是「派生结果」，不能静默当成完整血缘。
+ * 它计的是记录条数，不是缺字段的个数（一条记录只算一次）。
+ */
+export type LineageGraph = { nodes: LineageNode[]; edges: LineageEdge[]; skipped: number };
 
 /** 只收形状完整的引用；损坏库里缺字段 / 非字符串的 ref 不能把 `status` 打挂。 */
 function lineageRef(value: unknown): { provider: string; sessionId: string } | null {
@@ -155,6 +161,7 @@ export function lineageFromHistory(history: unknown): LineageGraph | null {
   if (!Array.isArray(history)) return null;
   const nodes = new Map<string, LineageNode>();
   const edges: LineageEdge[] = [];
+  let skipped = 0;
   const keyOf = (ref: { provider: string; sessionId: string }): string =>
     `${escapeControlChars(ref.provider)}:${escapeControlChars(ref.sessionId)}`;
   const addNode = (ref: { provider: string; sessionId: string }): void => {
@@ -162,15 +169,29 @@ export function lineageFromHistory(history: unknown): LineageGraph | null {
     if (!nodes.has(key)) nodes.set(key, { key, provider: ref.provider, sessionId: ref.sessionId });
   };
   for (const event of history) {
-    if (typeof event !== 'object' || event === null) continue;
+    if (typeof event !== 'object' || event === null) {
+      skipped++;
+      continue;
+    }
     const { fromRef, toRef, createdAt } = event as {
       fromRef?: unknown;
       toRef?: unknown;
       createdAt?: unknown;
     };
     const to = lineageRef(toRef);
-    if (!to) continue;
+    if (!to) {
+      // 没有目标就没有可确认的身份，整条记录进不了图；计数后交给调用方披露。
+      skipped++;
+      continue;
+    }
+    const hasFrom = fromRef !== null && fromRef !== undefined;
     const from = lineageRef(fromRef);
+    if (hasFrom && !from) {
+      // 目标仍是一个确认过的身份，先记节点；边因来源损坏而省略，但要计数。
+      addNode(to);
+      skipped++;
+      continue;
+    }
     // 没有来源的 switch_events 仍然确认了一个会话身份（adopt / new 的首次绑定）；只记节点。
     if (!from) {
       addNode(to);
@@ -184,7 +205,7 @@ export function lineageFromHistory(history: unknown): LineageGraph | null {
       at: typeof createdAt === 'number' && Number.isFinite(createdAt) ? createdAt : null,
     });
   }
-  return { nodes: [...nodes.values()], edges };
+  return { nodes: [...nodes.values()], edges, skipped };
 }
 
 /**

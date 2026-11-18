@@ -1297,6 +1297,13 @@ export async function chainStatus(
   // 不能返回空图冒充「没有历史」。没有链时 history 为空数组，空图是准确结论。
   // 节点只来自已确认的 fromRef/toRef，不是对摘要的猜测。
   const lineage = store && !historyFailed ? lineageFromHistory(history) : undefined;
+  if (lineage?.skipped) {
+    // 派生结果少了记录仍是降级：不披露的话，--json 的 nodes / edges 会被当成完整血缘。
+    // 记录本身仍在 history 里，下一步是核对库内容，而不是删掉这条链。
+    warnings.push(
+      `链历史里有 ${lineage.skipped} 条切换记录的会话引用不完整或损坏，血缘图已跳过这些记录（节点 / 边可能不完整）；切换记录本身仍保留在 history 里`,
+    );
+  }
   // 链尾只以当前链的 switch_events 最后一条为准；不再 fallback 到目录全局最新会话
   let chainTip: ProviderTip | null = null;
   let chainTipUnusable = false;
