@@ -448,13 +448,28 @@ export function claudeBashInput(event: ProcessEvent): { command: string; descrip
   return { command: extractExecCommand(raw) };
 }
 
-export function codexToolInput(event: ProcessEvent): string {
-  if (typeof event.input === 'string') return event.input;
-  if (event.input && typeof event.input === 'object' && !Array.isArray(event.input)) {
-    const obj = event.input as Record<string, unknown>;
-    if (typeof obj.command === 'string') return obj.command;
+/**
+ * Codex `custom_tool_call.input` 的文本；`codexName` 是 `toCodexToolName()` 之后的工具名。
+ *
+ * 只有 `exec` 取命令本身（随后由 writer 包成调用脚本）。其它工具必须拿到完整入参：
+ * - 入参里有 `command` 键不等于它是 shell——`str_replace_editor` 的 `command` 是子命令名，
+ *   MCP 远程执行类工具的 `command` 旁边还有主机 / 会话；只写 `command` 会把其余键全丢掉。
+ * - 事件没有 `detail` 不等于没有入参——Pi / OpenCode 的解析结果只带结构化 `input`，
+ *   退回 `summary` 得到的是工具名或 200 字符摘要。
+ * 顺序：字符串入参 → 来源原文 `detail`（键序与数字写法按来源保留）→ 结构化入参序列化
+ * → 最后才是单行摘要。round-trip 不比 input / detail，这里错了自校验查不出来。
+ */
+export function codexToolInput(event: ProcessEvent, codexName: string): string {
+  const input = event.input;
+  if (typeof input === 'string') return input;
+  if (codexName === 'exec' && input && typeof input === 'object' && !Array.isArray(input)) {
+    const command = (input as Record<string, unknown>).command;
+    if (typeof command === 'string') return command;
   }
-  return event.detail ?? event.summary;
+  if (typeof event.detail === 'string') return event.detail;
+  // JSON.stringify 对函数 / symbol 等不可序列化的值返回 undefined，此时仍退回摘要。
+  const serialized: unknown = input === undefined || input === null ? undefined : JSON.stringify(input);
+  return typeof serialized === 'string' ? serialized : event.summary;
 }
 
 export function summarize(text: string, fallback: string): string {

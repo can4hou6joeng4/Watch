@@ -543,7 +543,9 @@ function emitCodexEvent(
     const callId = ev.callId || `call_${randomUUID().replace(/-/g, '').slice(0, 24)}`;
     setLastCallId(callId);
     const name = toCodexToolName(ev.name ?? 'tool');
-    const input = wrapExecInput(name, codexToolInput(ev), cwd);
+    // 写出的 input 与下面的回显必须同源：parser 用回读到的入参重建回显来识别并跳过它。
+    const text = codexToolInput(ev, name);
+    const input = wrapExecInput(name, text, cwd);
     push('response_item', {
       type: 'custom_tool_call',
       id: `ctc_${randomUUID().replace(/-/g, '')}`,
@@ -553,7 +555,7 @@ function emitCodexEvent(
       input,
       internal_chat_message_metadata_passthrough: meta,
     });
-    const shown = name === 'exec' ? codexToolInput(ev) : `${name}: ${codexToolInput(ev)}`;
+    const shown = name === 'exec' ? text : `${name}: ${text}`;
     pushCommentary(push, shown.length > 200 ? `${shown.slice(0, 199)}…` : shown, turnId, true);
     return;
   }
