@@ -90,6 +90,33 @@ export async function countUnparsableJsonLines(filePath: string): Promise<number
 }
 
 /**
+ * 「0 轮」这一档统一的原因措辞：坏行优先，扫描读不出来单列，都没有才说可能是合法空会话。
+ *
+ * parse 跳过坏行后，截断 / 损坏的 JSONL 与 `watch new` 建出的合法空会话都返回 0 轮。
+ * 这几档的下一步完全不同（恢复备份 / 先确认可读 / 继续聊），任何只说「刚建出来或内容被清空」
+ * 的文案都会把人引错方向。所有 0 轮披露共用这一句，避免各入口再分叉。
+ */
+export function describeZeroTurnReason(
+  scan: BadLinesScan,
+  emptyFallback: string,
+  consequence?: string,
+): string {
+  const failure = describeBadLinesScanFailure(
+    scan,
+    '文件',
+    '是否真的只有 0 轮无法确认——先确认该文件可读再重试',
+  );
+  if (scan.count > 0) {
+    return (
+      `文件里有 ${scan.count} 行无法解析（截断或损坏），这些内容已被跳过——更可能是文件被截断或损坏，不能当成「刚建出来的空会话」` +
+      `${failure ? `；${failure}` : ''}${consequence ? `；${consequence}` : ''}`
+    );
+  }
+  if (failure) return `${failure}${consequence ? `；${consequence}` : ''}`;
+  return `${emptyFallback}${consequence ? `；${consequence}` : ''}`;
+}
+
+/**
  * 扫描没完成时的披露句；扫完了返回 `null`。
  *
  * `subject` 由调用方带上会话 / 链的标识（不含路径，路径在 `error` 前的场景里已由各处声明）；

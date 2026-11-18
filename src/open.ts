@@ -10,7 +10,7 @@ import type { ProviderAdapter } from './providers/adapter.js';
 import { cliDetectFailedBlock, cliMissingBlock, PreflightBlockedError, SessionLookupFailureError } from './providers/adapter.js';
 import type { SessionLookupFailureKind } from './providers/adapter.js';
 import { getAdapter, listAdapters, unknownProviderMessage } from './providers/registry.js';
-import { describeBadLinesScanFailure, scanUnparsableJsonLines } from './core/jsonl.js';
+import { describeBadLinesScanFailure, describeZeroTurnReason, scanUnparsableJsonLines } from './core/jsonl.js';
 import { usageBadLinesReason, usageSidecarProblem } from './core/usage-integrity.js';
 import { collectUnattributable, unattributablePickWarning } from './core/session-coverage.js';
 import {
@@ -774,11 +774,12 @@ export async function openSession(
               `下面这条 resume 命令虽然能打开它，但历史内容已经没有了——如果它本该有内容，先从备份恢复这个文件（Watch 不会替你重建历史）`,
           );
         } else {
-          // 文件可读、parse 也成功，却 0 轮：`watch new` 建出的合法空会话与「内容被清空只剩占位头」
-          // 都长这样。不说这一句时，下面那条 resume 看起来与正常会话完全一样（0 字节档已在上面说清）。
+          // 文件可读、parse 也成功，却 0 轮：`watch new` 建出的合法空会话、内容被清空只剩占位头，
+          // 以及末尾被截断的 JSONL（parse 跳过坏行）都长这样；显式扫一次坏行，按事实分档。
+          const zeroScan = await scanUnparsableJsonLines(target.found.ref.filePath);
           warnings.push(
             `会话 ${target.found.ref.sessionId}（${target.adapter.displayName}）解析出 0 轮（没有可继续的对话）：` +
-              `可能是刚建出来的空会话，也可能内容已被清空；` +
+              `${describeZeroTurnReason(zeroScan, '可能是刚建出来的空会话，也可能内容已被清空')}；` +
               `下面这条 resume 命令打开的是空会话——如果它本该有历史，先在 ${target.adapter.displayName} 里打开它确认，或从备份恢复该文件（Watch 不会替你重建历史）`,
           );
         }
@@ -1062,11 +1063,12 @@ async function planOpenInProvider(
               `这次要 resume 的就是它，历史内容已经没有了——如果它本该有内容，先从备份恢复这个文件再重试（Watch 不会替你重建历史）`,
           );
         } else {
-          // 与 `open <id>` 单独打开同一档：可读、parse 成功却 0 轮，可能刚建出来，也可能内容已被清空。
-          // `--check` 也吃这份 diagnostics，所以预检会提前说，不会等 resume 打开空会话才发现。
+          // 与 `open <id>` 单独打开同一档：可读、parse 成功却 0 轮，可能刚建出来，也可能内容已被清空
+          // 或末尾损坏；显式扫一次坏行后再分档。`--check` 也吃这份 diagnostics，预检会提前说。
+          const ownZeroScan = await scanUnparsableJsonLines(sourceRef.filePath);
           diagnostics?.push(
             `目标会话 ${sourceRef.sessionId}（${target.displayName}）解析出 0 轮（没有可继续的对话）：` +
-              `可能是刚建出来的空会话，也可能内容已被清空；这次要 resume 的就是它——` +
+              `${describeZeroTurnReason(ownZeroScan, '可能是刚建出来的空会话，也可能内容已被清空')}；这次要 resume 的就是它——` +
               `如果它本该有历史，先在 ${target.displayName} 里打开它确认，或从备份恢复该文件（Watch 不会替你重建历史）`,
           );
         }
@@ -1122,11 +1124,16 @@ async function planOpenInProvider(
     // 到底有没有写入（确实是零写入，但必须说出来），更不给下一步——而 handoff 那边的同一种
     // 状态从 284 轮起已经会说「0 字节，内容已丢失」+ 两条可照抄的路径。
     const empty = await zeroByteSessionReason(sourceRef);
+    // 坏行已经扫过（`sourceBadScan`）：0 轮时复用那份结果，既拿到坏行计数也不重复扫描。
+    const zeroReason = describeZeroTurnReason(
+      badSourceScan,
+      '可能是刚建出来的空会话，也可能内容已被清空',
+    );
     const lead = empty
       ? `来源会话 ${escapeControlChars(sourceId)}（${source.adapter.displayName}）的${empty}；没有可转入的内容（0 轮）。` +
         `本次未写入任何内容——如果这条会话本该有内容，先从备份恢复该文件（Watch 不会替你重建历史）再重试`
       : `来源会话 ${escapeControlChars(sourceId)}（${source.adapter.displayName}）没有可转入的内容（0 轮）：` +
-        `可能是刚建出来的空会话，也可能内容已被清空；本次未写入任何内容——` +
+        `${zeroReason}；本次未写入任何内容——` +
         `如果这条会话本该有历史，先在 ${source.adapter.displayName} 里打开它确认，或从备份恢复该文件（Watch 不会替你重建历史）再重试`;
     return {
       ok: false,
