@@ -68,10 +68,6 @@ Watch 只做一件事：**把已保存的会话记录连同工作目录交到目
 </tr>
 </table>
 
-**同类工具对照**
-
-[catchup](https://github.com/wilbeibi/catchup) 以转录文本交接为主，也提供 `fork` 与 `fork --into`；[ThreadPort](https://github.com/Frankie-Xu/threadport) 用可校验的 Capsule 记录可观察的工作状态；[agent-sessions](https://github.com/jazzyalex/agent-sessions) 把索引、刷新、失败、筛选无结果与真正空库分成不同状态；[Möbius](https://github.com/TardisBooo/Mobius) 把重复交接记录为 persistent handoff graph，强调从交接回溯到来源会话与消息范围，而不是只给一份摘要；[deja-vu](https://github.com/vshulcz/deja-vu) 提供只读的本地 Agent 存储审计，并点出 Claude Code `cleanupPeriodDays` 的 transcript 清理风险；[ACDC](https://github.com/awithi-co/acdc) 以 Skill 形式在 Claude Code 与 Codex 之间交接结构化摘要，并支持按名称 / UUID 找回自己的历史会话；[handoff](https://github.com/rosehgal/handoff) 持续把每个项目的 Agent 工作写成人类可读的交接文档；[ccx](https://github.com/AaronWong1999/ccx) 用 macOS 菜单栏在 Claude Code、Codex 与 Antigravity 桌面版之间双向同步会话，并在 5 小时额度接近上限时提醒；[Relayvora](https://github.com/Dagimassefa/Relayvora) 生成标注来源（观察 / 用户 / Agent 报告 / 推断）、先跑项目检查的摘要式交接，并可通过 Git 仓库共享给队友；[cross_agent_session_resumer](https://github.com/Dicklesworthstone/cross_agent_session_resumer) 与 [session-migrate](https://github.com/xhluca/session-migrate) 都提供原生会话格式转换。Watch 以本机原生会话记录和显式命令为准，不监控额度，也不运行项目检查；它提供启动器、链式交接、Codex 官方导入三条独立入口，以及只读摘要导出和路径级写入防护；`status --json` 还会从本链的切换记录派生只读血缘图（节点是已确认会话，边是切换记录），桌面接力记录页显示同一份计数；`doctor` 只读核对 Claude Code 用户设置、当前目录项目设置与仓库根目录本地设置里的 `cleanupPeriodDays`，但不把它们说成实际生效值（`--settings` 与管理设置可能覆盖）；桌面端近期列表也区分扫描中、读取失败与真正空列表。不同工具的适配与验收范围需要逐项核对；Watch 的实现边界见[架构说明](docs/ARCHITECTURE.md)，方向与版本限制见[兼容性记录](docs/COMPATIBILITY.md)。
-
 ## 安装
 
 需要可运行 `node:sqlite` 与 tsx 的 Node（**≥ 22.13**），以及实际使用的 Agent CLI。桌面端另需 Rust / Tauri 环境。
@@ -228,6 +224,7 @@ npm run watch -- import-codex status <plan-id> --json
 - [产品需求与实施计划](docs/PLAN.md)：当前范围与分阶段完成条件。
 - [客户端兼容性证据](docs/COMPATIBILITY.md)：官方依据、实现状态和本机预检。
 - [架构与安全边界](docs/ARCHITECTURE.md)：当前实现及缺口。
+- [同类工具对照](docs/alternatives.md)：按交接产物与使用场景比较。
 - [Codex 官方导入说明](docs/import-codex.md)：实验入口的完整流程与限制。
 - [贡献指南](CONTRIBUTING.md)：环境要求、代码风格、测试隔离与提交规范。
 
