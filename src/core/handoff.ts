@@ -1331,9 +1331,22 @@ export async function chainStatus(
             chainTipTurns = turns.length;
             if (turns.length === 0) {
               chainTipEmpty = true;
+              // parse 会跳过坏行：文件末尾被截断、整份 JSONL 损坏时也会解析出 0 轮，
+              // 与合法空会话同形。先说清有没有坏行，避免把「文件坏了」讲成
+              // 「刚建出来还没聊过 / 内容被清空」。
+              const subject = `链尾会话 ${last.toProvider} ${last.toRef.sessionId}`;
+              const badScan = await scanUnparsableJsonLines(last.toRef.filePath);
+              const badFailure = describeBadLinesScanFailure(
+                badScan,
+                subject,
+                '是否真的只有 0 轮无法确认——先确认该文件可读再重试',
+              );
+              const reason = badScan.count > 0
+                ? `文件里有 ${badScan.count} 行无法解析（截断或损坏），这些内容已被跳过——更可能是文件被截断或损坏，不能当成「刚建出来的空会话」`
+                : badFailure ?? '可能是刚建出来的空会话，也可能内容已被清空';
               warnings.push(
-                `链尾会话 ${last.toProvider} ${last.toRef.sessionId} 解析出 0 轮（没有可继续的对话）：` +
-                  `可能是刚建出来的空会话，也可能内容已被清空；按这个链尾 resume 打开的是空会话——` +
+                `${subject} 解析出 0 轮（没有可继续的对话）：${reason}；` +
+                  `按这个链尾 resume 打开的是空会话——` +
                   `如果它本该有历史，先在 ${tipAdapter.displayName} 里打开它确认，或从备份恢复该文件（Watch 不会替你重建历史）`,
               );
             }
