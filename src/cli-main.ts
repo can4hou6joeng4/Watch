@@ -1935,8 +1935,7 @@ async function cmdPrompt(
     }
   }
 
-  // 解析完再比一次：来源若在这期间被追加，正文里的轮次 / 时间范围 / 用量都只代表开始那一刻。
-  // 这条路径不写任何文件，所以下一步是「重跑会重渲染一份新的」，不是「重跑会增量补齐」。
+  // 对比读取前后的文件状态。正文、用量与坏行扫描分别读取，stat 无法判定其中各自包含哪些记录。
   const sourceChange = await sourceChangeSince(foundRef.filePath, sourceSnapshot);
   // 与正文同一份判据：把这次 stat 结论传进去，不再让正文函数自己重测一次
   const sourceDrift = sourceChange

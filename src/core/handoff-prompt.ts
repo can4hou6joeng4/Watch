@@ -144,12 +144,9 @@ export type PromptSessionMeta = {
   /** 自动选择时扫描不完整等范围警告；文档脱离终端后也必须保留，并计入 findings。 */
   sourceSelectionWarnings?: string[];
   /**
-   * 来源文件在渲染期间被追加 / 改写 / 截断过（`describeSourceChangedDuringPrompt()` 的结论）。
-   *
-   * 这条路径只读一次来源：正文里的轮次、时间范围、用量都是**开始读取那一刻**的事实。
-   * 不写进正文的话，文档被复制到别家助手后，读者会把「正文这么多」当成「会话就这么多」——
-   * 而来源其实还在长。`watch prompt` 不写任何文件，所以这句不承诺「重跑会增量补齐」，
-   * 它只说重跑会重渲染一份新的。
+   * `describeSourceChangedDuringPrompt()` 检测到读取前后的文件大小或修改时间变化。
+   * 正文、用量和坏行扫描分别读取。文件状态无法说明哪些记录已经包含在正文中，
+   * 因此交接文档保留这条提示，供接手者核对来源并重新生成文档。
    */
   sourceDriftNote?: string;
   /**

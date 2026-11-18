@@ -312,18 +312,18 @@ export async function describeSourceChangedDuringPrompt(
   const actual = change === undefined ? await sourceChangeSince(filePath, before) : change;
   if (!actual) return null;
   const { from, to, growth } = actual;
+  const prefix = `来源会话 ${label} 在读取前后的文件状态有变化（${from} → ${to} 字节`;
   if (growth) {
-    return (
-      `来源会话 ${label} 在生成这份文档期间被写入过（${from} → ${to} 字节，新增约 ${to - from} 字节）：` +
-      `正文是开始读取时的内容，之后新增的记录没有写进来——重新执行一次 watch prompt 会按更新后的记录重渲染；` +
-      `这份文档本身不会跟着更新`
-    );
+    return `${prefix}，增加了 ${to - from} 字节），无法确认正文已包含哪些新增记录。` +
+      '重新执行一次 watch prompt 会按当时读到的记录重渲染，已生成的文档不会更新。';
   }
-  const detail = to < from ? `少了约 ${from - to} 字节` : '内容被改写（大小不变）';
-  return (
-    `来源会话 ${label} 在生成这份文档期间被写入过（${from} → ${to} 字节，${detail}）：` +
-    `正文是开始读取时的内容；先确认来源文件没有被损坏，再用 watch prompt 重新生成（重渲染不会把被改写掉的旧内容拼回来）`
-  );
+  if (to < from) {
+    return `${prefix}，减少了 ${from - to} 字节），正文可能与当前记录不同。` +
+      '先核对来源文件，再用 watch prompt 重新生成。若旧记录已丢失，重渲染无法恢复。';
+  }
+  // 大小相同只说明 mtime 变了，单独调整时间戳也会触发。
+  return `${prefix}，修改时间变化），仅凭文件状态无法确认内容是否变化。` +
+    '如需核对当前记录，请重新执行 watch prompt。';
 }
 
 /** 从 source 里去掉 dest 已有的前缀子序列，只留下待追加增量 */
