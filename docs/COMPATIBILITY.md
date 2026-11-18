@@ -323,3 +323,5 @@ Computer Use 原生管道未能启动，因此此记录依赖真实窗口中的�
 **指南入口在中英 README 与 llms.txt 的补齐（2026-11-18，v0.1.130，文档一致性检查）**：本轮调研 `ctx`、`mcpsnoop`、`agent-history-mcp`、`ai-session-hub` 等 transcript 索引 / 会话检索项目，它们都把检索入口直接列在README 与机器可读清单中。Watch 的「0 轮空会话的识别与恢复」指南已经发布并进入站点构建，但中英 README 的指南列表与 `llms.txt` 的 Pages / High-Frequency Answers 仍只有旧四条。现在三处统一补上该指南（中英各一条；llms.txt 再补一条可直接引用的答案），不累积逐版本说明。站点构建与 15 项站点回归通过；未运行原生客户端，不构成原生验收。
 
 **首页 FAQ 补 0 轮会话（2026-11-18，v0.1.131，站点内容）**：本轮调研 `Wake`（13 家 Agent transcript 聚合、SQLite FTS5 trigram 检索）、`Einsia/agent-git`（把会话当可分享资产）与 `slopus/happy`（移动端远程控制本地会话）。Wake 的检索实现与 Watch 的 `messages_fts` 方向一致，AgentGit 的分享 / 云端与 Happy 的远程控制都超出 Watch「本地接力」范围，没有导入新的能力承诺；仅把已发布指南对应的「resume 打开是空会话」问题补进首页 FAQ（中英各一条），让站点问答与 `llms.txt`、指南页三处口径一致。站点回归 15 项与完整隔离回归 2295 项通过；未运行原生客户端，不构成原生验收。
+
+**同类工具对照补 ACDC 与 handoff（2026-11-18，v0.1.132，README 中英镜像）**：本轮调研 `awithi-co/acdc`（以 Skill 形式在 Claude Code 与 Codex 之间交接结构化摘要，并支持按名称 / UUID 找回自己的历史会话）与 `rosehgal/handoff`（持续把每个项目的 Agent 工作写成人类可读的交接文档）。两者都侧重摘要或文档，不提供 Watch 的三条本地接力入口与路径级写入防护；中英 README 的同类工具段各补一句对照，不改变版本历史策略。完整隔离回归 2295 项、站点回归 15 项通过；未运行原生客户端，不构成原生验收。
