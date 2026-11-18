@@ -359,3 +359,5 @@ Computer Use 原生管道未能启动，因此此记录依赖真实窗口中的�
 **同类工具页补 Codex / Codex+Claude 交接插件（2026-11-18，未发版，`docs/alternatives.md` 中英双语）**：`yuzushi-dev/session-handoff`（67★）是 Claude Code / Codex 双端插件，生成可校验交接文档并迁移支持的可移植历史；其公开的恢复率来自 2026-09-08 的合成试点，不能等价为原生格式写回承诺。`Liu-Bot24/codex-session-handoff-skill`（46★）只面向 Codex，把目标、验证结果与下一步写成本机快照与索引，默认 `~/.handoffs`，不写项目目录。两者均为 Skill 形态，与 Watch 的本地原生会话接力是不同交付方式；仅作对照，不构成互通或验收。
 
 **`watch prompt` 输出失败尝试清单（2026-11-18，v0.1.150，隔离合成检查）**：参考 `REMvisual/claude-handoff` 与 `hacktivist123/agent-session-resume` 对失败尝试的证据化披露，`--json` 新增 `failedAttempts: [{ tool, path?, command?, count }]` 与截断 / 无法归类计数；正文新增「失败与中断」，所有档位保留。判据复用 `work-manifest.ts` 的 provider + callId 配对，只认 `tool_result.failed === true`，不读工具输出 `detail` / `summary`，不从文字猜失败；失败写入不计入成功改动，缺工具名或超上限如实计数。中英 README、指南与 `llms.txt` 同步。完整隔离回归 2329 项通过；未运行原生客户端，不构成原生验收。
+
+**同类工具页补失败尝试证据化披露来源（2026-11-18，v0.1.151，`docs/alternatives.md` 中英双语）**：`REMvisual/claude-handoff`（75★）固定保留失败尝试、被否定的决策与证据，写入前按最低字段自校验；它是 Claude Code Skill，不等于 Watch 已支持原生格式写回。失败尝试结构化字段据此落地，见 v0.1.150 记录。
