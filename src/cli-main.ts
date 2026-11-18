@@ -4,7 +4,7 @@ import path from 'node:path';
 import { chainsElsewhereHint, chainsSameDirectoryHint, isStoreError, SEARCH_MAX_HITS, SEARCH_SCAN_LIMIT, searchElsewhereHint, searchSameDirectoryHint, Store, defaultDbPath, describeStoreErrorReason, describeStoreOpenFailure } from './core/store.js';
 import type { Chain, ChainsElsewhere, SearchElsewhere } from './core/store.js';
 import { describeFindings } from './core/findings.js';
-import { adoptIntoChain, blockedHint, chainStatus, chainUsage, collectTips, createChainSession, currentChainShiftNote, describeSourceChangedDuringPrompt, emptyChainBindHint, handoff, HandoffBlockedError, notCurrentChainWarning, pickLatestTip, rebindHint, snapshotSourceState, storeUnavailableWarning } from './core/handoff.js';
+import { adoptIntoChain, blockedHint, chainStatus, chainUsage, collectTips, createChainSession, currentChainShiftNote, describeSourceChangedDuringPrompt, emptyChainBindHint, handoff, HandoffBlockedError, notCurrentChainWarning, pickLatestTip, rebindHint, snapshotSourceState, sourceChangeSince, storeUnavailableWarning } from './core/handoff.js';
 import { reindexCwd, type SearchCoverage } from './core/search.js';
 import type { SessionRef } from './core/types.js';
 import type { TokenUsage } from './core/types.js';
@@ -1937,11 +1937,15 @@ async function cmdPrompt(
 
   // 解析完再比一次：来源若在这期间被追加，正文里的轮次 / 时间范围 / 用量都只代表开始那一刻。
   // 这条路径不写任何文件，所以下一步是「重跑会重渲染一份新的」，不是「重跑会增量补齐」。
-  const sourceDrift = await describeSourceChangedDuringPrompt(
-    foundRef.filePath,
-    sourceSnapshot,
-    `${foundRef.sessionId}（${adapter.displayName}）`,
-  );
+  const sourceChange = await sourceChangeSince(foundRef.filePath, sourceSnapshot);
+  // 与正文同一份判据：只取一次 stat，避免「有文本没字段」或两边结论不一致
+  const sourceDrift = sourceChange
+    ? await describeSourceChangedDuringPrompt(
+        foundRef.filePath,
+        sourceSnapshot,
+        `${foundRef.sessionId}（${adapter.displayName}）`,
+      )
+    : null;
   if (sourceDrift) warnings.push(sourceDrift);
 
   // 来源记录里的 cwd 现在还在不在：与本次 `--cwd` 无关（那由上面的 cwdIssue 管）。文档会被复制走，
@@ -2035,6 +2039,7 @@ async function cmdPrompt(
       // 脚本要能区分「按 id 查到的」与「替你猜的」：两者的可信度不一样
       ...(autoPicked ? { autoPicked: true } : {}),
       markdown: result.markdown,
+      ...(sourceChange ? { sourceDrift: sourceChange } : {}),
       ...(sourceBranch ? { sourceBranch } : {}),
       ...(sourceWorktree ? { sourceWorktree } : {}),
       stats: result.stats,

@@ -257,11 +257,14 @@ export async function snapshotSourceState(filePath: string): Promise<SourceState
   }
 }
 
+/** 结构化来源漂移：只有 stat 得到的字节数与方向，不含会话正文 */
+export type SourceChangeSince = { from: number; to: number; growth: boolean };
+
 /** 来源文件在读取前后有没有变；变了就给出方向与字节差，没变返回 null */
-async function sourceChangeSince(
+export async function sourceChangeSince(
   filePath: string,
   before: SourceStateSnapshot | null,
-): Promise<{ from: number; to: number; growth: boolean } | null> {
+): Promise<SourceChangeSince | null> {
   if (!before) return null;
   const after = await snapshotSourceState(filePath);
   if (!after) return null;

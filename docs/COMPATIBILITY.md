@@ -353,3 +353,5 @@ Computer Use 原生管道未能启动，因此此记录依赖真实窗口中的�
 **README 与指南同步分支行和 sourceBranch（2026-11-18，v0.1.146，文档与站点内容）**：v0.1.140 / v0.1.143 的分支行与 v0.1.145 的 `--json sourceBranch` 此前只在兼容性记录里；中英 README 的 `prompt` 说明与「没有适配器时」指南的第 3 步同步补上：文档头给出工作目录状态、工作树类型与当前分支，仓库子目录会向上定位仓库根；`--json` 返回 `{ branch, repoRoot }` 或 `{ detached: true, repoRoot }`，脚本不必解析正文。仅文档与站点文案，不新增能力；站点回归 22 项、typecheck 与桌面前端构建通过；未运行原生客户端，不构成原生验收。
 
 **`watch prompt --json` 输出结构化工作树（2026-11-18，v0.1.147，隔离合成检查）**：`sourceBranch` 只覆盖普通仓库根，链接工作树此前在 `--json` 里没有任何结构化字段，脚本仍要解析「工作目录类型」正文。现在工作树探测命中时返回 `sourceWorktree: { mainWorktree, branch }`；主工作树或分支读不出来时对应字段为 `null`，不编造路径或分支；`unknown` 状态仍只保留正文说明，不输出假结论。工作树与 `sourceBranch` 互斥，避免同一来源出现两个分支形状。新增 1 项 CLI 合成断言（工作树字段、正文说明、互斥）；typecheck 与桌面前端构建通过；未运行原生客户端，不构成原生验收。
+
+**`watch prompt --json` 输出结构化来源漂移（2026-11-18，v0.1.148，隔离合成检查）**：来源在渲染期间被追加 / 改写时，此前只有 stderr 的 warning 与正文的「生成期间有变化」一行，脚本要拿方向与字节差只能解析正文。现在 `sourceChangeSince()` 成为可复用入口，同一份 stat 结论同时给出 `sourceDrift: { from, to, growth }`（仅字节数、增长方向；不暴露会话内容、不声称内容一定不同）与原有正文 / finding `prompt_source_changed_during_render`；快照拿不到时三者都不报，不把「没量到」写成「没变化」。新增 2 项合成断言（判据方向与 CLI 字段 / 正文 / findings 同步）；typecheck 与桌面前端构建通过；未运行原生客户端，不构成原生验收。
