@@ -361,3 +361,5 @@ Computer Use 原生管道未能启动，因此此记录依赖真实窗口中的�
 **`watch prompt` 输出失败尝试清单（2026-11-18，v0.1.150，隔离合成检查）**：参考 `REMvisual/claude-handoff` 与 `hacktivist123/agent-session-resume` 对失败尝试的证据化披露，`--json` 新增 `failedAttempts: [{ tool, path?, command?, count }]` 与截断 / 无法归类计数；正文新增「失败与中断」，所有档位保留。判据复用 `work-manifest.ts` 的 provider + callId 配对，只认 `tool_result.failed === true`，不读工具输出 `detail` / `summary`，不从文字猜失败；失败写入不计入成功改动，缺工具名或超上限如实计数。中英 README、指南与 `llms.txt` 同步。完整隔离回归 2329 项通过；未运行原生客户端，不构成原生验收。
 
 **同类工具页补失败尝试证据化披露来源（2026-11-18，v0.1.151，`docs/alternatives.md` 中英双语）**：`REMvisual/claude-handoff`（75★）固定保留失败尝试、被否定的决策与证据，写入前按最低字段自校验；它是 Claude Code Skill，不等于 Watch 已支持原生格式写回。失败尝试结构化字段据此落地，见 v0.1.150 记录。
+
+**修正 `watch prompt` 来源漂移的重复测量（2026-11-18，v0.1.152，隔离合成检查）**：v0.1.148 让 `--json` 输出 `sourceDrift` 与正文说明共用判据，但 CLI 先取一次 stat、正文函数又自己取一次；两次之间来源若再次变化，结构化字段与正文会给出不同的字节数，甚至一边有一边没有。现在 `describeSourceChangedDuringPrompt()` 接受已测量的 `SourceChangeSince`，CLI 显式传入同一份结论；只有调用方省略时才自行测量，旧调用方行为不变。新增 2 项合成断言（文件在两次测量之间消失仍使用预计算结论、CLI 正文与字段字节差一致）；typecheck 与完整隔离回归通过；未运行原生客户端，不构成原生验收。

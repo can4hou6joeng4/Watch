@@ -305,10 +305,13 @@ export async function describeSourceChangedDuringPrompt(
   filePath: string,
   before: SourceStateSnapshot | null,
   label: string,
+  change?: SourceChangeSince | null,
 ): Promise<string | null> {
-  const change = await sourceChangeSince(filePath, before);
-  if (!change) return null;
-  const { from, to, growth } = change;
+  // 调用方已经量过一次时复用同一份结论：再量一次可能得到不同结果，
+  // 于是 `--json` 的结构化字段与正文各说一套。undefined 才表示「这里自己量」。
+  const actual = change === undefined ? await sourceChangeSince(filePath, before) : change;
+  if (!actual) return null;
+  const { from, to, growth } = actual;
   if (growth) {
     return (
       `来源会话 ${label} 在生成这份文档期间被写入过（${from} → ${to} 字节，新增约 ${to - from} 字节）：` +
