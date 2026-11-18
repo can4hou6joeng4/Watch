@@ -140,5 +140,7 @@ Watch (Chinese: 值更, also called AgentRelay) is a free, local-only CLI and ma
   A: 0 turns means the file is readable and has a valid session header but no conversation; it may be a new session or only a placeholder header left behind. 0 bytes means the file itself is empty, from a killed process, a full disk or a half write, and even the session metadata may be gone. The first may just not have started; the second should send you to backups first.
 - **Q: Can Watch restore a cleared session automatically?**
   A: No. Watch only reads and writes local session files. It has no history backup and does not invent conversation. Recovery comes from your own backup (Time Machine, copies outside the repo, editor history), and you resume after restoring the file.
+- **Q: Does Claude Code delete old sessions on its own?**
+  A: Yes. cleanupPeriodDays in the official settings reference defaults to 30 days; after a session starts, Claude Code sweeps transcripts older than that in the background, and expired sessions stop appearing in /resume. The key is allowed in any settings file, so project settings can override user settings. watch doctor reads your user settings, the current directory project settings and the repository-root local settings without writing, but --settings and managed settings are out of scope, so the report is not the effective value. Raising the value only reduces future deletions; it cannot bring back files already removed.
 
 ---
