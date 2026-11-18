@@ -93,6 +93,82 @@ export type ClaudeProjectRetentionScope = 'repository-local' | 'project-local' |
 
 export type ClaudeProjectRetentionProbe = ClaudeRetentionProbe & { scope: ClaudeProjectRetentionScope };
 
+/**
+ * 已探测设置文件之间的优先级。官方顺序是 managed > `--settings` > 项目 local >
+ * 项目 shared > 用户设置；仓库根目录的 local 与启动目录的 local 都属于项目 local，
+ * 官方说明两份同时设置同一个键时以仓库根目录为准，所以它排在最前。
+ * managed 与 `--settings` 不在这份列表里，调用方不能把这里的结果说成最终生效值。
+ */
+const CLAUDE_PROJECT_RETENTION_PRECEDENCE: readonly ClaudeProjectRetentionScope[] = [
+  'repository-local',
+  'project-local',
+  'project-shared',
+];
+
+export type EffectiveClaudeRetention =
+  | { state: 'configured'; days: number; scope: ClaudeProjectRetentionScope | 'user'; settingsPath: string | null }
+  | { state: 'default'; days: number }
+  | { state: 'unknown'; scope: ClaudeProjectRetentionScope | 'user'; settingsPath: string | null; error: string };
+
+/**
+ * 按已探测设置文件的优先级推出「Claude Code 将会读取的那一份」。
+ *
+ * 这是估算链尾清理风险的依据，不是最终生效值：managed 设置与命令行 `--settings`
+ * 仍在范围之外。高层设置写了这个键就覆盖低层，哪怕低层的天数更短；高层无法读取时
+ * 无法判断它是否覆盖，因此返回 unknown，而不是拿低层的短值继续报警。
+ */
+export function resolveEffectiveClaudeRetention(
+  user: ClaudeRetentionProbe,
+  project: ClaudeProjectRetentionProbe[],
+): EffectiveClaudeRetention {
+  for (const scope of CLAUDE_PROJECT_RETENTION_PRECEDENCE) {
+    const probe = project.find((item) => item.scope === scope);
+    if (!probe) continue;
+    if (probe.state === 'unknown') {
+      return {
+        state: 'unknown',
+        scope,
+        settingsPath: probe.settingsPath,
+        error: probe.error ?? '这份设置读不出来，无法确认它是否覆盖了保留期',
+      };
+    }
+    if (probe.state === 'configured') {
+      if (probe.configuredDays === null) {
+        return { state: 'unknown', scope, settingsPath: probe.settingsPath, error: '探针报告已配置，但没有读出天数' };
+      }
+      return { state: 'configured', days: probe.configuredDays, scope, settingsPath: probe.settingsPath };
+    }
+  }
+  if (user.state === 'unknown') {
+    return {
+      state: 'unknown',
+      scope: 'user',
+      settingsPath: user.settingsPath,
+      error: user.error ?? '用户设置读不出来，无法确认保留期',
+    };
+  }
+  if (user.state === 'configured') {
+    if (user.configuredDays === null) {
+      return { state: 'unknown', scope: 'user', settingsPath: user.settingsPath, error: '探针报告已配置，但没有读出天数' };
+    }
+    return { state: 'configured', days: user.configuredDays, scope: 'user', settingsPath: user.settingsPath };
+  }
+  return { state: 'default', days: CLAUDE_DEFAULT_CLEANUP_DAYS };
+}
+
+/** 同一目录的探针里，是否有更高优先级的设置文件明确写了这个键（因此当前探针被覆盖）。 */
+export function hasHigherPrecedenceClaudeRetentionSetting(
+  probe: ClaudeProjectRetentionProbe,
+  project: ClaudeProjectRetentionProbe[],
+): boolean {
+  const ownRank = CLAUDE_PROJECT_RETENTION_PRECEDENCE.indexOf(probe.scope);
+  if (ownRank < 0) return false;
+  return project.some((item) => {
+    const rank = CLAUDE_PROJECT_RETENTION_PRECEDENCE.indexOf(item.scope);
+    return rank >= 0 && rank < ownRank && item.state === 'configured';
+  });
+}
+
 /** 当前目录下 Claude Code 会读取的两份项目设置（仓库根目录的 local 由 `probeClaudeProjectRetention()` 另加）。 */
 export const CLAUDE_PROJECT_SETTINGS_RELATIVE_PATHS = [
   '.claude/settings.local.json',

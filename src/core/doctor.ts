@@ -13,7 +13,7 @@ import { escapeControlChars } from './display.js';
 import { describeBadLinesScanFailure, scanUnparsableJsonLines } from './jsonl.js';
 import { compressedCopy, compressedRetryAdvice, describeSessionReadFailureReason, isEmptySessionFileReason, isFileSystemErrorCode, probeSessionReadable, sessionFilePresence } from './read-text.js';
 import { collectUnattributable, unattributableWarning } from './session-coverage.js';
-import { CLAUDE_DEFAULT_CLEANUP_DAYS, probeClaudeProjectRetention, probeClaudeRetention, type ClaudeProjectRetentionProbe, type ClaudeRetentionProbe } from '../providers/claude/retention.js';
+import { CLAUDE_DEFAULT_CLEANUP_DAYS, hasHigherPrecedenceClaudeRetentionSetting, probeClaudeProjectRetention, probeClaudeRetention, resolveEffectiveClaudeRetention, type ClaudeProjectRetentionProbe, type ClaudeRetentionProbe } from '../providers/claude/retention.js';
 
 export type BrokenTip = {
   chainId: string;
@@ -458,28 +458,31 @@ export async function doctorReport(cwd: string, deps: DoctorDeps): Promise<Docto
     } else if (
       probe.state === 'configured' &&
       probe.configuredDays !== null &&
-      probe.configuredDays < CLAUDE_DEFAULT_CLEANUP_DAYS
+      probe.configuredDays < CLAUDE_DEFAULT_CLEANUP_DAYS &&
+      // 仓库根目录的 local 覆盖启动目录的 local，项目 local 又覆盖 shared。
+      // 更高优先级已经写了这个键时，这一份不会生效，不能拿它发清理风险警告。
+      !hasHigherPrecedenceClaudeRetentionSetting(probe, claudeProjectRetention)
     ) {
       const location =
         probe.scope === 'repository-local'
           ? 'Claude Code 在 Git 仓库的子目录启动时会读取仓库根目录的 settings.local.json；若会话在该仓库启动'
-          : 'Claude Code 从会话的主工作目录读取项目设置；若会话在该目录启动';
+          : 'Claude Code 从会话的主工作目录读取项目设置；若会话在该目录启动且没有被更高优先级的设置覆盖';
       warnings.push(
         `${subject}（${settingsPath}）把 cleanupPeriodDays 设为 ${probe.configuredDays} 天，低于官方默认 ${CLAUDE_DEFAULT_CLEANUP_DAYS} 天。${location}，超过期限的会话记录可能被清理，导致 open / resume 找不到内容。${probedScope}；管理设置与 --settings 不在范围，请核对实际加载的设置并提前备份重要会话`,
       );
     }
   }
 
-  // 显式把保留期压到官方默认以下的设置里最短的那个。链尾会话如果比它还旧，
-  // 下一次 Claude Code 启动后的清理就可能把它删掉。没有显式短设置时只用默认值不报警：
-  // 老链尾很多时候是有意保留的归档，拿官方默认 30 天去喊会变成噪音。
-  const shortestRetentionDays =
-    [
-      claudeRetention.state === 'configured' ? claudeRetention.configuredDays : null,
-      ...claudeProjectRetention.map((probe) => (probe.state === 'configured' ? probe.configuredDays : null)),
-    ]
-      .filter((days): days is number => days !== null && days < CLAUDE_DEFAULT_CLEANUP_DAYS)
-      .sort((a, b) => a - b)[0] ?? null;
+  // 链尾会话如果比「Claude Code 按已探测设置会读取的那份保留期」还旧，下一次启动后的
+  // 清理就可能把它删掉。不能取所有探针里的最短值：高层设置写了更长的值就会覆盖低层，
+  // 拿被覆盖的短值报警会把用户引去改一份根本不生效的文件。高层设置读不出来时也不猜，
+  // 只保留上面已发出的 unknown 警告。没有显式短设置时不用官方默认 30 天报警：老链尾
+  // 很多时候是有意保留的归档，拿默认值喊会变成噪音。
+  const effectiveRetention = resolveEffectiveClaudeRetention(claudeRetention, claudeProjectRetention);
+  const riskRetentionDays =
+    effectiveRetention.state === 'configured' && effectiveRetention.days < CLAUDE_DEFAULT_CLEANUP_DAYS
+      ? effectiveRetention.days
+      : null;
 
   // 原生会话列表只读；与 detect（只看 PATH）互补：装了但存储读不出，比「没装」更需要解释
   const storage: StorageProbe[] = [];
@@ -632,16 +635,16 @@ export async function doctorReport(cwd: string, deps: DoctorDeps): Promise<Docto
             );
           }
         } else if (
-          shortestRetentionDays !== null &&
+          riskRetentionDays !== null &&
           tip.provider === 'claude' &&
           tipPresence.mtimeMs !== null
         ) {
           // 只对 Claude 会话判断：cleanupPeriodDays 是 Claude Code 的设置。
           // 用文件 mtime 估「最后一次写入」，而不是断言原生一定按这个时间清理。
           const ageDays = Math.floor((Date.now() - tipPresence.mtimeMs) / 86_400_000);
-          if (ageDays >= shortestRetentionDays) {
+          if (ageDays >= riskRetentionDays) {
             warnings.push(
-              `链「${escapeControlChars(chain.name)}」的链尾是 Claude Code 会话（${escapeControlChars(tip.filePath)}），文件已经有 ${ageDays} 天没有更新，而探测到的最短 cleanupPeriodDays 是 ${shortestRetentionDays} 天；若没有更高优先级的设置覆盖，Claude Code 启动后的清理可能删除它——先备份该文件，或调大保留期，或${rebindHint(tip.provider)}`,
+              `链「${escapeControlChars(chain.name)}」的链尾是 Claude Code 会话（${escapeControlChars(tip.filePath)}），文件已经有 ${ageDays} 天没有更新，而按已探测设置的优先级生效的 cleanupPeriodDays 是 ${riskRetentionDays} 天；若没有更高优先级的设置覆盖，Claude Code 启动后的清理可能删除它——先备份该文件，或调大保留期，或${rebindHint(tip.provider)}`,
             );
           }
         }
