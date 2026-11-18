@@ -116,7 +116,7 @@ export function describeZeroTurnReason(
   return `${emptyFallback}${consequence ? `；${consequence}` : ''}`;
 }
 
-/** 血缘节点：`key` 用于等值连接，`provider` / `sessionId` 保留库里的原值。 */
+/** 以不透明的 `key` 连接边与节点。`provider` 和 `sessionId` 保留库里的原值。 */
 export type LineageNode = { key: string; provider: string; sessionId: string };
 
 /**
@@ -146,6 +146,11 @@ function lineageRef(value: unknown): { provider: string; sessionId: string } | n
     : null;
 }
 
+/** 先编码字段内的转义符和分隔符，再转义控制字符，使不同原值始终生成不同键。 */
+function lineageKeyPart(value: string): string {
+  return escapeControlChars(value.replaceAll('%', '%25').replaceAll('\\', '%5C').replaceAll(':', '%3A'));
+}
+
 /**
  * 从已有链历史派生只读的血缘图：节点是确认过的会话身份，边是 switch_events 记下的交接。
  *
@@ -154,8 +159,7 @@ function lineageRef(value: unknown): { provider: string; sessionId: string } | n
  * `history` 派生已确认的会话身份与切换边，不猜被删会话、不把摘要当节点、也不写库。
  * 入参不是数组时返回 null：调用方据此区分「历史读不出来」与「没有历史」（后者是空图）。
  *
- * `key` 里的控制字符先转义再拼接：JSON 字段保留原始会话 id，但当 key 被贴进终端或日志时
- * 不能带上 ESC / 换行。下游按这个 key 做等值连接，不能自行再拼原始 id。
+ * `key` 的两段分别编码后再拼接，以保留会话身份并避免终端控制字符。下游应直接按 `key` 做等值连接。
  */
 export function lineageFromHistory(history: unknown): LineageGraph | null {
   if (!Array.isArray(history)) return null;
@@ -163,7 +167,7 @@ export function lineageFromHistory(history: unknown): LineageGraph | null {
   const edges: LineageEdge[] = [];
   let skipped = 0;
   const keyOf = (ref: { provider: string; sessionId: string }): string =>
-    `${escapeControlChars(ref.provider)}:${escapeControlChars(ref.sessionId)}`;
+    `${lineageKeyPart(ref.provider)}:${lineageKeyPart(ref.sessionId)}`;
   const addNode = (ref: { provider: string; sessionId: string }): void => {
     const key = keyOf(ref);
     if (!nodes.has(key)) nodes.set(key, { key, provider: ref.provider, sessionId: ref.sessionId });
