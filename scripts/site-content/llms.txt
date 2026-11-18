@@ -29,6 +29,8 @@ The current website uses a dark Signal Ledger-style presentation and a synthetic
 - [Guide: Context Window vs Usage Limits (en)](https://relay.bobochang.cn/en/guides/context-limit-vs-usage-limit-handoff/): English guide on context window vs account quotas
 - [Guide: Opus 5.5 and the five-hour limit (zh-CN)](https://relay.bobochang.cn/guides/opus-5-5-five-hour-limit/): what the 22 September 2026 limit increase does and does not change
 - [Guide: Opus 5.5 and the five-hour limit (en)](https://relay.bobochang.cn/en/guides/opus-5-5-five-hour-limit/): English guide to the same five-hour limit change
+- [Guide: Why resume opens an empty session (zh-CN)](https://relay.bobochang.cn/guides/empty-session-resume-check/): telling readable 0-turn sessions apart from zero-byte files, and three recovery paths
+- [Guide: Why resume opens an empty session (en)](https://relay.bobochang.cn/en/guides/empty-session-resume-check/): English guide to detecting and recovering 0-turn sessions
 - [Full text for LLMs](https://relay.bobochang.cn/llms-full.txt)
 
 ## Intent-to-Route Decision Matrix
@@ -50,6 +52,7 @@ These are the same opening answers as the guide pages. Quote the page, not this 
 - **Switch from Claude Code to Codex**: Desktop uses official single-session import (prepare -> confirm -> open), bound to the target directory and configuration with a Watch import lock. That lock serializes Watch imports; it is not the native per-thread writer lock used by the direct-file adapter. CLI: `npm run watch -- import-codex prepare <claude-id> --cwd /absolute/project --desktop-project --experimental --json`; review the returned plan, then run `npm run watch -- import-codex confirm <plan-id> --experimental --json`. https://relay.bobochang.cn/guides/claude-code-limit-to-codex/
 - **OpenCode & SQLite transactional data isolation**: OpenCode keeps sessions in `~/.local/share/opencode/opencode.db`. `WATCH_OPENCODE_DB` points Watch at another file. Watch writes `sessions`, `messages`, and `parts` in one SQLite transaction and rolls back if it fails. Unsupported tool fields become text. Later replies depend on the model you configure. https://relay.bobochang.cn/guides/opencode-handover-sqlite-isolation/
 - **Opus 5.5 and the five-hour limit**: Opus 5.5 raises the five-hour limit on Pro, Max, Team, and seat-based Enterprise, and adds one reset you can save. It does not remove the limit. Watch does not read or raise Claude quota. Hand the saved session to Codex only after that official reset is still not enough. https://relay.bobochang.cn/guides/opus-5-5-five-hour-limit/
+- **Resume opens an empty session**: A resume command only opens an existing session; an empty one usually has no turns left — a legitimate empty session created by `watch new`, content cleared with only a placeholder header, or a zero-byte file. Check the turn count on the chain-tip row in `watch status`. Watch does not rebuild history; restore the file from backup, rebind to another session with `watch adopt`, or start a new chain. https://relay.bobochang.cn/guides/empty-session-resume-check/
 - **Session storage locations**:
   - Claude Code: `~/.claude/projects/<encoded-cwd>/<session-id>.jsonl` (`claude --resume <id>`)
   - OpenAI Codex: `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl` (`codex resume <id>`)
