@@ -957,4 +957,168 @@ export const guides = [
       },
     },
   },
+  {
+    id: 'prompt-handoff-without-adapter',
+    published: '2026-11-18',
+    modified: '2026-11-18',
+    status: 'published',
+    locales: {
+      zh: {
+        slug: 'prompt-handoff-without-adapter',
+        title: '没有原生适配器时用 watch prompt 交接会话 | Watch 指南',
+        description: '目标 CLI 还没有 Watch 适配器，或原生格式刚发生变化时，如何用 watch prompt 生成只读 Markdown 摘要交接文档，并读懂裁剪与降级说明。',
+        h1: '没有适配器时，用 watch prompt 交接会话',
+        summary: 'watch prompt 从本机原生会话记录生成一份 Markdown 摘要交接文档，不写任何文件、不启动目标 CLI。目标工具不会继承原生恢复能力，所有裁剪与来源状态都写在正文和 findings 里。',
+        answer: '目标工具没有适配器或原生格式刚变化时，用 watch prompt <session-id> 生成只读 Markdown 交接文档；它不写会话文件、不启动 CLI，裁剪计数与降级说明写进正文和 --json 的 findings，目标端只能把它当作摘要而不是原生会话。',
+        blocks: [
+          {
+            type: 'callout',
+            tone: 'info',
+            title: '什么时候用这一条',
+            body: '三条原生接力路径（启动器、链式交接、Codex 官方导入）都要求目标端有对应适配器与可验证的格式。目标 CLI 尚无适配器、原生格式刚变化，或你只想把上下文交给一个网页端助手时，用 watch prompt 生成只读摘要。它不是原生会话，只是可复制、可审阅的交接材料。',
+          },
+          {
+            type: 'paragraph',
+            text: 'watch prompt 只读取来源助手在本机保存的会话记录，把轮次、工具过程与改动概览整理成 Markdown。文档头会写明来源助手、会话 ID、源文件、工作目录、工作树类型与当前分支；正文会逐项说明裁剪了多少轮、哪些内容被省略、用量是否可能偏少。整个命令不写会话文件、不建库、不启动任何 CLI。',
+          },
+          {
+            type: 'steps',
+            items: [
+              {
+                title: '步骤 1：确定来源会话与目录',
+                body: '显式给出会话 ID，或用 --cwd 指定工作目录后省略 ID。省略 ID 时 Watch 按当前目录最新的可读会话自动挑选，并在文档头标注「自动挑选」；不确定时请显式指定，避免把另一条会话当成来源。',
+              },
+              {
+                title: '步骤 2：选择档位与窗口',
+                body: '--profile minimal|standard|verbose|full 控制每条正文与过程记录的展开程度；--last N 只保留最近 N 个用户轮，会省略首条任务描述，正文会明确写出；--since-compact 从最近一次压缩摘要开始，找不到可用摘要时不裁剪并说明。',
+              },
+              {
+                title: '步骤 3：检查 findings 与来源状态',
+                body: '加 --json 时，除 markdown 外还会返回 findings 与 warnings。degraded 表示已降级但说清了，skipped 表示按你的选项省略了内容；正文里的来源状态、坏行、用量与分支行用于判断这份文档能不能直接交给目标助手。',
+              },
+              {
+                title: '步骤 4：明确说明这是摘要交接',
+                body: '把 Markdown 粘贴或保存成文件交给目标工具，并在首轮说明这是摘要交接而不是原生会话。目标端不能原生恢复，工具调用、思考过程与附件可能已被裁剪，未包含的部分无法从文档恢复。',
+              },
+            ],
+          },
+          {
+            type: 'code',
+            language: 'sh',
+            code: '# 1. 自动挑选当前目录最近的会话，生成 standard 档位摘要\nnpm run watch -- prompt --cwd /abs/project\n\n# 2. 显式指定会话，只保留最近 5 个用户轮\nnpm run watch -- prompt <session-id> --cwd /abs/project --last 5\n\n# 3. 输出 JSON，检查 findings 与正文\nnpm run watch -- prompt <session-id> --cwd /abs/project --json',
+          },
+          {
+            type: 'callout',
+            tone: 'warning',
+            title: '边界与安全限制',
+            body: '1. 只读：不写会话文件、不建本地库、不启动目标 CLI，生成的 Markdown 由你决定如何交付。\n2. 摘要不等于原生会话：工具调用、思考过程与附件可能被裁剪，未包含的部分无法从文档恢复。\n3. 裁剪必须计数：档位、--last 与 --since-compact 的省略会写进正文与 findings；找不到摘要时宁可不裁剪，也会说明。\n4. 0 轮或来源损坏不会假装成功：正文会说明来源为空或坏行，无法确认的用量与坏行数会标注可能偏少或无法确认。',
+          },
+        ],
+        faq: [
+          {
+            question: 'watch prompt 会写入目标工具的会话吗？',
+            answer: '不会。它只读取来源记录并输出 Markdown，不写目标会话文件、不建库、不启动任何 CLI。需要目标端原生恢复时，请改用对应适配器的启动器或链式路径；支持官方导入的只有 Claude Code 到 Codex 桌面这一条。',
+          },
+          {
+            question: '为什么文档说「首条任务描述未保留」？',
+            answer: '使用 --last N 时，Watch 从倒数第 N 条用户轮开始截取，更早的轮次会被省略，其中就包括最初的任务描述。需要完整背景时去掉 --last，或改用 --since-compact 与更高的档位；正文会按实际发生的裁剪逐项说明。',
+          },
+          {
+            question: '目标助手能像原生会话一样继续吗？',
+            answer: '不能。目标端拿到的是一份摘要文档，不继承原生恢复能力，也看不到被裁剪的工具执行细节。建议在首轮要求目标助手复述任务目标与当前分支，确认理解后再分配修改任务。',
+          },
+        ],
+        sources: [
+          {
+            label: 'Watch repository README',
+            url: 'https://github.com/can4hou6joeng4/Watch#readme',
+            accessed: '2026-11-18',
+          },
+          {
+            label: 'Watch releases',
+            url: 'https://github.com/can4hou6joeng4/Watch/releases',
+            accessed: '2026-11-18',
+          },
+        ],
+      },
+      en: {
+        slug: 'prompt-handoff-without-adapter',
+        title: 'Hand Off a Session with watch prompt When No Adapter Exists | Watch Guide',
+        description: 'When the target CLI has no Watch adapter yet or its native format just changed, use watch prompt to produce a read-only Markdown handoff and read its trimming and degradation notes.',
+        h1: 'Using watch prompt When There Is No Adapter',
+        summary: 'watch prompt turns local native session records into a Markdown summary handoff without writing any file or launching the target CLI. The target does not inherit native resume, and every trim and source state is written into the document and findings.',
+        answer: 'When the target tool has no adapter or its native format just changed, run watch prompt <session-id> to build a read-only Markdown handoff. It writes no session files and starts no CLI; trimming counts and degradations go into the document and the --json findings, and the target must treat it as a summary, not a native session.',
+        blocks: [
+          {
+            type: 'callout',
+            tone: 'info',
+            title: 'When to use this path',
+            body: 'The three native handoff paths (launcher, chained handoff and official Codex import) require an adapter and a verifiable target format. When the target CLI has no adapter yet, its native format just changed, or you only need to hand context to a web assistant, use watch prompt to produce a read-only summary. It is not a native session, only copyable and reviewable handoff material.',
+          },
+          {
+            type: 'paragraph',
+            text: 'watch prompt reads only the source assistant local session record and renders turns, tool events and a work manifest into Markdown. The header names the source assistant, session ID, source file, working directory, worktree type and current branch; the body states how many turns were trimmed, what was omitted and whether usage may be undercounted. The command writes no session files, opens no database and launches no CLI.',
+          },
+          {
+            type: 'steps',
+            items: [
+              {
+                title: 'Step 1: Identify the source session and directory',
+                body: 'Pass the session ID explicitly, or pass --cwd and omit the ID. Without an ID, Watch picks the newest readable session in the current directory and marks it as auto-picked in the header; when unsure, name the ID so another session is not mistaken for the source.',
+              },
+              {
+                title: 'Step 2: Choose a profile and window',
+                body: '--profile minimal|standard|verbose|full controls how much text and how many tool events are expanded. --last N keeps only the newest N user turns and drops the original task description, which the document states. --since-compact starts at the latest compaction summary; when no usable summary exists it does not trim and says so.',
+              },
+              {
+                title: 'Step 3: Review findings and source state',
+                body: 'With --json the result includes markdown, findings and warnings. degraded means the downgrade was disclosed, skipped means content was omitted by your options. The source state, bad lines, usage and branch lines in the document tell you whether it is safe to hand over.',
+              },
+              {
+                title: 'Step 4: State that it is a summary handoff',
+                body: 'Paste the Markdown or save it as a file and tell the target assistant in the first turn that this is a summary handoff, not a native session. The target cannot resume natively, and tool calls, reasoning and attachments may have been trimmed; anything omitted cannot be recovered from the document.',
+              },
+            ],
+          },
+          {
+            type: 'code',
+            language: 'sh',
+            code: '# 1. Auto-pick the newest session in the current directory at the standard profile\nnpm run watch -- prompt --cwd /abs/project\n\n# 2. Name the session and keep only the newest 5 user turns\nnpm run watch -- prompt <session-id> --cwd /abs/project --last 5\n\n# 3. Emit JSON to review findings with the document\nnpm run watch -- prompt <session-id> --cwd /abs/project --json',
+          },
+          {
+            type: 'callout',
+            tone: 'warning',
+            title: 'Boundaries',
+            body: '1. Read-only: it writes no session files, opens no local database and launches no target CLI; you decide how to deliver the Markdown.\n2. A summary is not a native session: tool calls, reasoning and attachments may be trimmed, and omitted parts cannot be recovered from the document.\n3. Trimming is counted: profile, --last and --since-compact omissions go into the body and findings; when no summary exists it does not trim and says so.\n4. A 0-turn or damaged source is not reported as success: the body states an empty source or bad lines, and unreadable usage or bad-line counts are marked as possibly undercounted or unconfirmed.',
+          },
+        ],
+        faq: [
+          {
+            question: 'Does watch prompt write into the target tool session?',
+            answer: 'No. It only reads the source record and prints Markdown; it writes no target session file, opens no database and launches no CLI. When you need native resume in the target, use the launcher or chained path for that adapter; the only official import path is Claude Code to Codex desktop.',
+          },
+          {
+            question: 'Why does the document say the first task description was not kept?',
+            answer: 'With --last N, Watch starts at the Nth user turn from the end, so earlier turns, including the original task description, are omitted. Drop --last for full background, or use --since-compact with a larger profile; the body lists each trim that actually happened.',
+          },
+          {
+            question: 'Can the target assistant continue exactly like a native session?',
+            answer: 'No. It receives a summary document without native resume and cannot see trimmed tool execution detail. Ask it in the first turn to restate the task goal and current branch, and only then assign edits.',
+          },
+        ],
+        sources: [
+          {
+            label: 'Watch repository README',
+            url: 'https://github.com/can4hou6joeng4/Watch#readme',
+            accessed: '2026-11-18',
+          },
+          {
+            label: 'Watch releases',
+            url: 'https://github.com/can4hou6joeng4/Watch/releases',
+            accessed: '2026-11-18',
+          },
+        ],
+      },
+    },
+  },
 ];
