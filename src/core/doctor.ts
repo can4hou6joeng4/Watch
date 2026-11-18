@@ -444,6 +444,9 @@ export async function doctorReport(cwd: string, deps: DoctorDeps): Promise<Docto
       `Claude Code 的项目保留期设置没能探测：${error instanceof Error ? error.message : String(error)}`,
     );
   }
+  const probedScope = claudeProjectRetention.some((probe) => probe.scope === 'repository-local')
+    ? '本次探测了当前目录与仓库根目录的 .claude/ 设置'
+    : '本次探测了当前目录的 .claude/ 设置';
   for (const probe of claudeProjectRetention) {
     const settingsPath = probe.settingsPath ? escapeControlChars(probe.settingsPath) : '项目设置文件';
     const subject = probe.scope === 'repository-local' ? 'Claude Code 仓库根目录的项目设置' : 'Claude Code 项目设置';
@@ -461,7 +464,7 @@ export async function doctorReport(cwd: string, deps: DoctorDeps): Promise<Docto
           ? 'Claude Code 在 Git 仓库的子目录启动时会读取仓库根目录的 settings.local.json；若会话在该仓库启动'
           : 'Claude Code 从会话的主工作目录读取项目设置；若会话在该目录启动';
       warnings.push(
-        `${subject}（${settingsPath}）把 cleanupPeriodDays 设为 ${probe.configuredDays} 天，低于官方默认 ${CLAUDE_DEFAULT_CLEANUP_DAYS} 天。${location}，超过期限的会话记录可能被清理，导致 open / resume 找不到内容。本次探测了当前目录（普通 Git 仓库内还包括仓库根目录）的 .claude/ 设置；管理设置与 --settings 不在范围，请核对实际加载的设置并提前备份重要会话`,
+        `${subject}（${settingsPath}）把 cleanupPeriodDays 设为 ${probe.configuredDays} 天，低于官方默认 ${CLAUDE_DEFAULT_CLEANUP_DAYS} 天。${location}，超过期限的会话记录可能被清理，导致 open / resume 找不到内容。${probedScope}；管理设置与 --settings 不在范围，请核对实际加载的设置并提前备份重要会话`,
       );
     }
   }
