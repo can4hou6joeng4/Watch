@@ -10,7 +10,7 @@ import { randomBytes, randomUUID } from 'node:crypto';
 import { writeFileAtomic } from '../../core/atomic.js';
 import { parseJsonObject } from '../../core/jsonl.js';
 import { readTextOrEmpty } from '../../core/read-text.js';
-import { assistantOnlyIncrementReason, assistantTurnTextForWrite, userTurnTextForWrite } from '../../core/rich.js';
+import { assistantOnlyIncrementReason, assistantTurnTextForWrite, toolInputAsRecord, userTurnTextForWrite } from '../../core/rich.js';
 import { expectAttachmentPlaceholders, verifyWrittenTurns } from '../../core/verify.js';
 import { parsePiSession } from './parse.js';
 import type { ImportTurnsOpts } from '../adapter.js';
@@ -286,11 +286,16 @@ export async function importTurnsToPi(
       if (ev.kind === 'thinking') {
         content.push({ type: 'thinking', thinking: ev.detail ?? ev.summary });
       } else if (ev.kind === 'tool_call') {
+        // pi-ai 的 `ToolCall.arguments` 是 JsonObject：字符串（exec 调用脚本、自由文本补丁）、
+        // 数组等一律包成 `{ input: 原值 }`（Pi 自由文本工具的原生形状）并加块级标记，
+        // 解析侧认标记才还原。上游四条 API 转换路径都只取固定字段，块上的额外键不会进模型请求。
+        const wrapped = toolInputAsRecord(ev.input, 'input');
         content.push({
           type: 'toolCall',
           id: ev.callId ?? nid(),
           name: ev.name ?? 'tool',
-          arguments: ev.input ?? {},
+          arguments: wrapped.record,
+          ...(wrapped.wrapped ? { watchWrappedInput: true } : {}),
         });
       }
     }

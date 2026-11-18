@@ -472,6 +472,34 @@ export function codexToolInput(event: ProcessEvent, codexName: string): string {
   return typeof serialized === 'string' ? serialized : event.summary;
 }
 
+/**
+ * 目标原生字段只接受「字符串键对象」时用：Pi 的 `toolCall.arguments` 是 pi-ai `JsonObject`，
+ * OpenCode 1.x 的 `state.input` 是 `Record<string, any>`。Codex 来源里 `exec` 的命令、
+ * `apply_patch` 的自由文本补丁、解析不了的 JSON 参数都是字符串，原样写进去不符合目标的原生类型，
+ * 而 Watch 自己回读照样认得、round-trip 又不比入参，所以查不出来。
+ *
+ * 对象原样返回；缺省 / null 沿用既有口径写空对象；其余值包成 `{ [key]: 原值 }` 并报 `wrapped`。
+ * 包装必须可逆且不靠猜：调用方要在入参**之外**写下自己的标记，解析侧确认标记后才经
+ * `unwrapMarkedToolInput()` 还原——`{ input: "…" }` 本身就是 Pi 自由文本工具的原生形状。
+ */
+export function toolInputAsRecord(input: unknown, key: string): { record: Record<string, unknown>; wrapped: boolean } {
+  if (input === undefined || input === null) return { record: {}, wrapped: false };
+  if (typeof input === 'object' && !Array.isArray(input)) return { record: input as Record<string, unknown>, wrapped: false };
+  return { record: { [key]: input }, wrapped: true };
+}
+
+/**
+ * 还原 `toolInputAsRecord()` 的包装。只在调用方已确认 Watch 自己的标记后调用；
+ * 形状不是「恰好一个 `key` 键、内层不是对象」时原样返回——那不是 writer 会写出的东西。
+ */
+export function unwrapMarkedToolInput(value: unknown, key: string): unknown {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return value;
+  const keys = Object.keys(value);
+  if (keys.length !== 1 || keys[0] !== key) return value;
+  const inner = (value as Record<string, unknown>)[key];
+  return toolInputAsRecord(inner, key).wrapped ? inner : value;
+}
+
 export function summarize(text: string, fallback: string): string {
   const line = text.split('\n').find((l) => l.trim())?.trim() ?? '';
   if (!line) return fallback;

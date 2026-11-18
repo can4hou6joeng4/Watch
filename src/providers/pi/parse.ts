@@ -10,6 +10,7 @@ import {
   pushEvent,
   stripEmptyEvents,
   summarize,
+  unwrapMarkedToolInput,
   WATCH_CONTEXT_DISCLOSURE_PREFIX,
 } from '../../core/rich.js';
 import type { ProcessEvent, SessionRef, TokenUsage, UnifiedTurn } from '../../core/types.js';
@@ -442,7 +443,9 @@ function extractBlocks(
         provider: 'pi',
         name,
         callId,
-        input: b.arguments,
+        // 只认 Watch 自己的块级标记才还原包装（`{ input: "…" }` 也是 Pi 自由文本工具的
+        // 原生形状，靠同形猜测会把原生数据错误拆包）；旧版无标记的照旧当对象读。
+        input: b.watchWrappedInput === true ? unwrapMarkedToolInput(b.arguments, 'input') : b.arguments,
       });
     } else if (type === 'image') {
       // 字段口径来自 pi-ai 的 ImageContent：`{ type: 'image', data: base64, mimeType }`
