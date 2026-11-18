@@ -20,6 +20,8 @@
 
 Watch 从本机原生会话记录和工作目录出发，由用户发起接力。各写入路径有独立的防护措施，具体取决于走启动器、链式接力还是 Codex 官方导入。目标缺少适配器时，可用 `watch prompt` 导出只读 Markdown 摘要。`status --json` 可从切换记录回溯会话血缘，桌面接力记录显示同一份计数。桌面近期列表区分扫描中、读取失败和空列表。各路径的防护范围见[架构说明](ARCHITECTURE.md)。
 
+[herdr-agent-handoff](https://github.com/sanirudh17/herdr-agent-handoff) 从 Herdr 的源窗格定位会话，在另一个 Agent 的新窗格交接。完整转录放不进提示词时，它提供来源路径、行范围和 SHA-256 供核对。Watch 的 `prompt` 交付 Markdown 摘要，并比较读取前后的文件大小和修改时间来提示来源有变化。
+
 ## English
 
 Choose by the handoff output and workflow you need. Third-party entries describe what each project documents publicly. See the [compatibility records](COMPATIBILITY.md) for Watch's validated scope.
@@ -37,3 +39,5 @@ Choose by the handoff output and workflow you need. Third-party entries describe
 | Move a project and its session to another Mac | [Agent Handoff](https://github.com/pierback/agent-handoff) pairs two trusted Macs, syncs Git project snapshots and moves Codex and Claude Code session context; when the target has local changes it restores into a separate worktree. [baton](https://github.com/sukamenev/baton) reads local logs instead of rewriting summaries; its cross-machine `push` bundles the session, changed files and rule files with end-to-end encryption and backs up conflicting files as `.baton.bak`. [bb-plugin-handoff](https://github.com/vburojevic/bb-plugin-handoff) builds a provider-independent transcript plus workspace state, with document preview, handoff up to a chosen message, and uncommitted changes captured as a patch. Watch hands off on one machine and does not transfer projects or sessions across devices. |
 
 Watch starts from local native session records and the working directory. The user initiates each handoff. The launcher, chained handoff and official Codex import have separate entry points and write protections. Use `watch prompt` for a read-only Markdown summary when the target lacks an adapter. `status --json` traces lineage from recorded switches, with the same counts in desktop handoff history. The desktop recent list distinguishes scanning, read failures and an empty list. See the [architecture](ARCHITECTURE.md) for the protection each route provides.
+
+[herdr-agent-handoff](https://github.com/sanirudh17/herdr-agent-handoff) locates a session from its source pane and hands it off to a fresh agent pane in Herdr. If the full transcript exceeds the prompt budget, the plugin provides the source path, line bounds and SHA-256 for verification. Watch `prompt` produces a Markdown summary and compares file size and modification time before and after reading to flag source changes.
