@@ -7,7 +7,7 @@ import { dedupeCallEvents, describeAttachmentLoss, describeTextEventLoss, descri
 import { describeWriteFailureReason, type FileDigest } from './atomic.js';
 import { addFinding, type Finding } from './findings.js';
 import { escapeControlChars } from './display.js';
-import { describeBadLinesScanFailure, scanUnparsableJsonLines } from './jsonl.js';
+import { describeBadLinesScanFailure, lineageFromHistory, scanUnparsableJsonLines, type LineageGraph } from './jsonl.js';
 import { usageBadLinesDetail, usageContentBadLinesDetail, usageContentFileProblem, usageSidecarProblem } from './usage-integrity.js';
 import { cwdAliasHint, splitElsewhereByDirectory } from './cwd.js';
 import { compressedCopy, compressedRetryAdvice, describePathReadFailureReason, describeReadFailureOrSelf, emptySessionFileReasonFromStat, isEmptySessionFileReason, probeSessionReadable, sessionFilePresence } from './read-text.js';
@@ -1252,6 +1252,12 @@ export async function chainStatus(
   history: SwitchRecord[];
   /** 链历史读失败：`history` 为空不代表链真的没有记录，文本与 JSON 都不得把它讲成空链 */
   historyFailed: boolean;
+  /**
+   * 只读血缘图：节点是历史中确认过的 provider:sessionId，边来自 switch_events。
+   * `undefined` 表示库打不开或历史读失败，不能与空图（这条链确实没有记录）混淆；
+   * 不猜被删会话、不写盘。
+   */
+  lineage?: LineageGraph;
   chain: Chain | null;
   chains: Chain[];
   warnings: string[];
@@ -1287,6 +1293,10 @@ export async function chainStatus(
   } else {
     warnings.push(storeUnavailableWarning('链信息与链尾无法显示（只列出原生会话）', storeError));
   }
+  // 只读血缘图必须与 history 的读取结果同源：库打不开 / 读失败时是 undefined，
+  // 不能返回空图冒充「没有历史」。没有链时 history 为空数组，空图是准确结论。
+  // 节点只来自已确认的 fromRef/toRef，不是对摘要的猜测。
+  const lineage = store && !historyFailed ? lineageFromHistory(history) : undefined;
   // 链尾只以当前链的 switch_events 最后一条为准；不再 fallback 到目录全局最新会话
   let chainTip: ProviderTip | null = null;
   let chainTipUnusable = false;
@@ -1407,7 +1417,7 @@ export async function chainStatus(
       ...(readProblem ? { unreadable: true } : {}),
     });
   }
-  return { tips, chainTip, chainTipUnusable, chainTipEmpty, chainTipTurns, unreadable, history, historyFailed, chain, chains, warnings };
+  return { tips, chainTip, chainTipUnusable, chainTipEmpty, chainTipTurns, unreadable, history, historyFailed, ...(lineage ? { lineage } : {}), chain, chains, warnings };
 }
 
 /** 把链尾会话转换到 targetId，落 switch_events（store 可选）；opts.forceNew 强制新建目标会话（不追加既有配对） */

@@ -116,6 +116,77 @@ export function describeZeroTurnReason(
   return `${emptyFallback}${consequence ? `；${consequence}` : ''}`;
 }
 
+/** 血缘节点：`key` 用于等值连接，`provider` / `sessionId` 保留库里的原值。 */
+export type LineageNode = { key: string; provider: string; sessionId: string };
+
+/**
+ * 血缘边：`at` 缺失（或不是有限数字）时为 `null`，不拿 0 冒充 1970 年。
+ *
+ * 一条边的两端来自同一条 `switch_events`，节点身份不因时间缺失而丢掉。
+ */
+export type LineageEdge = { from: string; to: string; at: number | null };
+
+export type LineageGraph = { nodes: LineageNode[]; edges: LineageEdge[] };
+
+/** 只收形状完整的引用；损坏库里缺字段 / 非字符串的 ref 不能把 `status` 打挂。 */
+function lineageRef(value: unknown): { provider: string; sessionId: string } | null {
+  if (typeof value !== 'object' || value === null) return null;
+  const ref = value as { provider?: unknown; sessionId?: unknown };
+  return typeof ref.provider === 'string' &&
+    ref.provider !== '' &&
+    typeof ref.sessionId === 'string' &&
+    ref.sessionId !== ''
+    ? { provider: ref.provider, sessionId: ref.sessionId }
+    : null;
+}
+
+/**
+ * 从已有链历史派生只读的血缘图：节点是确认过的会话身份，边是 switch_events 记下的交接。
+ *
+ * 与 Möbius（TardisBooo/Mobius）把重复交接记录为 persistent handoff graph、强调从交接
+ * 回到来源会话与消息范围而不是只给摘要的做法同向；这里更窄：只从本目录当前链的
+ * `history` 派生已确认的会话身份与切换边，不猜被删会话、不把摘要当节点、也不写库。
+ * 入参不是数组时返回 null：调用方据此区分「历史读不出来」与「没有历史」（后者是空图）。
+ *
+ * `key` 里的控制字符先转义再拼接：JSON 字段保留原始会话 id，但当 key 被贴进终端或日志时
+ * 不能带上 ESC / 换行。下游按这个 key 做等值连接，不能自行再拼原始 id。
+ */
+export function lineageFromHistory(history: unknown): LineageGraph | null {
+  if (!Array.isArray(history)) return null;
+  const nodes = new Map<string, LineageNode>();
+  const edges: LineageEdge[] = [];
+  const keyOf = (ref: { provider: string; sessionId: string }): string =>
+    `${escapeControlChars(ref.provider)}:${escapeControlChars(ref.sessionId)}`;
+  const addNode = (ref: { provider: string; sessionId: string }): void => {
+    const key = keyOf(ref);
+    if (!nodes.has(key)) nodes.set(key, { key, provider: ref.provider, sessionId: ref.sessionId });
+  };
+  for (const event of history) {
+    if (typeof event !== 'object' || event === null) continue;
+    const { fromRef, toRef, createdAt } = event as {
+      fromRef?: unknown;
+      toRef?: unknown;
+      createdAt?: unknown;
+    };
+    const to = lineageRef(toRef);
+    if (!to) continue;
+    const from = lineageRef(fromRef);
+    // 没有来源的 switch_events 仍然确认了一个会话身份（adopt / new 的首次绑定）；只记节点。
+    if (!from) {
+      addNode(to);
+      continue;
+    }
+    addNode(from);
+    addNode(to);
+    edges.push({
+      from: keyOf(from),
+      to: keyOf(to),
+      at: typeof createdAt === 'number' && Number.isFinite(createdAt) ? createdAt : null,
+    });
+  }
+  return { nodes: [...nodes.values()], edges };
+}
+
 /**
  * 扫描没完成时的披露句；扫完了返回 `null`。
  *

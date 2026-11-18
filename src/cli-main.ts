@@ -715,7 +715,7 @@ async function cmdStatus(cwd: string, json: boolean, chain?: string): Promise<vo
     }));
     return;
   }
-  const { tips, chainTip, chainTipUnusable, chainTipEmpty, chainTipTurns, unreadable, history, historyFailed, chain: current, warnings } = result;
+  const { tips, chainTip, chainTipUnusable, chainTipEmpty, chainTipTurns, unreadable, history, historyFailed, lineage, chain: current, warnings } = result;
   for (const warning of warnings) console.error(`警告: ${escapeControlChars(warning)}`);
   // 链名是用户输入、库里可能留着写入守卫上线前的坏名字：进终端前转义，别把 ESC / 换行打出去
   if (current) console.log(`链: ${escapeControlChars(current.name)}${current.status === 'archived' ? ' [归档]' : ''}  (${current.id})`);
@@ -790,6 +790,13 @@ async function cmdStatus(cwd: string, json: boolean, chain?: string): Promise<vo
     for (const h of history) {
       const from = h.fromProvider ?? '?';
       console.log(`  ${from} → ${h.toProvider}  (${escapeControlChars(h.toRef.sessionId)})  @ ${fmtTime(h.createdAt)}`);
+    }
+    // 只报计数与来源：节点 / 边的原值在 --json 的 lineage 里，文本模式不再铺一张图。
+    // 没有节点（历史只有读不出来的损坏记录）时整行省略，不说「0 个会话」。
+    if (lineage?.nodes.length) {
+      console.log(
+        `会话血缘: ${lineage.nodes.length} 个已确认会话${lineage.edges.length ? `，${lineage.edges.length} 条切换边` : ''}（只来自本链记录）`,
+      );
     }
   } else if (store) {
     console.log('');
