@@ -229,6 +229,8 @@ export type RecentState<T = unknown> = {
   warnings: string[];
   /** 非空表示本次刷新失败；此时 items 已清空，不能继续显示上一轮结果 */
   error: string;
+  /** 本次扫描还在进行：此时 items 为空不等于「真的没有近期会话」 */
+  loading: boolean;
 };
 
 /**
@@ -239,14 +241,20 @@ export type RecentState<T = unknown> = {
  * 丢弃过期响应，这里只保证单次结果内部一致。
  */
 export function recentStateFromView<T>(view: RecentView): RecentState<T> {
-  return view.error
-    ? { items: [], omitted: 0, warnings: view.warnings, error: view.error }
+  const base = view.error
+    ? { items: [] as T[], omitted: 0, warnings: view.warnings, error: view.error }
     : { items: view.items as T[], omitted: view.omitted, warnings: view.warnings, error: '' };
+  return { ...base, loading: false };
 }
 
 /** 桥本身报错（找不到 node / tsx 起不来 / 子进程崩溃）时的状态：同样清空旧列表。 */
 export function recentStateFromError<T = never>(error: string): RecentState<T> {
-  return { items: [], omitted: 0, warnings: [], error };
+  return { items: [], omitted: 0, warnings: [], error, loading: false };
+}
+
+/** 开始一次扫描：旧列表不再属于本次结果，先清空；空态要等扫描结束才能下结论。 */
+export function recentStateLoading<T = never>(): RecentState<T> {
+  return { items: [], omitted: 0, warnings: [], error: '', loading: true };
 }
 
 export function shellQuote(value: string) { return `'${value.replace(/'/g, `'\\''`)}'`; }

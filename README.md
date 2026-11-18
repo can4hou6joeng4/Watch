@@ -70,7 +70,7 @@ Watch 只做一件事：**把已保存的会话记录连同工作目录交到目
 
 **同类工具对照**
 
-[catchup](https://github.com/wilbeibi/catchup) 以转录文本交接为主，也提供 `fork` 与 `fork --into`；[ThreadPort](https://github.com/Frankie-Xu/threadport) 用可校验的 Capsule 记录可观察的工作状态；[cross_agent_session_resumer](https://github.com/Dicklesworthstone/cross_agent_session_resumer) 与 [session-migrate](https://github.com/xhluca/session-migrate) 都提供原生会话格式转换。Watch 提供启动器、链式交接、Codex 官方导入三条独立入口，以及只读摘要导出和路径级写入防护。不同工具的适配与验收范围需要逐项核对；Watch 的实现边界见[架构说明](docs/ARCHITECTURE.md)，方向与版本限制见[兼容性记录](docs/COMPATIBILITY.md)。
+[catchup](https://github.com/wilbeibi/catchup) 以转录文本交接为主，也提供 `fork` 与 `fork --into`；[ThreadPort](https://github.com/Frankie-Xu/threadport) 用可校验的 Capsule 记录可观察的工作状态；[agent-sessions](https://github.com/jazzyalex/agent-sessions) 把索引、刷新、失败、筛选无结果与真正空库分成不同状态；[cross_agent_session_resumer](https://github.com/Dicklesworthstone/cross_agent_session_resumer) 与 [session-migrate](https://github.com/xhluca/session-migrate) 都提供原生会话格式转换。Watch 提供启动器、链式交接、Codex 官方导入三条独立入口，以及只读摘要导出和路径级写入防护；桌面端近期列表也区分扫描中、读取失败与真正空列表。不同工具的适配与验收范围需要逐项核对；Watch 的实现边界见[架构说明](docs/ARCHITECTURE.md)，方向与版本限制见[兼容性记录](docs/COMPATIBILITY.md)。
 
 ## 安装
 
