@@ -1,3 +1,4 @@
+import { escapeControlChars } from '../../core/display.js';
 import { ToolResultPairing } from '../../core/tool-pairing.js';
 import { iterateFileLines } from '../../core/read-text.js';
 import { asJsonObject, parseJsonObject } from '../../core/jsonl.js';
@@ -26,6 +27,13 @@ import type { ProcessEvent, SessionRef, TokenUsage, UnifiedTurn } from '../../co
  * 都逐条落盘，长会话可以超过 V8 字符串上限（约 512 MB），整份读取会抛 `Invalid string length`
  * ——同一个文件流式却能正常解析（第八十四轮 Claude 大会话的同一形状）。
  */
+const END_REASON_LABELS: Record<string, string> = {
+  cancelled: '用户中止',
+  failed: '请求失败',
+  blocked: '被阻止',
+  '（缺 reason）': '缺少结束原因',
+};
+
 export async function parseKimiSession(ref: SessionRef): Promise<UnifiedTurn[]> {
   const turns: UnifiedTurn[] = [];
   const pairing = new ToolResultPairing(turns, 'kimi', 'Kimi');
@@ -48,6 +56,14 @@ export async function parseKimiSession(ref: SessionRef): Promise<UnifiedTurn[]> 
   // 不能逐条计数：流式 delta 也走 context.append_loop_event，正常会话会被刷满；
   // 也正因如此以前完全不计——新出现的内容类事件就连痕迹都没有。聚合后一条披露。
   const unknownLoopEvents = new Map<string, number>();
+  // 顶层 `turn.ended` 的 `reason`（上游 TurnEndReason：completed / cancelled / failed /
+  // blocked）以前只用来把 state 归零，失败 / 中止 / 权限阻止与正常完成同形。
+  // 按原因计数而不是保留 `error.message`：那是 KimiErrorPayload，可能带上游响应片段。
+  const endReasons = new Map<string, number>();
+  let unrecognizedEndReasonCount = 0;
+  let lastNonCompletedReason = '';
+  let lastFailureTimestamp = '';
+  let tailEndedFailed = false;
 
   for await (const line of iterateFileLines(ref.filePath)) {
     const trimmed = line.trim();
@@ -194,6 +210,24 @@ export async function parseKimiSession(ref: SessionRef): Promise<UnifiedTurn[]> 
 
     if (type === 'turn.ended') {
       state = 'idle';
+      const rawReason = r.reason;
+      const rawLabel =
+        typeof rawReason === 'string' && rawReason.trim() ? rawReason.trim() : '（缺 reason）';
+      const reason = escapeControlChars(rawLabel.length > 64 ? `${rawLabel.slice(0, 64)}…` : rawLabel);
+      const known = ['completed', 'cancelled', 'failed', 'blocked'].includes(rawLabel);
+      // 缺 reason 与未识别类型分开点名（与 Pi 的 type 形状分档同口径）；completed 不计数，
+      // 健康日志不能冒出假警告。
+      if (reason === '（缺 reason）' || (known && reason !== 'completed')) {
+        endReasons.set(reason, (endReasons.get(reason) ?? 0) + 1);
+      }
+      if (!known && reason !== '（缺 reason）') unrecognizedEndReasonCount += 1;
+      if (reason !== 'completed') {
+        lastNonCompletedReason = reason;
+        lastFailureTimestamp = timestamp;
+        tailEndedFailed = true;
+      } else {
+        tailEndedFailed = false;
+      }
       continue;
     }
   }
@@ -206,35 +240,61 @@ export async function parseKimiSession(ref: SessionRef): Promise<UnifiedTurn[]> 
     const note = `[Kimi 记录里有 ${total} 个未识别的消息片段（${shown}），Watch 暂不解析：这部分原始内容没有并入交接，需要时请在原生 Kimi 里查看]`;
     turn.text = [turn.text, note].filter((s) => s.trim()).join('\n\n');
   }
-  if (unknownLoopEvents.size > 0) {
+  const disclose = (text: string, event?: Partial<ProcessEvent>): void => {
     const carrier = [...turns].reverse().find((turn) => turn.role === 'user' || turn.text.trim());
-    if (carrier) {
-      const total = [...unknownLoopEvents.values()].reduce((a, b) => a + b, 0);
-      const shown = [...unknownLoopEvents.entries()].map(([t, n]) => (n > 1 ? `${t} × ${n}` : `${t} × 1`)).join('、');
-      const text = `${WATCH_CONTEXT_DISCLOSURE_PREFIX}Kimi 日志里有 ${total} 个未识别或无法解析的 loop 事件（${shown}），Watch 暂不解析：其中的内容没有并入交接，需要时请在原生 Kimi 中查看]`;
-      pushEvent(carrier, { kind: 'text', summary: text, detail: text, timestamp: carrier.timestamp, provider: 'kimi' });
-    }
+    if (!carrier) return;
+    const note = `${WATCH_CONTEXT_DISCLOSURE_PREFIX}${text}]`;
+    pushEvent(carrier, {
+      kind: 'text',
+      summary: note.slice(0, 120),
+      detail: note,
+      timestamp: carrier.timestamp,
+      provider: 'kimi',
+      ...event,
+    });
+  };
+  // `turn.ended` 的失败 / 中止 / 阻止是会话收尾事实。只披露稳定原因与次数，
+  // 不复制 `error.message`（上游错误对象可能带请求片段）。
+  const endNoteParts: string[] = [];
+  if (endReasons.size > 0) {
+    const shown = [...endReasons.entries()]
+      .map(([reason, count]) => `${END_REASON_LABELS[reason] ?? escapeControlChars(reason)} × ${count}`)
+      .join('、');
+    endNoteParts.push(`Kimi 日志里的轮次以非正常原因结束（${shown}）`);
+  }
+  if (unrecognizedEndReasonCount > 0) {
+    endNoteParts.push(`另有 ${unrecognizedEndReasonCount} 条未识别的结束原因，Watch 暂不解析`);
+  }
+  if (endNoteParts.length > 0) {
+    endNoteParts.push('接手前请先在原生 Kimi 中确认这些轮次是否需要重试；Watch 不复制上游错误原文');
+  }
+  // Kimi 的 parse 不能凭空造空助手轮（写出侧会把无正文无事件的轮次跳过，round-trip 失败），
+  // 与 Grok 同口径：用结构化 tailFailure 改写下游「可能还在生成」的兜底句。
+  const tailUnanswered = tailEndedFailed && turns.at(-1)?.role === 'user';
+  if (endNoteParts.length > 0) {
+    const tail = tailUnanswered && lastNonCompletedReason
+      ? `；最后一轮以${END_REASON_LABELS[lastNonCompletedReason] ?? '请求失败'}结束，不是仍在生成`
+      : '';
+    disclose(
+      `${endNoteParts.join('；')}${tail}`,
+      tailUnanswered
+        ? { tailFailure: lastNonCompletedReason === 'cancelled' ? 'cancelled' : 'error' }
+        : undefined,
+    );
+  }
+  if (unknownLoopEvents.size > 0) {
+    const total = [...unknownLoopEvents.values()].reduce((a, b) => a + b, 0);
+    const shown = [...unknownLoopEvents.entries()].map(([t, n]) => (n > 1 ? `${t} × ${n}` : `${t} × 1`)).join('、');
+    disclose(`Kimi 日志里有 ${total} 个未识别或无法解析的 loop 事件（${shown}），Watch 暂不解析：其中的内容没有并入交接，需要时请在原生 Kimi 中查看`);
   }
   if (unreadableCompactions > 0) {
-    const carrier = [...turns].reverse().find((turn) => turn.role === 'user' || turn.text.trim());
-    if (carrier) {
-      const text = `${WATCH_CONTEXT_DISCLOSURE_PREFIX}Kimi 有 ${unreadableCompactions} 条 context.apply_compaction 记录没有可读摘要；这部分摘要未并入交接，也不作为 --since-compact 的裁剪边界，请在原生 Kimi 中核对。]`;
-      pushEvent(carrier, { kind: 'text', summary: text, detail: text, timestamp: carrier.timestamp, provider: 'kimi' });
-    }
+    disclose(`Kimi 有 ${unreadableCompactions} 条 context.apply_compaction 记录没有可读摘要；这部分摘要未并入交接，也不作为 --since-compact 的裁剪边界，请在原生 Kimi 中核对。`);
   }
   if (unsupportedLegacy > 0) {
-    const carrier = [...turns].reverse().find((turn) => turn.role === 'user' || turn.text.trim());
-    if (carrier) {
-      const text = `${WATCH_CONTEXT_DISCLOSURE_PREFIX}Kimi 旧格式日志里有 ${unsupportedLegacy} 条 context.append_message 记录 Watch 暂不解析（非 user / assistant 消息，或带工具调用的助手消息）；这些记录里的工具调用没有并入交接，需要时请在原生 Kimi 中核对。]`;
-      pushEvent(carrier, { kind: 'text', summary: text, detail: text, timestamp: carrier.timestamp, provider: 'kimi' });
-    }
+    disclose(`Kimi 旧格式日志里有 ${unsupportedLegacy} 条 context.append_message 记录 Watch 暂不解析（非 user / assistant 消息，或带工具调用的助手消息）；这些记录里的工具调用没有并入交接，需要时请在原生 Kimi 中核对。`);
   }
   if (unmatchedLegacyUsers > 0) {
-    const carrier = [...turns].reverse().find((turn) => turn.role === 'user' || turn.text.trim());
-    if (carrier) {
-      const text = `${WATCH_CONTEXT_DISCLOSURE_PREFIX}Kimi 日志里有 ${unmatchedLegacyUsers} 条旧格式用户消息（context.append_message）没能对应到任何 turn.prompt 记录，可能没有被并入交接；需要时请在原生 Kimi 中核对。]`;
-      pushEvent(carrier, { kind: 'text', summary: text, detail: text, timestamp: carrier.timestamp, provider: 'kimi' });
-    }
+    disclose(`Kimi 日志里有 ${unmatchedLegacyUsers} 条旧格式用户消息（context.append_message）没能对应到任何 turn.prompt 记录，可能没有被并入交接；需要时请在原生 Kimi 中核对。`);
   }
   pairing.finish();
   return stripEmptyEvents(turns);
