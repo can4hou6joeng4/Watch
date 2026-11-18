@@ -1969,7 +1969,7 @@ async function cmdPrompt(
         sourceWorktreeNote = worktreeNote;
       } else {
         const branchProbe = await inspectRepoBranch(foundRef.cwd);
-        const branchNote = describeRepoBranchNote(branchProbe);
+        const branchNote = describeRepoBranchNote(branchProbe, foundRef.cwd);
         if (branchNote) {
           sourceBranchNote = branchNote;
           if (branchProbe.state === 'unknown') sourceBranchUnreadable = true;

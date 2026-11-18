@@ -349,45 +349,58 @@ async function readHeadBranch(gitDir: string): Promise<string | null> {
 }
 
 /**
- * cwd 本身是普通仓库根时，`HEAD` 指向的分支。链接工作树 / 子模块的 `.git` 是文件，
- * 由 `inspectWorktree` 负责，这里只认 `.git` 目录。只读，不启动 git。
+ * 从 cwd 向上找最近的普通仓库根（`.git` 是目录），读出 `HEAD` 指向的分支。
+ *
+ * 会话经常在仓库子目录里启动，只在 cwd 本身查 `.git` 会漏掉分支——文档被复制到另一台
+ * 机器或另一天后，读者要自己猜该停在哪。向上只认**目录**形式的 `.git`；文件形式属于
+ * 链接工作树 / 子模块，由 `inspectWorktree` 负责，这里遇到就停，不重复也不猜。只读，不启动 git。
  *
  * `detached` 与 `unknown` 必须分开：前者是读到了结论（HEAD 里是提交号），后者是没读成，
- * 不能把权限或坏文件讲成「不在任何分支上」。
+ * 不能把权限或坏文件讲成「不在任何分支上」。走到文件系统根都没有 `.git` 才是 `not-repo`。
  */
 export type RepoBranchInspection =
-  | { state: 'branch'; branch: string }
-  | { state: 'detached' }
+  | { state: 'branch'; branch: string; repoRoot: string }
+  | { state: 'detached'; repoRoot: string }
   | { state: 'not-repo' }
   | { state: 'unknown'; reason: string };
 
 export async function inspectRepoBranch(cwd: string): Promise<RepoBranchInspection> {
-  const dotGit = join(cwd, '.git');
-  let entry;
-  try {
-    entry = await stat(dotGit);
-  } catch (error) {
-    const code = (error as NodeJS.ErrnoException).code;
-    if (code === 'ENOENT' || code === 'ENOTDIR') return { state: 'not-repo' };
-    return { state: 'unknown', reason: errnoReason(error) };
+  let dir = resolve(cwd);
+  while (true) {
+    const dotGit = join(dir, '.git');
+    let entry;
+    try {
+      entry = await stat(dotGit);
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code !== 'ENOENT' && code !== 'ENOTDIR') {
+        return { state: 'unknown', reason: `${showPathInMessage(dir)}：${errnoReason(error)}` };
+      }
+      const parent = dirname(dir);
+      if (parent === dir) return { state: 'not-repo' };
+      dir = parent;
+      continue;
+    }
+    // 文件形式的 .git 属于链接工作树 / 子模块：那里的分支由工作树说明负责，这里不重复也不猜
+    if (!entry.isDirectory()) return { state: 'not-repo' };
+    let head: string;
+    try {
+      head = (await readFile(join(dotGit, 'HEAD'), 'utf8')).trim();
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code === 'ENOENT' || code === 'ENOTDIR') return { state: 'unknown', reason: '.git 目录里没有 HEAD' };
+      return { state: 'unknown', reason: errnoReason(error) };
+    }
+    if (!head) return { state: 'unknown', reason: 'HEAD 为空' };
+    const match = /^ref:\s*refs\/heads\/(.+)$/.exec(head);
+    if (match) {
+      const branch = match[1]!.trim();
+      return branch
+        ? { state: 'branch', branch, repoRoot: dir }
+        : { state: 'unknown', reason: 'HEAD 的分支名为空' };
+    }
+    return { state: 'detached', repoRoot: dir };
   }
-  // 文件形式的 .git 属于链接工作树 / 子模块：那里的分支由工作树说明负责，这里不重复也不猜
-  if (!entry.isDirectory()) return { state: 'not-repo' };
-  let head: string;
-  try {
-    head = (await readFile(join(dotGit, 'HEAD'), 'utf8')).trim();
-  } catch (error) {
-    const code = (error as NodeJS.ErrnoException).code;
-    if (code === 'ENOENT' || code === 'ENOTDIR') return { state: 'unknown', reason: '.git 目录里没有 HEAD' };
-    return { state: 'unknown', reason: errnoReason(error) };
-  }
-  if (!head) return { state: 'unknown', reason: 'HEAD 为空' };
-  const match = /^ref:\s*refs\/heads\/(.+)$/.exec(head);
-  if (match) {
-    const branch = match[1]!.trim();
-    return branch ? { state: 'branch', branch } : { state: 'unknown', reason: 'HEAD 的分支名为空' };
-  }
-  return { state: 'detached' };
 }
 
 /**
@@ -395,16 +408,19 @@ export async function inspectRepoBranch(cwd: string): Promise<RepoBranchInspecti
  *
  * 读者拿到的文档可能离开原机；分支名是开始动手前最省事的一次核对（baton / bb-plugin-handoff
  * 同样在交接时带分支 / 提交信息）。普通目录返回 null；detached 与读不出来都要如实说，
- * 不能把「没读到」写成「没有分支」。
+ * 不能把「没读到」写成「没有分支」。`cwd` 与仓库根不同时把仓库根一并写出，读者才知道
+ * 上下文来自哪一层。
  */
-export function describeRepoBranchNote(probe: RepoBranchInspection): string | null {
+export function describeRepoBranchNote(probe: RepoBranchInspection, cwd?: string): string | null {
+  const rootNote = (root: string): string =>
+    cwd && resolve(cwd) !== root ? `（仓库根 ${showPathInMessage(root)}）` : '';
   switch (probe.state) {
     case 'not-repo':
       return null;
     case 'branch':
-      return `当前分支 ${escapeControlChars(probe.branch)}；动手前先确认目标机 / 目录停在同一分支`;
+      return `当前分支 ${escapeControlChars(probe.branch)}${rootNote(probe.repoRoot)}；动手前先确认目标机 / 目录停在同一分支`;
     case 'detached':
-      return '当前是 detached HEAD（HEAD 指向提交而不是分支）；接手后若要提交，先切回目标分支';
+      return `当前是 detached HEAD（HEAD 指向提交而不是分支）${rootNote(probe.repoRoot)}；接手后若要提交，先切回目标分支`;
     case 'unknown':
       return `无法确认当前 git 分支（${probe.reason}）；接手前先自行核对`;
   }
