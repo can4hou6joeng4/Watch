@@ -137,6 +137,8 @@ import-codex  prepare|confirm|status|project-prepare|project-confirm|project-sta
 
 `--check` 只与 `open ... --to <provider>` 同用：只读预检目标会话是否可写，不写入任何内容。
 
+读取 `status --json` 的血缘图时，用 `nodes[].key` 匹配 `edges[].from` 和 `edges[].to`。展示会话身份时用节点里的原始 `provider` 和 `sessionId`。
+
 `doctor --json` 的 `claudeRetention` 报告 Claude Code 用户设置中的保留期。设置路径异常、文件不可读或超过 1 MiB 时，返回 `unknown` 并给出原因。实际清理期限取决于 Claude Code 加载的全部设置。
 
 `usage` 的合计只是「读得出来的部分之和」：读取失败、没有 usage 字段、适配器不提供用量，都会在合计行括注；某个会话的用量数据源有无法解析的行时，合计后另起一行说明这轮是下界，按会话那一行也会就地标出「这个数是下界」——`--json` 对应 `totalExcluded` / `totalMissingUsage` / `byProvider[].usageBadLines`。内容文件有坏行时同样会披露，`byProvider[].contentBadLines` 给出坏行数；旁路文件里已经读到的用量仍会保留在合计里，不会因为内容文件的坏行而消失。只有解析确实为 0 轮时，警告才会说它不能当作空会话；已有轮次时只说明内容可能不完整。

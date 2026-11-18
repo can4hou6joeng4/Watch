@@ -137,6 +137,8 @@ import-codex  prepare|confirm|status|project-prepare|project-confirm|project-sta
 
 `--check` is only used with `open ... --to <provider>`: a read-only precheck of whether the target is writable. Nothing is written.
 
+In the `status --json` lineage graph, match `nodes[].key` to `edges[].from` and `edges[].to`. Use the node's original `provider` and `sessionId` to display the session identity.
+
 The `claudeRetention` field in `doctor --json` reports the retention period from Claude Code user settings. An unusable path, unreadable file, or file larger than 1 MiB yields `unknown` with a reason. The effective retention period depends on all settings Claude Code loads.
 
 The `usage` total is only the sum of what could be read: failed reads, sessions without a usage field and adapters that do not provide usage are named in the total line. When a session's usage source has unparsable lines, a line under the total says the number is a lower bound, and that session's row is marked the same way — in `--json` this is `totalExcluded` / `totalMissingUsage` / `byProvider[].usageBadLines`. Bad lines in the content file are disclosed too, with `byProvider[].contentBadLines` carrying the count; usage already read from a sidecar file stays in the total rather than disappearing because of content-file bad lines. Only a genuine 0-turn parse is described as not being an empty session; with existing turns the warning says the content may be incomplete.
