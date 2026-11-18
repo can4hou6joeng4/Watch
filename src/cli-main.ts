@@ -1955,6 +1955,9 @@ async function cmdPrompt(
   // 文档离开原机后读者能先核对分支再动手（baton / bb-plugin-handoff 同样带分支信息）。
   let sourceBranchNote: string | undefined;
   let sourceBranchUnreadable = false;
+  // 结构化字段给脚本用：Markdown 里的分支行是给人读的，脚本不该去解析正文。
+  // 链接工作树的情况已在 worktree 说明里，形状不同（主工作树可能读不出来），这里只放普通仓库根。
+  let sourceBranch: { branch: string; repoRoot: string } | { detached: true; repoRoot: string } | undefined;
   if (foundRef.cwd.trim()) {
     const recordedProbe = await inspectCwd(foundRef.cwd);
     const recordedCwdNote = describeRecordedCwd(recordedProbe, foundRef.cwd);
@@ -1973,6 +1976,8 @@ async function cmdPrompt(
         if (branchNote) {
           sourceBranchNote = branchNote;
           if (branchProbe.state === 'unknown') sourceBranchUnreadable = true;
+          else if (branchProbe.state === 'branch') sourceBranch = { branch: branchProbe.branch, repoRoot: branchProbe.repoRoot };
+          else if (branchProbe.state === 'detached') sourceBranch = { detached: true, repoRoot: branchProbe.repoRoot };
         }
       }
     }
@@ -2024,6 +2029,7 @@ async function cmdPrompt(
       // 脚本要能区分「按 id 查到的」与「替你猜的」：两者的可信度不一样
       ...(autoPicked ? { autoPicked: true } : {}),
       markdown: result.markdown,
+      ...(sourceBranch ? { sourceBranch } : {}),
       stats: result.stats,
       findings: result.findings,
       // 脚本拿得到结构化的改动清单，不必去解析 Markdown 里的那一节
