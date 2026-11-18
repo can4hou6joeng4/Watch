@@ -436,11 +436,15 @@ export async function doctorReport(cwd: string, deps: DoctorDeps): Promise<Docto
   // 归属异常、管理设置与 `--settings` 不在范围内，所以只声明读到了什么，
   // 不把「没读到」讲成「项目没有缩短保留期」。
   let claudeProjectRetention: ClaudeProjectRetentionProbe[];
+  // 探针整体失败时，项目设置是「不知道」而不是「没设置」。不能随后拿用户设置或默认值
+  // 估算链尾风险——那等于替一份可能覆盖它的项目设置猜了个结论。
+  let claudeProjectRetentionFailed = false;
   try {
     claudeProjectRetention = deps.claudeProjectRetention ?? (await probeClaudeProjectRetention(cwd));
   } catch (error) {
     // 每个文件探针自己 catch；这里只兜底路径拼接 / 向上查找等意外，不能静默当成「没设置」
     claudeProjectRetention = [];
+    claudeProjectRetentionFailed = true;
     warnings.push(
       `Claude Code 的项目保留期设置没能探测：${error instanceof Error ? error.message : String(error)}`,
     );
@@ -480,7 +484,9 @@ export async function doctorReport(cwd: string, deps: DoctorDeps): Promise<Docto
   // 很多时候是有意保留的归档，拿默认值喊会变成噪音。
   const effectiveRetention = resolveEffectiveClaudeRetention(claudeRetention, claudeProjectRetention);
   const riskRetentionDays =
-    effectiveRetention.state === 'configured' && effectiveRetention.days < CLAUDE_DEFAULT_CLEANUP_DAYS
+    !claudeProjectRetentionFailed &&
+    effectiveRetention.state === 'configured' &&
+    effectiveRetention.days < CLAUDE_DEFAULT_CLEANUP_DAYS
       ? effectiveRetention.days
       : null;
 
