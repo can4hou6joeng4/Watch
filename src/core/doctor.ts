@@ -639,9 +639,9 @@ export async function doctorReport(cwd: string, deps: DoctorDeps): Promise<Docto
           // 只对 Claude 会话判断：cleanupPeriodDays 是 Claude Code 的设置。
           // 用文件 mtime 估「最后一次写入」，而不是断言原生一定按这个时间清理。
           const ageDays = Math.floor((Date.now() - tipPresence.mtimeMs) / 86_400_000);
-          if (ageDays > shortestRetentionDays) {
+          if (ageDays >= shortestRetentionDays) {
             warnings.push(
-              `链「${escapeControlChars(chain.name)}」的链尾是 Claude Code 会话，文件已经有 ${ageDays} 天没有更新，而探测到的最短 cleanupPeriodDays 是 ${shortestRetentionDays} 天；若没有更高优先级的设置覆盖，Claude Code 启动后的清理可能删除它——先备份该文件，或调大保留期，或${rebindHint(tip.provider)}`,
+              `链「${escapeControlChars(chain.name)}」的链尾是 Claude Code 会话（${escapeControlChars(tip.filePath)}），文件已经有 ${ageDays} 天没有更新，而探测到的最短 cleanupPeriodDays 是 ${shortestRetentionDays} 天；若没有更高优先级的设置覆盖，Claude Code 启动后的清理可能删除它——先备份该文件，或调大保留期，或${rebindHint(tip.provider)}`,
             );
           }
         }
