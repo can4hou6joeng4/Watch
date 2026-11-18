@@ -28,6 +28,7 @@ Watch (Chinese: 值更, also called AgentRelay) is a free, local-only CLI and ma
 | Switch to local offline model | Claude Code | OpenCode | SQLite Store Adapter | `npm run watch -- open <id> --to opencode` | Single SQLite transaction rollback on failure; custom DB via WATCH_OPENCODE_DB; offline use requires a configured local provider |
 | Still limited after using the subscription's own reset | Claude Code | OpenAI Codex | Official Desktop Import | `npm run watch -- import-codex prepare <id> --cwd /absolute/project --desktop-project --experimental --json` | Watch does not inspect or consume quota resets; review the plan before explicit confirmation |
 | Resume past session in original agent | Any | Same Agent | Native Resume | `claude --resume <id>` / `codex resume <id>` / `opencode -s <id>` | Native CLI history lookup; no translation required |
+| Target CLI has no adapter or its native format changed | Any | Unsupported CLI | Read-only Prompt Handoff | `npm run watch -- prompt <id> --cwd /absolute/project --json` | Produces Markdown only; writes no target files and launches no CLI; trimmed turns and source state are disclosed in the document and findings |
 
 ---
 
@@ -142,5 +143,27 @@ Watch (Chinese: 值更, also called AgentRelay) is a free, local-only CLI and ma
   A: No. Watch only reads and writes local session files. It has no history backup and does not invent conversation. Recovery comes from your own backup (Time Machine, copies outside the repo, editor history), and you resume after restoring the file.
 - **Q: Does Claude Code delete old sessions on its own?**
   A: Yes. cleanupPeriodDays in the official settings reference defaults to 30 days; after a session starts, Claude Code sweeps transcripts older than that in the background, and expired sessions stop appearing in /resume. The key is allowed in any settings file, so project settings can override user settings. watch doctor reads your user settings, the current directory project settings and the repository-root local settings without writing, but --settings and managed settings are out of scope, so the report is not the effective value. Raising the value only reduces future deletions; it cannot bring back files already removed.
+
+---
+
+### Guide: Using watch prompt When There Is No Adapter (没有适配器时，用 watch prompt 交接会话)
+- URL (zh): https://relay.bobochang.cn/guides/prompt-handoff-without-adapter/
+- URL (en): https://relay.bobochang.cn/en/guides/prompt-handoff-without-adapter/
+- Direct Answer (en): When the target tool has no adapter or its native format just changed, run watch prompt <session-id> to build a read-only Markdown handoff. It writes no session files and starts no CLI; trimming counts and degradations go into the document and the --json findings, and the target must treat it as a summary, not a native session.
+- 核心解答 (zh): 目标工具没有适配器或原生格式刚变化时，用 watch prompt <session-id> 生成只读 Markdown 交接文档；它不写会话文件、不启动 CLI，裁剪计数与降级说明写进正文和 --json 的 findings，目标端只能把它当作摘要而不是原生会话。
+
+#### Procedure Steps:
+1. **Step 1: Identify the source session and directory**: Pass the session ID explicitly, or pass --cwd and omit the ID. Without an ID, Watch picks the newest readable session in the current directory and marks it as auto-picked in the header; when unsure, name the ID so another session is not mistaken for the source.
+1. **Step 2: Choose a profile and window**: --profile minimal|standard|verbose|full controls how much text and how many tool events are expanded. --last N keeps only the newest N user turns and drops the original task description, which the document states. --since-compact starts at the latest compaction summary; when no usable summary exists it does not trim and says so.
+1. **Step 3: Review findings and source state**: With --json the result includes markdown, findings and warnings. degraded means the downgrade was disclosed, skipped means content was omitted by your options. The source state, bad lines, usage and branch lines in the document tell you whether it is safe to hand over.
+1. **Step 4: State that it is a summary handoff**: Paste the Markdown or save it as a file and tell the target assistant in the first turn that this is a summary handoff, not a native session. The target cannot resume natively, and tool calls, reasoning and attachments may have been trimmed; anything omitted cannot be recovered from the document.
+
+#### Frequently Asked Questions:
+- **Q: Does watch prompt write into the target tool session?**
+  A: No. It only reads the source record and prints Markdown; it writes no target session file, opens no database and launches no CLI. When you need native resume in the target, use the launcher or chained path for that adapter; the only official import path is Claude Code to Codex desktop.
+- **Q: Why does the document say the first task description was not kept?**
+  A: With --last N, Watch starts at the Nth user turn from the end, so earlier turns, including the original task description, are omitted. Drop --last for full background, or use --since-compact with a larger profile; the body lists each trim that actually happened.
+- **Q: Can the target assistant continue exactly like a native session?**
+  A: No. It receives a summary document without native resume and cannot see trimmed tool execution detail. Ask it in the first turn to restate the task goal and current branch, and only then assign edits.
 
 ---
