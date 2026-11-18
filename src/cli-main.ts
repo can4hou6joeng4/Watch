@@ -24,6 +24,7 @@ import { ImportJobs } from './core/import-jobs.js';
 import { officialImportJournalRoot } from './providers/codex/official-import.js';
 import { doctorReport } from './core/doctor.js';
 import type { StoreFootprint } from './core/doctor.js';
+import type { ClaudeRetentionProbe } from './providers/claude/retention.js';
 import { cwdAliasHint, cwdControlCharsNote, cwdProblem, describeCwdProblem, describeRecordedCwd, describeWorktreeNote, describeWriteCwd, inspectCwd, inspectWorktree, sameDirectorySync, splitElsewhereByDirectory } from './core/cwd.js';
 import { escapeControlChars, hasControlChars } from './core/display.js';
 import { commandControlWarnings } from './core/terminal-command.js';
@@ -2116,6 +2117,21 @@ function describeStoreFootprint(f: StoreFootprint): string {
   return parts.join('；');
 }
 
+/**
+ * 「Claude 会话保留」一栏。
+ *
+ * 只报用户设置里写了什么，不能说成实际生效值：`cleanupPeriodDays` 的 scope 是 Any file，
+ * 项目 / local / managed 设置与 CLI 参数都可能覆盖它。默认值也要说清「官方默认」，
+ * 因为用户从没设过时 Watch 并没有读到任何东西。
+ */
+function describeClaudeRetention(r: ClaudeRetentionProbe): string {
+  if (r.state === 'unknown') return `无法确认（${r.error}；官方默认 ${r.defaultDays} 天）`;
+  if (r.state === 'default') {
+    return `用户设置未指定 cleanupPeriodDays，官方默认 ${r.defaultDays} 天（超过期限的 transcript 会被原生清理，链尾指向它们时 open / resume 会找不到内容）`;
+  }
+  return `用户设置 cleanupPeriodDays=${r.configuredDays} 天（项目 / managed 设置可能覆盖；超过 ${r.configuredDays} 天的 transcript 会被原生清理）`;
+}
+
 async function cmdDoctor(cwd: string, json: boolean, strict: boolean): Promise<void> {
   try {
     const store = openStore();
@@ -2158,6 +2174,7 @@ async function cmdDoctor(cwd: string, json: boolean, strict: boolean): Promise<v
       const state = p.available ? '✓ 已就绪' : p.error ? `✗ 检测失败: ${p.error}` : '✗ 未检测到';
       console.log(`  ${p.id.padEnd(10)} ${p.displayName.padEnd(12)} ${state}`);
     }
+    console.log(`Claude 会话保留: ${describeClaudeRetention(report.claudeRetention)}`);
     if (report.storage.length) {
       console.log('会话存储:');
       for (const st of report.storage) {

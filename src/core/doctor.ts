@@ -13,6 +13,7 @@ import { escapeControlChars } from './display.js';
 import { describeBadLinesScanFailure, scanUnparsableJsonLines } from './jsonl.js';
 import { compressedCopy, compressedRetryAdvice, describeSessionReadFailureReason, isEmptySessionFileReason, isFileSystemErrorCode, probeSessionReadable, sessionFilePresence } from './read-text.js';
 import { collectUnattributable, unattributableWarning } from './session-coverage.js';
+import { CLAUDE_DEFAULT_CLEANUP_DAYS, probeClaudeRetention, type ClaudeRetentionProbe } from '../providers/claude/retention.js';
 
 export type BrokenTip = {
   chainId: string;
@@ -151,6 +152,14 @@ export type DoctorReport = {
   storage: StorageProbe[];
   /** 本地库自身的磁盘占用与索引规模 */
   storeFootprint: StoreFootprint;
+  /**
+   * Claude Code 用户设置里的 transcript 保留期（只读 `cleanupPeriodDays`）。
+   *
+   * 不是「实际生效值」：项目 / local / managed 设置都可能覆盖用户设置。
+   * 排障入口报出来，是因为链尾指向被原生清理的会话时 `open` / `resume` 会直接找不到内容；
+   * 显式设成低于默认值时进 warnings，让 `--strict` 能发现这个风险。
+   */
+  claudeRetention: ClaudeRetentionProbe;
   store:
     | {
         available: true;
@@ -235,6 +244,8 @@ export type DoctorDeps = {
   ephemeralNote?: string;
   /** 测试可覆盖；默认读当前进程与 package.json */
   environment?: DoctorEnvironment;
+  /** 测试可覆盖；默认只读 Claude Code 用户设置里的 cleanupPeriodDays */
+  claudeRetention?: ClaudeRetentionProbe;
 };
 
 type PathPresence =
@@ -379,6 +390,35 @@ export async function doctorReport(cwd: string, deps: DoctorDeps): Promise<Docto
 
   const adapters = deps.adapters ?? listAdapters();
   const providers = await listProviders(adapters);
+
+  // Claude Code 的 transcript 保留期：用户设置读不出来只是「无法确认」，不是 Watch 的故障；
+  // 显式设得比官方默认更短则意味着链尾可能在用户不知情时被原生清理。只读，不修改设置。
+  let claudeRetention: ClaudeRetentionProbe;
+  try {
+    claudeRetention = deps.claudeRetention ?? (await probeClaudeRetention());
+  } catch (error) {
+    claudeRetention = {
+      settingsPath: null,
+      state: 'unknown',
+      configuredDays: null,
+      defaultDays: CLAUDE_DEFAULT_CLEANUP_DAYS,
+      error: error instanceof Error ? error.message : String(error),
+    };
+  }
+  if (claudeRetention.state === 'unknown') {
+    warnings.push(
+      `Claude Code 的会话保留期无法确认：${claudeRetention.error}；官方默认保留 ${CLAUDE_DEFAULT_CLEANUP_DAYS} 天，超过期限的 transcript 会被原生清理——链尾一旦指向它们，open / resume 会找不到内容`,
+    );
+  } else if (
+    claudeRetention.state === 'configured' &&
+    claudeRetention.configuredDays !== null &&
+    claudeRetention.configuredDays < CLAUDE_DEFAULT_CLEANUP_DAYS
+  ) {
+    const settingsPath = claudeRetention.settingsPath ? `${escapeControlChars(claudeRetention.settingsPath)} ` : '';
+    warnings.push(
+      `Claude Code 用户设置（${settingsPath}）把 cleanupPeriodDays 设为 ${claudeRetention.configuredDays} 天，低于官方默认 ${CLAUDE_DEFAULT_CLEANUP_DAYS} 天：超过 ${claudeRetention.configuredDays} 天的 transcript 会被原生清理且不提示，链尾指向这些会话时 open / resume 会失败——若这是有意设置可忽略，否则调大该值或先备份重要会话`,
+    );
+  }
 
   // 原生会话列表只读；与 detect（只看 PATH）互补：装了但存储读不出，比「没装」更需要解释
   const storage: StorageProbe[] = [];
@@ -856,5 +896,5 @@ export async function doctorReport(cwd: string, deps: DoctorDeps): Promise<Docto
     failures,
     warnings: warnings.length,
   };
-  return { cwd, environment, providers, storage, store, imports, storeFootprint, warnings, summary };
+  return { cwd, environment, providers, storage, store, imports, storeFootprint, claudeRetention, warnings, summary };
 }
