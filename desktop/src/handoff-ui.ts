@@ -140,6 +140,23 @@ export function historyView(
   return { entries, warnings, error };
 }
 
+export type LineageSummary = { nodes: number; edges: number };
+
+/**
+ * 「接力记录」页的血缘计数（`watch status --json` 的可选 `lineage`）。
+ *
+ * CLI 在历史读不出来时不输出该字段，空图只代表这条链确实没有记录；这里只在
+ * `nodes` 是数组且非空时给计数，形状不对或没有节点时返回 null——不拿 0 个节点
+ * 冒充「有一条空血缘」，也不在缺字段时编一个数。
+ */
+export function lineageSummary(data: { lineage?: unknown } | null | undefined): LineageSummary | null {
+  const lineage = data?.lineage;
+  if (typeof lineage !== 'object' || lineage === null) return null;
+  const raw = lineage as { nodes?: unknown; edges?: unknown };
+  if (!Array.isArray(raw.nodes) || raw.nodes.length === 0) return null;
+  return { nodes: raw.nodes.length, edges: Array.isArray(raw.edges) ? raw.edges.length : 0 };
+}
+
 /**
  * `list_terminals` 的返回值过滤：只留桌面端认识的终端 id。
  * `copy` 是前端加的选项（仅复制命令），不是可拉起的终端；一个都不剩时退回系统终端，
