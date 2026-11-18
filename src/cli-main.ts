@@ -25,7 +25,7 @@ import { officialImportJournalRoot } from './providers/codex/official-import.js'
 import { doctorReport } from './core/doctor.js';
 import type { StoreFootprint } from './core/doctor.js';
 import { CLAUDE_PROJECT_SETTINGS_RELATIVE_PATHS, type ClaudeRetentionProbe } from './providers/claude/retention.js';
-import { cwdAliasHint, cwdControlCharsNote, cwdProblem, describeCwdProblem, describeRecordedCwd, describeRepoBranchNote, describeWorktreeNote, describeWriteCwd, inspectCwd, inspectRepoBranch, inspectWorktree, sameDirectorySync, splitElsewhereByDirectory } from './core/cwd.js';
+import { cwdAliasHint, cwdControlCharsNote, cwdProblem, describeCwdProblem, describeRecordedCwd, describeRepoBranchNote, describeWorktreeNote, describeWriteCwd, inspectCwd, inspectRepoBranch, inspectWorktree, sameDirectorySync, splitElsewhereByDirectory, type CwdInspection } from './core/cwd.js';
 import { escapeControlChars, hasControlChars } from './core/display.js';
 import { commandControlWarnings } from './core/terminal-command.js';
 import { trimUserKey } from './core/cli-input.js';
@@ -1953,6 +1953,9 @@ async function cmdPrompt(
   // 读者照着里面的相对路径与命令动手时，这个目录可能早已不在——这句必须进正文，stderr 不会跟着走。
   // 空字符串不探测：没有可核对的路径，不能把「没记」讲成「现在不存在」。
   let sourceCwdNote: string | undefined;
+  // 结构化状态给脚本用：正文的「工作目录状态」一行是给人读的，脚本不该解析它；
+  // 只有探测确实不是 ok 时才输出，健康目录不冒字段。
+  let sourceCwd: CwdInspection | undefined;
   // 链接工作树和目录状态是两件事：目录还在，但它是 `git worktree add` 建出来的独立工作树时，
   // 文档读者从路径上看不出来，可能回主工作树改同一份文件——必须写进正文（PLAN §5）。
   let sourceWorktreeNote: string | undefined;
@@ -1969,6 +1972,7 @@ async function cmdPrompt(
     const recordedProbe = await inspectCwd(foundRef.cwd);
     const recordedCwdNote = describeRecordedCwd(recordedProbe, foundRef.cwd);
     if (recordedCwdNote) {
+      sourceCwd = recordedProbe;
       sourceCwdNote = recordedCwdNote;
       warnings.push(`来源会话记录的工作目录现在不可用：${recordedCwdNote}`);
     }
@@ -2034,6 +2038,7 @@ async function cmdPrompt(
       sessionId: foundRef.sessionId,
       provider: adapter.id,
       cwd: foundRef.cwd,
+      ...(sourceCwd ? { sourceCwd } : {}),
       profile: result.profile,
       ...(lastUserTurns !== undefined ? { lastUserTurns } : {}),
       ...(sinceCompact ? { sinceCompact: true } : {}),

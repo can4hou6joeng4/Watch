@@ -363,3 +363,6 @@ Computer Use 原生管道未能启动，因此此记录依赖真实窗口中的�
 **同类工具页补失败尝试证据化披露来源（2026-11-18，v0.1.151，`docs/alternatives.md` 中英双语）**：`REMvisual/claude-handoff`（75★）固定保留失败尝试、被否定的决策与证据，写入前按最低字段自校验；它是 Claude Code Skill，不等于 Watch 已支持原生格式写回。失败尝试结构化字段据此落地，见 v0.1.150 记录。
 
 **修正 `watch prompt` 来源漂移的重复测量（2026-11-18，v0.1.152，隔离合成检查）**：v0.1.148 让 `--json` 输出 `sourceDrift` 与正文说明共用判据，但 CLI 先取一次 stat、正文函数又自己取一次；两次之间来源若再次变化，结构化字段与正文会给出不同的字节数，甚至一边有一边没有。现在 `describeSourceChangedDuringPrompt()` 接受已测量的 `SourceChangeSince`，CLI 显式传入同一份结论；只有调用方省略时才自行测量，旧调用方行为不变。新增 2 项合成断言（文件在两次测量之间消失仍使用预计算结论、CLI 正文与字段字节差一致）；typecheck 与完整隔离回归通过；未运行原生客户端，不构成原生验收。
+
+**`watch prompt --json` 输出结构化来源工作目录状态（2026-11-18，v0.1.153，隔离合成检查）**：正文的「工作目录状态」一行与 `prompt_source_cwd_unavailable` 此前已经是降级披露，但脚本只能解析中文正文才能区分「目录不存在」「被同名文件占住」「权限不足」。现在 CLI 复用同一次 `inspectCwd()` 结果，探测不是 `ok` 时额外返回 `sourceCwd: { state, reason? }`（state 为 `missing` / `not-directory` / `denied` / `unknown`，只有 unknown 带 errno reason）；健康目录与空字符串都不冒字段。字段与正文、findings、warnings 同源，不新增探测；`watch prompt` 仍只读。新增 3 项 CLI 合成断言（健康目录缺省、目录删除为 missing、同名文件为 not-directory）；typecheck 与定向隔离测试通过；未运行原生客户端，不构成原生验收。
+
