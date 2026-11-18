@@ -994,7 +994,7 @@ export const guides = [
               },
               {
                 title: '步骤 3：检查 findings 与来源状态',
-                body: '加 --json 时，除 markdown 外还会返回 findings 与 warnings。degraded 表示已降级但说清了，skipped 表示按你的选项省略了内容；正文里的来源状态、坏行、用量与分支行用于判断这份文档能不能直接交给目标助手。',
+                body: '加 --json 时，除 markdown 外还会返回 findings 与 warnings。degraded 表示已降级但说清了，skipped 表示按你的选项省略了内容；正文里的来源状态、坏行、用量与分支行用于判断这份文档能不能直接交给目标助手。普通仓库根还会返回结构化 sourceBranch（{ branch, repoRoot }，detached HEAD 为 { detached: true, repoRoot }），脚本不必解析正文。',
               },
               {
                 title: '步骤 4：明确说明这是摘要交接',
@@ -1072,7 +1072,7 @@ export const guides = [
               },
               {
                 title: 'Step 3: Review findings and source state',
-                body: 'With --json the result includes markdown, findings and warnings. degraded means the downgrade was disclosed, skipped means content was omitted by your options. The source state, bad lines, usage and branch lines in the document tell you whether it is safe to hand over.',
+                body: 'With --json the result includes markdown, findings and warnings. degraded means the downgrade was disclosed, skipped means content was omitted by your options. The source state, bad lines, usage and branch lines in the document tell you whether it is safe to hand over. A normal repository root also returns a structured sourceBranch ({ branch, repoRoot }; a detached HEAD returns { detached: true, repoRoot }), so scripts do not parse the document.',
               },
               {
                 title: 'Step 4: State that it is a summary handoff',
