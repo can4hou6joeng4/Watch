@@ -770,7 +770,7 @@ export const guides = [
   {
     id: 'empty-session-resume-check',
     published: '2026-11-17',
-    modified: '2026-11-17',
+    modified: '2026-11-18',
     status: 'published',
     locales: {
       zh: {
@@ -790,6 +790,10 @@ export const guides = [
           {
             type: 'paragraph',
             text: '会话文件有两种「空」：一种是 0 轮可读——文件里有合法的会话头（Claude Code 的占位 user 行、Codex rollout 的 session_meta），但没有任何对话轮次；另一种是 0 字节——进程被杀、磁盘写满或只写了一半，文件本身空了。两者的下一步不同：0 轮可读可能只是刚建出来的新会话，也可能内容被清空；0 字节则连会话元数据都可能一起丢了，Codex 的归属写在 rollout 首行，截成 0 字节后连反查都会失败。',
+          },
+          {
+            type: 'paragraph',
+            text: '还有一种「打开是空的」发生在文件已经不在的时候：Claude Code 会按 cleanupPeriodDays 在会话启动后清理过期 transcript，官方默认 30 天，这个键允许写在任意设置文件里，项目设置可以覆盖用户设置。超期会话不再出现在 /resume 里，Watch 的 open 与 resume 自然也找不到。watch doctor 会只读核对用户设置、当前目录项目设置，以及在普通 Git 仓库子目录运行时的仓库根目录本地设置（scope 为 repository-local），低于默认值或无法确认时给出警告；它不会把这个值说成实际生效值，--settings 与管理设置也不在探测范围。调大保留期只能减少以后被清理的会话，不会恢复已经删除的文件——重要会话请提前备份。',
           },
           {
             type: 'steps',
@@ -837,8 +841,17 @@ export const guides = [
             question: 'Watch 能帮我自动恢复被清空的会话吗？',
             answer: '不能。Watch 只读写本地会话文件，没有历史备份能力，也不会凭空重建对话。恢复只能来自你自己的备份（Time Machine、git 之外的副本、编辑器历史等），恢复文件后再 resume 即可。',
           },
+          {
+            question: 'Claude Code 会自己删掉旧会话吗？',
+            answer: '会。官方 settings 里的 cleanupPeriodDays 默认 30 天，会话启动后后台清理超过期限的 transcript，超期会话不再出现在 /resume 里。它允许写在任意设置文件里，项目设置可以覆盖用户设置；watch doctor 会只读核对用户设置、当前目录项目设置与仓库根目录本地设置，但 --settings 与管理设置不在探测范围，报告不代表实际生效值。调大这个值只能减少以后被删除的会话，不能找回已经删掉的文件。',
+          },
         ],
         sources: [
+          {
+            label: 'Anthropic Claude Code settings reference',
+            url: 'https://code.claude.com/docs/en/settings-reference',
+            accessed: '2026-11-18',
+          },
           {
             label: 'Watch repository',
             url: 'https://github.com/can4hou6joeng4/Watch',
@@ -868,6 +881,10 @@ export const guides = [
           {
             type: 'paragraph',
             text: 'There are two kinds of empty. A readable 0-turn file still has a valid session header (the placeholder user line in Claude Code, the session_meta line in a Codex rollout) but no conversation turns. A zero-byte file was killed mid-write, ran out of disk, or was truncated, so even the session metadata may be gone; Codex stores attribution in the first rollout line, so truncating to zero bytes also breaks lookup.',
+          },
+          {
+            type: 'paragraph',
+            text: 'A third way to open an empty session is that the file no longer exists. Claude Code deletes transcripts older than cleanupPeriodDays after a session starts; the official default is 30 days, and the key is allowed in any settings file, so project settings can override user settings. Expired sessions no longer appear in /resume, and watch open or resume cannot find them either. watch doctor reads, without writing, your user settings, the current directory project settings and, inside a subdirectory of a normal Git repository, the repository-root local settings (scope repository-local), and warns when a value is below the default or cannot be confirmed. It does not present that value as the effective one, and --settings plus managed settings are out of scope. Raising the retention period only reduces future deletions; it does not restore files already removed, so back up important sessions in advance.',
           },
           {
             type: 'steps',
@@ -915,8 +932,17 @@ export const guides = [
             question: 'Can Watch restore a cleared session automatically?',
             answer: 'No. Watch only reads and writes local session files. It has no history backup and does not invent conversation. Recovery comes from your own backup (Time Machine, copies outside the repo, editor history), and you resume after restoring the file.',
           },
+          {
+            question: 'Does Claude Code delete old sessions on its own?',
+            answer: 'Yes. cleanupPeriodDays in the official settings reference defaults to 30 days; after a session starts, Claude Code sweeps transcripts older than that in the background, and expired sessions stop appearing in /resume. The key is allowed in any settings file, so project settings can override user settings. watch doctor reads your user settings, the current directory project settings and the repository-root local settings without writing, but --settings and managed settings are out of scope, so the report is not the effective value. Raising the value only reduces future deletions; it cannot bring back files already removed.',
+          },
         ],
         sources: [
+          {
+            label: 'Anthropic Claude Code settings reference',
+            url: 'https://code.claude.com/docs/en/settings-reference',
+            accessed: '2026-11-18',
+          },
           {
             label: 'Watch repository',
             url: 'https://github.com/can4hou6joeng4/Watch',
