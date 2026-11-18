@@ -139,7 +139,7 @@ import-codex  prepare|confirm|status|project-prepare|project-confirm|project-sta
 
 读取 `status --json` 的血缘图时，用 `nodes[].key` 匹配 `edges[].from` 和 `edges[].to`。展示会话身份时用节点里的原始 `provider` 和 `sessionId`。
 
-`doctor --json` 的 `claudeRetention` 报告 Claude Code 用户设置中的保留期，`claudeProjectRetention` 报告项目设置里读到的值：当前目录下的 `.claude/settings.local.json` 与 `.claude/settings.json`，以及在普通 Git 仓库子目录运行时仓库根目录的 `.claude/settings.local.json`（`scope` 为 `repository-local`）。设置路径异常、文件不可读或超过 1 MiB 时，返回 `unknown` 并给出原因。`cleanupPeriodDays` 允许写在任意设置文件里，项目设置可以覆盖用户设置；工作树 / 子模块（`.git` 是文件）、仓库根就是家目录或目录所有权不符时跳过仓库根这一份，`--settings` 与管理设置不在范围内，实际清理期限取决于 Claude Code 加载的全部设置。
+`doctor --json` 的 `claudeRetention` 报告 Claude Code 用户设置中的保留期，`claudeProjectRetention` 报告项目设置里读到的值：当前目录下的 `.claude/settings.local.json` 与 `.claude/settings.json`，以及在普通 Git 仓库子目录运行时仓库根目录的 `.claude/settings.local.json`（`scope` 为 `repository-local`）。设置路径异常、文件不可读或超过 1 MiB 时，返回 `unknown` 并给出原因。`cleanupPeriodDays` 允许写在任意设置文件里，项目设置可以覆盖用户设置；工作树 / 子模块（`.git` 是文件）、仓库根就是家目录或目录所有权不符时跳过仓库根这一份，`--settings` 与管理设置不在范围内，实际清理期限取决于 Claude Code 加载的全部设置。若探测到显式低于官方默认的保留期，而链尾的 Claude Code 会话文件比该天数更旧，`doctor` 会把这条链标成清理风险（按文件最后修改时间估算，不宣称一定会被删除）。
 
 `usage` 的合计只是「读得出来的部分之和」：读取失败、没有 usage 字段、适配器不提供用量，都会在合计行括注；某个会话的用量数据源有无法解析的行时，合计后另起一行说明这轮是下界，按会话那一行也会就地标出「这个数是下界」——`--json` 对应 `totalExcluded` / `totalMissingUsage` / `byProvider[].usageBadLines`。内容文件有坏行时同样会披露，`byProvider[].contentBadLines` 给出坏行数；旁路文件里已经读到的用量仍会保留在合计里，不会因为内容文件的坏行而消失。只有解析确实为 0 轮时，警告才会说它不能当作空会话；已有轮次时只说明内容可能不完整。
 
