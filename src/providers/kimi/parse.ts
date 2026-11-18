@@ -62,8 +62,9 @@ export async function parseKimiSession(ref: SessionRef): Promise<UnifiedTurn[]> 
   const endReasons = new Map<string, number>();
   let unrecognizedEndReasonCount = 0;
   let lastNonCompletedReason = '';
-  let lastFailureTimestamp = '';
   let tailEndedFailed = false;
+  let tailEventSeq = 0;
+  let failureEventSeq = 0;
 
   for await (const line of iterateFileLines(ref.filePath)) {
     const trimmed = line.trim();
@@ -88,6 +89,7 @@ export async function parseKimiSession(ref: SessionRef): Promise<UnifiedTurn[]> 
         timestamp,
         ...(extracted.events.length ? { events: extracted.events } : {}),
       });
+      tailEventSeq += 1;
       state = 'user';
       continue;
     }
@@ -121,6 +123,7 @@ export async function parseKimiSession(ref: SessionRef): Promise<UnifiedTurn[]> 
         // 1.4 日志可能两者并存：同一段回答不能因回退读取再写一遍
         if (loopTextTurns.has(last) && last.text === text) continue;
         last.text = last.text ? `${last.text}\n\n${text}` : text;
+        tailEventSeq += 1;
         state = 'assistant';
         continue;
       }
@@ -135,6 +138,7 @@ export async function parseKimiSession(ref: SessionRef): Promise<UnifiedTurn[]> 
       const normalized = normalizeUserText(text);
       if (normalized === null) continue;
       turns.push({ role: 'user', text: normalized, timestamp });
+      tailEventSeq += 1;
       state = 'user';
       continue;
     }
@@ -166,6 +170,7 @@ export async function parseKimiSession(ref: SessionRef): Promise<UnifiedTurn[]> 
       if (state !== 'assistant') continue;
 
       const last = ensureAssistant(turns, timestamp, 'kimi');
+      tailEventSeq += 1;
       processLoopEvent(
         event,
         last,
@@ -197,6 +202,7 @@ export async function parseKimiSession(ref: SessionRef): Promise<UnifiedTurn[]> 
         text: `${KIMI_COMPACTION_SUMMARY_PREFIX}\n${summary}${unknownBlockNote(message.unknown) ? `\n\n${unknownBlockNote(message.unknown)}` : ''}`,
         timestamp,
       });
+      tailEventSeq += 1;
       state = 'user';
       continue;
     }
@@ -223,7 +229,7 @@ export async function parseKimiSession(ref: SessionRef): Promise<UnifiedTurn[]> 
       if (!known && reason !== '（缺 reason）') unrecognizedEndReasonCount += 1;
       if (reason !== 'completed') {
         lastNonCompletedReason = reason;
-        lastFailureTimestamp = timestamp;
+        failureEventSeq = tailEventSeq;
         tailEndedFailed = true;
       } else {
         tailEndedFailed = false;
@@ -270,7 +276,7 @@ export async function parseKimiSession(ref: SessionRef): Promise<UnifiedTurn[]> 
   }
   // Kimi 的 parse 不能凭空造空助手轮（写出侧会把无正文无事件的轮次跳过，round-trip 失败），
   // 与 Grok 同口径：用结构化 tailFailure 改写下游「可能还在生成」的兜底句。
-  const tailUnanswered = tailEndedFailed && turns.at(-1)?.role === 'user';
+  const tailUnanswered = tailEndedFailed && failureEventSeq === tailEventSeq && turns.at(-1)?.role === 'user';
   if (endNoteParts.length > 0) {
     const tail = tailUnanswered && lastNonCompletedReason
       ? `；最后一轮以${END_REASON_LABELS[lastNonCompletedReason] ?? '请求失败'}结束，不是仍在生成`

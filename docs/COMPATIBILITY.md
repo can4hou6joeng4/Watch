@@ -291,3 +291,5 @@ Computer Use 原生管道未能启动，因此此记录依赖真实窗口中的�
 **站点 GEO 元信息对齐同类项目实践（2026-11-18，v0.1.114，站点产物 + 1 项回归）**：调研 `wilbeibi/catchup`（本地优先跨 Agent 接力 CLI，83★）的站点产物后，采用其两项可迁移做法：每个页面 `robots` 显式加 `max-snippet:-1, max-image-preview:large`（不再用默认截断提示），并把 Watch 仓库 URL 加入 Person 与 SoftwareApplication 的 `sameAs`，让实体与代码仓库的关联不靠站点域名猜测。指南页仍用 TechArticle，不伪造 SoftwareApplication 实体。新增 1 项站点回归；未运行原生客户端，不构成原生验收。
 
 **同类工具对照补充 ThreadPort（2026-11-18，README 中英镜像）**：`Frankie-Xu/threadport`（约 123★）用可校验的 Context Capsule 记录目标、决策、文件、测试与下一步，并把「实现」与「尚未原生验收」分开写。Watch 的对应边界是三条交接入口与逐路径防护，不用合成测试冒充原生验收。中英 README 的同类工具段加入该对照，不改版本历史策略。
+
+**Kimi 尾部失败与事件顺序（2026-11-18，v0.1.116，隔离合成检查）**：v0.1.107 用 `ProcessEvent.tailFailure` 改写「可能还在生成」时只看「尾部停在用户轮 + 曾有非 completed 的 `turn.ended`」。同一毫秒内先失败、后又收到新问题时会把最后的用户轮说成失败收尾。现在解析过程维护可见轮次与非正常结束的事件序号，只有失败事件紧跟最后一个可见轮次时才标记尾部失败；会话级失败原因计数不变。新增 1 项合成检查；完整隔离回归 2264 项通过。未运行原生客户端，不构成原生验收。
