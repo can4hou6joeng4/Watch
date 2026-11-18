@@ -406,8 +406,9 @@ export async function doctorReport(cwd: string, deps: DoctorDeps): Promise<Docto
     };
   }
   if (claudeRetention.state === 'unknown') {
+    const settingsPath = claudeRetention.settingsPath ? `（${escapeControlChars(claudeRetention.settingsPath)}）` : '';
     warnings.push(
-      `Claude Code 的会话保留期无法确认：${claudeRetention.error}；官方默认保留 ${CLAUDE_DEFAULT_CLEANUP_DAYS} 天，超过期限的 transcript 会被原生清理——链尾一旦指向它们，open / resume 会找不到内容`,
+      `Claude Code 的会话保留期无法确认${settingsPath}：${claudeRetention.error}。官方默认保留 ${CLAUDE_DEFAULT_CLEANUP_DAYS} 天，请核对实际使用的设置`,
     );
   } else if (
     claudeRetention.state === 'configured' &&
@@ -416,7 +417,7 @@ export async function doctorReport(cwd: string, deps: DoctorDeps): Promise<Docto
   ) {
     const settingsPath = claudeRetention.settingsPath ? `${escapeControlChars(claudeRetention.settingsPath)} ` : '';
     warnings.push(
-      `Claude Code 用户设置（${settingsPath}）把 cleanupPeriodDays 设为 ${claudeRetention.configuredDays} 天，低于官方默认 ${CLAUDE_DEFAULT_CLEANUP_DAYS} 天：超过 ${claudeRetention.configuredDays} 天的 transcript 会被原生清理且不提示，链尾指向这些会话时 open / resume 会失败——若这是有意设置可忽略，否则调大该值或先备份重要会话`,
+      `Claude Code 用户设置（${settingsPath}）把 cleanupPeriodDays 设为 ${claudeRetention.configuredDays} 天，低于官方默认 ${CLAUDE_DEFAULT_CLEANUP_DAYS} 天。这个值若在 Claude Code 中生效，超过期限的会话记录可能被清理，导致 open / resume 找不到内容。请核对项目或管理设置的覆盖情况，并提前备份重要会话`,
     );
   }
 

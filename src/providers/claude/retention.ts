@@ -1,7 +1,8 @@
-import { readFile } from 'node:fs/promises';
+import { constants } from 'node:fs';
+import { open } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import path from 'node:path';
-import { describePathReadFailureReason, isMissingPathError } from '../../core/read-text.js';
+import { describePathReadFailureReason } from '../../core/read-text.js';
 import { claudeConfigDirFrom } from './build.js';
 
 /**
@@ -13,6 +14,7 @@ import { claudeConfigDirFrom } from './build.js';
  * `open` / `switch` / `resume` 都会找不到内容——所以排障入口应当先说出来。
  */
 export const CLAUDE_DEFAULT_CLEANUP_DAYS = 30;
+const MAX_SETTINGS_BYTES = 1024 * 1024;
 
 /**
  * Claude Code 用户级设置里的保留期探针。
@@ -26,7 +28,7 @@ export type ClaudeRetentionProbe = {
   /** 实际读取的设置文件；`CLAUDE_CONFIG_DIR` 无效时为 null */
   settingsPath: string | null;
   /**
-   * default = 用户设置没写这个键（官方默认值适用）；
+   * default = 用户设置文件不存在或未写这个键；defaultDays 仅是官方默认值。
    * configured = 读到一个合法值；
    * unknown = 设置读不出来 / 不是合法形状，无法确认用户是否覆盖了默认值。
    */
@@ -84,13 +86,35 @@ export function parseClaudeCleanupPeriodDays(raw: string): ParsedCleanupPeriodDa
 export async function probeClaudeRetentionDir(configDir: string): Promise<ClaudeRetentionProbe> {
   const settingsPath = path.join(configDir, 'settings.json');
   const base = { settingsPath, defaultDays: CLAUDE_DEFAULT_CLEANUP_DAYS, configuredDays: null };
+  const unknown = (error: string): ClaudeRetentionProbe => ({ ...base, state: 'unknown', error });
   let raw: string;
   try {
-    raw = await readFile(settingsPath, 'utf8');
+    // 非阻塞打开后检查同一个句柄。软链接可指向普通文件，FIFO 不会卡在 open。
+    const file = await open(settingsPath, constants.O_RDONLY | constants.O_NONBLOCK);
+    try {
+      const info = await file.stat();
+      if (!info.isFile()) return unknown('设置路径不是普通文件');
+      const oversized = '设置文件超过 1 MiB 的诊断读取上限';
+      if (info.size > MAX_SETTINGS_BYTES) return unknown(oversized);
+      // 多读一个字节区分恰好达到上限与读取过程中继续增长的文件。
+      const bytes = Buffer.allocUnsafe(MAX_SETTINGS_BYTES + 1);
+      let total = 0;
+      while (total < bytes.length) {
+        const { bytesRead } = await file.read(bytes, total, bytes.length - total, total);
+        if (bytesRead === 0) break;
+        total += bytesRead;
+      }
+      if (total > MAX_SETTINGS_BYTES) return unknown(oversized);
+      raw = bytes.toString('utf8', 0, total);
+    } finally {
+      await file.close();
+    }
   } catch (error) {
-    // 没有用户设置是正常事实：官方默认值适用，不要报成故障。
-    if (isMissingPathError(error)) return { ...base, state: 'default' };
-    return { ...base, state: 'unknown', error: `读取设置文件失败：${describePathReadFailureReason(error)}` };
+    const { code } = error as NodeJS.ErrnoException;
+    if (code === 'ENOENT') return { ...base, state: 'default' };
+    if (code === 'ENOTDIR') return unknown('设置路径有一级不是目录');
+    if (code === 'EISDIR') return unknown('设置路径不是普通文件');
+    return unknown(`读取设置文件失败：${describePathReadFailureReason(error)}`);
   }
   const parsed = parseClaudeCleanupPeriodDays(raw);
   if (parsed.state === 'default') return { ...base, state: 'default' };

@@ -2127,9 +2127,9 @@ function describeStoreFootprint(f: StoreFootprint): string {
 function describeClaudeRetention(r: ClaudeRetentionProbe): string {
   if (r.state === 'unknown') return `无法确认（${r.error}；官方默认 ${r.defaultDays} 天）`;
   if (r.state === 'default') {
-    return `用户设置未指定 cleanupPeriodDays，官方默认 ${r.defaultDays} 天（超过期限的 transcript 会被原生清理，链尾指向它们时 open / resume 会找不到内容）`;
+    return `用户设置未指定 cleanupPeriodDays。官方默认 ${r.defaultDays} 天，项目或管理设置可能覆盖`;
   }
-  return `用户设置 cleanupPeriodDays=${r.configuredDays} 天（项目 / managed 设置可能覆盖；超过 ${r.configuredDays} 天的 transcript 会被原生清理）`;
+  return `用户设置 cleanupPeriodDays=${r.configuredDays} 天。实际清理期限取决于 Claude Code 加载的全部设置`;
 }
 
 async function cmdDoctor(cwd: string, json: boolean, strict: boolean): Promise<void> {
