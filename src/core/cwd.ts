@@ -95,7 +95,7 @@ export function describeCwdProblem(probe: CwdInspection, cwd: string): string | 
     case 'denied':
       return `--cwd 目录无权访问：${shown}（权限问题，不是路径写错）；${tail}${note}`;
     case 'unknown':
-      return `--cwd 目录无法访问：${shown}（${probe.reason}）；${tail}${note}`;
+      return `--cwd 目录无法访问：${shown}（${escapeControlChars(probe.reason)}）；${tail}${note}`;
   }
 }
 
@@ -118,7 +118,7 @@ export function describeWriteCwd(probe: CwdInspection, cwd: string): string | nu
     case 'denied':
       return `--cwd 目录无权访问：${showPathInMessage(cwd)}（权限问题，不是路径写错）${cwdControlCharsNote(cwd)}`;
     case 'unknown':
-      return `--cwd 目录无法访问：${showPathInMessage(cwd)}（${probe.reason}）${cwdControlCharsNote(cwd)}`;
+      return `--cwd 目录无法访问：${showPathInMessage(cwd)}（${escapeControlChars(probe.reason)}）${cwdControlCharsNote(cwd)}`;
   }
 }
 
@@ -148,7 +148,7 @@ export function describeRecordedCwd(probe: CwdInspection, cwd: string): string |
     case 'denied':
       return `${shown} 现在读不出来（权限问题，不是路径写错）；文档里的相对路径与命令都以它为前提，动手前先确认权限或换一个可用的工作目录`;
     case 'unknown':
-      return `${shown} 现在无法确认是否存在（${probe.reason}）；文档里的相对路径与命令都以它为前提，动手前先确认工作目录`;
+      return `${shown} 现在无法确认是否存在（${escapeControlChars(probe.reason)}）；文档里的相对路径与命令都以它为前提，动手前先确认工作目录`;
   }
 }
 
@@ -277,7 +277,7 @@ export async function sessionCwdProblem(cwd: string): Promise<string | null> {
     case 'denied':
       return `会话记录的工作目录无权访问：${shown}（权限问题，不是被删除）；${tail}${note}`;
     case 'unknown':
-      return `无法确认会话记录的工作目录能否进入：${shown}（${probe.reason}）；${tail}${note}`;
+      return `无法确认会话记录的工作目录能否进入：${shown}（${escapeControlChars(probe.reason)}）；${tail}${note}`;
   }
 }
 
@@ -422,7 +422,7 @@ export function describeRepoBranchNote(probe: RepoBranchInspection, cwd?: string
     case 'detached':
       return `当前是 detached HEAD（HEAD 指向提交而不是分支）${rootNote(probe.repoRoot)}；接手后若要提交，先切回目标分支`;
     case 'unknown':
-      return `无法确认当前 git 分支（${probe.reason}）；接手前先自行核对`;
+      return `无法确认当前 git 分支（${escapeControlChars(probe.reason)}）；接手前先自行核对`;
   }
 }
 
@@ -456,7 +456,7 @@ export function describeWorktreeNote(probe: WorktreeInspection): string | null {
     case 'other':
       return null;
     case 'unknown':
-      return `无法确认这个目录是不是 git 链接工作树（${probe.reason}）；若是，这里的改动属于它自己的分支，动手前先核对`;
+      return `无法确认这个目录是不是 git 链接工作树（${escapeControlChars(probe.reason)}）；若是，这里的改动属于它自己的分支，动手前先核对`;
     case 'worktree': {
       const where = probe.mainWorktree
         ? `主工作树在 ${showPathInMessage(probe.mainWorktree)}`
