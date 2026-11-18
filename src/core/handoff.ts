@@ -1672,10 +1672,22 @@ export async function handoff(
       // （与 `open` 纯打开 / `adopt` / `switch` 其它分支的 0 轮披露同一口径）。
       const resumeTargetReadableEmpty = resumeTargetEmpty && !resumeReadProblem;
       if (resumeTargetReadableEmpty) {
+        // 与 status / chain list / doctor / new 同档：parse 跳过坏行，0 轮也可能是截断文件。
+        const subject = `目标会话 ${resumeRef.sessionId}（${target.displayName}）`;
+        const badScan = await scanUnparsableJsonLines(resumeRef.filePath);
+        const badFailure = describeBadLinesScanFailure(
+          badScan,
+          subject,
+          '是否真的只有 0 轮无法确认——先确认该文件可读再重试',
+        );
+        const reason = badScan.count > 0
+          ? `文件里有 ${badScan.count} 行无法解析（截断或损坏），这些内容已被跳过——更可能是文件被截断或损坏，不能当成「刚建出来的空会话」`
+          : badFailure ?? `可能是刚建出来的空会话，也可能内容已被清空`;
         warnings.push(
-          `目标会话 ${resumeRef.sessionId}（${target.displayName}）解析出 0 轮（没有可继续的对话）：` +
-            `可能是刚建出来的空会话，也可能内容已被清空；下面这条 resume 打开的是空会话——` +
-            `如果它本该有历史，先在 ${target.displayName} 里打开它确认，或从备份恢复该文件（Watch 不会替你重建历史）`,
+          `${subject} 解析出 0 轮（没有可继续的对话）：${reason}` +
+            `${badFailure ? `；${badFailure}` : ''}；下面这条 resume 打开的是空会话——` +
+            `如果它本该有历史，先在 ${target.displayName} 里打开它确认，或从备份恢复该文件（Watch 不会替你重建历史）；` +
+            `如果挑错了会话，用 watch adopt ${targetId} --session <另一个会话 id> 换绑`,
         );
       }
       return {
