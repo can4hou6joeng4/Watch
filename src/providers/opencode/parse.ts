@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
 import { escapeControlChars } from '../../core/display.js';
-import { normalizeUserText, OPENCODE_COMPACTION_SUMMARY_PREFIX, OPENCODE_SYNTHETIC_TEXT_PREFIX, OPENCODE_TOOL_FAILURE_PREFIX, WATCH_CONTEXT_DISCLOSURE_PREFIX } from '../../core/rich.js';
+import { normalizeUserText, OPENCODE_COMPACTION_SUMMARY_PREFIX, OPENCODE_SYNTHETIC_TEXT_PREFIX, OPENCODE_TOOL_FAILURE_PREFIX, unwrapMarkedToolInput, WATCH_CONTEXT_DISCLOSURE_PREFIX } from '../../core/rich.js';
 import { isoFromEpochMs } from '../../core/time.js';
 import type { ProcessEvent, SessionRef, TokenUsage, UnifiedTurn } from '../../core/types.js';
 import { detectOpencodeLayout, opencodeDbPath, opencodeDbSqliteError, probeOpencodeDbFile } from './paths.js';
@@ -48,7 +48,8 @@ type OpencodeMessageData = {
 
 type OpencodeToolState = {
   status?: string;
-  input?: Record<string, unknown>;
+  // 上游类型是 Record<string, any>；Watch 写入侧会把非对象入参包成 { value: 原值 }（见 build 侧）。
+  input?: unknown;
   output?: unknown;
   error?: string;
   metadata?: Record<string, unknown>;
@@ -265,7 +266,12 @@ function partToEvents(part: OpencodePartData, baseTime: number, recordKey: strin
     });
   } else if (isToolPart(part)) {
     const callId = opencodeCallId(part.callID, '1.x tool.callID', recordKey, callIds);
-    const input = part.state?.input ?? {};
+    // 上游 v1 的 `state.input` 只接受对象；Watch 写入侧把非对象包成 `{ value: 原值 }` 并加
+    // `metadata.watch_wrapped_input`，这里认标记才还原（同形原生对象不猜拆包）。
+    const markedWrapped = part.state?.metadata?.watch_wrapped_input === true;
+    const input = markedWrapped
+      ? unwrapMarkedToolInput(part.state?.input ?? {}, 'value')
+      : part.state?.input ?? {};
     // Watch 用合法 error 状态承载来源未记录结果的调用；它并非一次真实失败返回，不能伪造 tool_result。
     const unfinished = part.state?.status === 'error' && part.state.metadata?.watch_unfinished_tool === true;
     events.push({

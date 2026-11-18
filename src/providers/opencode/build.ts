@@ -5,7 +5,7 @@ import type { ImportTurnsOpts } from '../adapter.js';
 import { SessionLookupFailureError } from '../adapter.js';
 import type { ProcessEvent, SessionRef, TokenUsage, UnifiedTurn } from '../../core/types.js';
 import { escapeControlChars } from '../../core/display.js';
-import { stripToolFailurePrefix } from '../../core/rich.js';
+import { stripToolFailurePrefix, toolInputAsRecord } from '../../core/rich.js';
 import {
   assertUsableOpencodeDb,
   detectOpencodeLayout,
@@ -342,11 +342,19 @@ function buildStepFinishPartData(reason: string): string {
 
 function buildToolPartData(ev: ProcessEvent, fallbackCallId: string, time: number): string {
   // metadata 是 v1.18+ ToolStateCompleted 必填键（Record，可空对象），缺了整个 GET messages 会被 schema 校验拒掉
+  // 上游 v1 的 `state.input` 是 `Record<string, any>`：非对象入参包成 `{ value: 原值 }`（与官方导出
+  // `official-export.ts` 的 `inputRecord` 同形）并写 `metadata.watch_wrapped_input`，解析侧认标记才还原。
+  const wrappedInput = toolInputAsRecord(ev.input, 'value');
   const state: Record<string, unknown> = {
     status: ev.kind === 'tool_call' ? 'error' : 'completed',
     title: ev.name ?? 'tool',
-    input: ev.kind === 'tool_call' ? ev.input ?? {} : {},
-    metadata: ev.kind === 'tool_call' ? { watch_unfinished_tool: true } : {},
+    input: wrappedInput.record,
+    metadata:
+      ev.kind === 'tool_call'
+        ? { watch_unfinished_tool: true, ...(wrappedInput.wrapped ? { watch_wrapped_input: true } : {}) }
+        : wrappedInput.wrapped
+          ? { watch_wrapped_input: true }
+          : {},
     time: { start: time, end: time + 1 },
   };
   // 调用先按明确失败保存，匹配到真实结果后才改成 completed；缺结果时也符合原生状态 schema。
@@ -360,7 +368,7 @@ function buildToolPartData(ev: ProcessEvent, fallbackCallId: string, time: numbe
       state.error = stripToolFailurePrefix(ev.detail ?? ev.summary ?? '') || '工具执行失败';
     }
   }
-  return JSON.stringify({ type: 'tool', callID: ev.callId || fallbackCallId, tool: ev.kind === 'tool_call' ? ev.name : 'tool', state });
+  return JSON.stringify({ type: 'tool', callID: ev.callId || fallbackCallId, tool: ev.kind === 'tool_call' ? ev.name ?? 'tool' : 'tool', state });
 }
 
 export async function importTurnsToOpencode(
