@@ -86,6 +86,8 @@ npm --prefix desktop run build               # 桌面前端构建
 cd desktop && npx tauri build                # 打包当前平台
 ```
 
+预览官网时，先运行 `npm run site:build`，再运行 `npm run site:preview`。预览服务仅监听 `127.0.0.1`，默认端口为 4173，支持直接打开 `/en/` 和指南地址。
+
 更多约定（代码风格、测试隔离、提交规范）见 [贡献指南](CONTRIBUTING.md)。
 
 ## 使用

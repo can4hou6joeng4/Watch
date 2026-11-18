@@ -28,6 +28,8 @@ cargo test  --manifest-path desktop/src-tauri/Cargo.toml   # Rust 桥接单测
 
 官网文案源在 `scripts/lib/site-content.mjs`、`site-guides.mjs` 与 `scripts/site-content/llms.txt`；页面的 `siteDate` 与指南日期统一按 `Asia/Shanghai` 维护，构建日期使用同一时区，与宿主机时区无关，仍拒绝未来日期。站点图标生成使用桌面依赖中的 React / React DOM / Lucide，先运行 `npm --prefix desktop ci`，改源后运行 `npm run site:build`。升版或改分享图模板后，先运行 `node scripts/media/render-og.mjs`（默认使用 macOS Google Chrome，可用 `CHROME_PATH` 指定可执行文件），再构建站点。渲染器使用独立临时浏览器目录，记录版本及模板、PNG 的 SHA-256；`node scripts/media/render-og.mjs --check` 与站点构建不启动浏览器，发现过期或缺失产物会失败。`site/` 构建产物与渲染清单需要一同提交。
 
+构建后运行 `npm run site:preview`，可在 `http://127.0.0.1:4173` 检查中英文首页和指南。预览从 `site/` 读取产物，目录地址会打开其中的 `index.html`。
+
 ## 目录结构
 
 ```

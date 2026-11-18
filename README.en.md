@@ -86,6 +86,8 @@ npm --prefix desktop run build               # build the desktop frontend
 cd desktop && npx tauri build                # package the current platform
 ```
 
+To preview the website, run `npm run site:build`, then `npm run site:preview`. The preview listens on `127.0.0.1` on port 4173 by default. Open `/en/` or any guide URL directly.
+
 More conventions (code style, test isolation, commit format) are in the [contributing guide](CONTRIBUTING.md).
 
 ## Usage
