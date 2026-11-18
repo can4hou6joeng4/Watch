@@ -692,8 +692,22 @@ export async function doctorReport(cwd: string, deps: DoctorDeps): Promise<Docto
                 sessionId: tip.sessionId,
                 filePath: tip.filePath,
               });
+              // 与 status / chain list 同档：parse 跳过坏行，0 轮也可能是文件截断或损坏。
+              // 排障入口尤其不能把「文件坏了」讲成「刚建出来还没聊过」。
+              const subject = `链「${escapeControlChars(chain.name)}」的链尾会话 ${tip.provider} ${tip.sessionId}`;
+              const badScan = await scanUnparsableJsonLines(tip.filePath);
+              const badFailure = describeBadLinesScanFailure(
+                badScan,
+                subject,
+                '是否真的只有 0 轮无法确认——先确认该文件可读再重跑 watch doctor',
+              );
+              const reason = badScan.count > 0
+                ? `文件里有 ${badScan.count} 行无法解析（截断或损坏），这些内容已被跳过——更可能是文件被截断或损坏，不能当成「刚建出来的空会话」`
+                : badFailure ?? '如果刚 watch new 建出来还没聊过属正常，先在该会话里继续';
               warnings.push(
-                `链「${escapeControlChars(chain.name)}」的链尾会话 ${tip.provider} ${tip.sessionId} 是空的（解析出 0 轮，没有可继续的对话）：resume 打开就是空会话——如果刚 watch new 建出来还没聊过属正常，先在该会话里继续；否则从备份恢复该文件，或 watch switch ${tip.provider} 重新绑定，或 watch chain new <新名字> 另起一条链`,
+                `${subject} 是空的（解析出 0 轮，没有可继续的对话）：${reason}；` +
+                  `resume 打开就是空会话——若它本该有历史，先从备份恢复该文件（不属正常新建），` +
+                  `或 watch switch ${tip.provider} 重新绑定，或 watch chain new <新名字> 另起一条链`,
               );
             }
           } catch (error) {

@@ -2630,9 +2630,21 @@ async function cmdChain(cwd: string, json: boolean, action?: string, a?: string,
             `链「${escapeControlChars(c.name)}」的链尾会话文件无法确认是否还在（${last.toRef.provider}:${last.toRef.sessionId}）：${tipError}`,
           );
         } else if (turns === 0 && c.status === 'active') {
-          // 0 轮与 status 的 chainTipEmpty 同档：文件没坏，坏的是「resume 打开是空会话」的预期
+          // 与 status 的 chainTipEmpty 同档：parse 跳过坏行，0 轮也可能来自截断 / 损坏，
+          // 先把「坏行」与「合法空会话」分开，再决定要不要让人去原生客户端继续聊。
+          const subject = `链「${escapeControlChars(c.name)}」的链尾会话 ${last.toRef.provider} ${last.toRef.sessionId}`;
+          const badScan = await scanUnparsableJsonLines(last.toRef.filePath);
+          const badFailure = describeBadLinesScanFailure(
+            badScan,
+            subject,
+            '是否真的只有 0 轮无法确认——先确认该文件可读再重试',
+          );
+          const reason = badScan.count > 0
+            ? `文件里有 ${badScan.count} 行无法解析（截断或损坏），这些内容已被跳过——更可能是文件被截断或损坏，不能当成「刚建出来的空会话」`
+            : badFailure ?? '可能刚建出来还没聊过，也可能内容已被清空';
           warnings.push(
-            `链「${escapeControlChars(c.name)}」的链尾会话 ${last.toRef.provider} ${last.toRef.sessionId} 解析出 0 轮（没有可继续的对话）：resume 打开就是空会话——可能刚建出来还没聊过，也可能内容已被清空；如果它本该有历史，先在原生客户端里打开确认，或从备份恢复该文件`,
+            `${subject} 解析出 0 轮（没有可继续的对话）：${reason}；` +
+              `resume 打开就是空会话——如果它本该有历史，先确认文件是否需要从备份恢复（Watch 不会替你重建历史）`,
           );
         }
       }
