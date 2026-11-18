@@ -70,7 +70,7 @@ Watch 只做一件事：**把已保存的会话记录连同工作目录交到目
 
 **同类工具对照**
 
-[catchup](https://github.com/wilbeibi/catchup) 以转录文本交接为主，也提供 `fork` 与 `fork --into`；[ThreadPort](https://github.com/Frankie-Xu/threadport) 用可校验的 Capsule 记录可观察的工作状态；[agent-sessions](https://github.com/jazzyalex/agent-sessions) 把索引、刷新、失败、筛选无结果与真正空库分成不同状态；[Möbius](https://github.com/TardisBooo/Mobius) 把重复交接记录为 persistent handoff graph，强调从交接回溯到来源会话与消息范围，而不是只给一份摘要；[deja-vu](https://github.com/vshulcz/deja-vu) 提供只读的本地 Agent 存储审计，并点出 Claude Code `cleanupPeriodDays` 的 transcript 清理风险；[cross_agent_session_resumer](https://github.com/Dicklesworthstone/cross_agent_session_resumer) 与 [session-migrate](https://github.com/xhluca/session-migrate) 都提供原生会话格式转换。Watch 提供启动器、链式交接、Codex 官方导入三条独立入口，以及只读摘要导出和路径级写入防护；`status --json` 还会从本链的切换记录派生只读血缘图（节点是已确认会话，边是切换记录），桌面接力记录页显示同一份计数；`doctor` 只读核对 Claude Code 用户设置与当前目录项目设置里的 `cleanupPeriodDays`，但不把它们说成实际生效值（仓库根目录与管理设置可能覆盖）；桌面端近期列表也区分扫描中、读取失败与真正空列表。不同工具的适配与验收范围需要逐项核对；Watch 的实现边界见[架构说明](docs/ARCHITECTURE.md)，方向与版本限制见[兼容性记录](docs/COMPATIBILITY.md)。
+[catchup](https://github.com/wilbeibi/catchup) 以转录文本交接为主，也提供 `fork` 与 `fork --into`；[ThreadPort](https://github.com/Frankie-Xu/threadport) 用可校验的 Capsule 记录可观察的工作状态；[agent-sessions](https://github.com/jazzyalex/agent-sessions) 把索引、刷新、失败、筛选无结果与真正空库分成不同状态；[Möbius](https://github.com/TardisBooo/Mobius) 把重复交接记录为 persistent handoff graph，强调从交接回溯到来源会话与消息范围，而不是只给一份摘要；[deja-vu](https://github.com/vshulcz/deja-vu) 提供只读的本地 Agent 存储审计，并点出 Claude Code `cleanupPeriodDays` 的 transcript 清理风险；[cross_agent_session_resumer](https://github.com/Dicklesworthstone/cross_agent_session_resumer) 与 [session-migrate](https://github.com/xhluca/session-migrate) 都提供原生会话格式转换。Watch 提供启动器、链式交接、Codex 官方导入三条独立入口，以及只读摘要导出和路径级写入防护；`status --json` 还会从本链的切换记录派生只读血缘图（节点是已确认会话，边是切换记录），桌面接力记录页显示同一份计数；`doctor` 只读核对 Claude Code 用户设置、当前目录项目设置与仓库根目录本地设置里的 `cleanupPeriodDays`，但不把它们说成实际生效值（`--settings` 与管理设置可能覆盖）；桌面端近期列表也区分扫描中、读取失败与真正空列表。不同工具的适配与验收范围需要逐项核对；Watch 的实现边界见[架构说明](docs/ARCHITECTURE.md)，方向与版本限制见[兼容性记录](docs/COMPATIBILITY.md)。
 
 ## 安装
 
@@ -139,7 +139,7 @@ import-codex  prepare|confirm|status|project-prepare|project-confirm|project-sta
 
 读取 `status --json` 的血缘图时，用 `nodes[].key` 匹配 `edges[].from` 和 `edges[].to`。展示会话身份时用节点里的原始 `provider` 和 `sessionId`。
 
-`doctor --json` 的 `claudeRetention` 报告 Claude Code 用户设置中的保留期，`claudeProjectRetention` 报告当前目录下 `.claude/settings.local.json` 与 `.claude/settings.json` 里读到的值。设置路径异常、文件不可读或超过 1 MiB 时，返回 `unknown` 并给出原因。`cleanupPeriodDays` 允许写在任意设置文件里，项目设置可以覆盖用户设置；本次只探测当前目录下的这两份文件，仓库根目录的 `settings.local.json`、`--settings` 与管理设置不在范围内，实际清理期限取决于 Claude Code 加载的全部设置。
+`doctor --json` 的 `claudeRetention` 报告 Claude Code 用户设置中的保留期，`claudeProjectRetention` 报告项目设置里读到的值：当前目录下的 `.claude/settings.local.json` 与 `.claude/settings.json`，以及在普通 Git 仓库子目录运行时仓库根目录的 `.claude/settings.local.json`（`scope` 为 `repository-local`）。设置路径异常、文件不可读或超过 1 MiB 时，返回 `unknown` 并给出原因。`cleanupPeriodDays` 允许写在任意设置文件里，项目设置可以覆盖用户设置；工作树 / 子模块（`.git` 是文件）、仓库根就是家目录或目录所有权不符时跳过仓库根这一份，`--settings` 与管理设置不在范围内，实际清理期限取决于 Claude Code 加载的全部设置。
 
 `usage` 的合计只是「读得出来的部分之和」：读取失败、没有 usage 字段、适配器不提供用量，都会在合计行括注；某个会话的用量数据源有无法解析的行时，合计后另起一行说明这轮是下界，按会话那一行也会就地标出「这个数是下界」——`--json` 对应 `totalExcluded` / `totalMissingUsage` / `byProvider[].usageBadLines`。内容文件有坏行时同样会披露，`byProvider[].contentBadLines` 给出坏行数；旁路文件里已经读到的用量仍会保留在合计里，不会因为内容文件的坏行而消失。只有解析确实为 0 轮时，警告才会说它不能当作空会话；已有轮次时只说明内容可能不完整。
 
