@@ -2056,6 +2056,14 @@ async function cmdPrompt(
           ...(result.manifest.failedFileWrites ? { failedFileWrites: result.manifest.failedFileWrites } : {}),
         },
       } : {}),
+      // 明确失败的工具调用单独输出：它们不在成功改动清单里，脚本也不该靠解析正文拿这份信息。
+      // 没有任何明确失败结果时整个字段都不出现。
+      ...(result.manifest.failedAttemptCalls || result.manifest.unclassifiedFailures ? {
+        failedAttempts: result.manifest.failedAttempts,
+        ...(result.manifest.omittedFailedAttempts ? { failedAttemptsOmitted: result.manifest.omittedFailedAttempts } : {}),
+        ...(result.manifest.omittedFailedAttemptCalls ? { failedAttemptsOmittedCalls: result.manifest.omittedFailedAttemptCalls } : {}),
+        ...(result.manifest.unclassifiedFailures ? { failedAttemptsUnclassified: result.manifest.unclassifiedFailures } : {}),
+      } : {}),
       ...(warnings.length ? { warnings } : {}),
     }));
     return;
@@ -2070,6 +2078,13 @@ async function cmdPrompt(
     console.error(
       `说明: 正文「改动概览」列出 ${result.stats.manifestFiles} 个文件、${result.stats.manifestCommands} 条命令` +
         `${result.manifest.truncated ? '（有截断，见该节）' : ''}；这份清单覆盖整条会话，不受档位裁剪影响`,
+    );
+  }
+  if (result.manifest.failedAttemptCalls > 0 || result.manifest.unclassifiedFailures > 0) {
+    const listedCalls = result.manifest.failedAttempts.reduce((n, attempt) => n + attempt.count, 0);
+    console.error(
+      `说明: 正文「失败与中断」按工具、路径与命令列出 ${listedCalls} 次明确失败的调用` +
+        `${result.manifest.failedAttemptsTruncated ? '（有截断，见该节）' : ''}；这些失败不计入成功改动清单`,
     );
   }
   if (result.stats.omittedTurns > 0 || result.stats.omittedEvents > 0) {

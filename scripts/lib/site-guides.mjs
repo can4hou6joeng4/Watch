@@ -994,7 +994,7 @@ export const guides = [
               },
               {
                 title: '步骤 3：检查 findings 与来源状态',
-                body: '加 --json 时，除 markdown 外还会返回 findings 与 warnings。degraded 表示已降级但说清了，skipped 表示按你的选项省略了内容；正文里的来源状态、坏行、用量与分支行用于判断这份文档能不能直接交给目标助手。普通仓库根返回结构化 sourceBranch（{ branch, repoRoot }，detached HEAD 为 { detached: true, repoRoot }），链接工作树返回 sourceWorktree（{ mainWorktree, branch }）；生成期间来源被写入时另有 sourceDrift（{ from, to, growth }，只表示字节数与增长方向）。脚本不必解析正文。',
+                body: '加 --json 时，除 markdown 外还会返回 findings 与 warnings。degraded 表示已降级但说清了，skipped 表示按你的选项省略了内容；正文里的来源状态、坏行、用量与分支行用于判断这份文档能不能直接交给目标助手。普通仓库根返回结构化 sourceBranch（{ branch, repoRoot }，detached HEAD 为 { detached: true, repoRoot }），链接工作树返回 sourceWorktree（{ mainWorktree, branch }）；生成期间来源被写入时另有 sourceDrift（{ from, to, growth }，只表示字节数与增长方向）。脚本不必解析正文。明确标记失败的工具调用另有 failedAttempts（工具、路径或命令与次数，不复制工具输出），正文保留「失败与中断」一节。',
               },
               {
                 title: '步骤 4：明确说明这是摘要交接',
@@ -1072,7 +1072,7 @@ export const guides = [
               },
               {
                 title: 'Step 3: Review findings and source state',
-                body: 'With --json the result includes markdown, findings and warnings. degraded means the downgrade was disclosed, skipped means content was omitted by your options. The source state, bad lines, usage and branch lines in the document tell you whether it is safe to hand over. A normal repository root returns a structured sourceBranch ({ branch, repoRoot }; a detached HEAD returns { detached: true, repoRoot }) and a linked worktree returns sourceWorktree ({ mainWorktree, branch }). When the source is written during rendering, sourceDrift ({ from, to, growth }) reports byte counts and direction only. Scripts do not parse the document.',
+                body: 'With --json the result includes markdown, findings and warnings. degraded means the downgrade was disclosed, skipped means content was omitted by your options. The source state, bad lines, usage and branch lines in the document tell you whether it is safe to hand over. A normal repository root returns a structured sourceBranch ({ branch, repoRoot }; a detached HEAD returns { detached: true, repoRoot }) and a linked worktree returns sourceWorktree ({ mainWorktree, branch }). When the source is written during rendering, sourceDrift ({ from, to, growth }) reports byte counts and direction only. Scripts do not parse the document. Explicitly failed tool calls are returned as failedAttempts (tool, path or command and count, never tool output), with a matching "Failed attempts" section in the document.',
               },
               {
                 title: 'Step 4: State that it is a summary handoff',
