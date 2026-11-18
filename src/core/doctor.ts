@@ -13,7 +13,7 @@ import { escapeControlChars } from './display.js';
 import { describeBadLinesScanFailure, scanUnparsableJsonLines } from './jsonl.js';
 import { compressedCopy, compressedRetryAdvice, describeSessionReadFailureReason, isEmptySessionFileReason, isFileSystemErrorCode, probeSessionReadable, sessionFilePresence } from './read-text.js';
 import { collectUnattributable, unattributableWarning } from './session-coverage.js';
-import { CLAUDE_DEFAULT_CLEANUP_DAYS, probeClaudeRetention, type ClaudeRetentionProbe } from '../providers/claude/retention.js';
+import { CLAUDE_DEFAULT_CLEANUP_DAYS, probeClaudeProjectRetention, probeClaudeRetention, type ClaudeRetentionProbe } from '../providers/claude/retention.js';
 
 export type BrokenTip = {
   chainId: string;
@@ -160,6 +160,12 @@ export type DoctorReport = {
    * 显式设成低于默认值时进 warnings，让 `--strict` 能发现这个风险。
    */
   claudeRetention: ClaudeRetentionProbe;
+  /**
+   * 当前诊断目录下 Claude Code 会加载的项目设置探针（`.claude/settings.local.json` 在前，
+   * `.claude/settings.json` 在后）。`cleanupPeriodDays` 的 scope 是「Any file」，
+   * 项目设置可以覆盖用户设置；只探测当前目录，仓库根目录与管理设置不在范围内。
+   */
+  claudeProjectRetention: ClaudeRetentionProbe[];
   store:
     | {
         available: true;
@@ -246,6 +252,8 @@ export type DoctorDeps = {
   environment?: DoctorEnvironment;
   /** 测试可覆盖；默认只读 Claude Code 用户设置里的 cleanupPeriodDays */
   claudeRetention?: ClaudeRetentionProbe;
+  /** 测试可覆盖；默认探测诊断目录下的两份 Claude 项目设置 */
+  claudeProjectRetention?: ClaudeRetentionProbe[];
 };
 
 type PathPresence =
@@ -408,7 +416,7 @@ export async function doctorReport(cwd: string, deps: DoctorDeps): Promise<Docto
   if (claudeRetention.state === 'unknown') {
     const settingsPath = claudeRetention.settingsPath ? `（${escapeControlChars(claudeRetention.settingsPath)}）` : '';
     warnings.push(
-      `Claude Code 的会话保留期无法确认${settingsPath}：${claudeRetention.error}。官方默认保留 ${CLAUDE_DEFAULT_CLEANUP_DAYS} 天，请核对实际使用的设置`,
+      `Claude Code 的会话保留期无法确认${settingsPath}：${escapeControlChars(claudeRetention.error ?? '原因未知')}。官方默认保留 ${CLAUDE_DEFAULT_CLEANUP_DAYS} 天，请核对实际使用的设置`,
     );
   } else if (
     claudeRetention.state === 'configured' &&
@@ -419,6 +427,36 @@ export async function doctorReport(cwd: string, deps: DoctorDeps): Promise<Docto
     warnings.push(
       `Claude Code 用户设置（${settingsPath}）把 cleanupPeriodDays 设为 ${claudeRetention.configuredDays} 天，低于官方默认 ${CLAUDE_DEFAULT_CLEANUP_DAYS} 天。这个值若在 Claude Code 中生效，超过期限的会话记录可能被清理，导致 open / resume 找不到内容。请核对项目或管理设置的覆盖情况，并提前备份重要会话`,
     );
+  }
+
+  // 项目设置可以覆盖用户设置（scope 是 Any file）。只探测诊断目录下的两份文件：
+  // 仓库根目录的 settings.local.json、管理设置与 `--settings` 不在范围内，所以只声明读到了什么，
+  // 不把「没读到」讲成「项目没有缩短保留期」。
+  let claudeProjectRetention: ClaudeRetentionProbe[];
+  try {
+    claudeProjectRetention = deps.claudeProjectRetention ?? (await probeClaudeProjectRetention(cwd));
+  } catch (error) {
+    // 每个文件探针自己 catch；这里只兜底路径拼接等意外，不能静默当成「没设置」
+    claudeProjectRetention = [];
+    warnings.push(
+      `Claude Code 的项目保留期设置没能探测：${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
+  for (const probe of claudeProjectRetention) {
+    const settingsPath = probe.settingsPath ? escapeControlChars(probe.settingsPath) : '项目设置文件';
+    if (probe.state === 'unknown') {
+      warnings.push(
+        `Claude Code 的项目保留期设置无法确认（${settingsPath}）：${escapeControlChars(probe.error ?? '原因未知')}。若 Claude Code 在该目录加载这份设置，就无法判断它是否缩短了会话保留期`,
+      );
+    } else if (
+      probe.state === 'configured' &&
+      probe.configuredDays !== null &&
+      probe.configuredDays < CLAUDE_DEFAULT_CLEANUP_DAYS
+    ) {
+      warnings.push(
+        `Claude Code 项目设置（${settingsPath}）把 cleanupPeriodDays 设为 ${probe.configuredDays} 天，低于官方默认 ${CLAUDE_DEFAULT_CLEANUP_DAYS} 天。Claude Code 从会话的主工作目录读取项目设置；若会话在该目录启动，超过期限的会话记录可能被清理，导致 open / resume 找不到内容。本次只探测了诊断目录下的 .claude/，请核对实际加载的设置并提前备份重要会话`,
+      );
+    }
   }
 
   // 原生会话列表只读；与 detect（只看 PATH）互补：装了但存储读不出，比「没装」更需要解释
@@ -897,5 +935,5 @@ export async function doctorReport(cwd: string, deps: DoctorDeps): Promise<Docto
     failures,
     warnings: warnings.length,
   };
-  return { cwd, environment, providers, storage, store, imports, storeFootprint, claudeRetention, warnings, summary };
+  return { cwd, environment, providers, storage, store, imports, storeFootprint, claudeRetention, claudeProjectRetention, warnings, summary };
 }

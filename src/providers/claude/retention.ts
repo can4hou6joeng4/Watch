@@ -82,9 +82,20 @@ export function parseClaudeCleanupPeriodDays(raw: string): ParsedCleanupPeriodDa
   return { state: 'unknown', error: `cleanupPeriodDays ${describeInvalidCleanupValue(value)}` };
 }
 
-/** 读取指定 Claude 配置目录下的 `settings.json`；只读，不写盘、不改设置。 */
-export async function probeClaudeRetentionDir(configDir: string): Promise<ClaudeRetentionProbe> {
-  const settingsPath = path.join(configDir, 'settings.json');
+/**
+ * 当前目录下 Claude Code 会读取的两份项目设置，探针按这个顺序读。
+ *
+ * `settings.local.json` 是个人在本项目里的覆盖，优先级高于团队提交的 `settings.json`；
+ * 两者都只从会话的主工作目录读取。仓库子目录启动时 Claude Code 还可能读取仓库根目录的
+ * `settings.local.json`，这里不向上找——doctor 只声明「当前目录探测到了什么」。
+ */
+export const CLAUDE_PROJECT_SETTINGS_RELATIVE_PATHS = [
+  '.claude/settings.local.json',
+  '.claude/settings.json',
+] as const;
+
+/** 读取一个 Claude Code 设置文件里的 `cleanupPeriodDays`；只读、有界、非阻塞，不写盘。 */
+export async function probeClaudeSettingsFile(settingsPath: string): Promise<ClaudeRetentionProbe> {
   const base = { settingsPath, defaultDays: CLAUDE_DEFAULT_CLEANUP_DAYS, configuredDays: null };
   const unknown = (error: string): ClaudeRetentionProbe => ({ ...base, state: 'unknown', error });
   let raw: string;
@@ -120,6 +131,26 @@ export async function probeClaudeRetentionDir(configDir: string): Promise<Claude
   if (parsed.state === 'default') return { ...base, state: 'default' };
   if (parsed.state === 'configured') return { ...base, state: 'configured', configuredDays: parsed.days };
   return { ...base, state: 'unknown', error: parsed.error };
+}
+
+/** 读取指定 Claude 配置目录下的用户设置 `settings.json`；只读，不写盘、不改设置。 */
+export async function probeClaudeRetentionDir(configDir: string): Promise<ClaudeRetentionProbe> {
+  return probeClaudeSettingsFile(path.join(configDir, 'settings.json'));
+}
+
+/**
+ * 读取当前目录下 Claude Code 会加载的项目设置（local 在前、shared 在后）。
+ *
+ * `cleanupPeriodDays` 的 scope 是「Any file」，项目设置因此可以覆盖用户设置；不探测这一层时，
+ * doctor 只能给一句「项目或管理设置可能覆盖」，把「这个项目把保留期调成了 3 天」讲成泛泛的可能。
+ * 只读当前目录、不向上找仓库根：每个探针都把实际读的路径带回去，由调用方声明探测范围。
+ */
+export async function probeClaudeProjectRetention(cwd: string): Promise<ClaudeRetentionProbe[]> {
+  const probes: ClaudeRetentionProbe[] = [];
+  for (const relativePath of CLAUDE_PROJECT_SETTINGS_RELATIVE_PATHS) {
+    probes.push(await probeClaudeSettingsFile(path.join(cwd, relativePath)));
+  }
+  return probes;
 }
 
 /**

@@ -2125,11 +2125,33 @@ function describeStoreFootprint(f: StoreFootprint): string {
  * 因为用户从没设过时 Watch 并没有读到任何东西。
  */
 function describeClaudeRetention(r: ClaudeRetentionProbe): string {
-  if (r.state === 'unknown') return `无法确认（${r.error}；官方默认 ${r.defaultDays} 天）`;
+  if (r.state === 'unknown') return `无法确认（${escapeControlChars(r.error ?? '原因未知')}；官方默认 ${r.defaultDays} 天）`;
   if (r.state === 'default') {
     return `用户设置未指定 cleanupPeriodDays。官方默认 ${r.defaultDays} 天，项目或管理设置可能覆盖`;
   }
   return `用户设置 cleanupPeriodDays=${r.configuredDays} 天。实际清理期限取决于 Claude Code 加载的全部设置`;
+}
+
+/**
+ * 「Claude 项目设置」一栏。
+ *
+ * 只声明这次探测到的文件与值，不把它讲成「Claude Code 最终用的天数」：CLI `--settings`、
+ * 仓库根目录的 `settings.local.json` 与管理设置都可能在其上覆盖，而 doctor 只读当前目录下的两份。
+ */
+function describeClaudeProjectRetention(probes: ClaudeRetentionProbe[], cwd: string): string {
+  const found: string[] = [];
+  for (const probe of probes) {
+    const settingsPath = probe.settingsPath ? escapeControlChars(probe.settingsPath) : '项目设置文件';
+    if (probe.state === 'unknown') {
+      found.push(`${settingsPath} 无法确认（${escapeControlChars(probe.error ?? '原因未知')}）`);
+    } else if (probe.state === 'configured') {
+      const low = (probe.configuredDays ?? 0) < probe.defaultDays ? '，低于官方默认' : '';
+      found.push(`${settingsPath} cleanupPeriodDays=${probe.configuredDays} 天${low}`);
+    }
+  }
+  if (!found.length) found.push('未指定 cleanupPeriodDays');
+  const scope = `本次只探测了 ${escapeControlChars(cwd)} 下的 .claude/settings.local.json 与 .claude/settings.json`;
+  return `${found.join('；')}（${scope}）`;
 }
 
 async function cmdDoctor(cwd: string, json: boolean, strict: boolean): Promise<void> {
@@ -2175,6 +2197,7 @@ async function cmdDoctor(cwd: string, json: boolean, strict: boolean): Promise<v
       console.log(`  ${p.id.padEnd(10)} ${p.displayName.padEnd(12)} ${state}`);
     }
     console.log(`Claude 会话保留: ${describeClaudeRetention(report.claudeRetention)}`);
+    console.log(`Claude 项目设置: ${describeClaudeProjectRetention(report.claudeProjectRetention, report.cwd)}`);
     if (report.storage.length) {
       console.log('会话存储:');
       for (const st of report.storage) {
