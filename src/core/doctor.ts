@@ -13,7 +13,7 @@ import { escapeControlChars } from './display.js';
 import { describeBadLinesScanFailure, scanUnparsableJsonLines } from './jsonl.js';
 import { compressedCopy, compressedRetryAdvice, describeSessionReadFailureReason, isEmptySessionFileReason, isFileSystemErrorCode, probeSessionReadable, sessionFilePresence } from './read-text.js';
 import { collectUnattributable, unattributableWarning } from './session-coverage.js';
-import { CLAUDE_DEFAULT_CLEANUP_DAYS, probeClaudeProjectRetention, probeClaudeRetention, type ClaudeRetentionProbe } from '../providers/claude/retention.js';
+import { CLAUDE_DEFAULT_CLEANUP_DAYS, probeClaudeProjectRetention, probeClaudeRetention, type ClaudeProjectRetentionProbe, type ClaudeRetentionProbe } from '../providers/claude/retention.js';
 
 export type BrokenTip = {
   chainId: string;
@@ -161,11 +161,12 @@ export type DoctorReport = {
    */
   claudeRetention: ClaudeRetentionProbe;
   /**
-   * 当前诊断目录下 Claude Code 会加载的项目设置探针（`.claude/settings.local.json` 在前，
-   * `.claude/settings.json` 在后）。`cleanupPeriodDays` 的 scope 是「Any file」，
-   * 项目设置可以覆盖用户设置；只探测当前目录，仓库根目录与管理设置不在范围内。
+   * 当前诊断目录下 Claude Code 会加载的项目设置探针，按优先级排列：仓库根目录的 local
+   * （在普通 Git 仓库的子目录启动时）→ 当前目录的 local → 当前目录的 shared。
+   * `cleanupPeriodDays` 的 scope 是「Any file」，项目设置可以覆盖用户设置；
+   * 工作树 / 子模块、归属异常、管理设置与 `--settings` 不在探测范围。
    */
-  claudeProjectRetention: ClaudeRetentionProbe[];
+  claudeProjectRetention: ClaudeProjectRetentionProbe[];
   store:
     | {
         available: true;
@@ -252,8 +253,8 @@ export type DoctorDeps = {
   environment?: DoctorEnvironment;
   /** 测试可覆盖；默认只读 Claude Code 用户设置里的 cleanupPeriodDays */
   claudeRetention?: ClaudeRetentionProbe;
-  /** 测试可覆盖；默认探测诊断目录下的两份 Claude 项目设置 */
-  claudeProjectRetention?: ClaudeRetentionProbe[];
+  /** 测试可覆盖；默认探测诊断目录与普通 Git 仓库根目录下的 Claude 项目设置 */
+  claudeProjectRetention?: ClaudeProjectRetentionProbe[];
 };
 
 type PathPresence =
@@ -429,14 +430,15 @@ export async function doctorReport(cwd: string, deps: DoctorDeps): Promise<Docto
     );
   }
 
-  // 项目设置可以覆盖用户设置（scope 是 Any file）。只探测诊断目录下的两份文件：
-  // 仓库根目录的 settings.local.json、管理设置与 `--settings` 不在范围内，所以只声明读到了什么，
+  // 项目设置可以覆盖用户设置（scope 是 Any file）。按优先级探测：仓库根目录的 local
+  // （普通 Git 仓库的子目录）→ 当前目录的 local → 当前目录的 shared；工作树 / 子模块、
+  // 归属异常、管理设置与 `--settings` 不在范围内，所以只声明读到了什么，
   // 不把「没读到」讲成「项目没有缩短保留期」。
-  let claudeProjectRetention: ClaudeRetentionProbe[];
+  let claudeProjectRetention: ClaudeProjectRetentionProbe[];
   try {
     claudeProjectRetention = deps.claudeProjectRetention ?? (await probeClaudeProjectRetention(cwd));
   } catch (error) {
-    // 每个文件探针自己 catch；这里只兜底路径拼接等意外，不能静默当成「没设置」
+    // 每个文件探针自己 catch；这里只兜底路径拼接 / 向上查找等意外，不能静默当成「没设置」
     claudeProjectRetention = [];
     warnings.push(
       `Claude Code 的项目保留期设置没能探测：${error instanceof Error ? error.message : String(error)}`,
@@ -444,17 +446,22 @@ export async function doctorReport(cwd: string, deps: DoctorDeps): Promise<Docto
   }
   for (const probe of claudeProjectRetention) {
     const settingsPath = probe.settingsPath ? escapeControlChars(probe.settingsPath) : '项目设置文件';
+    const subject = probe.scope === 'repository-local' ? 'Claude Code 仓库根目录的项目设置' : 'Claude Code 项目设置';
     if (probe.state === 'unknown') {
       warnings.push(
-        `Claude Code 的项目保留期设置无法确认（${settingsPath}）：${escapeControlChars(probe.error ?? '原因未知')}。若 Claude Code 在该目录加载这份设置，就无法判断它是否缩短了会话保留期`,
+        `${subject}无法确认（${settingsPath}）：${escapeControlChars(probe.error ?? '原因未知')}。若 Claude Code 在该目录加载这份设置，就无法判断它是否缩短了会话保留期`,
       );
     } else if (
       probe.state === 'configured' &&
       probe.configuredDays !== null &&
       probe.configuredDays < CLAUDE_DEFAULT_CLEANUP_DAYS
     ) {
+      const location =
+        probe.scope === 'repository-local'
+          ? 'Claude Code 在 Git 仓库的子目录启动时会读取仓库根目录的 settings.local.json；若会话在该仓库启动'
+          : 'Claude Code 从会话的主工作目录读取项目设置；若会话在该目录启动';
       warnings.push(
-        `Claude Code 项目设置（${settingsPath}）把 cleanupPeriodDays 设为 ${probe.configuredDays} 天，低于官方默认 ${CLAUDE_DEFAULT_CLEANUP_DAYS} 天。Claude Code 从会话的主工作目录读取项目设置；若会话在该目录启动，超过期限的会话记录可能被清理，导致 open / resume 找不到内容。本次只探测了诊断目录下的 .claude/，请核对实际加载的设置并提前备份重要会话`,
+        `${subject}（${settingsPath}）把 cleanupPeriodDays 设为 ${probe.configuredDays} 天，低于官方默认 ${CLAUDE_DEFAULT_CLEANUP_DAYS} 天。${location}，超过期限的会话记录可能被清理，导致 open / resume 找不到内容。本次探测了当前目录（普通 Git 仓库内还包括仓库根目录）的 .claude/ 设置；管理设置与 --settings 不在范围，请核对实际加载的设置并提前备份重要会话`,
       );
     }
   }

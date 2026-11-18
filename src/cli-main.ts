@@ -24,7 +24,7 @@ import { ImportJobs } from './core/import-jobs.js';
 import { officialImportJournalRoot } from './providers/codex/official-import.js';
 import { doctorReport } from './core/doctor.js';
 import type { StoreFootprint } from './core/doctor.js';
-import type { ClaudeRetentionProbe } from './providers/claude/retention.js';
+import { CLAUDE_PROJECT_SETTINGS_RELATIVE_PATHS, type ClaudeRetentionProbe } from './providers/claude/retention.js';
 import { cwdAliasHint, cwdControlCharsNote, cwdProblem, describeCwdProblem, describeRecordedCwd, describeWorktreeNote, describeWriteCwd, inspectCwd, inspectWorktree, sameDirectorySync, splitElsewhereByDirectory } from './core/cwd.js';
 import { escapeControlChars, hasControlChars } from './core/display.js';
 import { commandControlWarnings } from './core/terminal-command.js';
@@ -2136,9 +2136,10 @@ function describeClaudeRetention(r: ClaudeRetentionProbe): string {
  * 「Claude 项目设置」一栏。
  *
  * 只声明这次探测到的文件与值，不把它讲成「Claude Code 最终用的天数」：CLI `--settings`、
- * 仓库根目录的 `settings.local.json` 与管理设置都可能在其上覆盖，而 doctor 只读当前目录下的两份。
+ * 工作树 / 子模块的本地设置与管理设置都可能在其上覆盖。普通 Git 仓库的子目录会额外探测
+ * 仓库根目录的 `settings.local.json`，探测范围随探针数量声明。
  */
-function describeClaudeProjectRetention(probes: ClaudeRetentionProbe[], cwd: string): string {
+function describeClaudeProjectRetention(probes: ClaudeRetentionProbe[]): string {
   const found: string[] = [];
   for (const probe of probes) {
     const settingsPath = probe.settingsPath ? escapeControlChars(probe.settingsPath) : '项目设置文件';
@@ -2150,7 +2151,10 @@ function describeClaudeProjectRetention(probes: ClaudeRetentionProbe[], cwd: str
     }
   }
   if (!found.length) found.push('未指定 cleanupPeriodDays');
-  const scope = `本次只探测了 ${escapeControlChars(cwd)} 下的 .claude/settings.local.json 与 .claude/settings.json`;
+  const scope =
+    probes.length > CLAUDE_PROJECT_SETTINGS_RELATIVE_PATHS.length
+      ? '本次探测了当前目录与仓库根目录的 .claude/ 设置'
+      : '本次探测了当前目录的 .claude/ 设置';
   return `${found.join('；')}（${scope}）`;
 }
 
@@ -2197,7 +2201,7 @@ async function cmdDoctor(cwd: string, json: boolean, strict: boolean): Promise<v
       console.log(`  ${p.id.padEnd(10)} ${p.displayName.padEnd(12)} ${state}`);
     }
     console.log(`Claude 会话保留: ${describeClaudeRetention(report.claudeRetention)}`);
-    console.log(`Claude 项目设置: ${describeClaudeProjectRetention(report.claudeProjectRetention, report.cwd)}`);
+    console.log(`Claude 项目设置: ${describeClaudeProjectRetention(report.claudeProjectRetention)}`);
     if (report.storage.length) {
       console.log('会话存储:');
       for (const st of report.storage) {

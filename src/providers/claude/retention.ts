@@ -1,5 +1,5 @@
 import { constants } from 'node:fs';
-import { open } from 'node:fs/promises';
+import { lstat, open } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import path from 'node:path';
 import { describePathReadFailureReason } from '../../core/read-text.js';
@@ -83,16 +83,76 @@ export function parseClaudeCleanupPeriodDays(raw: string): ParsedCleanupPeriodDa
 }
 
 /**
- * 当前目录下 Claude Code 会读取的两份项目设置，探针按这个顺序读。
+ * Claude Code 项目设置的三类位置。
  *
- * `settings.local.json` 是个人在本项目里的覆盖，优先级高于团队提交的 `settings.json`；
- * 两者都只从会话的主工作目录读取。仓库子目录启动时 Claude Code 还可能读取仓库根目录的
- * `settings.local.json`，这里不向上找——doctor 只声明「当前目录探测到了什么」。
+ * - `repository-local`：在 Git 仓库的子目录启动时，个人本地覆盖写在**仓库根目录**的
+ *   `.claude/settings.local.json`（前提见 `canUseRepositoryLocalSettings()`）。
+ * - `project-local` / `project-shared`：当前目录下的本地覆盖与团队共享设置。
  */
+export type ClaudeProjectRetentionScope = 'repository-local' | 'project-local' | 'project-shared';
+
+export type ClaudeProjectRetentionProbe = ClaudeRetentionProbe & { scope: ClaudeProjectRetentionScope };
+
+/** 当前目录下 Claude Code 会读取的两份项目设置（仓库根目录的 local 由 `probeClaudeProjectRetention()` 另加）。 */
 export const CLAUDE_PROJECT_SETTINGS_RELATIVE_PATHS = [
   '.claude/settings.local.json',
   '.claude/settings.json',
 ] as const;
+
+/**
+ * 从 `cwd` 向上找最近的 Git 仓库根，不越过文件系统根。
+ *
+ * 只认 `.git` 是目录且含 `HEAD` 普通文件的情形：工作树 / 子模块的 `.git` 是文件，本地设置
+ * 位置取决于主检出，这里不解析 gitdir，保守地不把当前目录当仓库根。`lstat` 读不出来时
+ * 同样返回 null（不猜），避免把「无法确认」讲成「仓库没有更短的保留期」。
+ */
+async function findRepositoryRoot(cwd: string): Promise<string | null> {
+  let dir = path.resolve(cwd);
+  for (;;) {
+    try {
+      const gitDir = path.join(dir, '.git');
+      const entry = await lstat(gitDir);
+      if (!entry.isDirectory()) return null;
+      const head = await lstat(path.join(gitDir, 'HEAD'));
+      return head.isFile() ? dir : null;
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code !== 'ENOENT' && code !== 'ENOTDIR') return null;
+    }
+    const parent = path.dirname(dir);
+    if (parent === dir) return null;
+    dir = parent;
+  }
+}
+
+/**
+ * 官方规则：仓库根、它的 `.git` 或 `.claude` 不属于当前用户（以及 Windows、仓库根就是家目录）时，
+ * Claude Code 把本地设置留在启动目录，不写到仓库根。判定不确定时一律返回 false——
+ * 宁可漏报一份文件，也不能拿 Claude Code 不会加载的文件发警告。
+ */
+async function canUseRepositoryLocalSettings(root: string, home: string): Promise<boolean> {
+  if (process.platform === 'win32') return false;
+  if (path.resolve(root) === path.resolve(home)) return false;
+  const uid = typeof process.getuid === 'function' ? process.getuid() : null;
+  if (uid === null) return false;
+  const claudeDir = path.join(root, '.claude');
+  for (const target of [root, path.join(root, '.git'), claudeDir]) {
+    try {
+      const entry = await lstat(target);
+      if (entry.uid !== uid) return false;
+    } catch (error) {
+      // 仓库根没有 `.claude` 目录是正常情况；其余（含权限与类型异常）一律保守跳过
+      if (target === claudeDir && isMissingPathEntryError(error)) continue;
+      return false;
+    }
+  }
+  return true;
+}
+
+function isMissingPathEntryError(error: unknown): boolean {
+  const code = (error as NodeJS.ErrnoException).code;
+  return code === 'ENOENT' || code === 'ENOTDIR';
+}
 
 /** 读取一个 Claude Code 设置文件里的 `cleanupPeriodDays`；只读、有界、非阻塞，不写盘。 */
 export async function probeClaudeSettingsFile(settingsPath: string): Promise<ClaudeRetentionProbe> {
@@ -139,16 +199,34 @@ export async function probeClaudeRetentionDir(configDir: string): Promise<Claude
 }
 
 /**
- * 读取当前目录下 Claude Code 会加载的项目设置（local 在前、shared 在后）。
+ * 读取 Claude Code 可能加载的项目设置，按优先级排列：
+ * 仓库根目录的 local（子目录启动时）→ 当前目录的 local → 当前目录的 shared。
  *
  * `cleanupPeriodDays` 的 scope 是「Any file」，项目设置因此可以覆盖用户设置；不探测这一层时，
- * doctor 只能给一句「项目或管理设置可能覆盖」，把「这个项目把保留期调成了 3 天」讲成泛泛的可能。
- * 只读当前目录、不向上找仓库根：每个探针都把实际读的路径带回去，由调用方声明探测范围。
+ * doctor 只能给一句「项目或管理设置可能覆盖」。每个探针都把实际读的路径与位置带回去，
+ * 调用方据此声明探测范围——不把「没读到」讲成「项目没有缩短保留期」。
  */
-export async function probeClaudeProjectRetention(cwd: string): Promise<ClaudeRetentionProbe[]> {
-  const probes: ClaudeRetentionProbe[] = [];
-  for (const relativePath of CLAUDE_PROJECT_SETTINGS_RELATIVE_PATHS) {
-    probes.push(await probeClaudeSettingsFile(path.join(cwd, relativePath)));
+export async function probeClaudeProjectRetention(
+  cwd: string,
+  home: string = homedir(),
+): Promise<ClaudeProjectRetentionProbe[]> {
+  const targets: { settingsPath: string; scope: ClaudeProjectRetentionScope }[] = [];
+  const add = (settingsPath: string, scope: ClaudeProjectRetentionScope): void => {
+    if (!targets.some((t) => t.settingsPath === settingsPath)) targets.push({ settingsPath, scope });
+  };
+  const repositoryRoot = await findRepositoryRoot(cwd);
+  if (
+    repositoryRoot !== null &&
+    path.resolve(repositoryRoot) !== path.resolve(cwd) &&
+    (await canUseRepositoryLocalSettings(repositoryRoot, home))
+  ) {
+    add(path.join(repositoryRoot, '.claude/settings.local.json'), 'repository-local');
+  }
+  add(path.join(cwd, '.claude/settings.local.json'), 'project-local');
+  add(path.join(cwd, '.claude/settings.json'), 'project-shared');
+  const probes: ClaudeProjectRetentionProbe[] = [];
+  for (const target of targets) {
+    probes.push({ ...(await probeClaudeSettingsFile(target.settingsPath)), scope: target.scope });
   }
   return probes;
 }
