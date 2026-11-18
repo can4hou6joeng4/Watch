@@ -1951,6 +1951,8 @@ async function cmdPrompt(
   // 链接工作树和目录状态是两件事：目录还在，但它是 `git worktree add` 建出来的独立工作树时，
   // 文档读者从路径上看不出来，可能回主工作树改同一份文件——必须写进正文（PLAN §5）。
   let sourceWorktreeNote: string | undefined;
+  // 结构化 worktree 字段同样给脚本用；主工作树或分支读不出来时保留 null，不编造。
+  let sourceWorktree: { mainWorktree: string | null; branch: string | null } | undefined;
   // 链接工作树的分支已在「工作目录类型」一行里；普通仓库根再补一行当前分支，
   // 文档离开原机后读者能先核对分支再动手（baton / bb-plugin-handoff 同样带分支信息）。
   let sourceBranchNote: string | undefined;
@@ -1967,9 +1969,13 @@ async function cmdPrompt(
     }
     // 目录不在时 `.git` 也无从读，此时探测只会得到「不是 worktree」这个假事实，索性不探
     if (recordedProbe.state === 'ok') {
-      const worktreeNote = describeWorktreeNote(await inspectWorktree(foundRef.cwd));
+      const worktreeProbe = await inspectWorktree(foundRef.cwd);
+      const worktreeNote = describeWorktreeNote(worktreeProbe);
       if (worktreeNote) {
         sourceWorktreeNote = worktreeNote;
+        if (worktreeProbe.state === 'worktree') {
+          sourceWorktree = { mainWorktree: worktreeProbe.mainWorktree, branch: worktreeProbe.branch };
+        }
       } else {
         const branchProbe = await inspectRepoBranch(foundRef.cwd);
         const branchNote = describeRepoBranchNote(branchProbe, foundRef.cwd);
@@ -2030,6 +2036,7 @@ async function cmdPrompt(
       ...(autoPicked ? { autoPicked: true } : {}),
       markdown: result.markdown,
       ...(sourceBranch ? { sourceBranch } : {}),
+      ...(sourceWorktree ? { sourceWorktree } : {}),
       stats: result.stats,
       findings: result.findings,
       // 脚本拿得到结构化的改动清单，不必去解析 Markdown 里的那一节

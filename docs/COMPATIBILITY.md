@@ -351,3 +351,5 @@ Computer Use 原生管道未能启动，因此此记录依赖真实窗口中的�
 **`watch prompt --json` 输出结构化分支（2026-11-18，v0.1.145，隔离合成检查）**：Markdown 里的「工作目录分支」一行是给人读的，脚本此前只能解析正文才能拿到分支。现在 `--json` 在普通仓库根（含向上找到的仓库根）时额外返回 `sourceBranch: { branch, repoRoot }`，detached HEAD 返回 `{ detached: true, repoRoot }`；链接工作树的分支仍只写在「工作目录类型」说明里（主工作树可能读不出来，形状不同），`unknown` 不编造字段、只保留正文与 findings。字段与正文同源，不新增探测。扩展 1 项 CLI 合成断言（sourceBranch 的 branch / repoRoot / detached 缺省）；typecheck 与桌面前端构建通过；未运行原生客户端，不构成原生验收。
 
 **README 与指南同步分支行和 sourceBranch（2026-11-18，v0.1.146，文档与站点内容）**：v0.1.140 / v0.1.143 的分支行与 v0.1.145 的 `--json sourceBranch` 此前只在兼容性记录里；中英 README 的 `prompt` 说明与「没有适配器时」指南的第 3 步同步补上：文档头给出工作目录状态、工作树类型与当前分支，仓库子目录会向上定位仓库根；`--json` 返回 `{ branch, repoRoot }` 或 `{ detached: true, repoRoot }`，脚本不必解析正文。仅文档与站点文案，不新增能力；站点回归 22 项、typecheck 与桌面前端构建通过；未运行原生客户端，不构成原生验收。
+
+**`watch prompt --json` 输出结构化工作树（2026-11-18，v0.1.147，隔离合成检查）**：`sourceBranch` 只覆盖普通仓库根，链接工作树此前在 `--json` 里没有任何结构化字段，脚本仍要解析「工作目录类型」正文。现在工作树探测命中时返回 `sourceWorktree: { mainWorktree, branch }`；主工作树或分支读不出来时对应字段为 `null`，不编造路径或分支；`unknown` 状态仍只保留正文说明，不输出假结论。工作树与 `sourceBranch` 互斥，避免同一来源出现两个分支形状。新增 1 项 CLI 合成断言（工作树字段、正文说明、互斥）；typecheck 与桌面前端构建通过；未运行原生客户端，不构成原生验收。
