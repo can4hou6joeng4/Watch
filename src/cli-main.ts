@@ -2280,10 +2280,10 @@ async function cmdDoctor(cwd: string, json: boolean, strict: boolean): Promise<v
         // 只读存储是「已知且能读」的状态，不进 warnings（--strict 不该因此常红）；
         // 探测失败才是降级，已经在上面的警告里说过，这里只补一行「未确认」
         if (st.writeLimit) {
-          console.log(`  写入受限（${st.writeLimit.code}）: ${st.writeLimit.reason}`);
-          if (st.writeLimit.hint) console.log(`    ${st.writeLimit.hint}`);
+          console.log(`  写入受限（${escapeControlChars(st.writeLimit.code)}）: ${escapeControlChars(st.writeLimit.reason)}`);
+          if (st.writeLimit.hint) console.log(`    ${escapeControlChars(st.writeLimit.hint)}`);
         }
-        if (st.writeLimitError) console.log(`  写入能力未确认: ${st.writeLimitError}`);
+        if (st.writeLimitError) console.log(`  写入能力未确认: ${escapeControlChars(st.writeLimitError)}`);
       }
     }
     if (report.store.available) {
@@ -2307,7 +2307,7 @@ async function cmdDoctor(cwd: string, json: boolean, strict: boolean): Promise<v
       }
       for (const d of report.store.driftedPairs) {
         console.log(
-          `  链「${escapeControlChars(d.chainName)}」: ${d.from.provider}:${d.from.sessionId} → ${d.to.provider}:${d.to.sessionId}，缺 ${d.missingTurns}/${d.sourceTurns} 条`,
+          `  链「${escapeControlChars(d.chainName)}」: ${escapeControlChars(d.from.provider)}:${escapeControlChars(d.from.sessionId)} → ${escapeControlChars(d.to.provider)}:${escapeControlChars(d.to.sessionId)}，缺 ${d.missingTurns}/${d.sourceTurns} 条`,
         );
       }
       // 摘要行只报个数；缺的是哪条链尾必须直接给 provider:sessionId，否则照「可先 watch switch」也无法定位。
@@ -2316,38 +2316,38 @@ async function cmdDoctor(cwd: string, json: boolean, strict: boolean): Promise<v
         console.log(
           b.compressedPath
             ? b.compressedEmpty
-              ? `  链「${escapeControlChars(b.chainName)}」: ${b.provider}:${b.sessionId} 链尾只剩 0 字节压缩副本（${escapeControlChars(b.compressedPath)}）；内容已丢失，重新展开也拿不回内容——从备份恢复；${rebindHint(b.provider)}`
-              : `  链「${escapeControlChars(b.chainName)}」: ${b.provider}:${b.sessionId} 链尾只剩压缩副本（${escapeControlChars(b.compressedPath)}）；本版不读压缩格式——先让它重新展开再重试（若是 Codex 压缩的，在 Codex 里继续该会话即可），或 ${rebindHint(b.provider)}`
+              ? `  链「${escapeControlChars(b.chainName)}」: ${escapeControlChars(b.provider)}:${escapeControlChars(b.sessionId)} 链尾只剩 0 字节压缩副本（${escapeControlChars(b.compressedPath)}）；内容已丢失，重新展开也拿不回内容——从备份恢复；${rebindHint(b.provider)}`
+              : `  链「${escapeControlChars(b.chainName)}」: ${escapeControlChars(b.provider)}:${escapeControlChars(b.sessionId)} 链尾只剩压缩副本（${escapeControlChars(b.compressedPath)}）；本版不读压缩格式——先让它重新展开再重试（若是 Codex 压缩的，在 Codex 里继续该会话即可），或 ${rebindHint(b.provider)}`
             : b.missing
-            ? `  链「${escapeControlChars(b.chainName)}」: ${b.provider}:${b.sessionId} 链尾文件已不存在（${escapeControlChars(b.filePath)}），${rebindHint(b.provider)}`
+            ? `  链「${escapeControlChars(b.chainName)}」: ${escapeControlChars(b.provider)}:${escapeControlChars(b.sessionId)} 链尾文件已不存在（${escapeControlChars(b.filePath)}），${rebindHint(b.provider)}`
             : b.unreadable
-              ? `  链「${escapeControlChars(b.chainName)}」: ${b.provider}:${b.sessionId} 链尾文件读不出来（${escapeControlChars(b.filePath)}，${b.error}）；resume 与下次切换都会失败——先修好这个文件（权限或内容），或 watch switch ${b.provider} 重新绑定`
-              : `  链「${escapeControlChars(b.chainName)}」: ${b.provider}:${b.sessionId} 链尾文件状态无法确认（${escapeControlChars(b.filePath)}，${b.error}）；先确认文件是否还在，再决定是否需要 adopt`,
+              ? `  链「${escapeControlChars(b.chainName)}」: ${escapeControlChars(b.provider)}:${escapeControlChars(b.sessionId)} 链尾文件读不出来（${escapeControlChars(b.filePath)}，${escapeControlChars(b.error)}）；resume 与下次切换都会失败——先修好这个文件（权限或内容），或 watch switch ${b.provider} 重新绑定`
+              : `  链「${escapeControlChars(b.chainName)}」: ${escapeControlChars(b.provider)}:${escapeControlChars(b.sessionId)} 链尾文件状态无法确认（${escapeControlChars(b.filePath)}，${escapeControlChars(b.error)}）；先确认文件是否还在，再决定是否需要 adopt`,
         );
       }
       // 摘要里已经报了个数；这里给出是哪条链尾、为什么打开是空的，以及下一步。
       // 不给 provider:sessionId，用户照「watch switch」也无法定位到具体会话
       for (const e of report.store.emptyTips) {
         console.log(
-          `  链「${escapeControlChars(e.chainName)}」: ${e.provider}:${e.sessionId} 链尾是空的（解析出 0 轮）；resume 打开就是空会话——如果在原生客户端里还没聊过属正常，否则从备份恢复该文件，或 watch switch ${e.provider} 重新绑定，或 watch chain new <新名字> 另起一条链`,
+          `  链「${escapeControlChars(e.chainName)}」: ${escapeControlChars(e.provider)}:${escapeControlChars(e.sessionId)} 链尾是空的（解析出 0 轮）；resume 打开就是空会话——如果在原生客户端里还没聊过属正常，否则从备份恢复该文件，或 watch switch ${e.provider} 重新绑定，或 watch chain new <新名字> 另起一条链`,
         );
       }
     } else {
-      console.log(`本地库: 不可用（${report.store.error}）`);
+      console.log(`本地库: 不可用（${escapeControlChars(report.store.error)}）`);
     }
     if (report.imports.available) {
       const i = report.imports;
       console.log(`导入日志: ${i.total} 条（imported ${i.imported} / associated ${i.associated} / uncertain ${i.uncertain} / prepared ${i.prepared}）`);
       // 「不要重试」只有配上 planId 才能执行；否则用户只知道有 N 个未知结果，找不到是哪一个
       for (const id of i.uncertainIds) {
-        console.log(`  结果未知: ${id}（用 watch import-codex status ${id} 查看；勿重试、勿删日志）`);
+        console.log(`  结果未知: ${escapeControlChars(id)}（用 watch import-codex status ${escapeControlChars(id)} 查看；勿重试、勿删日志）`);
       }
       // 读不出来的日志没进 total，不逐条说就只是「总数比实际少」，看不出是哪几份
       for (const j of i.skippedJournals) {
-        console.log(`  读取失败（未计入上面的统计）: ${j.id}（${j.reason}）`);
+        console.log(`  读取失败（未计入上面的统计）: ${escapeControlChars(j.id)}（${escapeControlChars(j.reason)}）`);
       }
     } else {
-      console.log(`导入日志: 不可用（${report.imports.error}）`);
+      console.log(`导入日志: 不可用（${escapeControlChars(report.imports.error)}）`);
     }
     if (report.warnings.length) {
       console.error('警告:');
@@ -2357,7 +2357,7 @@ async function cmdDoctor(cwd: string, json: boolean, strict: boolean): Promise<v
     // 结论行必须在 stdout 最后：`watch doctor | tail -1` 与只看退出码的脚本要拿到同一句话
     const s = report.summary;
     if (failed) {
-      console.log(`结论: ${s.failures.length} 项失败（退出码 1）：${s.failures.join('、')}；先按上面的失败项修复再重试`);
+      console.log(`结论: ${s.failures.length} 项失败（退出码 1）：${s.failures.map((f) => escapeControlChars(f)).join('、')}；先按上面的失败项修复再重试`);
     } else if (strictFailed) {
       console.log(`结论: 通过，有 ${s.warnings} 条警告（--strict 下退出码 1）`);
     } else if (s.warnings > 0) {
