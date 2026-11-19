@@ -163,20 +163,24 @@ export async function appendFileAtomic(
       // 判断做在本次私有副本上，不再读源文件：源文件在 stat 之后被别的进程改写时，
       // 旧写法会按改之前的内容决定补不补换行，与随后复制到的内容对不上。
       let needsNewline = false;
+      const probe = await open(tmpPath, 'r');
       try {
-        const handle = await open(tmpPath, 'r');
-        try {
-          const { size } = await handle.stat();
-          if (size > 0) {
-            const last = Buffer.alloc(1);
-            await handle.read(last, 0, 1, size - 1);
-            needsNewline = last[0] !== 0x0a;
+        const { size } = await probe.stat();
+        if (size > 0) {
+          const last = Buffer.alloc(1);
+          const { bytesRead } = await probe.read(last, 0, 1, size - 1);
+          if (bytesRead !== 1) {
+            // 用非 errno 的业务 code：`describeWriteFailureReason()` 会把任何 E* 翻成通用
+            // 「写入失败（E…）」，把这条具体诊断盖掉
+            throw Object.assign(new Error(`无法读取追加副本的末尾字节（${escapeControlChars(tmpPath)}），已中止写入；原文件与既有备份未改动，可重试`), {
+              code: 'EWATCHTAILPROBE',
+              path: tmpPath,
+            });
           }
-        } finally {
-          await handle.close();
+          needsNewline = last[0] !== 0x0a;
         }
-      } catch {
-        // 刚复制出的私有副本读不出末尾字节：保持原来的纯追加行为
+      } finally {
+        await probe.close();
       }
       const handle = await open(tmpPath, 'a');
       try {
