@@ -21,7 +21,8 @@ function canonicalToolInput(value: unknown): unknown {
   return value;
 }
 
-function sameToolInput(a: unknown, b: unknown): boolean {
+/** 供 SQLite 写入路径（OpenCode）在事务内复用同一套 JSON 语义比较。 */
+export function sameToolInput(a: unknown, b: unknown): boolean {
   return JSON.stringify(canonicalToolInput(a)) === JSON.stringify(canonicalToolInput(b));
 }
 
