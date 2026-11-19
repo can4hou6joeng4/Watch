@@ -7,6 +7,7 @@ import {
   ENCRYPTED_THINKING,
   ensureAssistant,
   extractExecCommand,
+  formatUnknownTypeCounts,
   normalizeUserText,
   pushEvent,
   stripEmptyEvents,
@@ -915,7 +916,7 @@ function parseCodexContent(content: unknown, timestamp: string): CodexContentPar
   }
   if (unknown.size > 0) {
     const total = [...unknown.values()].reduce((a, b) => a + b, 0);
-    const counts = [...unknown.entries()].map(([type, n]) => (n > 1 ? `${type}×${n}` : type)).join('、');
+    const counts = formatUnknownTypeCounts(unknown);
     texts.push(
       `[Codex 记录里有 ${total} 个未识别的消息块（${counts}），Watch 暂不解析：这部分原始内容没有并入交接，需要时请在原生 Codex 里查看]`,
     );

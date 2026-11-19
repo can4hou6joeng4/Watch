@@ -1,5 +1,5 @@
-import { clipCodePoints, escapeControlChars } from '../../core/display.js';
-import { WATCH_CONTEXT_DISCLOSURE_PREFIX } from '../../core/rich.js';
+import { clipCodePoints } from '../../core/display.js';
+import { unknownTypeLabel, WATCH_CONTEXT_DISCLOSURE_PREFIX } from '../../core/rich.js';
 import type { ProcessEvent } from '../../core/types.js';
 
 /**
@@ -144,11 +144,17 @@ export function finalizeGrokRetryAttribution(counts: GrokFailureCounts): void {
   counts.pendingRetryFailed = 0;
 }
 
+/**
+ * 计数展示：键来自会话文件（`unknownStops` 的 `stop_reason` 是任意字符串），必须按
+ * 第 269/270 轮规则有界——最多 8 种、余量写「另有 N 种」，展示名经 `unknownTypeLabel()`
+ * 先按码点截断再转义。旧实现只做 `escapeControlChars(key)`：超长 / 大量未知结束原因
+ * 会原样撑大披露正文，跟着 prompt 文档与目标会话走（第 288 轮）。
+ */
 function describeCountMap(map: Map<string, number>): string {
-  return [...map.entries()]
-    .sort((a, b) => b[1] - a[1])
-    .map(([key, count]) => `${escapeControlChars(key)} × ${count}`)
-    .join('、');
+  const entries = [...map.entries()].sort((a, b) => b[1] - a[1]);
+  const shown = entries.slice(0, 8).map(([key, count]) => `${unknownTypeLabel(key, 64)} × ${count}`);
+  if (entries.length > 8) shown.push(`另有 ${entries.length - 8} 种`);
+  return shown.join('、');
 }
 
 /** 会话级失败披露；没有任何失败 / 中止 / 重试 / 未知结束原因时返回 `null`（健康会话不多嘴）。
@@ -185,7 +191,8 @@ export function describeGrokFailures(counts: GrokFailureCounts, tailUnanswered =
     parts.push(line);
   }
   if (counts.unknownStops.size > 0) {
-    parts.push(`另有 ${describeCountMap(counts.unknownStops)} 轮未识别的结束原因，Watch 暂不解析`);
+    const total = [...counts.unknownStops.values()].reduce((sum, n) => sum + n, 0);
+    parts.push(`另有 ${total} 轮未识别的结束原因（${describeCountMap(counts.unknownStops)}），Watch 暂不解析`);
   }
   if (parts.length === 0) return null;
   const tail = counts.errors > 0 || counts.cancelled > 0

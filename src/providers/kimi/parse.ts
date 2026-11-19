@@ -377,8 +377,10 @@ export async function parseKimiSession(ref: SessionRef): Promise<UnifiedTurn[]> 
   }
   if (unknownLoopEvents.size > 0) {
     const total = [...unknownLoopEvents.values()].reduce((a, b) => a + b, 0);
-    const shown = [...unknownLoopEvents.entries()].map(([t, n]) => (n > 1 ? `${t} × ${n}` : `${t} × 1`)).join('、');
-    disclose(`Kimi 日志里有 ${total} 个未识别或无法解析的 loop 事件（${shown}），Watch 暂不解析：其中的内容没有并入交接，需要时请在原生 Kimi 中查看`);
+    const entries = [...unknownLoopEvents.entries()];
+    const shown = entries.slice(0, 8).map(([t, n]) => `${unknownTypeLabel(t, 64)} × ${n}`);
+    if (entries.length > 8) shown.push(`另有 ${entries.length - 8} 种`);
+    disclose(`Kimi 日志里有 ${total} 个未识别或无法解析的 loop 事件（${shown.join('、')}），Watch 暂不解析：其中的内容没有并入交接，需要时请在原生 Kimi 中查看`);
   }
   if (unreadableCompactions > 0) {
     disclose(`Kimi 有 ${unreadableCompactions} 条 context.apply_compaction 记录没有可读摘要；这部分摘要未并入交接，也不作为 --since-compact 的裁剪边界，请在原生 Kimi 中核对。`);
@@ -456,7 +458,7 @@ function extractAppendMessage(message: Record<string, unknown> | null): {
 function unknownBlockNote(counts: Map<string, number>): string {
   if (counts.size === 0) return '';
   const total = [...counts.values()].reduce((a, b) => a + b, 0);
-  const shown = [...counts.entries()].map(([t, n]) => (n > 1 ? `${t}×${n}` : t)).join('、');
+  const shown = formatUnknownTypeCounts(counts);
   return `[Kimi 记录里有 ${total} 个未识别的消息块（${shown}），Watch 暂不解析：这部分原始内容没有并入交接，需要时请在原生 Kimi 里查看]`;
 }
 
@@ -540,7 +542,7 @@ function extractUserInput(
   }
   if (unknown.size > 0) {
     const total = [...unknown.values()].reduce((a, b) => a + b, 0);
-    const shown = [...unknown.entries()].map(([t, n]) => (n > 1 ? `${t}×${n}` : t)).join('、');
+    const shown = formatUnknownTypeCounts(unknown);
     parts.push(
       `[Kimi 记录里有 ${total} 个未识别的输入片段（${shown}），Watch 暂不解析：这部分原始内容没有并入交接，需要时请在原生 Kimi 里查看]`,
     );
