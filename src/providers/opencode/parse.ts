@@ -710,9 +710,10 @@ function v2RecentMessageText(row: V2MessageRow, data: V2MessageData | null, part
     case 'shell': {
       // 后台 shell 的结果由完成时的 inbox 项单独进入上下文，这里不重复（上游 messageToText 同判据）。
       if (data.metadata?.background === true) return '';
-      const command = typeof data.command === 'string' ? data.command : '';
-      const output =
-        typeof data.output === 'string' ? data.output : typeof data.output?.output === 'string' ? data.output.output : '';
+      // 与主解析共用同一份形状收窄（第 258 轮）；形状异常由主解析对同一条记录另行计数，
+      // 保留窗口投影不产生披露条目。
+      const command = v2ShellCommandText(data.command);
+      const output = v2ShellOutputText(data.output) ?? '';
       return `[Shell]: ${command}\n${truncateV2RecentToolOutput(output)}`;
     }
     default:
@@ -898,6 +899,53 @@ function v2ToolErrorMessage(raw: unknown, unknown: Map<string, number>): string 
   return undefined;
 }
 
+/** 披露文案里的值形状标签（比裸 typeof 更贴近用户看到的 JSON：数组 / null / 对象）。 */
+function v2ValueShape(value: unknown): string {
+  if (value === null) return 'null';
+  if (Array.isArray(value)) return '数组';
+  if (typeof value === 'object') return '对象';
+  return typeof value;
+}
+
+/** 形状异常时尽量把原值带进交接；带不了（无法序列化）返回 undefined，由调用方决定下一步。 */
+function v2JsonText(value: unknown): string | undefined {
+  try {
+    const text = JSON.stringify(value);
+    return typeof text === 'string' && text !== 'undefined' ? text : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * shell 行的 `command`（第 258 轮）：上游 `Shell.command` 是字符串。其它形状以前静默落成
+ * 空串——调用摘要、`tool_call.input.command` 与后台命令样本整段消失。现在能序列化就保留
+ * 原文（仍按原因计数），不能序列化才落空串。缺省 / null 视为「没有命令」，不计数。
+ */
+function v2ShellCommandText(raw: unknown, counts?: Map<string, number>): string {
+  if (typeof raw === 'string') return raw;
+  if (raw === undefined || raw === null) return '';
+  if (counts) bumpCount(counts, `shell:command（${v2ValueShape(raw)}，不是字符串）`);
+  return v2JsonText(raw) ?? '';
+}
+
+/**
+ * shell 行的 `output`（第 258 轮）：上游是字符串（运行时也可能写成 `{ output: string }`）。
+ * 其它形状以前被静默当成「没有输出」——结果事件整条消失，配对层反而报
+ * 「工具调用没有结果，可能在中断或仍在运行」，把形状异常讲成执行状态。现在保留序列化
+ * 原文（结果不丢），并按原因计数；空串与缺省仍是「没有输出」，不计数。
+ */
+function v2ShellOutputText(raw: unknown, counts?: Map<string, number>): string | undefined {
+  if (typeof raw === 'string') return raw || undefined;
+  if (raw === undefined || raw === null) return undefined;
+  if (typeof raw === 'object' && !Array.isArray(raw)) {
+    const inner = (raw as { output?: unknown }).output;
+    if (typeof inner === 'string') return inner || undefined;
+  }
+  if (counts) bumpCount(counts, `shell:output（${v2ValueShape(raw)}，不是字符串或 { output }）`);
+  return v2JsonText(raw);
+}
+
 /**
  * 工具结果正文。error 状态在上游是
  * `{ error: state.error, content: state.content ?? [] }`——错误信息与工具失败时已经产生的
@@ -912,7 +960,13 @@ function v2ToolResultText(state: V2ToolState | undefined, unknown: Map<string, n
   }
   if (contentText) return contentText;
   if (typeof state?.output === 'string') return state.output;
-  if (state?.output !== undefined) return JSON.stringify(state.output);
+  if (state?.output !== undefined) {
+    // 第 258 轮：上游 `ToolStateCompleted.output` 是字符串；其它形状以前被
+    // `JSON.stringify` 静默改写而不留痕迹。现在保留序列化原文（结果事件仍存在），
+    // 并把形状异常计入披露，避免用户把「序列化后的对象」当成工具原生输出。
+    bumpCount(unknown, `tool:output（${v2ValueShape(state.output)}，不是字符串）`);
+    return v2JsonText(state.output);
+  }
   return undefined;
 }
 
@@ -1189,7 +1243,9 @@ function v2AuxEvents(
   const timestamp = isoFromEpochMs(time);
   switch (row.type) {
     case 'shell': {
-      const command = typeof data.command === 'string' ? data.command : '';
+      // command / output 的形状由 v2ShellCommandText / v2ShellOutputText 收窄（第 258 轮）：
+      // 非字符串形状保留序列化原文并计数，不再静默落成空串 / 「没有输出」。
+      const command = v2ShellCommandText(data.command, unknown);
       // 上游 to-llm-message.ts：后台 shell 在完成前不进模型上下文（结果完成时另行投递）。
       // 当成普通工具调用会让启动消息出现在对话里、还常因为没有 output 触发
       // 「工具调用没有结果，可能在中断或仍在运行」的假警告。只计数与命令样本，不复制输出。
@@ -1212,8 +1268,8 @@ function v2AuxEvents(
           provider: 'opencode',
         },
       ];
-      const out = typeof data.output === 'string' ? data.output : data.output?.output;
-      if (typeof out === 'string' && out) {
+      const out = v2ShellOutputText(data.output, unknown);
+      if (out) {
         events.push({ kind: 'tool_result', timestamp, callId, detail: out, summary: out.slice(0, 200), provider: 'opencode' });
       }
       return events;
