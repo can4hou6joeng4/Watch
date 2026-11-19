@@ -75,6 +75,8 @@ export async function parsePiSession(ref: SessionRef): Promise<UnifiedTurn[]> {
   // 失败 / 中止记录只计数，循环结束后合成一条披露：逐条挂事件会让一个 217 次失败的会话
   // 刷满同一句话。`tailFailure` 记录最后一次失败之后是否再没有出现真实回复。
   const failures: PiFailureCounts = createPiFailureCounts();
+  // 入参无法解析的工具调用：整份日志只出一条上下文披露，逐条挂会让长会话刷满同一句话。
+  const argumentErrors: PiToolArgumentErrorCounts = { count: 0, tools: new Map() };
   let tailFailure = false;
   let lastFailureTimestamp = '';
   // 顶层未知类型按 type×n 汇总；只计数、不复制记录正文，也不改轮次正文（否则旧轮次的
@@ -169,7 +171,7 @@ export async function parsePiSession(ref: SessionRef): Promise<UnifiedTurn[]> {
       : typeof msg.content === 'string'
         ? [{ type: 'text', text: msg.content }]
         : [];
-    const extracted = extractBlocks(content, timestamp);
+    const extracted = extractBlocks(content, timestamp, argumentErrors);
 
     if (role === 'user') {
       const text = normalizeUserText(extracted.text);
@@ -291,6 +293,17 @@ export async function parsePiSession(ref: SessionRef): Promise<UnifiedTurn[]> {
       provider: 'pi',
     });
   }
+  const argumentErrorNote = describePiToolArgumentErrors(argumentErrors);
+  if (argumentErrorNote && stripped.length > 0) {
+    const last = stripped.at(-1)!;
+    pushEvent(last, {
+      kind: 'text',
+      summary: `${WATCH_CONTEXT_DISCLOSURE_PREFIX}${argumentErrorNote.slice(0, 120)}]`,
+      detail: `${WATCH_CONTEXT_DISCLOSURE_PREFIX}${argumentErrorNote}]`,
+      timestamp: last.timestamp,
+      provider: 'pi',
+    });
+  }
   const topLevelNote = unknownPiTopLevelNote(unknownTopLevel);
   if (topLevelNote && stripped.length > 0) {
     const last = stripped.at(-1)!;
@@ -348,6 +361,24 @@ function countImageBlocks(content: unknown): number {
  * 披露文案：只说「日志里有多少条」，不说「当前分支生效多少条」——没有做叶路径投影，
  * 前者是能证明的事实，后者只是猜测。编辑与扩展消息的正文、图片 base64、details 都不复制。
  */
+/** 入参无法解析为 JSON 对象的工具调用计数（pi-ai ToolCall.argumentsError）。 */
+type PiToolArgumentErrorCounts = { count: number; tools: Map<string, number> };
+
+/**
+ * 入参解析失败的工具调用：`arguments` 是 `{}`、原始文本在 `argumentsError` 里（pi-ai 类型契约）。
+ * 只计数与工具名，不复制错误文本（它包含模型发出的原始参数，可能很长）；披露走上下文完整性通道。
+ */
+function describePiToolArgumentErrors(counts: PiToolArgumentErrorCounts): string {
+  if (counts.count === 0) return '';
+  const tools = [...counts.tools.entries()]
+    .map(([name, n]) => (n > 1 ? `${name}×${n}` : name))
+    .join('、');
+  return (
+    `Pi 会话日志里有 ${counts.count} 个工具调用的入参不是合法的 JSON 对象（原生 argumentsError，涉及 ${tools}），` +
+    'Watch 按原生契约以空对象保存：这些调用的原始入参文本没有并入交接，需要时请在原生 Pi 里核对'
+  );
+}
+
 function describePiContextEntries(counts: PiContextEntryCounts): string {
   const parts: string[] = [];
   const edits = counts.removed + counts.replaced + counts.unknownEdits;
@@ -412,6 +443,7 @@ function readPiUsage(msg: Record<string, unknown>): TokenUsage | undefined {
 function extractBlocks(
   blocks: unknown[],
   timestamp: string,
+  argErrors: PiToolArgumentErrorCounts,
 ): { text: string; events: ProcessEvent[] } {
   const texts: string[] = [];
   const events: ProcessEvent[] = [];
@@ -436,6 +468,14 @@ function extractBlocks(
     } else if (type === 'toolCall') {
       const name = typeof b.name === 'string' ? b.name : 'tool';
       const callId = typeof b.id === 'string' ? b.id : undefined;
+      // pi-ai 的 ToolCall 在参数不是合法 JSON 对象时给 `{}` + 非空 `argumentsError`：
+      // 原样写 `{}` 会让目标看起来「这次调用真的没有入参」。只计数与工具名，不复制错误正文。
+      const argumentsError = typeof b.argumentsError === 'string' ? b.argumentsError.trim() : '';
+      if (argumentsError) {
+        argErrors.count += 1;
+        const label = escapeControlChars(name.length > 64 ? `${name.slice(0, 64)}…` : name);
+        argErrors.tools.set(label, (argErrors.tools.get(label) ?? 0) + 1);
+      }
       events.push({
         kind: 'tool_call',
         summary: `${name}`,
