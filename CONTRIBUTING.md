@@ -39,8 +39,7 @@ src/core/           引擎：存储、链式交接、原子写、校验、导入
 src/providers/      各 Agent 适配器；新增一家 = 新增目录 + 在 registry.ts 注册一行
 desktop/src/        React + Vite 前端
 desktop/src-tauri/  Rust 桥：CLI 子进程、deep link、终端拉起
-tests/              node:test 回归用例
-scripts/            隔离测试运行器、站点构建、手动验收器
+scripts/            站点构建、打包检查、手动验收器
 site/               官网静态资源
 ```
 
@@ -62,10 +61,9 @@ site/               官网静态资源
 
 ## 测试约定
 
-- 使用 `node:test` 与 `node:assert/strict`，文件名 `<feature>.test.ts`，新增用例统一 strict。
-- 测试必须经 `scripts/run-tests.mjs` 运行：它会重建环境，只透传 `PATH` / `TERM` 等少数变量，把 `HOME`、`USERPROFILE`、`APPDATA`、`LOCALAPPDATA`、四个 `XDG_*`、`TMPDIR`、`WATCH_DB`、`WATCH_OPENCODE_DB` 全部指向临时根，并剔除 API key 与代理设置。
-- **测试不得读取真实 Agent 历史，也不得调用模型。** 用例内部同样自隔离：用临时目录，或通过可注入的根参数覆盖。
-- `.github/workflows/ci.yml` 在 PR 与 `main` 推送上运行类型检查、前端构建、站点构建与分享图摘要校验，以及 Ubuntu 上的 Rust 桥接单测；`.github/workflows/release.yml` 的 `quality` job 在 tag 打包前重复这些检查。仓库没有 PR/push 回归套件，也没有远程原生客户端验收。
+- 公开检出可运行上文列出的构建和 Rust 桥接检查。维护者另在隔离环境运行本地 TypeScript 回归。
+- **测试不得读取真实 Agent 历史，也不得调用模型。** 复现时使用合成会话和临时数据目录，通过可注入的根路径或隔离的环境变量指定这些目录。
+- 提交行为变更时附上可复现的输入、命令和预期结果，并说明覆盖的平台。
 
 ## 修改写入路径时的安全要求
 
@@ -82,8 +80,8 @@ site/               官网静态资源
 1. 阅读 `src/providers/adapter.ts` 的接口契约。
 2. 参考结构最接近的 `src/providers/<id>/`（`index.ts` / `parse.ts` / `build.ts`）。
 3. 在 `src/providers/registry.ts` 注册；桌面端目标卡片另有独立列表，需要同步。
-4. 补 `tests/<id>-adapter.test.ts`，覆盖解析、写回与 round-trip。
-5. 各家原生格式有无法通过内部校验发现、只有真机恢复才会暴露的约束；改动前请以实际 CLI 行为为准。
+4. 用合成会话验证解析、写回和回读，随变更提供复现步骤。维护者将用例纳入本地回归。
+5. 若要声明目标客户端能原生恢复，需在隔离环境启动该客户端验收，并注明客户端版本和验证方向。
 
 ## 数据与隐私
 
