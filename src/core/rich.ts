@@ -439,7 +439,10 @@ export function toClaudeToolName(name: string): string {
 
 export function toCodexToolName(name: string): string {
   if (name === 'Bash' || name === 'bash') return 'exec';
-  return name;
+  // 空 / 纯空白不是合法工具名（原生不会产生）：原样写进 `custom_tool_call.name` 会留下空串，
+  // 与 OpenCode 第 263 轮的 `opencodeToolName()` 同口径归一为 `tool`。parse 侧的
+  // `codexToolName()` 同步归一，否则写后校验的期望与回读不一致。
+  return name.trim() ? name : 'tool';
 }
 
 /** 只认调用脚本的起始形状，shell 命令里提到 tools.exec_command 不等于已经包装。 */
@@ -548,8 +551,11 @@ export function piBashTimeoutFromClaude(value: unknown): number | undefined {
  *   MCP 远程执行类工具的 `command` 旁边还有主机 / 会话；只写 `command` 会把其余键全丢掉。
  * - 事件没有 `detail` 不等于没有入参——Pi / OpenCode 的解析结果只带结构化 `input`，
  *   退回 `summary` 得到的是工具名或 200 字符摘要。
- * 顺序：字符串入参 → 来源原文 `detail`（键序与数字写法按来源保留）→ 结构化入参序列化
- * → 最后才是单行摘要。round-trip 不比 input / detail，这里错了自校验查不出来。
+ * 顺序：字符串入参 → exec 的 `command`（字符串，或旧版 `shell` 的 argv 数组，与
+ * `claudeBashInput()` 同一套还原）→ 来源原文 `detail`（键序与数字写法按来源保留）→
+ * 结构化入参序列化 → 最后才是单行摘要。round-trip 不比 input / detail，这里错了自校验查不出来。
+ * exec 没有可用命令时（如 Pi `argumentsError` 的 `{}`）保留入参原文：它会在下一跳立刻报语法
+ * 错误，而退回 summary 只有工具名（`cmd:"bash"` 会起交互式 shell），更糟。
  */
 export function codexToolInput(event: ProcessEvent, codexName: string): string {
   const input = event.input;
@@ -557,6 +563,8 @@ export function codexToolInput(event: ProcessEvent, codexName: string): string {
   if (codexName === 'exec' && input && typeof input === 'object' && !Array.isArray(input)) {
     const command = (input as Record<string, unknown>).command;
     if (typeof command === 'string') return command;
+    const argv = commandArgv(command);
+    if (argv) return formatCommandArgv(argv);
   }
   if (typeof event.detail === 'string') return event.detail;
   // JSON.stringify 对函数 / symbol 等不可序列化的值返回 undefined，此时仍退回摘要。
