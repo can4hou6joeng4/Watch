@@ -143,6 +143,11 @@ async function parseCodexLines(
     fallbackAtFirst: null,
   };
 
+  // 首条用户消息之前的助手消息 / 过程记录：Watch 的对话从首条用户消息开始，这些记录不成轮。
+  // 本机只读采样里，从另一条会话分叉出来的 Codex Desktop 会话（session_meta.forked_from_id）
+  // 开头就带一条沿用自原会话的助手终稿；以前直接 continue，没有任何披露。只计数、不复制正文。
+  const preUser = { assistant: 0, process: 0, fallbackAssistant: 0 };
+  let forked = false;
   let lineIndex = 0;
   let synthesizedInlineCalls = 0;
   let synthesizedCalls = 0;
@@ -177,6 +182,10 @@ async function parseCodexLines(
     }
     const p = asJsonObject(payload);
     if (!p) continue;
+    if (r.type === 'session_meta') {
+      if (typeof p.forked_from_id === 'string' && p.forked_from_id) forked = true;
+      continue;
+    }
 
     if (r.type === 'response_item' && p.type !== 'message') {
       const parsed = processItem(p, timestamp);
@@ -190,7 +199,10 @@ async function parseCodexLines(
         continue;
       }
       // 独立命名输出是输入上下文，可以先于首条用户消息；其他过程仍须有真实提问。
-      if (!sawUser && parsed.placement !== 'before') continue;
+      if (!sawUser && parsed.placement !== 'before') {
+        preUser.process += 1;
+        continue;
+      }
       if (parsed.output) {
         outputCounts.images += parsed.output.images;
         outputCounts.audio += parsed.output.audio;
@@ -243,11 +255,14 @@ async function parseCodexLines(
         if (parsed.events.length) turn.events = parsed.events;
         turns.push(turn);
       } else if (role === 'assistant') {
-        if (!sawUser) continue;
         // 只有附件、没有文字的助手消息同样保留为终态回复：整条跳过会让
         // `unansweredUserTail()` 把这一轮讲成「用户问了没人答」。
         const text = parsed.text.trim() === '' ? parsed.placeholders.join('\n') : parsed.text;
         if (text.trim() === '') continue;
+        if (!sawUser) {
+          preUser.assistant += 1;
+          continue;
+        }
         hasResponseMessages = true;
         const turn = ensureAssistant(turns, timestamp, 'codex');
         acceptAssistant(turn, text, timestamp, p);
@@ -291,7 +306,11 @@ async function parseCodexLines(
         fallback.push(turn);
       } else if (p.type === 'agent_message' && typeof p.message === 'string') {
         const text = p.message;
-        if (!sawFallbackUser || text.trim() === '') continue;
+        if (text.trim() === '') continue;
+        if (!sawFallbackUser) {
+          preUser.fallbackAssistant += 1;
+          continue;
+        }
         acceptAssistant(ensureAssistant(fallback, timestamp, 'codex'), text, timestamp, p);
       }
     }
@@ -325,6 +344,18 @@ async function parseCodexLines(
   if (unknownItems.size) {
     const total = [...unknownItems.values()].reduce((a, b) => a + b, 0);
     appendCodexDisclosure(active, `Codex 有 ${total} 条未识别或无法解析的 response_item（${codexTypeCounts(unknownItems)}），这部分原始内容没有并入交接，请在来源核对。`);
+  }
+  {
+    const assistantCount = hasResponseMessages ? preUser.assistant : preUser.fallbackAssistant;
+    const processCount = hasResponseMessages ? preUser.process : 0;
+    if (assistantCount || processCount) {
+      const parts = [
+        assistantCount ? `${assistantCount} 条助手消息` : '',
+        processCount ? `${processCount} 条过程记录` : '',
+      ].filter(Boolean);
+      const origin = forked ? '（这条会话是从另一条会话分叉出来的，它们通常是沿用自原会话的上下文）' : '';
+      appendCodexDisclosure(active, `Codex 日志在首条用户消息之前有 ${parts.join('、')}${origin}，Watch 的对话从首条用户消息开始：这些记录没有并入交接，请在来源核对。`);
+    }
   }
   if (unknownTopLevel.size) {
     const total = [...unknownTopLevel.values()].reduce((a, b) => a + b, 0);
