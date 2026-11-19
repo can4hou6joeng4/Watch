@@ -1313,7 +1313,7 @@ async function cmdSessions(cwd: string, json: boolean, chain?: string): Promise<
     // 本来没问题的设置，而 `status` / `usage` 早在同一环境下把真实原因带出来了
     warnings.push(
       chain
-        ? storeUnavailableWarning(`--chain ${chain} 过滤已忽略，下面是该目录的全部会话`, lastStoreError ?? undefined)
+        ? storeUnavailableWarning(`--chain ${escapeControlChars(chain)} 过滤已忽略，下面是该目录的全部会话`, lastStoreError ?? undefined)
         : storeUnavailableWarning('会话列表只来自原生存储（本地库里的映射与链信息未参与）', lastStoreError ?? undefined),
     );
   }
@@ -3221,7 +3221,7 @@ async function cmdUsage(cwd: string, json: boolean, chain?: string): Promise<voi
     } else if (chain) {
       // 本地库不可用时 chainUsage 返回 chain:null——这时连「这条链是否存在」都没查成。
       // 单独印一行「链: keep」与 --json 的 chain:null 矛盾，用户会当成「链在、只是没有用量」
-      console.log(`链: ${chain}（未能确认这条链是否存在；原因见警告）`);
+      console.log(`链: ${escapeControlChars(chain)}（未能确认这条链是否存在；原因见警告）`);
     }
     // 警告必须先打：本地库不可用时 byProvider 也是空的，先 return 会把「读不出来」说成「没有绑定会话」
     for (const warning of result.warnings) console.error(`警告: ${escapeControlChars(warning)}`);
