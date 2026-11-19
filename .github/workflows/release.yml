@@ -52,23 +52,95 @@ jobs:
       - name: Rust 桥接测试
         run: cargo test --manifest-path desktop/src-tauri/Cargo.toml
 
+  # macOS 两个目标放在**同一条 job** 里顺序构建（2026-11-19）：此前是两条矩阵腿，
+  # macOS runner 队列紧张时第二条腿在 15 分钟内拿不到 runner 会被取消，`release` 随即
+  # 被跳过（v0.1.192 连续两次，见 docs/evidence/iteration-274）。x64 本来就是 arm64
+  # runner 上的交叉编译，合并后一次 release 只需取得一个 macOS runner。
+  build-macos:
+    needs: quality
+    runs-on: macos-latest
+    env:
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+
+      # 仓库根依赖（app 运行期 resolve_cwd 要走 src/cli.ts + node_modules/tsx）
+      - name: 根依赖
+        run: npm ci
+
+      - name: 桌面前端构建
+        working-directory: desktop
+        run: |
+          npm ci
+          npm run build
+
+      - name: 打包（arm64）
+        uses: tauri-apps/tauri-action@v0
+        with:
+          projectPath: desktop
+          args: --bundles dmg --target aarch64-apple-darwin
+
+      # 静态检查 bundle 内 tsx/esbuild 的运行期依赖架构与 watch-core/package.json；不执行被打包的二进制。
+      # Tauri 打完 DMG 会清理中间 Watch.app（0.1.25 首次运行即因此失败），因此只读挂载 DMG 再查包内资源。
+      - name: 检查 arm64 运行期依赖
+        run: |
+          dmg=desktop/src-tauri/target/aarch64-apple-darwin/release/bundle/dmg/Watch_*.dmg
+          mount=$(mktemp -d)
+          hdiutil attach -readonly -nobrowse -noautoopen -mountpoint "$mount" $dmg
+          trap 'hdiutil detach "$mount"' EXIT
+          app=$(find "$mount" -maxdepth 1 -name '*.app' -type d | head -1)
+          test -n "$app"
+          node scripts/verify-bundle-runtime.mjs "$app/Contents/Resources/watch-core" "darwin/arm64"
+
+      # npm 按安装机架构选 @esbuild 可选包；交叉构建必须补装目标架构包，
+      # 否则 watch-core 在目标机器上找不到可执行的 esbuild（0.1.25 修复）。
+      - name: 交叉架构 esbuild 依赖（x64）
+        run: |
+          host=$(node -p 'process.arch')
+          if [ "$host" != "x64" ]; then
+            version=$(node -p "require('./node_modules/esbuild/package.json').version")
+            npm install --no-save --force --ignore-scripts "@esbuild/darwin-x64@$version"
+          fi
+
+      - name: 打包（x86_64 交叉编译）
+        uses: tauri-apps/tauri-action@v0
+        with:
+          projectPath: desktop
+          args: --bundles dmg --target x86_64-apple-darwin
+
+      - name: 检查 x64 运行期依赖
+        run: |
+          dmg=desktop/src-tauri/target/x86_64-apple-darwin/release/bundle/dmg/Watch_*.dmg
+          mount=$(mktemp -d)
+          hdiutil attach -readonly -nobrowse -noautoopen -mountpoint "$mount" $dmg
+          trap 'hdiutil detach "$mount"' EXIT
+          app=$(find "$mount" -maxdepth 1 -name '*.app' -type d | head -1)
+          test -n "$app"
+          node scripts/verify-bundle-runtime.mjs "$app/Contents/Resources/watch-core" "darwin/x64"
+
+      - name: 上传安装包
+        uses: actions/upload-artifact@v4
+        with:
+          name: watch-macos
+          path: |
+            desktop/src-tauri/target/aarch64-apple-darwin/release/bundle/dmg/*.dmg
+            desktop/src-tauri/target/x86_64-apple-darwin/release/bundle/dmg/*.dmg
+          if-no-files-found: error
+
   build:
     needs: quality
     strategy:
       fail-fast: false
       matrix:
         include:
-          # mac arm / x86 都在 macos-latest(arm)上出,x86 走交叉编译,不依赖将被回收的 Intel runner
-          - os: macos-latest
-            rust-target: aarch64-apple-darwin
-            bundles: dmg
-            artifact: watch-macos-arm64
-            esbuild-arch: arm64
-          - os: macos-latest
-            rust-target: x86_64-apple-darwin
-            bundles: dmg
-            artifact: watch-macos-x64
-            esbuild-arch: x64
           - os: windows-latest
             bundles: nsis
             artifact: watch-windows-x64
@@ -86,8 +158,6 @@ jobs:
           node-version: 22
 
       - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: ${{ matrix.rust-target || '' }}
 
       # Tauri v2 在 Ubuntu 上的运行时/打包依赖
       - name: 系统依赖
@@ -105,17 +175,6 @@ jobs:
       - name: 根依赖
         run: npm ci
 
-      # npm 按安装机架构选 @esbuild 可选包；交叉构建必须补装目标架构包，
-      # 否则 watch-core 在目标机器上找不到可执行的 esbuild（0.1.25 修复）。
-      - name: 交叉架构 esbuild 依赖
-        if: matrix.esbuild-arch
-        run: |
-          host=$(node -p 'process.arch')
-          if [ "$host" != "${{ matrix.esbuild-arch }}" ]; then
-            version=$(node -p "require('./node_modules/esbuild/package.json').version")
-            npm install --no-save --force --ignore-scripts "@esbuild/darwin-${{ matrix.esbuild-arch }}@$version"
-          fi
-
       - name: 桌面前端构建
         working-directory: desktop
         run: |
@@ -127,35 +186,20 @@ jobs:
         uses: tauri-apps/tauri-action@v0
         with:
           projectPath: desktop
-          args: --bundles ${{ matrix.bundles }} ${{ matrix.rust-target && format('--target {0}', matrix.rust-target) || '' }}
-
-      # 静态检查 bundle 内 tsx/esbuild 的运行期依赖架构与 watch-core/package.json；不执行被打包的二进制。
-      # Tauri 打完 DMG 会清理中间 Watch.app（0.1.25 首次运行即因此失败），因此只读挂载 DMG 再查包内资源。
-      - name: 检查打包运行期依赖
-        if: matrix.esbuild-arch
-        run: |
-          dmg=desktop/src-tauri/target/${{ matrix.rust-target }}/release/bundle/dmg/Watch_*.dmg
-          mount=$(mktemp -d)
-          hdiutil attach -readonly -nobrowse -noautoopen -mountpoint "$mount" $dmg
-          trap 'hdiutil detach "$mount"' EXIT
-          app=$(find "$mount" -maxdepth 1 -name '*.app' -type d | head -1)
-          test -n "$app"
-          node scripts/verify-bundle-runtime.mjs "$app/Contents/Resources/watch-core" "darwin/${{ matrix.esbuild-arch }}"
+          args: --bundles ${{ matrix.bundles }}
 
       - name: 上传安装包
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact }}
           path: |
-            desktop/src-tauri/target/${{ matrix.rust-target }}/release/bundle/dmg/*.dmg
-            desktop/src-tauri/target/release/bundle/dmg/*.dmg
             desktop/src-tauri/target/release/bundle/nsis/*-setup.exe
             desktop/src-tauri/target/release/bundle/deb/*.deb
           if-no-files-found: error
 
   release:
     if: startsWith(github.ref, 'refs/tags/')
-    needs: build
+    needs: [build, build-macos]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
