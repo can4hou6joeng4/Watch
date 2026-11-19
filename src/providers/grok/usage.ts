@@ -294,8 +294,9 @@ export async function grokUpdateScan(updatesPath: string): Promise<GrokUpdateSca
         if (!updateType) {
           unknownUpdates.set('（缺少 sessionUpdate）', (unknownUpdates.get('（缺少 sessionUpdate）') ?? 0) + 1);
         } else if (!KNOWN_GROK_UPDATE_TYPES.has(updateType)) {
-          const label = escapeControlChars(updateType.length > 64 ? `${updateType.slice(0, 64)}…` : updateType);
-          unknownUpdates.set(label, (unknownUpdates.get(label) ?? 0) + 1);
+          // 存原文：转义与截断统一在披露渲染时做（formatUnknownTypeCounts），
+          // 避免先转义后截断切出半截转义序列。
+          unknownUpdates.set(updateType, (unknownUpdates.get(updateType) ?? 0) + 1);
         }
         continue;
       }

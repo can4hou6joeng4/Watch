@@ -3,7 +3,7 @@ import { ToolResultPairing } from '../../core/tool-pairing.js';
 import { iterateFileLines } from '../../core/read-text.js';
 import { asJsonObject, parseJsonObject } from '../../core/jsonl.js';
 import { isoFromEpochMs } from '../../core/time.js';
-import { ensureAssistant, KIMI_COMPACTION_SUMMARY_PREFIX, normalizeUserText, pushEvent, stripEmptyEvents, summarize, WATCH_CONTEXT_DISCLOSURE_PREFIX } from '../../core/rich.js';
+import { ensureAssistant, formatUnknownTypeCounts, KIMI_COMPACTION_SUMMARY_PREFIX, normalizeUserText, pushEvent, stripEmptyEvents, summarize, unknownTypeLabel, WATCH_CONTEXT_DISCLOSURE_PREFIX } from '../../core/rich.js';
 import type { ProcessEvent, SessionRef, TokenUsage, UnifiedTurn } from '../../core/types.js';
 
 /**
@@ -86,11 +86,7 @@ const KNOWN_KIMI_TOP_LEVEL_TYPES = new Set([
 /** 未知顶层类型的清单展示：有界、转义，防止记录里的类型名把控制字符带进终端。 */
 function kimiTypeCounts(counts: Map<string, number>): string {
   const entries = [...counts];
-  const label = (type: string): string => {
-    const escaped = escapeControlChars(type);
-    return escaped.length > 60 ? `${escaped.slice(0, 60)}…` : escaped;
-  };
-  const shown = entries.slice(0, 8).map(([type, n]) => `${label(type)}×${n}`);
+  const shown = entries.slice(0, 8).map(([type, n]) => `${unknownTypeLabel(type, 60)}×${n}`);
   if (entries.length > 8) shown.push(`另有 ${entries.length - 8} 种`);
   return shown.join('、');
 }
@@ -331,7 +327,7 @@ export async function parseKimiSession(ref: SessionRef): Promise<UnifiedTurn[]> 
   // `watch prompt` 复制走、也作为文本转入目标会话，standard 档位不展开事件。
   for (const [turn, counts] of unknownParts) {
     const total = [...counts.values()].reduce((a, b) => a + b, 0);
-    const shown = [...counts.entries()].map(([t, n]) => (n > 1 ? `${t}×${n}` : t)).join('、');
+    const shown = formatUnknownTypeCounts(counts);
     const note = `[Kimi 记录里有 ${total} 个未识别的消息片段（${shown}），Watch 暂不解析：这部分原始内容没有并入交接，需要时请在原生 Kimi 里查看]`;
     turn.text = [turn.text, note].filter((s) => s.trim()).join('\n\n');
   }
@@ -352,10 +348,16 @@ export async function parseKimiSession(ref: SessionRef): Promise<UnifiedTurn[]> 
   // 不复制 `error.message`（上游错误对象可能带请求片段）。
   const endNoteParts: string[] = [];
   if (endReasons.size > 0) {
-    const shown = [...endReasons.entries()]
-      .map(([reason, count]) => `${END_REASON_LABELS[reason] ?? escapeControlChars(reason)} × ${count}`)
+    const entries = [...endReasons.entries()];
+    const shown = entries
+      .slice(0, 8)
+      .map(([reason, count]) => `${END_REASON_LABELS[reason] ?? unknownTypeLabel(reason, 64)} × ${count}`)
       .join('、');
-    endNoteParts.push(`Kimi 日志里的轮次以非正常原因结束（${shown}）`);
+    if (entries.length > 8) {
+      endNoteParts.push(`Kimi 日志里的轮次以非正常原因结束（${shown}、另有 ${entries.length - 8} 种）`);
+    } else {
+      endNoteParts.push(`Kimi 日志里的轮次以非正常原因结束（${shown}）`);
+    }
   }
   if (unrecognizedEndReasonCount > 0) {
     endNoteParts.push(`另有 ${unrecognizedEndReasonCount} 条未识别的结束原因，Watch 暂不解析`);

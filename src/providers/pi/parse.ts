@@ -4,6 +4,7 @@ import { asJsonObject } from '../../core/jsonl.js';
 import { iterateFileLines } from '../../core/read-text.js';
 import {
   ensureAssistant,
+  formatUnknownTypeCounts,
   normalizeUserText,
   PI_BRANCH_SUMMARY_PREFIX,
   PI_COMPACTION_SUMMARY_PREFIX,
@@ -42,18 +43,14 @@ const KNOWN_PI_TOP_LEVEL_TYPES = new Set([
 function unknownPiTopLevelNote(unknown: Map<string, number>): string {
   if (unknown.size === 0) return '';
   const total = [...unknown.values()].reduce((a, b) => a + b, 0);
-  const counts = [...unknown.entries()]
-    .map(([type, count]) => (count > 1 ? `${type}×${count}` : type))
-    .join('、');
+  const counts = formatUnknownTypeCounts(unknown);
   return `Pi 会话日志里有 ${total} 条未识别的顶层记录（${counts}），Watch 暂不解析：无法确认其中是否包含对话内容，这些记录没有并入交接；需要时请在原生 Pi 里核对。`;
 }
 
 function unparsedMessageNote(unknown: Map<string, number>): string {
   if (unknown.size === 0) return '';
   const total = [...unknown.values()].reduce((a, b) => a + b, 0);
-  const counts = [...unknown.entries()]
-    .map(([role, count]) => (count > 1 ? `${role}×${count}` : role))
-    .join('、');
+  const counts = formatUnknownTypeCounts(unknown);
   return (
     `Pi 会话日志里有 ${total} 条无法并入交接的 message 记录（role：${counts}），` +
     '其中 bashExecution / custom 在原生 Pi 里可能作为用户上下文参与对话；' +
@@ -110,8 +107,9 @@ export async function parsePiSession(ref: SessionRef): Promise<UnifiedTurn[]> {
       // 缺 type 与 type 不是字符串是两种不同形状，分开点名，避免把人引向错误的核对方向。
       const label =
         rawType || (rawTypeValue === undefined ? '（缺 type）' : '（type 不是字符串）');
-      const escaped = escapeControlChars(label.length > 64 ? `${label.slice(0, 64)}…` : label);
-      unknownTopLevel.set(escaped, (unknownTopLevel.get(escaped) ?? 0) + 1);
+      // 存原文：转义、截断与有界汇总统一在渲染时做（formatUnknownTypeCounts），
+      // 避免先转义后截断切出半截 \u001B 序列。
+      unknownTopLevel.set(label, (unknownTopLevel.get(label) ?? 0) + 1);
       continue;
     }
 
@@ -156,7 +154,7 @@ export async function parsePiSession(ref: SessionRef): Promise<UnifiedTurn[]> {
     // hookMessage）作为用户文本送进模型上下文。Watch 的 UnifiedTurn 没有对应类型，
     // 以前这两类以及形状认不出的 message 都直接 `continue`，内容连计数都没有。
     if (role !== 'user' && role !== 'assistant' && role !== 'toolResult') {
-      const label = typeof role === 'string' && role ? escapeControlChars(role.slice(0, 64)) : '（缺 role）';
+      const label = typeof role === 'string' && role ? role : '（缺 role）';
       unparsedMessages.set(label, (unparsedMessages.get(label) ?? 0) + 1);
       continue;
     }
@@ -522,7 +520,7 @@ function extractBlocks(
   // 未识别块的占位跟着文本走：`watch prompt` 的文档会被复制走，standard 档位也不展开事件。
   if (unknown.size > 0) {
     const total = [...unknown.values()].reduce((a, b) => a + b, 0);
-    const counts = [...unknown.entries()].map(([type, n]) => (n > 1 ? `${type}×${n}` : type)).join('、');
+    const counts = formatUnknownTypeCounts(unknown);
     texts.push(
       `[Pi 记录里有 ${total} 个未识别的消息块（${counts}），Watch 暂不解析：这部分原始内容没有并入交接，需要时请在原生 Pi 里查看]`,
     );

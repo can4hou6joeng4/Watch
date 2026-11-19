@@ -1,7 +1,6 @@
 import { formatCommandArgv } from '../../core/command-argv.js';
-import { escapeControlChars } from '../../core/display.js';
 import { asJsonObject } from '../../core/jsonl.js';
-import { pushEvent, WATCH_CONTEXT_DISCLOSURE_PREFIX } from '../../core/rich.js';
+import { pushEvent, unknownTypeLabel, WATCH_CONTEXT_DISCLOSURE_PREFIX } from '../../core/rich.js';
 import type { ProcessEvent, UnifiedTurn } from '../../core/types.js';
 import { codexMediaPlaceholder, codexMediaRefFromContentItem } from './media.js';
 
@@ -13,8 +12,7 @@ export function codexToolName(name: string, namespace: unknown): string {
 }
 
 export function codexLabel(value: string, limit = 120): string {
-  const escaped = escapeControlChars(value);
-  return escaped.length > limit ? `${escaped.slice(0, limit)}…` : escaped;
+  return unknownTypeLabel(value, limit);
 }
 
 export function addCount(counts: Map<string, number>, type: unknown): void {

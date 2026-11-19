@@ -3,10 +3,12 @@ import {
   CLAUDE_THINKING_PREFIX,
   ENCRYPTED_THINKING,
   ensureAssistant,
+  formatUnknownTypeCounts,
   preUserRecordsNote,
   pushEvent,
   stripEmptyEvents,
   summarize,
+  unknownTypeLabel,
   unwrapMarkedToolInput,
   unwrapUserQuery,
   WATCH_CONTEXT_DISCLOSURE_PREFIX,
@@ -66,11 +68,7 @@ const KNOWN_TOP_LEVEL_TYPES = new Set([
 /** 未知顶层类型的清单展示：有界、转义，防止记录里的类型名把控制字符带进终端。 */
 function claudeTypeCounts(counts: Map<string, number>): string {
   const entries = [...counts];
-  const label = (type: string): string => {
-    const escaped = escapeControlChars(type);
-    return escaped.length > 60 ? `${escaped.slice(0, 60)}…` : escaped;
-  };
-  const shown = entries.slice(0, 8).map(([type, n]) => `${label(type)}×${n}`);
+  const shown = entries.slice(0, 8).map(([type, n]) => `${unknownTypeLabel(type, 60)}×${n}`);
   if (entries.length > 8) shown.push(`另有 ${entries.length - 8} 种`);
   return shown.join('、');
 }
@@ -656,7 +654,7 @@ function extractRich(
   // 当成「空记录」丢掉（只含未知块的 user 消息正是最容易整条消失的一档）。
   if (unknown.size > 0) {
     const total = [...unknown.values()].reduce((a, b) => a + b, 0);
-    const counts = [...unknown.entries()].map(([type, n]) => (n > 1 ? `${type}×${n}` : type)).join('、');
+    const counts = formatUnknownTypeCounts(unknown);
     parts.push(
       `[Claude 记录里有 ${total} 个未识别的消息块（${counts}），Watch 暂不解析：这部分原始内容没有并入交接，需要时请在原生 Claude Code 里查看]`,
     );

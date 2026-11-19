@@ -2,8 +2,7 @@ import { readFile, stat } from 'node:fs/promises';
 import { ToolResultPairing } from '../../core/tool-pairing.js';
 import { iterateFileLines } from '../../core/read-text.js';
 import { dirname, join } from 'node:path';
-import { ensureAssistant, normalizeUserText, preUserRecordsNote, pushEvent, stripEmptyEvents, summarize, WATCH_CONTEXT_DISCLOSURE_PREFIX } from '../../core/rich.js';
-import { escapeControlChars } from '../../core/display.js';
+import { ensureAssistant, formatUnknownTypeCounts, normalizeUserText, preUserRecordsNote, pushEvent, stripEmptyEvents, summarize, WATCH_CONTEXT_DISCLOSURE_PREFIX } from '../../core/rich.js';
 import { asJsonObject, parseJsonObject } from '../../core/jsonl.js';
 import type { ProcessEvent, SessionRef, UnifiedTurn } from '../../core/types.js';
 import { grokFailureDisclosure, grokTailFailed } from './failure.js';
@@ -65,7 +64,7 @@ function extractContent(content: unknown): { text: string; unknown: Map<string, 
 function unknownBlockNote(unknown: Map<string, number>): string {
   if (unknown.size === 0) return '';
   const total = [...unknown.values()].reduce((a, b) => a + b, 0);
-  const counts = [...unknown.entries()].map(([type, n]) => (n > 1 ? `${type}×${n}` : type)).join('、');
+  const counts = formatUnknownTypeCounts(unknown);
   return `[Grok 记录里有 ${total} 个未识别的消息块（${counts}），Watch 暂不解析：这部分原始内容没有并入交接，需要时请在原生 Grok 里查看]`;
 }
 
@@ -82,9 +81,7 @@ const KNOWN_TOP_LEVEL_TYPES = new Set(['system', 'user', 'assistant', 'tool_resu
 function unknownTopLevelNote(unknown: Map<string, number>): string {
   if (unknown.size === 0) return '';
   const total = [...unknown.values()].reduce((a, b) => a + b, 0);
-  const counts = [...unknown.entries()]
-    .map(([type, n]) => (n > 1 ? `${type}×${n}` : type))
-    .join('、');
+  const counts = formatUnknownTypeCounts(unknown);
   return `Grok 的 chat_history.jsonl 有 ${total} 条未识别的顶层记录（${counts}），Watch 暂不解析：无法确认其中是否包含对话内容，这些记录没有并入交接；需要时请在原生 Grok 里核对。`;
 }
 
@@ -153,8 +150,8 @@ export async function parseGrokSession(ref: SessionRef): Promise<UnifiedTurn[]> 
     const timestamp = grokTimestamp(base, lineIndex);
 
     if (!KNOWN_TOP_LEVEL_TYPES.has(type)) {
-      const rawLabel = type || '（缺 type）';
-      const label = escapeControlChars(rawLabel.length > 64 ? `${rawLabel.slice(0, 64)}…` : rawLabel);
+      const label = type || '（缺 type）';
+      // 存原文：转义、截断与有界汇总统一在渲染时做（formatUnknownTypeCounts）。
       unknownTopLevel.set(label, (unknownTopLevel.get(label) ?? 0) + 1);
       continue;
     }
@@ -368,9 +365,7 @@ async function attachGrokSidecars(
   }
   if (scan.unknownUpdates.size > 0) {
     const total = [...scan.unknownUpdates.values()].reduce((a, b) => a + b, 0);
-    const counts = [...scan.unknownUpdates.entries()]
-      .map(([type, n]) => (n > 1 ? `${type}×${n}` : type))
-      .join('、');
+    const counts = formatUnknownTypeCounts(scan.unknownUpdates);
     disclose(`Grok 的 updates.jsonl 有 ${total} 条未识别的会话更新（${counts}），Watch 暂不解析：无法确认其中是否包含对话内容，这些记录没有并入交接，请在来源核对。`);
   }
   return turns;
