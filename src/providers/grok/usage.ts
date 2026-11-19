@@ -1,6 +1,7 @@
 import { iterateFileLines } from '../../core/read-text.js';
 import { dirname, join } from 'node:path';
 import type { SessionRef, TokenUsage } from '../../core/types.js';
+import { escapeControlChars } from '../../core/display.js';
 import { parseJsonObject } from '../../core/jsonl.js';
 import { describeSessionReadFailure, isMissingPathError } from '../../core/read-text.js';
 import { createGrokFailureCounts, readGrokRetryState, readGrokTurnCompleted, type GrokFailureCounts } from './failure.js';
@@ -72,13 +73,62 @@ export async function grokUpdateTurnUsages(updatesPath: string): Promise<TokenUs
  * 分开读会让同一条会话在大文件上多付一次 IO，也让「文件读不出来」出现多种处理方式。
  * 信息层仍只关心用量，经 `grokUpdateTurnUsages()` 取 `usages`。
  */
-export type GrokUpdateScan = { usages: TokenUsage[]; compactions: number; badLines: number; failures: GrokFailureCounts };
+/**
+ * `updates.jsonl` 里 `sessionUpdate` 的已知类型（第 254 轮）。
+ *
+ * 本机 24 个 updates.jsonl、13389 条记录的只读采样（只统计类型名与计数）里有 23 种：
+ * 对话镜像（user_message_chunk / agent_thought_chunk / agent_message_chunk / tool_call /
+ * tool_call_update）、已有读取器（turn_completed / retry_state / compaction_checkpoint）、
+ * 以及元数据 / 后台任务 / 记忆整理 / 压缩 / 子代理记账。对话本体以 chat_history.jsonl 为准，
+ * 镜像类有意不并入；表外类型按 type 计数并披露。新增已知类型必须先采样或对上游核对。
+ */
+const KNOWN_GROK_UPDATE_TYPES = new Set([
+  'user_message_chunk',
+  'agent_thought_chunk',
+  'agent_message_chunk',
+  'tool_call',
+  'tool_call_update',
+  'turn_completed',
+  'retry_state',
+  'compaction_checkpoint',
+  'task_backgrounded',
+  'task_completed',
+  'background_tasks',
+  'session_recap',
+  'plan',
+  'memory_dream_queued',
+  'memory_dream_started',
+  'memory_dream_completed',
+  'rewind_marker',
+  'auto_compact_started',
+  'auto_compact_completed',
+  'current_mode_update',
+  'image_dropped',
+  'subagent_spawned',
+  'subagent_finished',
+]);
+
+export type GrokUpdateScan = {
+  usages: TokenUsage[];
+  compactions: number;
+  badLines: number;
+  failures: GrokFailureCounts;
+  /** `rewind_marker` 条数：回退改变 Grok 当前可见的上下文，Watch 不重建投影，只披露。 */
+  rewinds: number;
+  /** `image_dropped` 条数：Grok 明确丢弃了图片，那些图片不会出现在任何日志里。 */
+  imagesDropped: number;
+  /** 表外 `sessionUpdate` 类型 → 条数（类型名已转义、截断）。 */
+  unknownUpdates: Map<string, number>;
+};
 
 export async function grokUpdateScan(updatesPath: string): Promise<GrokUpdateScan | null> {
   const usages: TokenUsage[] = [];
   const failures = createGrokFailureCounts();
   let compactions = 0;
   let badLines = 0;
+  let rewinds = 0;
+  let imagesDropped = 0;
+  const unknownUpdates = new Map<string, number>();
   try {
     // 逐行流式读取：ACP `updates.jsonl` 连流式增量都逐条落盘，整份 `readFile` 在超过
     // V8 字符串上限（约 512 MB）时抛 `Invalid string length`——那会被讲成「读取失败」，
@@ -93,19 +143,39 @@ export async function grokUpdateScan(updatesPath: string): Promise<GrokUpdateSca
       const params = asRecord(rec.params);
       const update = asRecord(params?.update) ?? asRecord(rec.update);
       if (!update) continue;
-      if (update.sessionUpdate === 'compaction_checkpoint') {
+      const updateType =
+        typeof update.sessionUpdate === 'string' && update.sessionUpdate ? update.sessionUpdate : null;
+      if (updateType === 'rewind_marker') {
+        // 回退会改变 Grok 下一次请求实际携带的上下文；Watch 没有回退投影，只计数披露。
+        rewinds += 1;
+        continue;
+      }
+      if (updateType === 'image_dropped') {
+        // Grok 自己丢弃的图片不会出现在 chat_history / 任何日志里，只能按事件披露。
+        imagesDropped += 1;
+        continue;
+      }
+      if (updateType === 'compaction_checkpoint') {
         // Grok 每次压缩上下文都写一条；摘要正文在会话目录的 compaction_checkpoints/ 旁路文件里，
         // 格式未经验证，这里只计数、不读也不拼进交接（见 parseGrokSession 的披露）。
         compactions += 1;
         continue;
       }
-      if (update.sessionUpdate === 'retry_state') {
+      if (updateType === 'retry_state') {
         // 独立 update 类型（不是 turn_completed 的字段）；`reason` 带完整上游 URL，
         // 只认 `error_type` 这个枚举（见 failure.ts）。
         readGrokRetryState(update, failures);
         continue;
       }
-      if (update.sessionUpdate !== 'turn_completed') continue;
+      if (updateType !== 'turn_completed') {
+        if (!updateType) {
+          unknownUpdates.set('（缺少 sessionUpdate）', (unknownUpdates.get('（缺少 sessionUpdate）') ?? 0) + 1);
+        } else if (!KNOWN_GROK_UPDATE_TYPES.has(updateType)) {
+          const label = escapeControlChars(updateType.length > 64 ? `${updateType.slice(0, 64)}…` : updateType);
+          unknownUpdates.set(label, (unknownUpdates.get(label) ?? 0) + 1);
+        }
+        continue;
+      }
       // 结束原因与用量各读各的：失败轮可能没有 usage，有 usage 的轮次也可能以失败收尾
       readGrokTurnCompleted(update, failures);
       const u = pick(update.usage);
@@ -116,7 +186,7 @@ export async function grokUpdateScan(updatesPath: string): Promise<GrokUpdateSca
     if (isMissingPathError(error)) return null;
     throw new Error(describeSessionReadFailure(updatesPath, error));
   }
-  return { usages, compactions, badLines, failures };
+  return { usages, compactions, badLines, failures, rewinds, imagesDropped, unknownUpdates };
 }
 
 function pick(usage: unknown): TokenUsage | null {

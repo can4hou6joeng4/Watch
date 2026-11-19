@@ -344,6 +344,22 @@ async function attachGrokSidecars(
       `目标会话看到的可能是压缩前的历史，与 Grok 当前实际使用的上下文不一致，需要精确续接时请在原生 Grok 中核对。`,
     );
   }
+  if (scan.rewinds > 0) {
+    disclose(
+      `Grok 的 updates.jsonl 记录了 ${scan.rewinds} 次回退（rewind_marker）；Watch 不重建回退后的上下文投影：` +
+      `交接保留日志原文，可能比 Grok 当前实际使用的上下文更多，需要精确续接时请在原生 Grok 中核对。`,
+    );
+  }
+  if (scan.imagesDropped > 0) {
+    disclose(`Grok 的 updates.jsonl 记录了 ${scan.imagesDropped} 张图片被丢弃（image_dropped）：这些图片不在 chat_history.jsonl 里，无法并入交接。`);
+  }
+  if (scan.unknownUpdates.size > 0) {
+    const total = [...scan.unknownUpdates.values()].reduce((a, b) => a + b, 0);
+    const counts = [...scan.unknownUpdates.entries()]
+      .map(([type, n]) => (n > 1 ? `${type}×${n}` : type))
+      .join('、');
+    disclose(`Grok 的 updates.jsonl 有 ${total} 条未识别的会话更新（${counts}），Watch 暂不解析：无法确认其中是否包含对话内容，这些记录没有并入交接，请在来源核对。`);
+  }
   return turns;
 }
 
