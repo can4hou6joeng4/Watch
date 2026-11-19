@@ -10,7 +10,7 @@ import { randomBytes, randomUUID } from 'node:crypto';
 import { writeFileAtomic } from '../../core/atomic.js';
 import { parseJsonObject } from '../../core/jsonl.js';
 import { readTextOrEmpty } from '../../core/read-text.js';
-import { assistantOnlyIncrementReason, assistantTurnTextForWrite, toolInputAsRecord, userTurnTextForWrite } from '../../core/rich.js';
+import { assistantOnlyIncrementReason, assistantTurnTextForWrite, piBashTimeoutFromClaude, toolInputAsRecord, userTurnTextForWrite } from '../../core/rich.js';
 import { expectAttachmentPlaceholders, verifyWrittenTurns } from '../../core/verify.js';
 import { parsePiSession } from './parse.js';
 import type { ImportTurnsOpts } from '../adapter.js';
@@ -215,11 +215,25 @@ function nid(): string {
 }
 
 /**
+ * 写进 Pi `toolCall.arguments` 的入参：`Bash` 的 `timeout` 从 Claude 的毫秒换算成 Pi 的秒
+ * （pi-ai 1.5.2 的 bash schema 写明 "Timeout in seconds"）。只换算来源明确是 Claude、
+ * 工具名就是 `Bash` 的调用——Pi 来源原生已是秒，其它来源的单位无法确认，一律原样保留。
+ * 写出与写后校验（`expectPiToolCall`）共用这一份派生。
+ */
+export function piToolArguments(ev: ProcessEvent): { record: Record<string, unknown>; wrapped: boolean } {
+  const wrapped = toolInputAsRecord(ev.input, 'input');
+  if (wrapped.wrapped || ev.provider !== 'claude' || ev.name !== 'Bash') return wrapped;
+  const timeout = piBashTimeoutFromClaude(wrapped.record.timeout);
+  if (timeout === undefined) return wrapped;
+  return { record: { ...wrapped.record, timeout }, wrapped: false };
+}
+
+/**
  * 写后校验的期望（`verifyWrittenTurns` 的 `expectToolCall`）：与写入共用同一派生。
  * 带块级标记的包装值会被 parser 还原成来源原值；缺省 / null 写出的空对象与回读一致。
  */
 export function expectPiToolCall(ev: ProcessEvent): { name: unknown; input: unknown } {
-  const wrapped = toolInputAsRecord(ev.input, 'input');
+  const wrapped = piToolArguments(ev);
   return { name: ev.name ?? 'tool', input: wrapped.wrapped ? ev.input : wrapped.record };
 }
 
@@ -298,7 +312,7 @@ export async function importTurnsToPi(
         // pi-ai 的 `ToolCall.arguments` 是 JsonObject：字符串（exec 调用脚本、自由文本补丁）、
         // 数组等一律包成 `{ input: 原值 }`（Pi 自由文本工具的原生形状）并加块级标记，
         // 解析侧认标记才还原。上游四条 API 转换路径都只取固定字段，块上的额外键不会进模型请求。
-        const wrapped = toolInputAsRecord(ev.input, 'input');
+        const wrapped = piToolArguments(ev);
         content.push({
           type: 'toolCall',
           id: ev.callId ?? nid(),
