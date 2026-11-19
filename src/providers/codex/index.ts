@@ -728,15 +728,21 @@ export function isCodexDesktopExecutable(executable: string): boolean {
   return (bundle === 'Codex.app' || bundle === 'ChatGPT.app') && (binary === 'Codex' || binary === 'ChatGPT');
 }
 
-/** Desktop 进程是否在运行（pgrep 不可用等异常按未运行放行，保持旧行为） */
-async function desktopProcessRunning(): Promise<boolean> {
+/**
+ * Desktop 进程是否在运行。
+ * true / false 是结论；null = 探测本身失败（pgrep 超时、被拒、被安全软件拦）。
+ * 不能把 null 当成「未运行」：本函数的两处调用都是在 lsof / 目标上下文判定不了时的
+ * 保守回退，把「查不了」讲成「没有」会让预检在不该放行的时候放行。
+ */
+async function desktopProcessRunning(): Promise<boolean | null> {
   for (const pattern of ['Codex.app/Contents/MacOS/Codex', 'ChatGPT.app/Contents/MacOS/ChatGPT']) {
     try {
       await execFileAsync('pgrep', ['-f', pattern], { timeout: 10_000 });
       return true;
     } catch (error) {
-      if (typeof error === 'object' && error !== null && 'code' in error && error.code === 1) continue;
-      return false;
+      const code = (error as { code?: unknown }).code;
+      if (code === 1) continue; // 无匹配，试下一个模式
+      return null; // 探测失败（不是「没有」）
     }
   }
   return false;
@@ -820,11 +826,19 @@ export const codexAdapter: ProviderAdapter = {
     if (process.platform !== 'darwin') return; // MVP 只覆盖 macOS，其余平台放行
     if (!ctx) {
       // 未提供任何目标上下文（兼容旧调用）：无法做目标级判定，按进程保守拒绝
-      if (!(await desktopProcessRunning())) return;
+      const running = await desktopProcessRunning();
+      if (running === false) return;
+      if (running === true) {
+        throw new PreflightBlockedError({
+          code: 'codex_desktop_running',
+          message: '检测到 Codex/ChatGPT Desktop 正在运行，请先退出再切换（避免会话目录写入互斥）',
+          hint: '未提供目标会话时无法做目标级判定，因此保守拒绝。',
+        });
+      }
       throw new PreflightBlockedError({
-        code: 'codex_desktop_running',
-        message: '检测到 Codex/ChatGPT Desktop 正在运行，请先退出再切换（避免会话目录写入互斥）',
-        hint: '未提供目标会话时无法做目标级判定，因此保守拒绝。',
+        code: 'codex_desktop_unverifiable',
+        message: '无法确认 Codex/ChatGPT Desktop 是否在运行（进程探测失败）；未提供目标会话时无法做目标级判定，已保守拒绝写入',
+        hint: '检查 pgrep 是否可用（PATH、权限或安全软件拦截）后重试；本次未写入任何内容。',
       });
     }
     const ref = ctx.ref;
@@ -862,12 +876,25 @@ export const codexAdapter: ProviderAdapter = {
       });
     }
     if (holders) return; // 陈旧锁：持有者已退出 → 可写
-    if (!(await desktopProcessRunning())) return;
+    // lsof 不可用：退回 Desktop 进程检查。探测失败（null）必须保守拒绝——
+    // 以前它被当成「未运行」直接放行，与上面「锁状态读不出来就拒绝」的口径相反。
+    const running = await desktopProcessRunning();
+    if (running === false) return;
+    if (running === true) {
+      throw new PreflightBlockedError({
+        code: 'codex_target_busy',
+        sessionId: ref.sessionId,
+        message: `Codex 会话 ${ref.sessionId} 可能正被写入（无法探测 writer 锁，且 Desktop 正在运行），已保守拒绝`,
+        hint: '退出 Codex/ChatGPT Desktop 后重试；本次未写入任何内容。',
+      });
+    }
     throw new PreflightBlockedError({
-      code: 'codex_target_busy',
+      code: 'codex_desktop_unverifiable',
       sessionId: ref.sessionId,
-      message: `Codex 会话 ${ref.sessionId} 可能正被写入（无法探测 writer 锁，且 Desktop 正在运行），已保守拒绝`,
-      hint: '退出 Codex/ChatGPT Desktop 后重试；本次未写入任何内容。',
+      message:
+        `Codex 会话 ${ref.sessionId} 的 writer 锁无法探测（lsof 不可用），` +
+        'Desktop 进程状态也无法确认，已保守拒绝写入',
+      hint: '检查 lsof 与 pgrep 是否可用（PATH、权限或安全软件拦截）后重试；本次未写入任何内容。',
     });
   },
 
