@@ -688,7 +688,10 @@ function v2RecentAssistantText(data: V2MessageData, parts?: V2ContentItem[]): st
     if (item.type !== 'tool') continue;
     const name = typeof item.name === 'string' && item.name ? item.name : 'tool';
     const rawInput = item.state?.input;
-    const input = typeof rawInput === 'string' ? rawInput : JSON.stringify(rawInput);
+    // `JSON.stringify(undefined)` 返回 undefined（类型标注仍是 string），模板串会渲染成
+    // 字面量 "undefined" 写进保留窗口投影——与第 260 轮 Grok 的 `parseToolOutput()` 同族。
+    // 缺省与主解析的 `v2ToolInput()` 同口径，落成 `{}`。
+    const input = typeof rawInput === 'string' ? rawInput : JSON.stringify(rawInput ?? {});
     lines.push(`[Assistant tool call]: ${name}(${input})`);
     if (item.state?.status === 'completed') {
       lines.push(`[Tool result]: ${truncateV2RecentToolOutput(v2RecentToolContent(item.state?.content))}`);
