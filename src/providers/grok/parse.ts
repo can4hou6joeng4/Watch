@@ -100,10 +100,20 @@ export function parseToolArguments(raw: unknown): unknown {
   return raw ?? {};
 }
 
+/**
+ * 工具结果正文（第 260 轮）：`tool_result.content` 由上游写成字符串，但我们的消息联合里
+ * 它是可选的。缺省 / null 以前直接进 `JSON.stringify(undefined)` → 返回 undefined
+ * （类型标注写的是 string），随后 `summarize(undefined, …)` 对 undefined 调 `.split`，
+ * **整条会话解析抛 TypeError**——`open` / `handoff` / `prompt` 全部失败，用户只会看到
+ * 一个与工具结果无关的英文异常。现在缺省与 null 按「没有正文」返回空串（与空字符串
+ * content 同一档），其余形状仍序列化。
+ */
 function parseToolOutput(raw: unknown): string {
   if (typeof raw === 'string') return raw;
+  if (raw === undefined || raw === null) return '';
   try {
-    return JSON.stringify(raw);
+    const text = JSON.stringify(raw);
+    return typeof text === 'string' ? text : String(raw);
   } catch {
     return String(raw);
   }
