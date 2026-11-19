@@ -1,5 +1,5 @@
 import path from 'node:path';
-import { formatCommandArgv, isPatchArgv, isShellScriptArgv } from './command-argv.js';
+import { commandArgv, formatCommandArgv, isPatchArgv, isShellScriptArgv } from './command-argv.js';
 import { codeFence, inlineCode, singleLineText } from './markdown.js';
 import type { ProcessEvent, UnifiedTurn } from './types.js';
 
@@ -246,13 +246,6 @@ type Classified =
   | { kind: 'command'; command: string; workdir?: string; scanPatch?: false }
   | { kind: 'unreadable-write' }
   | null;
-
-/** 旧版 Codex `shell` 的 `command` 是字符串数组；只接受非空纯字符串数组。 */
-function commandArgv(value: unknown): string[] | undefined {
-  if (!Array.isArray(value) || value.length === 0) return undefined;
-  if (!value.every((v): v is string => typeof v === 'string')) return undefined;
-  return value;
-}
 
 /**
  * 判定一条工具调用。

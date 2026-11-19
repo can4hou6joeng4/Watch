@@ -1,3 +1,10 @@
+/** 旧版 Codex `shell` 的 `command` 是字符串数组；只接受非空纯字符串数组，其余形状不猜。 */
+export function commandArgv(value: unknown): string[] | undefined {
+  if (!Array.isArray(value) || value.length === 0) return undefined;
+  if (!value.every((v): v is string => typeof v === 'string')) return undefined;
+  return value;
+}
+
 /** 三项 POSIX shell 包装可直接展示脚本；有额外参数时必须保留整个 argv。 */
 export function isShellScriptArgv(argv: readonly string[]): boolean {
   return argv.length === 3 && /(?:^|[\\/])(?:bash|zsh|sh)$/.test(argv[0]!) && (argv[1] === '-c' || argv[1] === '-lc');

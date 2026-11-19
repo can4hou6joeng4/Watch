@@ -1,4 +1,5 @@
 import type { ProcessEvent, UnifiedTurn } from './types.js';
+import { commandArgv, formatCommandArgv } from './command-argv.js';
 import { escapeControlChars } from './display.js';
 
 export const ENCRYPTED_THINKING = '思考中…（加密）';
@@ -433,13 +434,24 @@ export function extractExecCommand(input: string): string {
   return cmds.length ? cmds.join('\n') : input;
 }
 
+/**
+ * 写进 Claude `Bash` 的入参；调用方已按 `toClaudeToolName()` 确认目标工具是 `Bash`。
+ *
+ * `command` 两种来源形状都要认：字符串，以及旧版 Codex `shell` 的 argv 数组
+ * （`{ command: ["bash", "-lc", "…"], workdir }`）。不认数组就会落到最后的来源原文兜底，
+ * 把整段入参 JSON 文本当成命令写进去，下一跳再照着这段 JSON 去执行。
+ * argv 按 `formatCommandArgv()` 还原成命令文本：三项 shell 包装取脚本本身，其余逐项按
+ * shell 单引号规则引用。`Bash` 入参没有 `workdir` / `timeout_ms` / `env` 的位置，这些键不写。
+ */
 export function claudeBashInput(event: ProcessEvent): { command: string; description?: string } {
   const input = event.input;
   if (input && typeof input === 'object' && !Array.isArray(input)) {
     const obj = input as Record<string, unknown>;
-    if (typeof obj.command === 'string') {
+    const argv = commandArgv(obj.command);
+    const command = typeof obj.command === 'string' ? obj.command : argv ? formatCommandArgv(argv) : undefined;
+    if (command !== undefined) {
       return {
-        command: obj.command,
+        command,
         description: typeof obj.description === 'string' ? obj.description : event.summary,
       };
     }
