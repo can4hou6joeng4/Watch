@@ -1240,12 +1240,12 @@ function v2AssistantTurn(
       // summary 直接展示字符串原文，避免 JSON.stringify 对半截 JSON 再加一层转义。
       const inputText = typeof input === 'string' ? input : JSON.stringify(input);
       // 上游 `tool.name` 是必填字符串。非字符串以前原样写进事件，渲染侧
-      // `(event.name ?? '').trim()` 直接 TypeError（第 263 轮）；与 r261 保留窗口投影
-      // 的 `typeof item.name === 'string' && item.name` 同口径，并计数披露。
+      // `(event.name ?? '').trim()` 直接 TypeError（第 263 轮）。空字符串不是原生合法
+      // 工具名，与写后校验（`expectedOpencodeToolCalls()` 同一归一）一起落回 `tool`。
       if (item.name !== undefined && typeof item.name !== 'string') {
         bumpCount(unknown, `tool:name（${v2ValueShape(item.name)}，不是字符串）`);
       }
-      const toolName = typeof item.name === 'string' && item.name ? item.name : 'tool';
+      const toolName = typeof item.name === 'string' ? item.name : 'tool';
       events.push({
         kind: 'tool_call',
         timestamp,

@@ -342,14 +342,24 @@ function buildStepFinishPartData(reason: string): string {
   return JSON.stringify({ type: 'step-finish', reason, tokens: { total: 0, input: 0, output: 0, reasoning: 0, cache: { write: 0, read: 0 } }, cost: 0 });
 }
 
+/**
+ * OpenCode 的 `tool` 是必填非空字符串：缺失与空字符串都落回 `tool`。
+ * 第 263 轮起 parser 与写后校验用同一归一，来源里空字符串的工具名不会让
+ * `opencodeToolCallsFromRows()` 与期望值对不上（否则整个导入会被事务校验回滚）。
+ */
+function opencodeToolName(name: string | undefined): string {
+  return typeof name === 'string' && name ? name : 'tool';
+}
+
 function buildToolPartData(ev: ProcessEvent, fallbackCallId: string, time: number): string {
   // metadata 是 v1.18+ ToolStateCompleted 必填键（Record，可空对象），缺了整个 GET messages 会被 schema 校验拒掉
   // 上游 v1 的 `state.input` 是 `Record<string, any>`：非对象入参包成 `{ value: 原值 }`（与官方导出
   // `official-export.ts` 的 `inputRecord` 同形）并写 `metadata.watch_wrapped_input`，解析侧认标记才还原。
   const wrappedInput = toolInputAsRecord(ev.input, 'value');
+  const toolName = ev.kind === 'tool_call' ? opencodeToolName(ev.name) : 'tool';
   const state: Record<string, unknown> = {
     status: ev.kind === 'tool_call' ? 'error' : 'completed',
-    title: ev.name ?? 'tool',
+    title: toolName,
     input: wrappedInput.record,
     metadata:
       ev.kind === 'tool_call'
@@ -370,7 +380,7 @@ function buildToolPartData(ev: ProcessEvent, fallbackCallId: string, time: numbe
       state.error = stripToolFailurePrefix(ev.detail ?? ev.summary ?? '') || '工具执行失败';
     }
   }
-  return JSON.stringify({ type: 'tool', callID: ev.callId || fallbackCallId, tool: ev.kind === 'tool_call' ? ev.name ?? 'tool' : 'tool', state });
+  return JSON.stringify({ type: 'tool', callID: ev.callId || fallbackCallId, tool: toolName, state });
 }
 
 /** 事务内新写入的 part id 快照（append 时用来只校验本次增量）。 */
@@ -391,7 +401,7 @@ function expectedOpencodeToolCalls(turns: UnifiedTurn[]): { callId?: string; nam
       if (ev.kind === 'tool_call') {
         if (ev.callId) pending.add(ev.callId);
         const wrapped = toolInputAsRecord(ev.input, 'value');
-        expected.push({ callId: ev.callId, name: ev.name ?? 'tool', input: wrapped.wrapped ? ev.input : wrapped.record });
+        expected.push({ callId: ev.callId, name: opencodeToolName(ev.name), input: wrapped.wrapped ? ev.input : wrapped.record });
       } else if (ev.kind === 'tool_result') {
         if (ev.callId && pending.has(ev.callId)) {
           pending.delete(ev.callId);
