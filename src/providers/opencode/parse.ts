@@ -1,7 +1,6 @@
 import { createHash } from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
-import { escapeControlChars } from '../../core/display.js';
-import { normalizeUserText, OPENCODE_COMPACTION_SUMMARY_PREFIX, OPENCODE_SYNTHETIC_TEXT_PREFIX, OPENCODE_TOOL_FAILURE_PREFIX, unwrapMarkedToolInput, WATCH_CONTEXT_DISCLOSURE_PREFIX } from '../../core/rich.js';
+import { normalizeUserText, OPENCODE_COMPACTION_SUMMARY_PREFIX, OPENCODE_SYNTHETIC_TEXT_PREFIX, OPENCODE_TOOL_FAILURE_PREFIX, unknownTypeLabel, unwrapMarkedToolInput, WATCH_CONTEXT_DISCLOSURE_PREFIX } from '../../core/rich.js';
 import { isoFromEpochMs } from '../../core/time.js';
 import type { ProcessEvent, SessionRef, TokenUsage, UnifiedTurn } from '../../core/types.js';
 import { detectOpencodeLayout, opencodeDbPath, opencodeDbSqliteError, probeOpencodeDbFile } from './paths.js';
@@ -891,10 +890,7 @@ function v2RowTypeLabel(value: unknown): string {
  */
 function describeCounts(map: Map<string, number>): string {
   const entries = [...map.entries()].sort((a, b) => b[1] - a[1]);
-  const label = (key: string): string => {
-    const chars = [...key];
-    return escapeControlChars(chars.length > 60 ? `${chars.slice(0, 60).join('')}…` : key);
-  };
+  const label = (key: string): string => unknownTypeLabel(key, 60);
   const shown = entries.slice(0, 8).map(([k, n]) => `${label(k)} × ${n}`);
   if (entries.length > 8) shown.push(`另有 ${entries.length - 8} 种`);
   return shown.join('、');
@@ -1343,7 +1339,9 @@ function v2AuxEvents(
       if (data.metadata?.background === true) {
         backgroundShells.count += 1;
         if (command && backgroundShells.samples.length < 3) {
-          backgroundShells.samples.push(escapeControlChars(command).slice(0, 80));
+          // 先按码点截断再转义（unknownTypeLabel）：以前是先转义后 `slice(0, 80)`，
+          // `\u001B` 跨在边界上会被切成 `\u001` 半截序列。
+          backgroundShells.samples.push(unknownTypeLabel(command, 80));
         }
         return [];
       }

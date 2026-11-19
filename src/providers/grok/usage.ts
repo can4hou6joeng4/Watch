@@ -2,8 +2,8 @@ import { iterateFileLines } from '../../core/read-text.js';
 import { isAbsolute, join, relative, resolve, dirname } from 'node:path';
 import { lstat, readFile } from 'node:fs/promises';
 import type { SessionRef, TokenUsage } from '../../core/types.js';
-import { escapeControlChars } from '../../core/display.js';
 import { parseJsonObject } from '../../core/jsonl.js';
+import { formatUnknownTypeCounts } from '../../core/rich.js';
 import { describeSessionReadFailure, isMissingPathError } from '../../core/read-text.js';
 import {
   createGrokFailureCounts,
@@ -173,8 +173,8 @@ async function readGrokCheckpoint(sessionDir: string, file: unknown): Promise<Gr
     for (const item of history) {
       const rec2 = asRecord(item);
       const role = rec2 && typeof rec2.role === 'string' && rec2.role ? rec2.role : '（缺 role）';
-      const label = escapeControlChars(role.length > 64 ? `${role.slice(0, 64)}…` : role);
-      roles.set(label, (roles.get(label) ?? 0) + 1);
+      // 存原文：转义、截断与有界汇总统一在披露渲染时做（formatUnknownTypeCounts）。
+      roles.set(role, (roles.get(role) ?? 0) + 1);
     }
     return {
       status: 'read',
@@ -200,9 +200,9 @@ export function describeGrokCheckpoints(scan: GrokCheckpointScan): string {
   };
   const parts: string[] = [];
   if (scan.last?.status === 'read' && scan.last.messages !== undefined) {
-    const roles = [...(scan.last.roles ?? new Map<string, number>()).entries()]
-      .map(([role, count]) => `${role}×${count}`)
-      .join('、');
+    // role 来自检查点文件，是不可信字符串；条数也可能任意多（损坏或第三方改写），
+    // 与其它未知类型披露同一口径有界展示。
+    const roles = formatUnknownTypeCounts(scan.last.roles ?? new Map<string, number>());
     parts.push(
       `最近一次压缩留下的上下文快照可读：压缩后重建的上下文有 ${scan.last.messages} 条记录` +
       (roles ? `（${roles}）` : '') +

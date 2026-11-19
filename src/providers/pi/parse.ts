@@ -1,5 +1,4 @@
 import { ToolResultPairing } from '../../core/tool-pairing.js';
-import { escapeControlChars } from '../../core/display.js';
 import { asJsonObject } from '../../core/jsonl.js';
 import { iterateFileLines } from '../../core/read-text.js';
 import {
@@ -377,9 +376,7 @@ type PiToolArgumentErrorCounts = { count: number; tools: Map<string, number> };
  */
 function describePiToolArgumentErrors(counts: PiToolArgumentErrorCounts): string {
   if (counts.count === 0) return '';
-  const tools = [...counts.tools.entries()]
-    .map(([name, n]) => (n > 1 ? `${name}×${n}` : name))
-    .join('、');
+  const tools = formatUnknownTypeCounts(counts.tools);
   return (
     `Pi 会话日志里有 ${counts.count} 个工具调用的入参不是合法的 JSON 对象（原生 argumentsError，涉及 ${tools}），` +
     'Watch 按原生契约以空对象保存：这些调用的原始入参文本没有并入交接，需要时请在原生 Pi 里核对'
@@ -480,8 +477,8 @@ function extractBlocks(
       const argumentsError = typeof b.argumentsError === 'string' ? b.argumentsError.trim() : '';
       if (argumentsError) {
         argErrors.count += 1;
-        const label = escapeControlChars(name.length > 64 ? `${name.slice(0, 64)}…` : name);
-        argErrors.tools.set(label, (argErrors.tools.get(label) ?? 0) + 1);
+        // 存原文：转义、截断与有界汇总统一在渲染时做（formatUnknownTypeCounts）。
+        argErrors.tools.set(name, (argErrors.tools.get(name) ?? 0) + 1);
       }
       events.push({
         kind: 'tool_call',

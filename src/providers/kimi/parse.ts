@@ -1,4 +1,3 @@
-import { escapeControlChars } from '../../core/display.js';
 import { ToolResultPairing } from '../../core/tool-pairing.js';
 import { iterateFileLines } from '../../core/read-text.js';
 import { asJsonObject, parseJsonObject } from '../../core/jsonl.js';
@@ -291,7 +290,7 @@ export async function parseKimiSession(ref: SessionRef): Promise<UnifiedTurn[]> 
       const rawReason = r.reason;
       const rawLabel =
         typeof rawReason === 'string' && rawReason.trim() ? rawReason.trim() : '（缺 reason）';
-      const reason = escapeControlChars(rawLabel.length > 64 ? `${rawLabel.slice(0, 64)}…` : rawLabel);
+      const reason = unknownTypeLabel(rawLabel, 64);
       const known = ['completed', 'cancelled', 'failed', 'blocked'].includes(rawLabel);
       // 缺 reason 与未识别类型分开点名（与 Pi 的 type 形状分档同口径）；completed 不计数，
       // 健康日志不能冒出假警告。
@@ -348,16 +347,12 @@ export async function parseKimiSession(ref: SessionRef): Promise<UnifiedTurn[]> 
   // 不复制 `error.message`（上游错误对象可能带请求片段）。
   const endNoteParts: string[] = [];
   if (endReasons.size > 0) {
-    const entries = [...endReasons.entries()];
-    const shown = entries
-      .slice(0, 8)
+    // endReasons 只会有 `（缺 reason）` 与三个已知非完成原因（completed 不计数），最多 4 项，
+    // 不需要 8 项上限；未识别的原因只按条数计入 unrecognizedEndReasonCount，不展示原文。
+    const shown = [...endReasons.entries()]
       .map(([reason, count]) => `${END_REASON_LABELS[reason] ?? unknownTypeLabel(reason, 64)} × ${count}`)
       .join('、');
-    if (entries.length > 8) {
-      endNoteParts.push(`Kimi 日志里的轮次以非正常原因结束（${shown}、另有 ${entries.length - 8} 种）`);
-    } else {
-      endNoteParts.push(`Kimi 日志里的轮次以非正常原因结束（${shown}）`);
-    }
+    endNoteParts.push(`Kimi 日志里的轮次以非正常原因结束（${shown}）`);
   }
   if (unrecognizedEndReasonCount > 0) {
     endNoteParts.push(`另有 ${unrecognizedEndReasonCount} 条未识别的结束原因，Watch 暂不解析`);
