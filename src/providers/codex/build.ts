@@ -576,7 +576,10 @@ function emitCodexEvent(
       input,
       internal_chat_message_metadata_passthrough: meta,
     });
-    const shown = name === 'exec' ? text : `${name}: ${text}`;
+    // 回显必须与 parser 的 detail 同源：exec 记录的 detail 是 `extractExecCommand(写入的
+    // input)`（回读时把脚本解码成命令）。直接用 `text` 当回显，在 text 本身已是 exec 脚本时
+    // 会与解码结果对不上，`isGeneratedCommentaryMirror()` 认不出它，回读就多出一条过程文本。
+    const shown = name === 'exec' ? extractExecCommand(input) : `${name}: ${text}`;
     pushCommentary(push, clipCodePointsToWidth(shown, 200), turnId, true);
     return;
   }

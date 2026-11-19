@@ -4,11 +4,16 @@ import { pushEvent, unknownTypeLabel, WATCH_CONTEXT_DISCLOSURE_PREFIX } from '..
 import type { ProcessEvent, UnifiedTurn } from '../../core/types.js';
 import { codexMediaPlaceholder, codexMediaRefFromContentItem } from './media.js';
 
-/** 对齐 ToolName::is_default_namespace 与 MCP 的 join_tool_name。 */
+/**
+ * 对齐 ToolName::is_default_namespace 与 MCP 的 join_tool_name。
+ * 空 / 纯空白工具名归一为 `tool`（与写出侧 `toCodexToolName()` 同改）：原生不会产生空名，
+ * 它只来自损坏来源或旧版 Watch；不归一会让空串原样进入事件与目标字段。
+ */
 export function codexToolName(name: string, namespace: unknown): string {
-  if (typeof namespace !== 'string' || !namespace || namespace === 'functions') return name;
+  const base = name.trim() ? name : 'tool';
+  if (typeof namespace !== 'string' || !namespace || namespace === 'functions') return base;
   const prefix = `${namespace.replace(/_+$/, '')}__`;
-  return name.startsWith(prefix) ? name : prefix + name.replace(/^_+/, '');
+  return base.startsWith(prefix) ? base : prefix + base.replace(/^_+/, '');
 }
 
 export function codexLabel(value: string, limit = 120): string {
