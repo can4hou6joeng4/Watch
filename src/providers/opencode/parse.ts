@@ -282,13 +282,21 @@ function partToEvents(
 ): ProcessEvent[] {
   const events: ProcessEvent[] = [];
   if (isReasoningPart(part)) {
-    events.push({
-      kind: 'thinking',
-      timestamp: isoFromEpochMs(baseTime),
-      detail: part.text ?? '',
-      summary: part.text ?? '',
-      provider: 'opencode',
-    });
+    // 上游 v1.18.29 的 `reasoning.text` 是必填字符串。损坏记录（数字 / 对象 / 数组）以前
+    // 原样写进事件；渲染侧 `sanitizeBody()` 的 `for…of` 在 --profile full 下抛
+    // "text is not iterable"，整条 `watch prompt` / 交接失败（第 263 轮）。与 2.x 的
+    // content:reasoning 同口径：计数披露、不产思考事件。
+    if (part.text !== undefined && typeof part.text !== 'string') {
+      if (unknown) bumpCount(unknown, `reasoning:text（${v2ValueShape(part.text)}，不是字符串）`);
+    } else {
+      events.push({
+        kind: 'thinking',
+        timestamp: isoFromEpochMs(baseTime),
+        detail: part.text ?? '',
+        summary: part.text ?? '',
+        provider: 'opencode',
+      });
+    }
   } else if (isToolPart(part)) {
     const callId = opencodeCallId(part.callID, '1.x tool.callID', recordKey, callIds);
     // 上游 v1 的 `state.input` 只接受对象；Watch 写入侧把非对象包成 `{ value: 原值 }` 并加
@@ -299,13 +307,19 @@ function partToEvents(
       : part.state?.input ?? {};
     // Watch 用合法 error 状态承载来源未记录结果的调用；它并非一次真实失败返回，不能伪造 tool_result。
     const unfinished = part.state?.status === 'error' && part.state.metadata?.watch_unfinished_tool === true;
+    // 上游 `tool` 是必填字符串。非字符串以前原样当名字写进事件，渲染侧
+    // `(event.name ?? '').trim()` 直接 TypeError（第 263 轮，与 reasoning.text 同族）。
+    if (part.tool !== undefined && typeof part.tool !== 'string') {
+      if (unknown) bumpCount(unknown, `tool:name（${v2ValueShape(part.tool)}，不是字符串）`);
+    }
+    const toolName = typeof part.tool === 'string' && part.tool ? part.tool : 'tool';
     events.push({
       kind: 'tool_call',
       timestamp: isoFromEpochMs(baseTime),
-      name: part.tool ?? 'tool',
+      name: toolName,
       callId,
       input,
-      summary: `${unfinished ? '[未完成工具调用] ' : ''}${part.tool ?? 'tool'} ${JSON.stringify(input).slice(0, 200)}`,
+      summary: `${unfinished ? '[未完成工具调用] ' : ''}${toolName} ${JSON.stringify(input).slice(0, 200)}`,
       provider: 'opencode',
     });
     const errored = part.state?.status === 'error';
@@ -445,7 +459,12 @@ function messageToTurn(
     if (partType === 'compaction') continue;
     const partTime = partRow.time_created;
     if (isTextPart(part)) {
-      if (part.text) {
+      // 上游 `text` 是必填字符串。非字符串以前被 `join('\n\n')` 静默转成 "42" /
+      // "[object Object]" 写进正文（不崩，但内容已经不是原值）；与 2.x 的
+      // content:text 同口径计数并跳过。
+      if (part.text !== undefined && typeof part.text !== 'string') {
+        bumpCount(unknown, `text（${v2ValueShape(part.text)}，不是字符串）`);
+      } else if (part.text) {
         // `ignored: true` 的文本上游不送进模型上下文（message-v2 的 toModelMessages 跳过），
         // 并进正文会让目标看到来源模型从未见过的内容；条数在整条会话上汇总后披露。
         if (part.ignored === true) {
@@ -1220,13 +1239,20 @@ function v2AssistantTurn(
       const input = v2ToolInput(item.state, unknown);
       // summary 直接展示字符串原文，避免 JSON.stringify 对半截 JSON 再加一层转义。
       const inputText = typeof input === 'string' ? input : JSON.stringify(input);
+      // 上游 `tool.name` 是必填字符串。非字符串以前原样写进事件，渲染侧
+      // `(event.name ?? '').trim()` 直接 TypeError（第 263 轮）；与 r261 保留窗口投影
+      // 的 `typeof item.name === 'string' && item.name` 同口径，并计数披露。
+      if (item.name !== undefined && typeof item.name !== 'string') {
+        bumpCount(unknown, `tool:name（${v2ValueShape(item.name)}，不是字符串）`);
+      }
+      const toolName = typeof item.name === 'string' && item.name ? item.name : 'tool';
       events.push({
         kind: 'tool_call',
         timestamp,
-        name: item.name ?? 'tool',
+        name: toolName,
         callId,
         input,
-        summary: `${item.name ?? 'tool'} ${inputText.slice(0, 200)}`,
+        summary: `${toolName} ${inputText.slice(0, 200)}`,
         provider: 'opencode',
       });
       const output = v2ToolResultText(item.state, unknown);
