@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { spawnSync } from 'node:child_process';
+import { createRequire } from 'node:module';
 
 // 1. Load Cloudflare credentials from ~/.env if available
 const envFile = path.join(os.homedir(), '.env');
@@ -51,15 +52,33 @@ if (build.status !== 0) {
 
 console.log(`🚀 开始将 ${siteDir} 部署至 Cloudflare Workers (静态资产 + 自定义域 relay.bobochang.cn)...`);
 
-const result = spawnSync('npx', [
-  'wrangler',
-  'deploy'
-], {
+// 用当前 Node 直接执行本地安装的 Wrangler 入口，不经 npx 与 shell：
+// shell: true 带参数会触发 Node 的 DEP0190 弃用警告，Windows 上的 npx.cmd 也只能靠 shell 启动。
+// wrangler 的 exports 不公开 bin 子路径，因此从 package.json 的 bin 字段定位入口文件。
+const require = createRequire(import.meta.url);
+let wranglerBin;
+try {
+  const manifestPath = require.resolve('wrangler/package.json');
+  const bin = require(manifestPath).bin;
+  const relativeBin = typeof bin === 'string' ? bin : bin?.wrangler;
+  if (typeof relativeBin !== 'string' || !relativeBin) throw new Error('package.json 没有 wrangler 的 bin 入口');
+  wranglerBin = path.resolve(path.dirname(manifestPath), relativeBin);
+  if (!fs.statSync(wranglerBin).isFile()) throw new Error(`入口不是普通文件: ${wranglerBin}`);
+} catch (error) {
+  console.error(`[Error] 找不到本地安装的 Wrangler（${error?.message || error}）。请先在仓库根运行 npm install。`);
+  process.exit(1);
+}
+
+const result = spawnSync(process.execPath, [wranglerBin, 'deploy'], {
   cwd: process.cwd(),
   env: envVars,
-  stdio: 'inherit',
-  shell: true
+  stdio: 'inherit'
 });
+
+if (result.error) {
+  console.error(`\n❌ 无法启动 Wrangler: ${result.error.message}`);
+  process.exit(1);
+}
 
 if (result.status !== 0) {
   console.error(`\n❌ 部署失败，退出码: ${result.status}`);
