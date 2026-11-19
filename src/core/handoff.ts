@@ -199,7 +199,26 @@ export async function assertTargetUnchanged(
   snapshot: FileDigest | null,
   action = '切换',
 ): Promise<void> {
-  if (!snapshot) return;
+  if (!snapshot) {
+    // 快照缺失不等于「没有变化」：适配器根本没有指纹能力时（opencode 走 SQLite 事务）
+    // 本来就不在这一层守卫；声明了能力却拿不到快照，必须分清「目标已经不在了」与
+    // 「读不出来」——直接放行会让只写权限（0200）、同名目录占位或瞬时 I/O 错误
+    // 把整条 TOCTOU 守卫静默跳过。
+    if (!adapter.contentFingerprint) return;
+    const presence = await sessionFilePresence(ref.filePath);
+    // 目标确实不在：写入会新建会话，由调用方的「目标消失」披露路径说明旧历史没并入
+    if (presence.state === 'missing') return;
+    const detail =
+      presence.state === 'unknown'
+        ? `文件状态无法确认（${presence.reason}）`
+        : presence.isFile
+          ? `文件存在但读不出内容（可能是权限或 I/O 问题）：${escapeControlChars(ref.filePath)}`
+          : `路径现在不是普通文件（被同名目录或设备文件占住了）：${escapeControlChars(ref.filePath)}`;
+    throw new HandoffBlockedError(
+      'target_unreadable',
+      `目标会话${detail}；规划时没有取到写前校验用的内容快照，无法确认期间是否被外部修改，已中止本次${action}（未写入任何内容），先确认它可读再重试`,
+    );
+  }
   const current = (await adapter.contentFingerprint?.(ref)) ?? null;
   if (current && current.sha256 === snapshot.sha256 && current.sizeBytes === snapshot.sizeBytes) return;
   // 指纹消失有两种完全不同的原因：文件被删 / 被移走，或只是读不出来（权限、I/O）。
