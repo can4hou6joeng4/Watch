@@ -365,17 +365,21 @@ function renderEvent(event: ProcessEvent, detailLimit: number | null, stats: Pro
     tool_result: '结果',
     text: '说明',
   };
-  const summary = clipInline(sanitizeBody(event.summary).text.replace(/\s+/g, ' ').trim(), 200);
+  // 截断必须在转义之前（第 271 轮）：先按原文码点切，再 `sanitizeBody()`。反过来做时
+  // ESC 已被转成 6 个字符的 `\u001B`，切在它中间会留下 `\u001` 半截序列——读者会把它
+  // 当成一个真实存在的转义，而原文只有一个 ESC。
+  const summary = clipInline(event.summary.replace(/\s+/g, ' ').trim(), 200);
   if (summary.truncated) stats.truncatedTexts += 1;
-  let line = `- [${kindLabel[event.kind]}] ${summary.text}`;
+  const summaryText = sanitizeBody(summary.text).text;
+  let line = `- [${kindLabel[event.kind]}] ${summaryText}`;
   if (event.detail && detailLimit !== 0) {
-    const detail = sanitizeBody(event.detail);
-    if (detail.escaped) stats.escapedBodies += 1;
-    const clipped = clip(detail.text, detailLimit);
+    const clipped = clip(event.detail, detailLimit);
     if (clipped.truncated) stats.truncatedTexts += 1;
+    const detail = sanitizeBody(clipped.text);
+    if (detail.escaped) stats.escapedBodies += 1;
     // 围栏长度按（截断后的）内容选择：工具入参里的 ``` 否则会提前闭合并把后续行漏成正文。
-    const fence = codeFence(clipped.text);
-    line += `\n  ${fence}\n${clipped.text}\n  ${fence}`;
+    const fence = codeFence(detail.text);
+    line += `\n  ${fence}\n${detail.text}\n  ${fence}`;
   }
   return line;
 }
