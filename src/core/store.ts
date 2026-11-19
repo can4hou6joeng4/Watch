@@ -4,7 +4,7 @@ import { dirname, join } from 'node:path';
 import { homedir } from 'node:os';
 import { randomUUID } from 'node:crypto';
 import { cwdControlCharsNote, sameDirectorySync } from './cwd.js';
-import { escapeControlChars } from './display.js';
+import { clipCodePoints, escapeControlChars } from './display.js';
 import { normalizePath } from './platform.js';
 import { probeSqliteTables, readSqliteFileHead } from './sqlite-file.js';
 import type { ProcessEvent, SessionRef, UnifiedTurn } from './types.js';
@@ -652,7 +652,7 @@ export class Store {
         'INSERT INTO messages_fts (text, session_id, provider, cwd, file_path) VALUES (?,?,?,?,?)',
       );
       for (const raw of opts.texts) {
-        const text = raw.replace(/\s+/g, ' ').trim().slice(0, FTS_TEXT_LIMIT);
+        const text = clipCodePoints(raw.replace(/\s+/g, ' ').trim(), FTS_TEXT_LIMIT).text;
         if (text.length < 2) continue;
         ins.run(text, opts.sessionId, opts.provider, opts.cwd, opts.filePath);
       }
@@ -983,7 +983,7 @@ export class Store {
     cwd = this.normCwd(cwd);
     const id = randomUUID();
     const now = Date.now();
-    const title = turns[0].text.replace(/\s+/g, ' ').slice(0, 50);
+    const title = clipCodePoints(turns[0].text.replace(/\s+/g, ' '), 50).text;
     this.db.prepare(
       'INSERT INTO sessions (id, title, cwd, provider, ref_json, created_at, updated_at, next_seq) VALUES (?,?,?,?,?,?,?,0)',
     ).run(id, title, cwd, provider, JSON.stringify(ref), now, now);
@@ -1521,10 +1521,26 @@ function excerpt(text: string, q: string): string {
   const needle = normalizeQueryWhitespace(q);
   const hay = text.toLowerCase();
   const at = hay.indexOf(needle.toLowerCase());
-  if (at < 0) return text.slice(0, 80);
-  const start = Math.max(0, at - 20);
-  const end = Math.min(text.length, at + needle.length + 20);
+  if (at < 0) return clipCodePoints(text, 80).text;
+  // 上下文窗口按码元算（与 indexOf 的命中下标同一坐标系），但两端要落在码点边界上：
+  // 截在 emoji 这类代理对中间时，片段首尾会出现孤立的一半（终端里是替换符）。
+  const start = snapStartBoundary(text, Math.max(0, at - 20));
+  const end = snapEndBoundary(text, Math.min(text.length, at + needle.length + 20));
   return `${start > 0 ? '…' : ''}${text.slice(start, at)}[${text.slice(at, at + needle.length)}]${text.slice(at + needle.length, end)}${end < text.length ? '…' : ''}`;
+}
+
+/** 起始下标落在低位代理上时退回一位，让整个代理对进入窗口。 */
+function snapStartBoundary(text: string, index: number): number {
+  if (index <= 0 || index >= text.length) return index;
+  const code = text.charCodeAt(index);
+  return code >= 0xdc00 && code <= 0xdfff ? index - 1 : index;
+}
+
+/** 结束下标切在高位代理后时前进一位，把低位代理一并纳入窗口。 */
+function snapEndBoundary(text: string, index: number): number {
+  if (index <= 0 || index >= text.length) return index;
+  const code = text.charCodeAt(index - 1);
+  return code >= 0xd800 && code <= 0xdbff ? index + 1 : index;
 }
 
 /**

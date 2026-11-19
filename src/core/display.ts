@@ -32,6 +32,28 @@ export function escapeControlChars(text: string): string {
   return out;
 }
 
+/**
+ * 按**码点**截断到 `limit` 个字符，不附加省略号；被截断时 `truncated` 为 true。
+ *
+ * `String.prototype.slice()` 按 UTF-16 码元切，emoji 这类代理对会被切成孤立的一半，
+ * 终端与 JSON 里显示为替换符。展示侧的截断统一走这里：先按原文码点切，需要省略号的
+ * 由调用方补，需要转义控制字符的仍在截断**之后**做（先转义后截断会切出 `\u001` 半截序列，
+ * 见 `unknownTypeLabel()` 与 v0.1.187–v0.1.189）。
+ * 实现按 `limit` 提前停止遍历，超长正文（如 FTS 索引）不会先展开整串。
+ */
+export function clipCodePoints(text: string, limit: number): { text: string; truncated: boolean } {
+  // 快路径：码元数不超过 limit 时码点数一定也不超过（代理对按两个码元算）
+  if (text.length <= limit) return { text, truncated: false };
+  let count = 0;
+  let end = 0;
+  for (const char of text) {
+    if (count === limit) break;
+    count += 1;
+    end += char.length;
+  }
+  return { text: text.slice(0, end), truncated: end < text.length };
+}
+
 /** 名字里是否有控制字符（决定要不要提示「显示时已转义、怎么修」）。 */
 export function hasControlChars(text: string): boolean {
   for (const char of text) {

@@ -1,7 +1,7 @@
 import path from 'node:path';
 import type { ProcessEvent, UnifiedTurn } from './types.js';
 import { commandArgv, formatCommandArgv } from './command-argv.js';
-import { escapeControlChars, hasControlChars } from './display.js';
+import { clipCodePoints, escapeControlChars, hasControlChars } from './display.js';
 
 /**
  * 未知类型 / 角色的展示名：先按原文码点截到 `limit` 再加省略号，然后转义控制字符。
@@ -10,8 +10,8 @@ import { escapeControlChars, hasControlChars } from './display.js';
  * （先转义后截断会留下 `\u001` 这样的半截序列）。
  */
 export function unknownTypeLabel(value: string, limit = 64): string {
-  const chars = [...value];
-  return escapeControlChars(chars.length > limit ? `${chars.slice(0, limit).join('')}…` : value);
+  const clipped = clipCodePoints(value, limit);
+  return escapeControlChars(clipped.truncated ? `${clipped.text}…` : value);
 }
 
 /**
@@ -595,7 +595,9 @@ export function unwrapMarkedToolInput(value: unknown, key: string): unknown {
 export function summarize(text: string, fallback: string): string {
   const line = text.split('\n').find((l) => l.trim())?.trim() ?? '';
   if (!line) return fallback;
-  return line.length > 80 ? `${line.slice(0, 79)}…` : line;
+  // 总宽 80 码点（含省略号）：恰 80 码点的行原样保留，更长的取前 79 码点 + `…`。
+  const clipped = clipCodePoints(line, 80);
+  return clipped.truncated ? `${clipCodePoints(clipped.text, 79).text}…` : line;
 }
 
 /**
@@ -1041,7 +1043,8 @@ export function describeUnansweredTail(
   const tail = unansweredUserTail(turns);
   if (!tail) return null;
   const full = tail.text.trim().replace(/\s+/g, ' ');
-  const preview = full.length > 40 ? `${full.slice(0, 40)}…` : full;
+  const clippedTail = clipCodePoints(full, 40);
+  const preview = clippedTail.truncated ? `${clippedTail.text}…` : full;
   // 来源日志已经写明失败 / 中止时，不能再说「可能还在生成」——两句话并列会自相矛盾。
   // 标记由解析器的失败披露事件携带（`ProcessEvent.tailFailure`），只改这一句，不压掉警告。
   const confirmed = (tail.events ?? []).find((e) => e.kind === 'text' && e.tailFailure)?.tailFailure;
