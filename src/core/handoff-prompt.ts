@@ -307,7 +307,7 @@ function selectTurns(
   turns: UnifiedTurn[],
   maxTurns: number | null,
   keepFirst = false,
-): { kept: UnifiedTurn[]; omitted: number } {
+): { kept: UnifiedTurn[]; omitted: number; joinNeedsMarker?: boolean } {
   if (maxTurns === null || turns.length <= maxTurns) return { kept: turns, omitted: 0 };
   const head = keepFirst ? turns[0] : turns[turns.findIndex((t) => t.role === 'user')];
   const tailCount = head ? Math.max(maxTurns - 1, 0) : maxTurns;
@@ -316,7 +316,10 @@ function selectTurns(
   // 首轮若已在尾部窗口内（会话本身很短），不要重复
   if (tail.some((t) => t === head)) return { kept: tail, omitted: turns.length - tail.length };
   const kept = [head, ...tail];
-  return { kept, omitted: turns.length - kept.length };
+  // 尾部窗口的第一条若是「回复」，它回答的是被省略的那条提问：直接拼在强制保留的首轮后面，
+  // 读者会把它当成对首轮的答复。正文在拼接处插入跳转标记（第 276 轮）。
+  const joinNeedsMarker = tail.length > 0 && tail[0]!.role !== 'user';
+  return { kept, omitted: turns.length - kept.length, joinNeedsMarker };
 }
 
 /**
@@ -340,10 +343,10 @@ function takeLastUserTurns(turns: UnifiedTurn[], n: number): { kept: UnifiedTurn
  * （它已经不在「被省略」里了）。不带 `--since-compact` 时不补：那时摘要轮本来就不属于窗口。
  */
 function keepCompactAnchor(
-  picked: { kept: UnifiedTurn[]; omitted: number },
+  picked: { kept: UnifiedTurn[]; omitted: number; joinNeedsMarker?: boolean },
   scoped: UnifiedTurn[],
   compactAt: number,
-): { kept: UnifiedTurn[]; omitted: number } {
+): { kept: UnifiedTurn[]; omitted: number; joinNeedsMarker?: boolean } {
   if (compactAt < 0 || scoped.length === 0) return picked;
   const anchor = scoped[0]!;
   if (picked.kept.includes(anchor)) return picked;
@@ -370,8 +373,11 @@ function renderEvent(event: ProcessEvent, detailLimit: number | null, stats: Pro
   // 当成一个真实存在的转义，而原文只有一个 ESC。
   const summary = clipInline(event.summary.replace(/\s+/g, ' ').trim(), 200);
   if (summary.truncated) stats.truncatedTexts += 1;
-  const summaryText = sanitizeBody(summary.text).text;
-  let line = `- [${kindLabel[event.kind]}] ${summaryText}`;
+  // 摘要里的控制字符同样被转义成字面量，必须计数（第 276 轮）：读者看到 `\u001B`
+  // 时应该能从 findings 里知道这是被改写过的原文，而不是会话里真有这串字符。
+  const summarySanitized = sanitizeBody(summary.text);
+  if (summarySanitized.escaped) stats.escapedBodies += 1;
+  let line = `- [${kindLabel[event.kind]}] ${summarySanitized.text}`;
   if (event.detail && detailLimit !== 0) {
     const clipped = clip(event.detail, detailLimit);
     if (clipped.truncated) stats.truncatedTexts += 1;
@@ -491,11 +497,19 @@ export function buildHandoffPrompt(
   }
 
   const body: string[] = [];
-  for (const turn of kept) {
-    const raw = sanitizeBody(turn.text);
-    if (raw.escaped) stats.escapedBodies += 1;
-    const clipped = clip(raw.text.trim(), limits.textLimit);
+  for (const [index, turn] of kept.entries()) {
+    // 首轮与尾部窗口之间若跳过了整段（见 selectTurns 的 joinNeedsMarker），在拼接处留一行标记：
+    // 紧随其后的助手回复回答的是被省略的提问，不是上一轮。
+    if (index === 1 && selection.joinNeedsMarker) {
+      body.push(`> …（中间省略 ${omitted} 轮；紧随其后的内容与前一轮不一定是问答关系）…`);
+      body.push('');
+    }
+    // 截断必须在转义之前（第 276 轮，与第 271 轮事件侧同一规则）：ESC 被展开成 6 个字符后
+    // 再切会留下 `\u001` 半截序列，披露的「原 N 字符」也会变成转义后的长度。
+    const clipped = clip(turn.text.trim(), limits.textLimit);
     if (clipped.truncated) stats.truncatedTexts += 1;
+    const bodyText = sanitizeBody(clipped.text);
+    if (bodyText.escaped) stats.escapedBodies += 1;
     const events = turn.events ?? [];
     const attachments = events.filter((e) => e.attachment).length;
     // 附件一律不随文档走（base64 会撑爆粘贴内容），但**必须在这里计数**，不能等到
@@ -511,10 +525,10 @@ export function buildHandoffPrompt(
     const compactEvents = events.filter(isCompactSummaryEvent);
     const procEvents = events.filter((e) => !isCompactSummaryEvent(e) && !isContextDisclosureEvent(e));
     let headed = false;
-    if (clipped.text.length > 0) {
+    if (bodyText.text.length > 0) {
       body.push(`### ${roleLabel(turn.role)}`);
       body.push('');
-      body.push(clipped.text);
+      body.push(bodyText.text);
       body.push('');
       headed = true;
     } else if (attachments > 0) {
@@ -552,6 +566,12 @@ export function buildHandoffPrompt(
       addFinding(findings, 'prompt_events_omitted', 'skipped', procEvents.length - shown.length);
     }
     if (shown.length) {
+      // 只有过程记录、没有正文的轮次（工具轮 / 被中断的轮 / 失败披露载体轮）没有标题时，
+      // 这组事件会挂到上一轮的 `### 角色` 之下，工具调用看起来像是上一轮说的（第 276 轮）。
+      if (!headed) {
+        body.push(`### ${roleLabel(turn.role)}`);
+        body.push('');
+      }
       body.push(`<details><summary>过程记录 ${shown.length}/${procEvents.length}</summary>`);
       body.push('');
       for (const event of shown) body.push(renderEvent(event, limits.detailLimit, stats));
@@ -564,7 +584,6 @@ export function buildHandoffPrompt(
 
   if (stats.omittedTurns > 0) addFinding(findings, 'prompt_turns_trimmed_to_profile', 'degraded', stats.omittedTurns);
   if (stats.truncatedTexts > 0) addFinding(findings, 'prompt_text_truncated', 'degraded', stats.truncatedTexts);
-  if (stats.escapedBodies > 0) addFinding(findings, 'prompt_control_chars_escaped', 'degraded', stats.escapedBodies);
 
   // 「改动概览」必须用**整条会话**的 turns，不能用裁剪后的 kept：`--last` / 档位会甩掉早期轮次，
   // 若清单跟着裁，读者会以为这段工作只改了留下来那几个文件。它也不受 eventsPerTurn 影响——
@@ -593,10 +612,17 @@ export function buildHandoffPrompt(
   stats.failedAttemptsOmittedCalls = manifest.omittedFailedAttemptCalls;
   stats.failedAttemptsUnclassified = manifest.unclassifiedFailures;
 
-  // ID 与路径是单行数据；正文的换行保留规则不适用于文档头部。
-  const metadataCode = (text: string): string => inlineCode(singleLineText(sanitizeBody(text).text));
+  // ID 与路径是单行数据；正文的换行保留规则不适用于文档头部。上游错误文案（上下文完整性、
+  // 坏行扫描错误）同样可能带换行，落在头部会伪造 `## 小节` 或清单条目——一律折成单行（第 276 轮）。
+  // 转义同样要计数：输出被改写了，读者必须能从 findings 里知道这不是原文。
+  const headerLine = (text: string): string => {
+    const sanitized = sanitizeBody(text);
+    if (sanitized.escaped) stats.escapedBodies += 1;
+    return singleLineText(sanitized.text);
+  };
+  const metadataCode = (text: string): string => inlineCode(headerLine(text));
   const lines: string[] = [];
-  lines.push(`# 会话交接 · ${sanitizeBody(meta.providerName).text}`);
+  lines.push(`# 会话交接 · ${headerLine(meta.providerName)}`);
   lines.push('');
   lines.push(
     '> 以下内容由 Watch（值更）从来源助手在本机保存的会话记录生成，用于在另一个 AI 编程助手中继续同一项工作。',
@@ -605,14 +631,14 @@ export function buildHandoffPrompt(
   lines.push('');
   lines.push('## 元信息');
   lines.push('');
-  lines.push(`- 来源助手：${sanitizeBody(meta.providerName).text}（${sanitizeBody(meta.providerId).text}）`);
+  lines.push(`- 来源助手：${headerLine(meta.providerName)}（${headerLine(meta.providerId)}）`);
   lines.push(
     `- 会话 ID：${metadataCode(meta.sessionId)}${meta.autoPicked ? '（自动挑选：本目录按修改时间最新的可读会话，可能不是你想要的另一条）' : ''}`,
   );
   if (meta.sourceSelectionWarnings?.length) {
     addFinding(findings, 'prompt_source_selection_incomplete', 'degraded', meta.sourceSelectionWarnings.length);
     for (const warning of meta.sourceSelectionWarnings) {
-      lines.push(`- 选择范围：${singleLineText(sanitizeBody(warning).text)}`);
+      lines.push(`- 选择范围：${headerLine(warning)}`);
     }
   }
   if (meta.sourcePath) lines.push(`- 源文件：${metadataCode(meta.sourcePath)}`);
@@ -627,7 +653,7 @@ export function buildHandoffPrompt(
     addFinding(findings, 'prompt_source_bad_lines_unscanned', 'degraded', 1);
     const partial = meta.sourceBadLines && meta.sourceBadLines > 0 ? `（已确认的 ${meta.sourceBadLines} 行已跳过，其后未读完）` : '';
     lines.push(
-      `- 源文件坏行数无法确认：${sanitizeBody(meta.sourceBadLinesScanError).text}${partial}` +
+      `- 源文件坏行数无法确认：${headerLine(meta.sourceBadLinesScanError)}${partial}` +
         '；正文是否缺少记录无法确认——先确认该文件可读，需要完整内容请先恢复来源文件',
     );
   }
@@ -636,16 +662,16 @@ export function buildHandoffPrompt(
   // 两者不一致时正是读者最需要看见差别的地方。
   if (meta.sourceCwdNote) {
     addFinding(findings, 'prompt_source_cwd_unavailable', 'degraded', 1);
-    lines.push(`- 工作目录状态：${sanitizeBody(meta.sourceCwdNote).text}`);
+    lines.push(`- 工作目录状态：${headerLine(meta.sourceCwdNote)}`);
   }
   // 这不是降级，是目录的**类型**：不说的话读者从路径上看不出它是独立工作树。
   if (meta.sourceWorktreeNote) {
-    lines.push(`- 工作目录类型：${sanitizeBody(meta.sourceWorktreeNote).text}`);
+    lines.push(`- 工作目录类型：${headerLine(meta.sourceWorktreeNote)}`);
   }
   // 普通仓库根的分支：工作树说明已经带了分支时不会同时出现；detached 与读不出来都如实写。
   if (meta.sourceBranchNote) {
     if (meta.sourceBranchUnreadable) addFinding(findings, 'prompt_source_branch_unreadable', 'degraded', 1);
-    lines.push(`- 工作目录分支：${sanitizeBody(meta.sourceBranchNote).text}`);
+    lines.push(`- 工作目录分支：${headerLine(meta.sourceBranchNote)}`);
   }
   // 来源记录的上下文与来源 CLI 当前发给模型的不一致（目前由 Pi parse 写入）：这个事件在
   // 正文里默认不展开（standard 档位 eventsPerTurn = 0），所以必须在头部单独说一句。扫描发生在
@@ -653,7 +679,7 @@ export function buildHandoffPrompt(
   const contextDisclosure = findContextDisclosure(turns);
   if (contextDisclosure) {
     addFinding(findings, 'prompt_context_disclosure', 'degraded', 1);
-    lines.push(`- 上下文完整性：${sanitizeBody(contextDisclosure.summary).text}`);
+    lines.push(`- 上下文完整性：${headerLine(contextDisclosure.summary)}`);
   }
   const range = formatTimeRange(meta.startedAt, meta.updatedAt);
   if (range) {
@@ -673,11 +699,11 @@ export function buildHandoffPrompt(
   if (meta.usageBadLinesScanError) addFinding(findings, 'prompt_usage_bad_lines_unscanned', 'degraded', 1);
   lines.push(
     `- 用量：${meta.usageNote
-      ? sanitizeBody(meta.usageNote).text
+      ? headerLine(meta.usageNote)
       : formatUsage(meta.usage) ?? '来源会话没有可读的用量记录'}` +
       (usageBadLines > 0 ? `（用量数据源有 ${usageBadLines} 行无法解析，这些行的用量没有计入，合计可能偏少）` : '') +
       (meta.usageBadLinesScanError
-        ? `（用量数据源的坏行无法统计：${sanitizeBody(meta.usageBadLinesScanError).text}；合计可能偏少且无法确认程度）`
+        ? `（用量数据源的坏行无法统计：${headerLine(meta.usageBadLinesScanError)}；合计可能偏少且无法确认程度）`
         : ''),
   );
   const fullHint = profile === 'full' ? '' : '；要更完整的内容，用 --profile full 重新生成';
@@ -726,7 +752,7 @@ export function buildHandoffPrompt(
   // 这句话必须跟在后面，否则文档被复制走之后没人知道它只代表那一瞬间
   if (meta.sourceDriftNote) {
     addFinding(findings, 'prompt_source_changed_during_render', 'degraded', 1);
-    lines.push(`- 生成期间有变化：${sanitizeBody(meta.sourceDriftNote).text}`);
+    lines.push(`- 生成期间有变化：${headerLine(meta.sourceDriftNote)}`);
   }
   lines.push('');
   // 改动概览放在「会话记录」之前：接手者先要知道动了哪些文件、跑过什么命令，
@@ -754,9 +780,11 @@ export function buildHandoffPrompt(
     }
     if (escapedManifest > 0) {
       stats.escapedBodies += escapedManifest;
-      addFinding(findings, 'prompt_control_chars_escaped', 'degraded', escapedManifest);
     }
   }
+  // 头部的单行转义发生在正文统计之后（第 276 轮），finding 统一在这里记一次：
+  // 上面的「本次省略」一行直接读 stats，已经包含头部与改动概览的计数。
+  if (stats.escapedBodies > 0) addFinding(findings, 'prompt_control_chars_escaped', 'degraded', stats.escapedBodies);
   lines.push('## 会话记录');
   lines.push('');
   if (!body.length) {
