@@ -1,7 +1,7 @@
 import path from 'node:path';
 import type { ProcessEvent, UnifiedTurn } from './types.js';
 import { commandArgv, formatCommandArgv } from './command-argv.js';
-import { clipCodePoints, escapeControlChars, hasControlChars } from './display.js';
+import { clipCodePoints, clipCodePointsToWidth, escapeControlChars, hasControlChars } from './display.js';
 
 /**
  * 未知类型 / 角色的展示名：先按原文码点截到 `limit` 再加省略号，然后转义控制字符。
@@ -596,8 +596,7 @@ export function summarize(text: string, fallback: string): string {
   const line = text.split('\n').find((l) => l.trim())?.trim() ?? '';
   if (!line) return fallback;
   // 总宽 80 码点（含省略号）：恰 80 码点的行原样保留，更长的取前 79 码点 + `…`。
-  const clipped = clipCodePoints(line, 80);
-  return clipped.truncated ? `${clipCodePoints(clipped.text, 79).text}…` : line;
+  return clipCodePointsToWidth(line, 80);
 }
 
 /**

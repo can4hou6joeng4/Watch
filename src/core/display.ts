@@ -54,6 +54,15 @@ export function clipCodePoints(text: string, limit: number): { text: string; tru
   return { text: text.slice(0, end), truncated: end < text.length };
 }
 
+/**
+ * 总宽 `width` 码点（省略号计入）的单行截断：恰 `width` 码点原样保留，
+ * 更长的取前 `width - 1` 码点加 `…`。用于「整句最多 N 字」的摘要与回显比对。
+ */
+export function clipCodePointsToWidth(text: string, width: number): string {
+  const clipped = clipCodePoints(text, width);
+  return clipped.truncated ? `${clipCodePoints(clipped.text, width - 1).text}…` : text;
+}
+
 /** 名字里是否有控制字符（决定要不要提示「显示时已转义、怎么修」）。 */
 export function hasControlChars(text: string): boolean {
   for (const char of text) {
