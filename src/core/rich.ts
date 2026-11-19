@@ -445,8 +445,10 @@ export function extractExecCommand(input: string): string {
  * shell 单引号规则引用。
  *
  * `timeout` / `run_in_background` 是 Claude Bash 的原生字段（timeout 是毫秒，上限 600000）：
- * 来源同样是 Claude 时按原值保留；其它来源的同名字段单位无法确认（旧版 Codex `shell` 的
- * `timeout`、Pi bash 的秒），不猜、不写，由 `describeBashControlLoss()` 披露。
+ * 来源同样是 Claude 时按原值保留；Pi bash 的 `timeout` 是秒（pi-ai 1.5.2 `bash.js` 的
+ * `resolveTimeoutMs()` 按 ×1000 转毫秒），能换算出整数毫秒并落在值域内时承载；
+ * 其它来源的同名字段单位无法确认（旧版 Codex `shell` 的 `timeout`），不猜、不写，
+ * 由 `describeBashControlLoss()` 披露。
  * `workdir` / `env` 在 Claude Bash 里没有位置，同样走披露。
  */
 export function claudeBashInput(event: ProcessEvent): {
@@ -461,7 +463,7 @@ export function claudeBashInput(event: ProcessEvent): {
     const argv = commandArgv(obj.command);
     const command = typeof obj.command === 'string' ? obj.command : argv ? formatCommandArgv(argv) : undefined;
     if (command !== undefined) {
-      const timeout = event.provider === 'claude' ? claudeBashTimeout(obj.timeout) : undefined;
+      const timeout = claudeCarriedBashTimeout(event, obj.timeout);
       return {
         command,
         description: typeof obj.description === 'string' ? obj.description : event.summary,
@@ -483,6 +485,31 @@ export function claudeBashTimeout(value: unknown): number | undefined {
   if (typeof value !== 'number' || !Number.isFinite(value)) return undefined;
   if (value < 1000 || value > 600_000) return undefined;
   return value;
+}
+
+/**
+ * Claude `Bash` 目标能承载的 `timeout`（毫秒）：Claude 来源按原值校验；
+ * Pi 来源的秒值能换算出整数毫秒且落在 Claude 值域内才承载（`0.5` 秒 → 500 毫秒会被拒，
+ * `1.5` 秒 → 1500 毫秒可以）；其它来源单位无法确认，不猜。
+ */
+export function claudeCarriedBashTimeout(event: ProcessEvent, value: unknown): number | undefined {
+  if (event.provider === 'claude') return claudeBashTimeout(value);
+  if (event.provider !== 'pi') return undefined;
+  if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) return undefined;
+  const ms = value * 1000;
+  if (!Number.isInteger(ms)) return undefined;
+  return claudeBashTimeout(ms);
+}
+
+/**
+ * Pi `bash` 目标能承载的 `timeout`（秒）：pi-ai 1.5.2 的 bash schema 写明
+ * "Timeout in seconds"、`resolveTimeoutMs()` 按 value × 1000 转毫秒，值域 finite > 0
+ * 且不超过 2147483.647 秒（`MAX_TIMEOUT_MS` 2^31−1 毫秒）。Claude 来源的毫秒值 ÷ 1000
+ * 换算成秒（Claude 的上限 600000 毫秒 → 600 秒，必在 Pi 值域内）；其余来源不换算。
+ */
+export function piBashTimeoutFromClaude(value: unknown): number | undefined {
+  if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) return undefined;
+  return value / 1000;
 }
 
 /**
@@ -936,8 +963,8 @@ export function describeBashControlLoss(
       } else {
         if (toClaudeToolName(name) !== 'Bash') continue;
         if (typeof obj.workdir === 'string' && obj.workdir.trim()) workdirs += 1;
-        // Claude 自己的毫秒 timeout（在值域内）会被 claudeBashInput() 保留，不算损失。
-        const carried = event.provider === 'claude' && claudeBashTimeout(obj.timeout) !== undefined;
+        // 能承载的超时（Claude 原值 / Pi 秒换算）不算损失。
+        const carried = claudeCarriedBashTimeout(event, obj.timeout) !== undefined;
         if (!carried && hasBashTimeout(obj)) timeouts += 1;
       }
     }
@@ -951,7 +978,7 @@ export function describeBashControlLoss(
   const display = escapeControlChars(target.displayName);
   const reason = id === 'codex'
     ? `${display} 的 exec 脚本用 tools.exec_command 重建，它没有超时 / 后台字段（yield_time_ms 只是等待窗口），工作目录只带绝对路径`
-    : `${display} 的 Bash 入参没有工作目录字段，超时只保留 Claude 自己的毫秒值（1000–600000），其它来源的单位或越界值无法确认`;
+    : `${display} 的 Bash 入参没有工作目录字段，超时只保留能确认单位的毫秒值（Claude 来源按原值、Pi 来源按秒换算，范围 1000–600000），其它来源的单位或越界值无法确认`;
   return (
     `来源会话有 ${parts.join('、')}不会随这次交接写进目标：${reason}；` +
     `这些调用的命令本身照常写入，需要当时的执行条件时请回来源会话核对`
