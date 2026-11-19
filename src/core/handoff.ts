@@ -3,7 +3,7 @@ import { stat } from 'node:fs/promises';
 import type { SessionRef, TokenUsage, UnifiedTurn } from './types.js';
 import { chainsElsewhereHint, chainsSameDirectoryHint, describeStoreErrorReason, emptyChainBindHint } from './store.js';
 import type { Chain, ChainsElsewhere, Store, SwitchRecord } from './store.js';
-import { dedupeCallEvents, describeAttachmentLoss, describeTextEventLoss, describeToolFailureLoss, describeDanglingToolCalls, describeUnansweredTail, describeResumeTargetUnfinished, findContextDisclosure, mergeTurns, shouldReplacePairedSession, turnIdentityKey } from './rich.js';
+import { dedupeCallEvents, describeAttachmentLoss, describeBashControlLoss, describeTextEventLoss, describeToolFailureLoss, describeDanglingToolCalls, describeUnansweredTail, describeResumeTargetUnfinished, findContextDisclosure, mergeTurns, shouldReplacePairedSession, turnIdentityKey } from './rich.js';
 import { describeWriteFailureReason, type FileDigest } from './atomic.js';
 import { addFinding, type Finding } from './findings.js';
 import { escapeControlChars } from './display.js';
@@ -1825,6 +1825,10 @@ export async function handoff(
   // 目标会话照常可读、校验照常通过，只是图片 / 文件没了。交接前按目标自报的能力主动披露。
   const attachmentLoss = describeAttachmentLoss(turns, target);
   if (attachmentLoss) warnings.push(attachmentLoss);
+  // Bash 类工具的工作目录 / 超时 / 后台标记会被目标重建掉（Claude 与 Codex 的写入侧会重新派生入参）：
+  // 命令本身照常写入，但这几项执行条件不会，主动披露避免下一跳把历史当成「没设过」。
+  const bashControlLoss = describeBashControlLoss(turns, target);
+  if (bashControlLoss) warnings.push(bashControlLoss);
   // 目标级保护：传入即将写入的会话，Codex 据此检查 per-thread writer 锁（而非只看 Desktop 是否运行）
   await target.preflight?.({ ref: into, cwd });
   // 协作写锁：供应商支持时在写入期间独占原生锁，收窄与原生 writer 的竞态窗口

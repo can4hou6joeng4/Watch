@@ -1,7 +1,7 @@
 import { stat } from 'node:fs/promises';
 import { describeWriteFailureReason, type FileDigest } from './core/atomic.js';
 import { assertTargetUnchanged, blockedHint, describeSourceChangedDuringHandoff, diffTurns, HandoffBlockedError, snapshotSourceState, type SourceStateSnapshot } from './core/handoff.js';
-import { describeAttachmentLoss, describeTextEventLoss, describeToolFailureLoss, describeDanglingToolCalls, describeUnansweredTail, describeResumeTargetUnfinished, dedupeCallEvents, findContextDisclosure, countPairedTurnsMissingEvents } from './core/rich.js';
+import { describeAttachmentLoss, describeBashControlLoss, describeTextEventLoss, describeToolFailureLoss, describeDanglingToolCalls, describeUnansweredTail, describeResumeTargetUnfinished, dedupeCallEvents, findContextDisclosure, countPairedTurnsMissingEvents } from './core/rich.js';
 import { Store, defaultDbPath, describeStoreErrorReason, describeStoreOpenFailure } from './core/store.js';
 import { IS_WIN, normalizePath, stripDevicePrefix } from './core/platform.js';
 import { trimUserKey } from './core/cli-input.js';
@@ -664,6 +664,8 @@ export async function openSession(
       // 与 switch 同一口径：附件原始数据不进 round-trip，目标侧不支持时只会静默剩下占位文本
       const attachmentLoss = describeAttachmentLoss(srcTurns, target.adapter);
       if (attachmentLoss) warnings.push(attachmentLoss);
+      const bashControlLoss = describeBashControlLoss(srcTurns, target.adapter);
+      if (bashControlLoss) warnings.push(bashControlLoss);
       // 目标就是这条即将 resume 的会话：它自己没收尾要说，与来源那一侧各说各的
       warnResumeTargetUnfinished(dstTurns, `目标会话 ${escapeControlChars(targetId)}（${target.adapter.displayName}）`, outgoing.length, (msg) =>
         warnings.push(msg),
@@ -1460,6 +1462,8 @@ export async function openInProvider(
       // 附件的原始数据不会进目标：与 `switch` / `--from` 共用一句，避免三处各写一套
       const attachmentLoss = describeAttachmentLoss(plan.turns, target);
       if (attachmentLoss) warnings.push(attachmentLoss);
+      const bashControlLoss = describeBashControlLoss(plan.turns, target);
+      if (bashControlLoss) warnings.push(bashControlLoss);
       const textLoss = describeTextEventLoss(plan.turns, target);
       if (textLoss) warnings.push(textLoss);
     }
@@ -1616,6 +1620,8 @@ export async function checkOpenInProvider(
   // 与执行使用同一份计划和计数；目标预检拒绝写入时，不把它说成内容损失。
   const attachmentLoss = describeAttachmentLoss(plan.turns, target);
   if (attachmentLoss) base.warnings = [...(base.warnings ?? []), attachmentLoss];
+  const bashControlLoss = describeBashControlLoss(plan.turns, target);
+  if (bashControlLoss) base.warnings = [...(base.warnings ?? []), bashControlLoss];
   const textLoss = describeTextEventLoss(plan.turns, target);
   if (textLoss) base.warnings = [...(base.warnings ?? []), textLoss];
   const failureLoss = describeToolFailureLoss(plan.turns, target);

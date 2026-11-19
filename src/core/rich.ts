@@ -1,6 +1,7 @@
+import path from 'node:path';
 import type { ProcessEvent, UnifiedTurn } from './types.js';
 import { commandArgv, formatCommandArgv } from './command-argv.js';
-import { escapeControlChars } from './display.js';
+import { escapeControlChars, hasControlChars } from './display.js';
 
 export const ENCRYPTED_THINKING = '思考中…（加密）';
 
@@ -441,23 +442,47 @@ export function extractExecCommand(input: string): string {
  * （`{ command: ["bash", "-lc", "…"], workdir }`）。不认数组就会落到最后的来源原文兜底，
  * 把整段入参 JSON 文本当成命令写进去，下一跳再照着这段 JSON 去执行。
  * argv 按 `formatCommandArgv()` 还原成命令文本：三项 shell 包装取脚本本身，其余逐项按
- * shell 单引号规则引用。`Bash` 入参没有 `workdir` / `timeout_ms` / `env` 的位置，这些键不写。
+ * shell 单引号规则引用。
+ *
+ * `timeout` / `run_in_background` 是 Claude Bash 的原生字段（timeout 是毫秒，上限 600000）：
+ * 来源同样是 Claude 时按原值保留；其它来源的同名字段单位无法确认（旧版 Codex `shell` 的
+ * `timeout`、Pi bash 的秒），不猜、不写，由 `describeBashControlLoss()` 披露。
+ * `workdir` / `env` 在 Claude Bash 里没有位置，同样走披露。
  */
-export function claudeBashInput(event: ProcessEvent): { command: string; description?: string } {
+export function claudeBashInput(event: ProcessEvent): {
+  command: string;
+  description?: string;
+  timeout?: number;
+  run_in_background?: boolean;
+} {
   const input = event.input;
   if (input && typeof input === 'object' && !Array.isArray(input)) {
     const obj = input as Record<string, unknown>;
     const argv = commandArgv(obj.command);
     const command = typeof obj.command === 'string' ? obj.command : argv ? formatCommandArgv(argv) : undefined;
     if (command !== undefined) {
+      const timeout = event.provider === 'claude' ? claudeBashTimeout(obj.timeout) : undefined;
       return {
         command,
         description: typeof obj.description === 'string' ? obj.description : event.summary,
+        ...(timeout !== undefined ? { timeout } : {}),
+        ...(obj.run_in_background === true ? { run_in_background: true } : {}),
       };
     }
   }
   const raw = typeof input === 'string' ? input : (event.detail ?? event.summary);
   return { command: extractExecCommand(raw) };
+}
+
+/**
+ * Claude Bash 的 `timeout` 值域：毫秒、[1000, 600000]（Claude Code 2.1.325 的 Bash schema
+ * 写明 "Optional timeout in milliseconds (max … for a foreground command)"）。越界不夹取：
+ * 夹取会改变来源语义，交给 `describeBashControlLoss()` 披露。
+ */
+export function claudeBashTimeout(value: unknown): number | undefined {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return undefined;
+  if (value < 1000 || value > 600_000) return undefined;
+  return value;
 }
 
 /**
@@ -846,6 +871,91 @@ export function describeToolFailureLoss(
     ? `${escapeControlChars(target.displayName)} 只保留助手轮工具结果的原生失败状态`
     : `${escapeControlChars(target.displayName)} 的写入侧不保留工具结果的原生失败状态`;
   return `这次交接有 ${lost} 条工具结果的失败标记不会在目标中保留：${reason}；不能仅凭目标记录判断这些调用是否成功，需要时请核对来源会话`;
+}
+
+/** Bash 类工具入参里代表「执行时限」的键；Codex exec 没有对应字段，Claude Bash 的 `timeout` 是毫秒。 */
+const BASH_TIMEOUT_KEYS = ['timeout', 'timeout_ms'] as const;
+/** 来源侧表示「放到后台跑」的标记（Claude `run_in_background`、Grok `is_background` / `background`）。 */
+const BASH_BACKGROUND_KEYS = ['run_in_background', 'is_background', 'background'] as const;
+
+/**
+ * 来源给出、可以放心写进目标原生字段的工作目录：绝对路径且不含控制字符。
+ *
+ * 其余形状（相对路径、空串、控制字符）不猜：Codex 的 `workdir` 与进程 cwd 的解析规则绑定，
+ * 相对值写进去就换了语义；控制字符会随脚本进入目标记录。带不过去时由
+ * `describeBashControlLoss()` 披露，不静默换成目标 cwd 假装保留了。
+ */
+export function usableBashWorkdir(value: unknown): string | undefined {
+  if (typeof value !== 'string' || !value.trim()) return undefined;
+  if (hasControlChars(value)) return undefined;
+  return path.isAbsolute(value) ? value : undefined;
+}
+
+function hasBashTimeout(obj: Record<string, unknown>): boolean {
+  return BASH_TIMEOUT_KEYS.some((key) => {
+    const value = obj[key];
+    return typeof value === 'number' && Number.isFinite(value) && value > 0;
+  });
+}
+
+/**
+ * Bash 类工具调用的控制字段（工作目录 / 超时 / 后台运行）在目标格式里放不下时的披露。
+ *
+ * 只有两种目标的写入侧会**重新派生** Bash 入参，其余（Pi / Kimi / Grok / OpenCode）原样保存
+ * 结构化入参，字段自然不会损失，函数返回 null：
+ * - Codex 的 `exec`：`codexToolInput()` 只留命令，`wrapExecInput()` 重建
+ *   `tools.exec_command({cmd, workdir, …})` 脚本。它没有超时 / 后台字段（`yield_time_ms`
+ *   是等待窗口，不是命令时限）；来源明确给出的绝对路径工作目录会写进 `workdir`，带不过去的才算损失。
+ * - Claude 的 `Bash`：`claudeBashInput()` 写 command / description，并保留 Claude 自己的
+ *   毫秒 `timeout`（值域内）与 `run_in_background`。它的 Bash 入参没有工作目录字段；其它来源的
+ *   超时单位无法确认（旧版 Codex `shell` 的 `timeout`、Pi bash 的秒），不猜、不写。
+ *
+ * 这些字段影响「这条命令当时是怎么跑的」，下一跳会照着历史判断，所以丢的时候必须说出来。
+ */
+export function describeBashControlLoss(
+  turns: UnifiedTurn[],
+  target: { id?: string; displayName: string },
+): string | null {
+  const id = target.id ?? '';
+  if (id !== 'codex' && id !== 'claude') return null;
+  let workdirs = 0;
+  let timeouts = 0;
+  let backgrounds = 0;
+  for (const turn of turns) {
+    for (const event of turn.events ?? []) {
+      if (event.kind !== 'tool_call') continue;
+      const input = event.input;
+      if (!input || typeof input !== 'object' || Array.isArray(input)) continue;
+      const obj = input as Record<string, unknown>;
+      const name = event.name ?? 'tool';
+      if (id === 'codex') {
+        if (toCodexToolName(name) !== 'exec') continue;
+        if (hasBashTimeout(obj)) timeouts += 1;
+        if (BASH_BACKGROUND_KEYS.some((key) => obj[key] === true)) backgrounds += 1;
+        if (typeof obj.workdir === 'string' && obj.workdir.trim() && !usableBashWorkdir(obj.workdir)) workdirs += 1;
+      } else {
+        if (toClaudeToolName(name) !== 'Bash') continue;
+        if (typeof obj.workdir === 'string' && obj.workdir.trim()) workdirs += 1;
+        // Claude 自己的毫秒 timeout（在值域内）会被 claudeBashInput() 保留，不算损失。
+        const carried = event.provider === 'claude' && claudeBashTimeout(obj.timeout) !== undefined;
+        if (!carried && hasBashTimeout(obj)) timeouts += 1;
+      }
+    }
+  }
+  const parts = [
+    workdirs ? `${workdirs} 个工作目录` : '',
+    timeouts ? `${timeouts} 个超时设置` : '',
+    backgrounds ? `${backgrounds} 个后台运行标记` : '',
+  ].filter(Boolean);
+  if (parts.length === 0) return null;
+  const display = escapeControlChars(target.displayName);
+  const reason = id === 'codex'
+    ? `${display} 的 exec 脚本用 tools.exec_command 重建，它没有超时 / 后台字段（yield_time_ms 只是等待窗口），工作目录只带绝对路径`
+    : `${display} 的 Bash 入参没有工作目录字段，超时只保留 Claude 自己的毫秒值（1000–600000），其它来源的单位或越界值无法确认`;
+  return (
+    `来源会话有 ${parts.join('、')}不会随这次交接写进目标：${reason}；` +
+    `这些调用的命令本身照常写入，需要当时的执行条件时请回来源会话核对`
+  );
 }
 
 /**
