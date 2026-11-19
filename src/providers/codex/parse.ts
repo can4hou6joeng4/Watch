@@ -34,7 +34,7 @@ import {
  * - reasoning 的 summary / content、带 namespace 的工具调用与 local_shell action 挂到 assistant.events
  * - 工具输出数组按换行投影，媒体 / 密文只留占位并计数披露；缺调用 ID 时稳定合成并声明
  * - 独立具名输出标为外部上下文；网页搜索 / 协作消息 / 图片生成只记标注文本，不造工具调用
- * - 记账条目忽略，未知 response_item 聚合披露；compaction / context_compaction 只披露不解密
+ * - 记账条目忽略，未知 response_item 与未知顶层记录类型分别聚合披露；compaction / context_compaction 只披露不解密
  * - commentary / partial_answer 保留为 text 事件；显式 final_answer 后的阶段文本带标记保留且不覆盖终稿
  * - 较早的 final / 无 phase 正文留在原事件位置并计数披露；phase 缺省保持旧主正文兼容
  * - 最后停在阶段消息的助手轮标记 incomplete，并计数披露未记录最终答复
@@ -77,6 +77,9 @@ async function parseCodexLines(
   const pairing = new ToolResultPairing(turns, 'codex', 'Codex');
   const notes = new CodexItemNotes(turns);
   const unknownItems = new Map<string, number>();
+  // 顶层 rollout 记录类型：认识的有意不并入对话（元数据 / 用量副本），其余计数披露——
+  // Codex 新版本新增内容型顶层记录时不能静默丢掉（与 Grok / Kimi / Pi 的顶层未知披露同口径）。
+  const unknownTopLevel = new Map<string, number>();
   const outputCounts = { images: 0, audio: 0, encrypted: 0, unknown: new Map<string, number>() };
   let generatedImages = 0;
   const fallback: UnifiedTurn[] = [];
@@ -149,6 +152,11 @@ async function parseCodexLines(
     if (!trimmed) continue;
     const r = parseJsonObject(trimmed);
     if (!r) continue;
+    const recordType = typeof r.type === 'string' ? r.type : '';
+    if (recordType && !KNOWN_TOP_LEVEL_TYPES.has(recordType)) {
+      unknownTopLevel.set(recordType, (unknownTopLevel.get(recordType) ?? 0) + 1);
+      continue;
+    }
     const timestamp = typeof r.timestamp === 'string' ? r.timestamp : '';
     const payload = r.payload;
     // 顶层 compacted：payload.message 是 Codex 压缩上下文后注入模型的历史摘要，
@@ -318,6 +326,10 @@ async function parseCodexLines(
     const total = [...unknownItems.values()].reduce((a, b) => a + b, 0);
     appendCodexDisclosure(active, `Codex 有 ${total} 条未识别或无法解析的 response_item（${codexTypeCounts(unknownItems)}），这部分原始内容没有并入交接，请在来源核对。`);
   }
+  if (unknownTopLevel.size) {
+    const total = [...unknownTopLevel.values()].reduce((a, b) => a + b, 0);
+    appendCodexDisclosure(active, `Codex 有 ${total} 条未识别的顶层记录（${codexTypeCounts(unknownTopLevel)}），Watch 暂不解析：无法确认其中是否包含对话内容，这些记录没有并入交接，请在来源核对。`);
+  }
   const placeholders = [
     outputCounts.images ? `工具输出图片 ${outputCounts.images} 项` : '',
     outputCounts.audio ? `工具输出音频 ${outputCounts.audio} 项` : '',
@@ -445,6 +457,15 @@ type CodexItem =
   | { compaction: true };
 
 const IGNORED_ITEMS = new Set(['additional_tools', 'configuration_update', 'compaction_trigger', 'tool_search_call', 'tool_search_output', 'ghost_snapshot']);
+/**
+ * rollout 顶层记录类型。前三种会被解析；其余是元数据与用量副本（`token_usage_record`
+ * 的逐次调用用量与 `event_msg.token_count` 同源），有意不并入对话、也不披露。
+ * 不在表里的类型由 parseCodexSession 计数后走 `appendCodexDisclosure()`。
+ */
+const KNOWN_TOP_LEVEL_TYPES = new Set([
+  'response_item', 'event_msg', 'compacted',
+  'session_meta', 'turn_context', 'world_state', 'retained_context', 'token_usage_record',
+]);
 const nonemptyString = (value: unknown): string | undefined => typeof value === 'string' && value.trim() ? value : undefined;
 
 function processItem(p: Record<string, unknown>, timestamp: string): CodexItem {
