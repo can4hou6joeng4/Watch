@@ -1245,7 +1245,7 @@ function v2AssistantTurn(
       if (item.name !== undefined && typeof item.name !== 'string') {
         bumpCount(unknown, `tool:name（${v2ValueShape(item.name)}，不是字符串）`);
       }
-      const toolName = typeof item.name === 'string' ? item.name : 'tool';
+      const toolName = typeof item.name === 'string' && item.name ? item.name : 'tool';
       events.push({
         kind: 'tool_call',
         timestamp,
