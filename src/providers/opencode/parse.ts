@@ -868,9 +868,18 @@ function v2NativeWindow(data: V2MessageData, unknown: Map<string, number>): numb
  */
 const V2_IGNORED_MESSAGE_TYPES = new Set(['agent-switched', 'idle', 'model-switched']);
 
-function bumpCount(map: Map<string, number>, key: string): void {
-  const k = key.trim() || '（空类型）';
+function bumpCount(map: Map<string, number>, key: unknown): void {
+  // SQLite 是动态类型：TEXT 列里也可能读到 BLOB 等非字符串值。以前 `key.trim()` 会抛
+  // TypeError，被 parseOpencodeSession 的 catch 讲成「无法查询 OpenCode 数据库」，
+  // 一条损坏记录就让整条会话打不开。这里兜底转成字符串，调用点仍应给可读的原因标签。
+  const k = (typeof key === 'string' ? key : String(key)).trim() || '（空类型）';
   map.set(k, (map.get(k) ?? 0) + 1);
+}
+
+/** session_message / session_part 的 type 列标签：非字符串按原因点名，不让整条会话变成「查询失败」。 */
+function v2RowTypeLabel(value: unknown): string {
+  if (typeof value !== 'string') return '（type 不是字符串）';
+  return value || '（空类型）';
 }
 
 function describeCounts(map: Map<string, number>): string {
@@ -1492,7 +1501,7 @@ function readV2Parts(db: DatabaseSync, sessionId: string, unknown: Map<string, n
   for (const row of rows) {
     const parsed = parseJson<Record<string, unknown>>(row.data);
     if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
-      bumpCount(unknown, `part:${row.type || '（空类型）'}（data 无法解析）`);
+      bumpCount(unknown, `part:${v2RowTypeLabel(row.type)}（data 无法解析）`);
       continue;
     }
     const item = { ...(parsed as unknown as V2ContentItem), type: row.type };
@@ -1553,7 +1562,7 @@ function parseOpencodeV2Turns(db: DatabaseSync, sessionId: string): UnifiedTurn[
     const row = rows[i]!;
     const data = parsed[i];
     if (!data) {
-      bumpCount(unknown, `${row.type || '（空类型）'}（data 不是对象）`);
+      bumpCount(unknown, `${v2RowTypeLabel(row.type)}（data 不是对象）`);
       continue;
     }
     const time = typeof data.time?.created === 'number' ? data.time.created : row.time_created;
@@ -1596,7 +1605,7 @@ function parseOpencodeV2Turns(db: DatabaseSync, sessionId: string): UnifiedTurn[
     );
     if (aux === null) {
       // 记账类型（agent-switched / idle）上游不进模型上下文，正常会话不该因此冒披露。
-      if (!V2_IGNORED_MESSAGE_TYPES.has(row.type)) bumpCount(unknown, row.type || '（空类型）');
+      if (!V2_IGNORED_MESSAGE_TYPES.has(row.type)) bumpCount(unknown, v2RowTypeLabel(row.type));
     } else attach(aux);
   }
 
