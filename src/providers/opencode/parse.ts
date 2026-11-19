@@ -629,7 +629,7 @@ type V2MessageData = {
   content?: V2ContentItem[] | string;
   command?: string;
   shellID?: string;
-  status?: string;
+  status?: unknown;
   exit?: number;
   output?: { output?: string } | string;
   summary?: string;
@@ -779,6 +779,13 @@ function v2RecentMessageText(row: V2MessageRow, data: V2MessageData | null, part
   }
 }
 
+/** 只有确实缺少状态的旧记录沿用 completed 兼容逻辑。 */
+function v2CompactionStatus(value: unknown): 'completed' | 'running' | 'failed' | null {
+  if (value === undefined || value === 'completed') return 'completed';
+  if (value === 'running' || value === 'failed') return value;
+  return null;
+}
+
 /**
  * 摘要型压缩的「保留窗口」：`metadata.keepID` 指向第一条逐字保留的消息，上游
  * `history.ts` 的 `withRecentText()` 从它到压缩记录之间重建文本放进 `<recent-context>`——
@@ -799,8 +806,7 @@ function v2KeptRecentTexts(
     const row = rows[i]!;
     const data = parsed[i];
     if (row.type !== 'compaction' || !data) continue;
-    const status = typeof data.status === 'string' ? data.status : 'completed';
-    if (status !== 'completed') continue;
+    if (v2CompactionStatus(data.status) !== 'completed') continue;
     const metadata = data.metadata;
     if (metadata !== undefined && (!metadata || typeof metadata !== 'object' || Array.isArray(metadata))) {
       bumpCount(unknown, 'compaction（metadata 不是对象）');
@@ -1345,7 +1351,15 @@ function v2AuxEvents(
       // 挂上摘要前缀会让 --since-compact 以「未生效的压缩」为边界裁掉更早的轮次，
       // 而 failed 连 summary 都没有（只有 error），裁掉后摘要正文是空的。
       // 第三方旧样本没有 status 字段：保持按 completed 处理（同一形状兼容）。
-      const status = typeof data.status === 'string' ? data.status : 'completed';
+      // status 有值但无法确认（null / 数字 / 对象 / 未知字符串）时既不能当已完成——会拿
+      // 未确认的摘要或原生窗口当 --since-compact 边界、误裁更早的对话——也不能讲成
+      // 「尚未完成」：running 允许带暂存摘要、failed 有失败原因，这一档两者都不是。
+      // 只按原因计数，不复制 status、summary 或窗口内容。
+      const status = v2CompactionStatus(data.status);
+      if (status === null) {
+        bumpCount(unknown, typeof data.status === 'string' ? 'compaction（status 不在已知状态中）' : 'compaction（status 不是字符串）');
+        return [];
+      }
       if (status === 'completed') {
         // provider 原生压缩：模型拿到的是 native.messages 窗口而不是 summary（上游写的
         // summary 就是空串）。挂摘要前缀会让 --since-compact 把压缩前的轮次全裁掉，只留一行
