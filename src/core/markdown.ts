@@ -7,20 +7,38 @@
  * 最长的连续反引号串更长。
  */
 
-/** 内容里最长的连续反引号串长度；Markdown 定界符必须比它更长。 */
+/**
+ * 内容里最长的连续反引号串长度；Markdown 定界符必须比它更长。
+ *
+ * 不要写成 `Math.max(0, ...matches)`：长命令可以有几十万个反引号串，
+ * 展开参数会抛 `RangeError: Maximum call stack size exceeded`，整份 prompt 生成失败。
+ */
 export function longestBacktickRun(text: string): number {
-  return Math.max(0, ...Array.from(text.matchAll(/`+/g), m => m[0].length));
+  let longest = 0;
+  for (const match of text.matchAll(/`+/g)) {
+    if (match[0].length > longest) longest = match[0].length;
+  }
+  return longest;
 }
 
 /**
- * 行内代码的安全包裹。内容含反引号时在首尾补一个空格（渲染时会去掉），
- * 否则首尾的反引号会被并进定界符。
+ * 行内代码的安全包裹。
+ *
+ * - 内容里的反引号：定界符必须比最长反引号串更长，否则会被内容截断。
+ * - 空串没有合法的空代码跨度（` `` ` 只是两个裸反引号），用一个空格内容占位；
+ *   调用方有更明确的占位文案时（如「（空命令）」）优先用文案。
+ * - CommonMark 会剥掉「首尾都是空格、且并非全空格」内容的一层空格；这类内容要
+ *   在两侧各补一个空格抵消，否则 `' a '` 被静默渲染成 `a`。
  */
 export function inlineCode(text: string): string {
+  if (text === '') return '` `';
   const longest = longestBacktickRun(text);
-  if (longest === 0) return `\`${text}\``;
   const fence = '`'.repeat(longest + 1);
-  const pad = text.startsWith('`') || text.endsWith('`') ? ' ' : '';
+  const needsPad =
+    text.startsWith('`') ||
+    text.endsWith('`') ||
+    (text.startsWith(' ') && text.endsWith(' ') && text.trim() !== '');
+  const pad = needsPad ? ' ' : '';
   return `${fence}${pad}${text}${pad}${fence}`;
 }
 

@@ -1,5 +1,5 @@
 import path from 'node:path';
-import { commandArgv, formatCommandArgv, isPatchArgv, isShellScriptArgv } from './command-argv.js';
+import { commandArgv, formatCommandArgv, isPatchArgv, isShellScriptArgv, shellScriptOf } from './command-argv.js';
 import { codeFence, inlineCode, singleLineText } from './markdown.js';
 import type { ProcessEvent, UnifiedTurn } from './types.js';
 
@@ -249,7 +249,8 @@ type Classified =
   | { kind: 'file'; path: string; mode: 'write' | 'edit' }
   | { kind: 'patch'; paths: string[] }
   // `scanPatch: false` 表示命令由普通 argv 拼接而来：参数里的补丁标记只是数据，不提取路径。
-  | { kind: 'command'; command: string; workdir?: string; scanPatch?: false }
+  // `patchSource` 用于展示成完整 argv、但真正会执行的是另一个脚本的情况：只扫描脚本本身。
+  | { kind: 'command'; command: string; workdir?: string; scanPatch?: false; patchSource?: string }
   | { kind: 'unreadable-write' }
   | null;
 
@@ -330,12 +331,17 @@ function classify(event: ProcessEvent): Classified {
         return { kind: 'unreadable-write' };
       }
       // 只有 shell 脚本包装才是「命令里内嵌补丁」；普通 argv 里出现标记只是数据。
-      const scanPatch = isShellScriptArgv(argv);
+      // 带尾随参数时展示必须保留整个 argv，但真正执行的是脚本本身：补丁扫描只认脚本。
+      const script = shellScriptOf(argv);
       return {
         kind: 'command',
         command: formatCommandArgv(argv),
         ...(workdir ? { workdir } : {}),
-        ...(scanPatch ? {} : { scanPatch: false }),
+        ...(script === undefined
+          ? { scanPatch: false }
+          : isShellScriptArgv(argv)
+            ? {}
+            : { patchSource: script }),
       };
     }
   }
@@ -522,7 +528,8 @@ export function collectWorkManifest(
       // 失败的命令仍运行过；内嵌补丁的文件则不能据此认定成功改动。
       addCommand(classified.command, classified.workdir);
       if (classified.scanPatch === false) continue;
-      const patchPaths = extractPatchPaths(classified.command);
+      // 展示用完整 argv 与可扫描脚本不同时，只扫描脚本：尾随参数里的标记只是数据。
+      const patchPaths = extractPatchPaths(classified.patchSource ?? classified.command);
       if (failed && patchPaths.length > 0) failedFileWrites += 1;
       else for (const patchPath of patchPaths) addFile(patchPath, 'edit');
     }
@@ -628,7 +635,10 @@ export function renderWorkManifest(manifest: WorkManifest): string[] {
         for (const line of cmd.command.split('\n')) lines.push(`  ${line}`);
         lines.push(`  ${fence}`);
       } else {
-        lines.push(`- ${inlineCode(cmd.command)}${suffix ? `（${suffix}）` : ''}`);
+        // 空脚本（`bash -lc ''`）会执行一次空命令；`inlineCode('')` 没有合法的空跨度，
+        // 这里用文字占位，避免清单里出现一个裸 `` 或空白条目。
+        const label = cmd.command ? inlineCode(cmd.command) : '（空命令）';
+        lines.push(`- ${label}${suffix ? `（${suffix}）` : ''}`);
       }
     }
     if (manifest.omittedCommands > 0) {
