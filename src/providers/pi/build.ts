@@ -214,6 +214,15 @@ function nid(): string {
   return randomBytes(4).toString('hex');
 }
 
+/**
+ * 写后校验的期望（`verifyWrittenTurns` 的 `expectToolCall`）：与写入共用同一派生。
+ * 带块级标记的包装值会被 parser 还原成来源原值；缺省 / null 写出的空对象与回读一致。
+ */
+export function expectPiToolCall(ev: ProcessEvent): { name: unknown; input: unknown } {
+  const wrapped = toolInputAsRecord(ev.input, 'input');
+  return { name: ev.name ?? 'tool', input: wrapped.wrapped ? ev.input : wrapped.record };
+}
+
 export async function importTurnsToPi(
   turns: UnifiedTurn[],
   cwd: string,
@@ -332,6 +341,7 @@ export async function importTurnsToPi(
         turns,
         provider: 'pi',
         expect: expectAttachmentPlaceholders,
+        expectToolCall: expectPiToolCall,
       }),
   });
   return { provider: 'pi', sessionId, filePath, cwd };
