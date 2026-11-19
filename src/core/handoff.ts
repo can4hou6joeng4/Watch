@@ -1861,7 +1861,10 @@ export async function handoff(
   await target.preflight?.({ ref: into, cwd });
   // 协作写锁：供应商支持时在写入期间独占原生锁，收窄与原生 writer 的竞态窗口
   const guardedWrite = async (turnsToWrite: UnifiedTurn[], opts?: ImportTurnsOpts): Promise<SessionRef> => {
-    const guard = into ? await target.acquireWriteLock?.({ ref: into }) : undefined;
+    const lock = into ? await target.acquireWriteLock?.({ ref: into }) : undefined;
+    // 锁路径准备失败等可修故障：降级为只探测，但必须披露，不能把「没有锁」讲成「有保护」
+    if (lock?.warning) warnings.push(lock.warning);
+    const guard = lock?.guard;
     try {
       // 取锁后再比对指纹：把与原生 writer 的竞态窗口收窄到「快照 → 取锁」之间
       await assertDestUnchanged();

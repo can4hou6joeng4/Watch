@@ -685,7 +685,10 @@ export async function openSession(
         const sourceCwd = source.found.ref.cwd;
         const targetCwd = target.found.ref.cwd;
         await target.adapter.preflight?.({ ref: target.found.ref, cwd: target.found.ref.cwd });
-        const guard = await target.adapter.acquireWriteLock?.({ ref: target.found.ref });
+        const lock = await target.adapter.acquireWriteLock?.({ ref: target.found.ref });
+        // 锁路径准备失败等可修故障：降级为只探测，但必须披露（与 switch 同一口径）
+        if (lock?.warning) warnings.push(lock.warning);
+        const guard = lock?.guard;
         try {
           await assertTargetUnchanged(target.adapter, target.found.ref, dstDigest, '并入');
           const textLoss = describeTextEventLoss(dedup, target.adapter);
@@ -1369,10 +1372,14 @@ async function guardedImport(
   snapshot: FileDigest | null,
   turns: UnifiedTurn[],
   cwd: string,
+  warnings: string[],
 ): Promise<SessionRef> {
   await adapter.preflight?.({ ref, cwd });
   // 协作锁：若供应商支持，写入期间独占原生 writer 锁，把竞态窗口收窄为原子取锁
-  const guard = ref ? await adapter.acquireWriteLock?.({ ref }) : undefined;
+  const lock = ref ? await adapter.acquireWriteLock?.({ ref }) : undefined;
+  // 锁路径准备失败等可修故障：降级为只探测，但必须披露（与 switch 同一口径）
+  if (lock?.warning) warnings.push(lock.warning);
+  const guard = lock?.guard;
   try {
     if (ref) await assertTargetUnchanged(adapter, ref, snapshot, '转入');
     return await adapter.importTurns(turns, cwd, ref);
@@ -1476,7 +1483,7 @@ export async function openInProvider(
       if (textLoss) warnings.push(textLoss);
     }
     const newRef =
-      plan.turns.length > 0 ? await guardedImport(target, plan.targetRef, plan.snapshot, plan.turns, cwd) : plan.targetRef;
+      plan.turns.length > 0 ? await guardedImport(target, plan.targetRef, plan.snapshot, plan.turns, cwd, warnings) : plan.targetRef;
     if (!newRef) {
       return {
         ok: false,

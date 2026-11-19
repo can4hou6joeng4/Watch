@@ -2,9 +2,26 @@ import { execFile, spawn, type ChildProcess } from 'node:child_process';
 import { mkdir, stat } from 'node:fs/promises';
 import path from 'node:path';
 import { promisify } from 'node:util';
+import { describeWriteFailureReason } from '../../core/atomic.js';
+import { escapeControlChars } from '../../core/display.js';
 import { codexDir } from './build.js';
 
 const execFileAsync = promisify(execFile);
+
+/**
+ * 锁目录建不出来（权限 / 同名文件占位 / 磁盘满）：与「没有 python3」不同，这是可修的环境故障，
+ * 调用方必须把它披露成 warning，而不是当成机制不存在静默降级。
+ */
+export class WriterLockDirError extends Error {
+  constructor(
+    public lockPath: string,
+    cause: unknown,
+  ) {
+    const reason = describeWriteFailureReason(cause) ?? (cause instanceof Error ? cause.message : String(cause));
+    super(`无法准备 Codex 写锁目录（${escapeControlChars(path.dirname(lockPath))}）：${reason}`);
+    this.name = 'WriterLockDirError';
+  }
+}
 
 /** 原生 per-thread writer 锁路径：`<codexHome>/thread-writer-locks/<thread-id>.lock`（0 字节 flock 文件） */
 export function threadWriterLockPath(sessionId: string, codexHome = codexDir()): string {
@@ -115,8 +132,10 @@ export async function acquireThreadWriterLock(lockPath: string): Promise<WriterL
   // `thread/resume`（`thread … already has an active writer`），释放后恢复可打开。
   try {
     await mkdir(path.dirname(lockPath), { recursive: true });
-  } catch {
-    return undefined;
+  } catch (error) {
+    // 以前这里静默 `return undefined`：锁目录权限坏了 / 被同名文件占住 / 磁盘满时，
+    // 协作写锁整条消失却没有任何警告。抛专用错误让调用方区分「机制不可用」与「可修的降级」。
+    throw new WriterLockDirError(lockPath, error);
   }
   const child = spawn('python3', ['-c', PY_HELPER, lockPath], { stdio: ['pipe', 'pipe', 'ignore'] });
   const first = await readFirstLine(child, 5_000);

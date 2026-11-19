@@ -240,9 +240,13 @@ export interface ProviderAdapter {
    * 可选：为目标会话取协作写锁（如 Codex 的原生 per-thread writer 锁）。
    * 写入期间持有它可把「探测 → 写入」之间的竞态窗口收窄为原子取锁。
    * 返回 undefined = 机制不可用（无 helper/平台不支持），调用方退回只探测；
+   * `{ guard }` = 已独占持有，写入后必须 release；
+   * `{ warning }` = 锁路径准备失败等可修故障，调用方应继续写入但把降级事实写进 warnings；
    * 抛 PreflightBlockedError = 已被其他 writer 抢占，调用方应拒绝写入。
    */
-  acquireWriteLock?(ctx: { ref?: SessionRef }): Promise<{ release(): Promise<void>; holderPid?: number } | undefined>;
+  acquireWriteLock?(ctx: {
+    ref?: SessionRef;
+  }): Promise<{ guard?: { release(): Promise<void>; holderPid?: number }; warning?: string } | undefined>;
 
   /** 可复制的原生恢复命令；会话 id 必须引用。windows 缺省按宿主平台，true 使用 PowerShell。 */
   resumeCommand(ref: SessionRef, windows?: boolean): string;

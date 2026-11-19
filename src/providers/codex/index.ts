@@ -14,7 +14,7 @@ import { asJsonObject, parseJsonObject } from '../../core/jsonl.js';
 import { describePathReadFailureReason, isMissingPathError, iterateFileLines } from '../../core/read-text.js';
 import type { ProviderAdapter, PreflightContext, WriteLimit } from '../adapter.js';
 import { PreflightBlockedError, SessionLookupFailureError } from '../adapter.js';
-import { acquireThreadWriterLock, probeThreadWriterHolders, threadWriterLockPath, type WriterLockGuard } from './writer-lock.js';
+import { acquireThreadWriterLock, probeThreadWriterHolders, threadWriterLockPath, WriterLockDirError, type WriterLockGuard } from './writer-lock.js';
 export { threadWriterLockPath };
 import type { ProcessEvent, SessionRef, UnifiedTurn } from '../../core/types.js';
 import { streamCommand } from '../../core/streamCommand.js';
@@ -743,14 +743,26 @@ async function desktopProcessRunning(): Promise<boolean> {
 }
 
 /** 协作写锁：写入前独占原生 per-thread 锁（收窄与原生 writer 的竞态窗口） */
-async function acquireCodexWriteLock(ctx: { ref?: SessionRef }): Promise<WriterLockGuard | undefined> {
+async function acquireCodexWriteLock(
+  ctx: { ref?: SessionRef },
+): Promise<{ guard?: WriterLockGuard; warning?: string } | undefined> {
   const ref = ctx.ref;
   if (!ref || process.platform !== 'darwin') return undefined;
   // 锁路径依赖数据目录：目录故障在这里原样抛出，不归入下面的「被其他 writer 抢先持有」。
   const lockPath = threadWriterLockPath(ref.sessionId);
   try {
-    return await acquireThreadWriterLock(lockPath);
-  } catch {
+    const guard = await acquireThreadWriterLock(lockPath);
+    return guard ? { guard } : undefined;
+  } catch (error) {
+    // 锁目录建不出来是可修的环境故障，不是「别人正在写」：降级为只探测并披露。
+    // 协作锁只是收窄竞态窗口的增强，preflight 已经做过只读探测，写入本身仍可继续。
+    if (error instanceof WriterLockDirError) {
+      return {
+        warning:
+          `${error.message}；本次仍会写入，但写入期间无法独占原生 writer 锁——` +
+          '若 Codex 正在写同一会话，仍可能互相覆盖；修好该目录（权限、同名文件占位或磁盘空间）后重试可恢复保护',
+      };
+    }
     // 锁在探测与取锁之间被别的 writer 拿走（或取锁失败）→ 拒绝写入，交由调用方转成结构化 blocked
     throw new PreflightBlockedError({
       code: 'codex_target_busy',
