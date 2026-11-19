@@ -583,6 +583,17 @@ export function isEmptyWorkManifest(manifest: WorkManifest): boolean {
 }
 
 /**
+ * 单行化（换行 → 字面 `\n`）会改写原文；每折一行回调一次，供调用方计数披露。
+ */
+function singleLineCounter(onRewrite?: () => void): (text: string) => string {
+  return (text) => {
+    const folded = singleLineText(text);
+    if (folded !== text) onRewrite?.();
+    return folded;
+  };
+}
+
+/**
  * 把清单渲染成 Markdown 行（不含尾部空行）。调用方负责做转义与计数。
  *
  * 措辞必须点明两件事：① 这是从工具参数汇总的，不是从工具输出；② 它覆盖整条会话，
@@ -590,8 +601,12 @@ export function isEmptyWorkManifest(manifest: WorkManifest): boolean {
  *
  * 路径与命令来自工具参数，定界符一律由 `markdown.ts` 按内容选择：固定长度的反引号
  * 会被内容里的反引号截断、``` 会提前闭合围栏、换行能伪造条目（回归见 r97）。
+ *
+ * `onRewrite`：单行化（换行 → 字面 `\n`）会改写原文，每折一行回调一次，供调用方计数披露；
+ * 旧实现里清单折行从不计数（第 281 轮）。
  */
-export function renderWorkManifest(manifest: WorkManifest): string[] {
+export function renderWorkManifest(manifest: WorkManifest, onRewrite?: () => void): string[] {
+  const oneLine = singleLineCounter(onRewrite);
   const lines: string[] = [];
   lines.push('## 改动概览');
   lines.push('');
@@ -609,7 +624,7 @@ export function renderWorkManifest(manifest: WorkManifest): string[] {
       const parts: string[] = [];
       if (file.writes) parts.push(`写入 ${file.writes} 次`);
       if (file.edits) parts.push(`编辑 ${file.edits} 次`);
-      lines.push(`- ${inlineCode(singleLineText(file.path))}（${parts.join('，')}）`);
+      lines.push(`- ${inlineCode(oneLine(file.path))}（${parts.join('，')}）`);
     }
     if (manifest.omittedFiles > 0) {
       lines.push(`- 另有 ${manifest.omittedFiles} 个文件未列出（超出本节上限）`);
@@ -621,7 +636,7 @@ export function renderWorkManifest(manifest: WorkManifest): string[] {
     lines.push('');
     for (const cmd of manifest.commands) {
       // workdir 来自工具参数，同样可能含反引号 / 换行。
-      const suffix = [cmd.count > 1 ? `×${cmd.count}` : '', cmd.workdir ? `在 ${inlineCode(singleLineText(cmd.workdir))} 下` : '']
+      const suffix = [cmd.count > 1 ? `×${cmd.count}` : '', cmd.workdir ? `在 ${inlineCode(oneLine(cmd.workdir))} 下` : '']
         .filter(Boolean)
         .join('，');
       // 多行命令（heredoc / 链式脚本）放进行内代码会把 Markdown 结构撑破，
@@ -681,7 +696,8 @@ export function renderWorkManifest(manifest: WorkManifest): string[] {
  * 渲染「失败与中断」小节（不含尾部空行）。只统计**明确标记失败**的调用，
  * 与成功改动分开：失败写入不进 `files`，这里的条目也不能被读成「改过这个文件」。
  */
-export function renderFailedAttempts(manifest: WorkManifest): string[] {
+export function renderFailedAttempts(manifest: WorkManifest, onRewrite?: () => void): string[] {
+  const oneLine = singleLineCounter(onRewrite);
   if (manifest.failedAttemptCalls === 0 && manifest.unclassifiedFailures === 0) return [];
   const lines: string[] = [];
   lines.push('## 失败与中断');
@@ -693,11 +709,11 @@ export function renderFailedAttempts(manifest: WorkManifest): string[] {
   );
   lines.push('');
   for (const attempt of manifest.failedAttempts) {
-    const tool = inlineCode(singleLineText(attempt.tool));
+    const tool = inlineCode(oneLine(attempt.tool));
     const suffix = `（失败 ${attempt.count} 次）`;
     if (attempt.command?.includes('\n')) {
       // 多行命令与「运行过的命令」同一处理：行进代码会撑破结构，改用围栏块。
-      const head = [tool, ...(attempt.path ? [inlineCode(singleLineText(attempt.path))] : [])].join('：');
+      const head = [tool, ...(attempt.path ? [inlineCode(oneLine(attempt.path))] : [])].join('：');
       lines.push(`- ${head} 多行命令${suffix}：`);
       lines.push('');
       const fence = codeFence(attempt.command);
@@ -708,7 +724,7 @@ export function renderFailedAttempts(manifest: WorkManifest): string[] {
     }
     const detail = [attempt.path, attempt.command]
       .filter((value): value is string => Boolean(value))
-      .map((value) => inlineCode(singleLineText(value)))
+      .map((value) => inlineCode(oneLine(value)))
       .join('，');
     lines.push(`- ${tool}${detail ? `：${detail}` : ''}${suffix}`);
   }

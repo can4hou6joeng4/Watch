@@ -2,6 +2,7 @@ import type { Finding } from './findings.js';
 import { addFinding } from './findings.js';
 import { codeFence, inlineCode, singleLineText } from './markdown.js';
 import { CLAUDE_COMPACT_SUMMARY_PREFIX, findContextDisclosure, KIMI_COMPACTION_SUMMARY_PREFIX, OPENCODE_COMPACTION_SUMMARY_PREFIX, PI_COMPACTION_SUMMARY_PREFIX, WATCH_CONTEXT_DISCLOSURE_PREFIX } from './rich.js';
+import { isoFromEpochMs } from './time.js';
 import type { ProcessEvent, TokenUsage, UnifiedTurn } from './types.js';
 import { collectWorkManifest, isEmptyWorkManifest, renderFailedAttempts, renderWorkManifest, type FailedAttempt, type WorkManifest } from './work-manifest.js';
 
@@ -262,16 +263,28 @@ function formatUsage(usage: TokenUsage | null | undefined): string | null {
   return `in=${usage.inputTokens} out=${usage.outputTokens}`;
 }
 
-type TimeRange = { text: string; startUnusable: boolean; note?: string };
+type TimeRange = {
+  text: string;
+  note?: string;
+  /** 起点晚于终点：两端互相矛盾，不作为连续区间展示 */
+  inconsistent?: boolean;
+  /** 时间数值无法表示（非有限或越界）的端点数；越界不等于「没有时间戳」，必须披露 */
+  invalidValues?: number;
+};
 
 /**
  * 时间范围：只有一端可读时写那一端，两端都没有就不写这一行（不编造时间）。
  *
- * **起点晚于终点时起点不可信**：`UnifiedTurn.timestamp` 并不总是原生记录里的真实时间。
- * grok 的 `chat_history.jsonl` 行内没有时间戳，`parse` 用同目录 `summary.json` 的
- * `created_at` 做锚点、缺失时回退 `now()`；文件早已写完时这个「起点」必然晚于文件 mtime，
- * 直接印出来就是一行 `2026-11-10T04:06:59Z → 2026-11-10T04:06:59Z` 倒挂的假范围。
- * 端点顺序是可验证的事实，倒挂说明起点是占位值——此时只保留终点并让调用方披露。
+ * **时间数值先过 `isoFromEpochMs()`**：`Number.isFinite(1e30)` 为真，但 `.toISOString()`
+ * 抛 `RangeError: Invalid time value`——opencode 的 `time_updated` 或 grok 摘要里的
+ * 数值被写坏时，`watch prompt` 会整条命令崩掉，`--json` 一行都输出不了（第 281 轮）。
+ * 越界也不等于「没有时间戳」：正文括注与 findings 都要说明这一端被忽略。
+ *
+ * **起点晚于终点时两端都被怀疑，不能只留下终点**：`UnifiedTurn.timestamp` 并不总是原生
+ * 记录里的真实时间。grok 的 `chat_history.jsonl` 行内没有时间戳，`parse` 用同目录
+ * `summary.json` 的 `created_at` 做锚点、缺失时回退文件 mtime。`created_at` 正常而文件
+ * mtime 因备份同步 / `cp -p` 更早时，**终点才是过期值**——端点顺序只能证明两端矛盾，
+ * 不能证明起点是占位值。旧实现只保留终点并断言「起点可能是占位值」，会把真实起点藏掉。
  *
  * **两端来源不同，必须写明**：起点来自第一条记录的时间戳，终点来自会话的「更新时间」
  * （多数适配器取文件 mtime；grok 可能取 `summary.json` 的 `updated_at`）。文档会被复制走，
@@ -280,21 +293,47 @@ type TimeRange = { text: string; startUnusable: boolean; note?: string };
  * 06:07:51 的文件 mtime）。两端都是真实时间戳也不改变这一点，所以照实说来源。
  */
 function formatTimeRange(startedAt?: number, updatedAt?: number): TimeRange | null {
-  const start = startedAt !== undefined && Number.isFinite(startedAt) ? new Date(startedAt).toISOString() : null;
-  const end = updatedAt !== undefined && Number.isFinite(updatedAt) ? new Date(updatedAt).toISOString() : null;
+  const start = isoFromEpochMs(startedAt);
+  const end = isoFromEpochMs(updatedAt);
+  const startInvalid = startedAt !== undefined && start === '';
+  const endInvalid = updatedAt !== undefined && end === '';
+  const invalidValues = (startInvalid ? 1 : 0) + (endInvalid ? 1 : 0);
+  const invalidNote = [
+    ...(startInvalid ? ['首条记录的时间数值无效或越界，已忽略'] : []),
+    ...(endInvalid ? ['来源更新时间的数值无效或越界，已忽略'] : []),
+  ].join('；');
+  if (!start && !end) {
+    if (invalidValues === 0) return null;
+    return { text: '不可用', note: invalidNote, invalidValues };
+  }
   if (start && end) {
-    if (Date.parse(start) > Date.parse(end)) return { text: end, startUnusable: true };
+    if (Date.parse(start) > Date.parse(end)) {
+      return {
+        text: `起点 ${start}、终点 ${end}`,
+        inconsistent: true,
+        note: '两个来源互相矛盾：首条记录的时间戳晚于来源更新时间，不把它当作连续区间',
+      };
+    }
     // 两端相同时**只说事实**：「短会话或精度只到秒」是猜的——两端也可能都取自同一个兜底锚点
     // （grok 无 summary.json 时起点与终点都是文件 mtime），那时这句话会替一个不存在的理由背书。
-    if (start === end) return { text: start, startUnusable: false, note: '只取到同一个时间点：首条记录与来源更新时间相同' };
+    if (start === end) return { text: start, note: '只取到同一个时间点：首条记录与来源更新时间相同' };
     return {
       text: `${start} → ${end}`,
-      startUnusable: false,
       note: '起点取首条记录的时间戳，终点取来源的更新时间，可能是文件修改时间而不是最后一条记录',
     };
   }
-  if (start) return { text: start, startUnusable: false, note: '只读到首条记录的时间戳' };
-  return end ? { text: end, startUnusable: false, note: '没有读到记录里的时间戳，这里取来源的更新时间' } : null;
+  if (start) {
+    return {
+      text: start,
+      note: `只读到首条记录的时间戳${invalidValues ? `；${invalidNote}` : ''}`,
+      ...(invalidValues ? { invalidValues } : {}),
+    };
+  }
+  return {
+    text: end,
+    note: `没有读到记录里的时间戳，这里取来源的更新时间${invalidValues ? `；${invalidNote}` : ''}`,
+    ...(invalidValues ? { invalidValues } : {}),
+  };
 }
 
 /**
@@ -307,7 +346,7 @@ function selectTurns(
   turns: UnifiedTurn[],
   maxTurns: number | null,
   keepFirst = false,
-): { kept: UnifiedTurn[]; omitted: number; joinNeedsMarker?: boolean } {
+): { kept: UnifiedTurn[]; omitted: number; joinNeedsMarker?: boolean; anchorAdded?: UnifiedTurn } {
   if (maxTurns === null || turns.length <= maxTurns) return { kept: turns, omitted: 0 };
   const head = keepFirst ? turns[0] : turns[turns.findIndex((t) => t.role === 'user')];
   const tailCount = head ? Math.max(maxTurns - 1, 0) : maxTurns;
@@ -346,11 +385,14 @@ function keepCompactAnchor(
   picked: { kept: UnifiedTurn[]; omitted: number; joinNeedsMarker?: boolean },
   scoped: UnifiedTurn[],
   compactAt: number,
-): { kept: UnifiedTurn[]; omitted: number; joinNeedsMarker?: boolean } {
+): { kept: UnifiedTurn[]; omitted: number; joinNeedsMarker?: boolean; anchorAdded?: UnifiedTurn } {
   if (compactAt < 0 || scoped.length === 0) return picked;
   const anchor = scoped[0]!;
   if (picked.kept.includes(anchor)) return picked;
-  return { kept: [anchor, ...picked.kept], omitted: Math.max(picked.omitted - 1, 0) };
+  // `anchorAdded` 供头部计数区分「--last 窗口内的用户轮」与「补回的摘要」：摘要本身是 user 轮时
+  // （Claude 压缩摘要），旧实现把它算进「保留了最近 N 个用户轮」，同一份文档里 --last 1 却写
+  // 「保留了最近 2 个用户轮」（第 281 轮）。
+  return { kept: [anchor, ...picked.kept], omitted: Math.max(picked.omitted - 1, 0), anchorAdded: anchor };
 }
 
 /** 单行摘要的硬上限：摘要本身就该短，超了只标省略，不追加「已截断」说明 */
@@ -620,13 +662,45 @@ export function buildHandoffPrompt(
   stats.failedAttemptsOmittedCalls = manifest.omittedFailedAttemptCalls;
   stats.failedAttemptsUnclassified = manifest.unclassifiedFailures;
 
+  // 改动概览必须在「本次省略」之前渲染并统计：路径 / 命令里的控制字符、换行折行都会在这一步
+  // 改写原文，计数要进同一行披露。旧实现先写「本次省略」再渲染清单，清单里的转义永远不进正文
+  // （findings 有、文档没有；文档被复制走后 findings 不再跟着它，第 281 轮）。
+  const renderedManifestLines: string[] = [];
+  if (!isEmptyWorkManifest(manifest)) {
+    // 「失败与中断」与「改动概览」同源但不合并：失败写入不是成功改动，失败小节必须
+    // 在只有失败、没有任何成功改动时也能出现。`renderWorkManifest()` 的既有契约
+    // 不含失败路径（r85 回归守着这一点），所以这里单独拼接。
+    const hasManifestChanges =
+      manifest.files.length > 0 ||
+      manifest.commands.length > 0 ||
+      manifest.unreadableWrites > 0 ||
+      manifest.failedFileWrites > 0 ||
+      manifest.truncated;
+    const countFold = () => {
+      stats.escapedBodies += 1;
+    };
+    const rawManifestLines = [
+      ...(hasManifestChanges ? renderWorkManifest(manifest, countFold) : []),
+      ...renderFailedAttempts(manifest, countFold),
+    ];
+    for (const line of rawManifestLines) {
+      const safe = sanitizeBody(line);
+      if (safe.escaped) stats.escapedBodies += 1;
+      renderedManifestLines.push(safe.text);
+    }
+  }
+
   // ID 与路径是单行数据；正文的换行保留规则不适用于文档头部。上游错误文案（上下文完整性、
   // 坏行扫描错误）同样可能带换行，落在头部会伪造 `## 小节` 或清单条目——一律折成单行（第 276 轮）。
   // 转义同样要计数：输出被改写了，读者必须能从 findings 里知道这不是原文。
   const headerLine = (text: string): string => {
     const sanitized = sanitizeBody(text);
-    if (sanitized.escaped) stats.escapedBodies += 1;
-    return singleLineText(sanitized.text);
+    const single = singleLineText(sanitized.text);
+    // 折行同样是改写：换行是 C0 控制字符，单行上下文里它只能以字面 `\n` 出现。旧实现只计
+    // `sanitizeBody()` 的转义，`第一行\n第二行` 被折成单行却报「没有转义」——文档被复制走
+    // 之后，读者没有第二个通道知道这行不是原文（第 281 轮）。
+    if (sanitized.escaped || single !== sanitized.text) stats.escapedBodies += 1;
+    return single;
   };
   const metadataCode = (text: string): string => inlineCode(headerLine(text));
   const lines: string[] = [];
@@ -691,15 +765,19 @@ export function buildHandoffPrompt(
   }
   const range = formatTimeRange(meta.startedAt, meta.updatedAt);
   if (range) {
-    if (range.startUnusable) addFinding(findings, 'prompt_time_range_start_unusable', 'degraded', 1);
+    if (range.inconsistent) addFinding(findings, 'prompt_time_range_inconsistent', 'degraded', 1);
+    if (range.invalidValues) addFinding(findings, 'prompt_time_range_invalid_timestamp', 'degraded', range.invalidValues);
     // 推定时间优先：`timeRangeNote` 自带完整来路，默认那句括注只解释「哪一端取什么」，
-    // 用在推定值上会让读者把锚点当成真实时间。
-    const rangeNote = meta.timeRangeNote ?? range.note;
-    lines.push(
-      range.startUnusable
-        ? `- 时间范围：… → ${range.text}（起始时间不可用：来源记录里的时间晚于文件更新时间，可能是占位值）`
-        : `- 时间范围：${range.text}${rangeNote ? `（${rangeNote}）` : ''}`,
-    );
+    // 用在推定值上会让读者把锚点当成真实时间。矛盾 / 越界是额外事实，无论有没有推定说明
+    // 都必须留在括注里（第 281 轮：旧实现遇到倒挂时整段丢掉 timeRangeNote）。
+    const rangeNote = (() => {
+      const metaNote = meta.timeRangeNote;
+      if (range.inconsistent || range.invalidValues) {
+        return metaNote && range.note ? `${metaNote}；${range.note}` : (metaNote ?? range.note);
+      }
+      return metaNote ?? range.note;
+    })();
+    lines.push(`- 时间范围：${range.text}${rangeNote ? `（${rangeNote}）` : ''}`);
   }
   lines.push(`- 轮次：${stats.turns} 轮（用户 ${stats.userTurns} / 助手 ${stats.assistantTurns}）`);
   const usageBadLines = meta.usageBadLines ?? 0;
@@ -719,6 +797,11 @@ export function buildHandoffPrompt(
   lines.push(`- 档位：${profile}（正文 ${limits.textLimit === null ? '不截断' : `每条 ≤ ${limits.textLimit} 字符`}，过程记录 ${limits.eventsPerTurn === null ? '全部展开' : limits.eventsPerTurn === 0 ? '不展开' : `每轮 ≤ ${limits.eventsPerTurn} 条`}${lastHint}${fullHint}）`);
   if (stats.omittedTurns > 0) {
     const keptUserTurns = kept.filter((t) => t.role === 'user').length;
+    // 补回的压缩摘要（`--since-compact` 的窗口起点）不属于 `--last` 窗口；它是 user 轮时
+    // 不能算进「保留了最近 N 个用户轮」——否则同一份文档里 `--last 1` 会写成「保留了最近
+    // 2 个用户轮」（第 281 轮）。单独说明它为什么在正文里。
+    const anchorUserTurns = selection.anchorAdded?.role === 'user' ? 1 : 0;
+    const windowUserTurns = keptUserTurns - anchorUserTurns;
     if (compactOmitted > 0) {
       lines.push(
         `- 按 --since-compact 从最近一次压缩摘要开始，省略其之前的 ${compactOmitted} 轮（摘要由 ${compactSource} 生成，不是用户原话）` +
@@ -727,7 +810,9 @@ export function buildHandoffPrompt(
     } else {
       lines.push(
         options.lastUserTurns !== undefined
-          ? `- 按 --last ${options.lastUserTurns} 保留了最近 ${keptUserTurns} 个用户轮，省略 ${stats.omittedTurns} 轮（**首条任务描述未保留**，需要背景请去掉 --last 重新生成）`
+          ? `- 按 --last ${options.lastUserTurns} 保留了最近 ${windowUserTurns} 个用户轮${
+              anchorUserTurns ? '，另补回压缩摘要（不属于 --last 窗口）' : ''
+            }，省略 ${stats.omittedTurns} 轮（**首条任务描述未保留**，需要背景请去掉 --last 重新生成）`
           : `- 本档位保留了 ${stats.includedTurns} 轮，省略 ${stats.omittedTurns} 轮（原始任务描述已强制保留）`,
       );
     }
@@ -764,34 +849,10 @@ export function buildHandoffPrompt(
   }
   lines.push('');
   // 改动概览放在「会话记录」之前：接手者先要知道动了哪些文件、跑过什么命令，
-  // 再读对话。清单里的路径与命令来自工具参数，同样要过 `sanitizeBody()`——它们
-  // 可能含控制字符，而这份文档会被复制进另一个终端。
-  if (!isEmptyWorkManifest(manifest)) {
-    // 「失败与中断」与「改动概览」同源但不合并：失败写入不是成功改动，失败小节必须
-    // 在只有失败、没有任何成功改动时也能出现。`renderWorkManifest()` 的既有契约
-    // 不含失败路径（r85 回归守着这一点），所以这里单独拼接。
-    const hasManifestChanges =
-      manifest.files.length > 0 ||
-      manifest.commands.length > 0 ||
-      manifest.unreadableWrites > 0 ||
-      manifest.failedFileWrites > 0 ||
-      manifest.truncated;
-    const manifestLines = [
-      ...(hasManifestChanges ? renderWorkManifest(manifest) : []),
-      ...renderFailedAttempts(manifest),
-    ];
-    let escapedManifest = 0;
-    for (const line of manifestLines) {
-      const safe = sanitizeBody(line);
-      if (safe.escaped) escapedManifest += 1;
-      lines.push(safe.text);
-    }
-    if (escapedManifest > 0) {
-      stats.escapedBodies += escapedManifest;
-    }
-  }
-  // 头部的单行转义发生在正文统计之后（第 276 轮），finding 统一在这里记一次：
-  // 上面的「本次省略」一行直接读 stats，已经包含头部与改动概览的计数。
+  // 再读对话。清单在头部之前就已渲染并统计（见 `renderedManifestLines`），这里只落位。
+  if (renderedManifestLines.length) lines.push(...renderedManifestLines);
+  // 转义 / 折行计数统一在这里记一次 finding：此时正文、头部与清单都已渲染完，
+  // 「本次省略」一行也已在前面按同一份 stats 写好。
   if (stats.escapedBodies > 0) addFinding(findings, 'prompt_control_chars_escaped', 'degraded', stats.escapedBodies);
   lines.push('## 会话记录');
   lines.push('');
