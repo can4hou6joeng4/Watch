@@ -882,11 +882,22 @@ function v2RowTypeLabel(value: unknown): string {
   return value || '（空类型）';
 }
 
+/**
+ * 未知类型 / 原因的有界展示：最多 8 项，余量以「另有 N 种」计数，单项原文截到 60 个码点。
+ * 类型名来自 SQLite 的 TEXT 列，损坏或第三方改写过的库可以有任意多个不同取值；不做上限时
+ * 这条 detail 会跟着 prompt 头部与 open / handoff warnings 一起变成一行巨串（Claude / Kimi /
+ * Codex 的同类披露一直是 8 项上限，这里对齐）。先截断原文再转义：从转义串中间切开会留下
+ * `\u001` 这样的半截序列。
+ */
 function describeCounts(map: Map<string, number>): string {
-  return [...map.entries()]
-    .sort((a, b) => b[1] - a[1])
-    .map(([k, n]) => `${escapeControlChars(k)} × ${n}`)
-    .join('、');
+  const entries = [...map.entries()].sort((a, b) => b[1] - a[1]);
+  const label = (key: string): string => {
+    const chars = [...key];
+    return escapeControlChars(chars.length > 60 ? `${chars.slice(0, 60).join('')}…` : key);
+  };
+  const shown = entries.slice(0, 8).map(([k, n]) => `${label(k)} × ${n}`);
+  if (entries.length > 8) shown.push(`另有 ${entries.length - 8} 种`);
+  return shown.join('、');
 }
 
 /** 未知数据通过统一上下文通道披露；不改正文，不让空正文工具助手轮承载文本。 */
