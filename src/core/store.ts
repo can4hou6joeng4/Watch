@@ -1519,14 +1519,53 @@ function excerpt(text: string, q: string): string {
   // 索引里的文本是折叠过空白的；查询同样归一后再找位置，否则多行片段永远对不上、只能退成
   // 「取开头 80 字符」，高亮消失、片段看似无关
   const needle = normalizeQueryWhitespace(q);
-  const hay = text.toLowerCase();
-  const at = hay.indexOf(needle.toLowerCase());
-  if (at < 0) return clipCodePoints(text, 80).text;
-  // 上下文窗口按码元算（与 indexOf 的命中下标同一坐标系），但两端要落在码点边界上：
-  // 截在 emoji 这类代理对中间时，片段首尾会出现孤立的一半（终端里是替换符）。
+  const found = findFoldAware(text, needle);
+  if (!found) return clipCodePoints(text, 80).text;
+  // 命中位置已换算回原文坐标（见 findFoldAware）；上下文窗口按原文码元算，
+  // 两端要落在码点边界上：截在 emoji 这类代理对中间时，片段首尾会出现孤立的一半。
+  const at = found.at;
+  const hitEnd = at + found.length;
   const start = snapStartBoundary(text, Math.max(0, at - 20));
-  const end = snapEndBoundary(text, Math.min(text.length, at + needle.length + 20));
-  return `${start > 0 ? '…' : ''}${text.slice(start, at)}[${text.slice(at, at + needle.length)}]${text.slice(at + needle.length, end)}${end < text.length ? '…' : ''}`;
+  const end = snapEndBoundary(text, Math.min(text.length, hitEnd + 20));
+  return `${start > 0 ? '…' : ''}${text.slice(start, at)}[${text.slice(at, hitEnd)}]${text.slice(hitEnd, end)}${end < text.length ? '…' : ''}`;
+}
+
+/**
+ * 大小写不敏感地定位 `needle` 在 `text` 中的**原文坐标**。
+ *
+ * 不能直接用 `text.toLowerCase().indexOf(...)`：Unicode 小写映射可能改变长度——
+ * `İ`（U+0130）小写成 `i̇`（两个码元）。命中点之前的每个扩展字符都会让折叠串的下标
+ * 相对原文右移，`slice` 于是把高亮框放在错误的字上（`İİİ ok` 搜 `ok` 会框住 `ai`），
+ * 窗口边界还可能切进代理对。折叠只会变长，所以两侧长度都不变时逐码元一一对应，
+ * 可以直接用折叠串的下标；任一侧变长才逐码点折叠并记录每个折叠码元对应的原文区间，
+ * 再把命中区间映射回去。逐码点重建只在罕见文本上发生，ASCII / 中文搜索仍走快路径。
+ */
+function findFoldAware(text: string, needle: string): { at: number; length: number } | null {
+  const needleFolded = needle.toLowerCase();
+  if (!needleFolded) return null;
+  const folded = text.toLowerCase();
+  if (folded.length === text.length && needleFolded.length === needle.length) {
+    const at = folded.indexOf(needleFolded);
+    return at < 0 ? null : { at, length: needle.length };
+  }
+  const starts: number[] = [];
+  const ends: number[] = [];
+  let rebuilt = '';
+  let offset = 0;
+  for (const ch of text) {
+    const lower = ch.toLowerCase();
+    for (let i = 0; i < lower.length; i += 1) {
+      starts.push(offset);
+      ends.push(offset + ch.length);
+    }
+    rebuilt += lower;
+    offset += ch.length;
+  }
+  const atFolded = rebuilt.indexOf(needleFolded);
+  if (atFolded < 0) return null;
+  const at = starts[atFolded]!;
+  const last = ends[atFolded + needleFolded.length - 1]!;
+  return { at, length: last - at };
 }
 
 /** 起始下标落在低位代理上时退回一位，让整个代理对进入窗口。 */
