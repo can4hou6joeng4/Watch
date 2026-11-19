@@ -70,7 +70,7 @@ site/               官网静态资源
 会话写入是项目的核心风险面，改动相关代码请保持既有约定：
 
 - **原子写**：新文件或整文件重写一律走 `src/core/atomic.ts` 的 `writeFileAtomic` / `appendFileAtomic`，不要直接写文件。
-- **写后自校验**：写出后用本 provider 的 `parse` 反解并对账（`src/core/verify.ts`），不一致即视为失败。
+- **写后自校验**：写出后用本 provider 的 `parse` 反解并对账（`src/core/verify.ts`），不一致即视为失败。目标写入侧有受控变换（包装、字段映射）时，应提供 `expectToolCall` 让校验同时比较工具名与入参；未提供时只比计数与 callId。
 - **写前比对目标指纹**：目标会话在解析后若被外部改动，必须中止写入而不是覆盖。
 - **降级必须披露**：任何「失败但继续」的分支都要记录到 `warnings` 或 `findings`（`exact` / `degraded` / `skipped` / `synthesized` / `blocked`），不要静默丢弃内容。
 - 新增适配器时，接口可选成员的缺省后果不同（例如不实现 `contentFingerprint` 等于跳过写前比对），请逐条确认。
