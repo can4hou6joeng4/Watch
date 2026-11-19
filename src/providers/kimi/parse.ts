@@ -516,11 +516,14 @@ function processLoopEvent(
       onUnknownEvent(`tool.call（缺少 ${missing}）`);
       return;
     }
+    // `args` 是上游的 unknown：原生解析失败时会存字符串（补丁正文、半截 JSON 等）。
+    // 与 claude parser 同一口径——字符串原样展示，不再套一层 JSON 引号与转义；其余仍序列化。
+    const detail = typeof event.args === 'string' ? event.args : JSON.stringify(event.args ?? {});
     pairing.call(turn, {
       ...base,
       kind: 'tool_call',
-      summary: summarize(`${name}: ${JSON.stringify(event.args ?? {})}`, name),
-      detail: JSON.stringify(event.args ?? {}),
+      summary: summarize(`${name}: ${detail}`, name),
+      detail,
       name,
       callId,
       input: event.args ?? {},
