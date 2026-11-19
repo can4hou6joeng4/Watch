@@ -13,7 +13,6 @@ import {
   unwrapUserQuery,
   WATCH_CONTEXT_DISCLOSURE_PREFIX,
 } from '../../core/rich.js';
-import { escapeControlChars } from '../../core/display.js';
 import { iterateFileLines } from '../../core/read-text.js';
 import type { ProcessEvent, SessionRef, TokenUsage, UnifiedTurn } from '../../core/types.js';
 import { describeClaudeContinuation, probeClaudeContinuation, readContinuedInRecord, type ClaudeContinuationCounts } from './continuation.js';
@@ -294,7 +293,7 @@ export async function parseClaudeSession(ref: SessionRef): Promise<UnifiedTurn[]
       toolMedia.images ? `图片 ${toolMedia.images} 个` : '',
       toolMedia.files ? `文件 ${toolMedia.files} 个` : '',
       toolMedia.unknown.size
-        ? `未识别块 ${[...toolMedia.unknown.values()].reduce((sum, n) => sum + n, 0)} 个（${[...toolMedia.unknown].slice(0, 3).map(([type, n]) => `${type}×${n}`).join('、')}）`
+        ? `未识别块 ${[...toolMedia.unknown.values()].reduce((sum, n) => sum + n, 0)} 个（${[...toolMedia.unknown].slice(0, 3).map(([type, n]) => `${unknownTypeLabel(type, 60)}×${n}`).join('、')}）`
         : '',
     ].filter(Boolean).join('、');
     const text = `${WATCH_CONTEXT_DISCLOSURE_PREFIX}Claude 的工具结果里有 ${toolMediaTotal} 个媒体或未识别内容块（${kinds}）；Watch 只保留占位文本，不复制原始数据，目标会话里无法还原这些载荷，需要时请在来源文件或原生 Claude Code 中核对。]`;
@@ -428,9 +427,14 @@ function isPersistedOutputText(text: string): boolean {
   return trimmed.startsWith('<persisted-output>') && trimmed.includes('Full output saved to:');
 }
 
+/**
+ * 块类型 / media_type 的展示名：与其它未知标签共用 `unknownTypeLabel()`——
+ * 先按码点截断再转义。旧实现先 `escapeControlChars()` 再 `slice(0, 60)`：转义序列
+ * `\u001B`（6 个字符）骑在边界上会被切成半截，`slice` 还会把 emoji 代理对切开。
+ * 这两个值来自会话文件，会跟着正文占位进入 prompt 文档与目标会话（第 285 轮）。
+ */
 function claudeBlockLabel(value: string, limit = 60): string {
-  const escaped = escapeControlChars(value);
-  return escaped.length > limit ? `${escaped.slice(0, limit)}…` : escaped;
+  return unknownTypeLabel(value, limit);
 }
 
 /** 只留占位与计数，不复制 base64 / url，不产 attachment（工具结果不是附件载体）。 */
@@ -488,8 +492,11 @@ function claudeToolResultText(output: unknown, counts: ClaudeToolMediaCounts): s
         if (nested.trim()) parts.push(nested);
         continue;
       }
-      const type = typeof b.type === 'string' && b.type ? claudeBlockLabel(b.type) : '（空类型）';
-      addUnknown(type);
+      // 计数键存原文，展示名只在两处渲染时各自截断 + 转义：旧实现把已经转义并截断过的
+      // 标签同时存进计数表，披露原样拼回去时半截序列会跟着 warnings 走（第 285 轮）。
+      const rawType = typeof b.type === 'string' && b.type ? b.type : '（空类型）';
+      const type = claudeBlockLabel(rawType);
+      addUnknown(rawType);
       parts.push(`[未识别内容块：${type}]`);
     }
     return parts.filter((part) => part.trim()).join('\n');
