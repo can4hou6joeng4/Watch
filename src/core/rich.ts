@@ -1066,3 +1066,16 @@ export function ensureAssistant(turns: UnifiedTurn[], timestamp: string, provide
 export function pushEvent(turn: UnifiedTurn, event: ProcessEvent): void {
   turn.events = [...(turn.events ?? []), event];
 }
+
+/**
+ * 首条用户消息之前的助手记录 / 过程记录：Watch 的对话从首条用户消息开始，这些记录不成轮。
+ * 只给计数文案（不含披露前缀与收尾括号），没有任何计数时返回 null；不复制正文。
+ */
+export function preUserRecordsNote(label: string, assistant: number, process: number): string | null {
+  const parts = [
+    assistant > 0 ? `${assistant} 条助手记录` : '',
+    process > 0 ? `${process} 条过程记录` : '',
+  ].filter(Boolean);
+  if (parts.length === 0) return null;
+  return `${label} 日志在首条用户消息之前有 ${parts.join('、')}，Watch 的对话从首条用户消息开始：这些记录没有并入交接，请在来源核对。`;
+}

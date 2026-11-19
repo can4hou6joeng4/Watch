@@ -2,7 +2,7 @@ import { readFile, stat } from 'node:fs/promises';
 import { ToolResultPairing } from '../../core/tool-pairing.js';
 import { iterateFileLines } from '../../core/read-text.js';
 import { dirname, join } from 'node:path';
-import { ensureAssistant, normalizeUserText, pushEvent, stripEmptyEvents, summarize, WATCH_CONTEXT_DISCLOSURE_PREFIX } from '../../core/rich.js';
+import { ensureAssistant, normalizeUserText, preUserRecordsNote, pushEvent, stripEmptyEvents, summarize, WATCH_CONTEXT_DISCLOSURE_PREFIX } from '../../core/rich.js';
 import { escapeControlChars } from '../../core/display.js';
 import { asJsonObject, parseJsonObject } from '../../core/jsonl.js';
 import type { ProcessEvent, SessionRef, UnifiedTurn } from '../../core/types.js';
@@ -113,6 +113,8 @@ export async function parseGrokSession(ref: SessionRef): Promise<UnifiedTurn[]> 
   const turns: UnifiedTurn[] = [];
   const pairing = new ToolResultPairing(turns, 'grok', 'Grok');
   let sawUser = false;
+  // 首条用户消息之前的助手行 / 工具结果 / 思考记录：只计数，解析结束后披露（第 252 轮）。
+  const preUser = { assistant: 0, process: 0 };
   // 顶层未知类型按 type×n 汇总，解析结束后写成一条上下文披露；不改轮次正文，
   // 否则来源日志只多一条元数据时 turnKey 会漂移，diffTurns 会把旧提问当成新增重放。
   const unknownTopLevel = new Map<string, number>();
@@ -159,7 +161,7 @@ export async function parseGrokSession(ref: SessionRef): Promise<UnifiedTurn[]> 
     }
 
     if (type === 'assistant') {
-      if (!sawUser) continue;
+      if (!sawUser) { preUser.assistant += 1; continue; }
       const extractedContent = extractContent(r.content);
       const content = [extractedContent.text, unknownBlockNote(extractedContent.unknown)]
         .filter(Boolean)
@@ -211,7 +213,7 @@ export async function parseGrokSession(ref: SessionRef): Promise<UnifiedTurn[]> 
     }
 
     if (type === 'tool_result') {
-      if (!sawUser) continue;
+      if (!sawUser) { preUser.process += 1; continue; }
       const callId = typeof r.tool_call_id === 'string' ? r.tool_call_id : undefined;
       // 重放历史里同一调用的 result 也会跨代再现，同 id 只留首个
       if (callId && seenResultIds.has(callId)) continue;
@@ -230,7 +232,7 @@ export async function parseGrokSession(ref: SessionRef): Promise<UnifiedTurn[]> 
     }
 
     if (type === 'reasoning') {
-      if (!sawUser) continue;
+      if (!sawUser) { preUser.process += 1; continue; }
       const last = ensureAssistant(turns, timestamp, 'grok');
       const summaryParts = Array.isArray(r.summary)
         ? r.summary
@@ -254,7 +256,7 @@ export async function parseGrokSession(ref: SessionRef): Promise<UnifiedTurn[]> 
   }
 
   pairing.finish();
-  return attachGrokSidecars(ref.filePath, stripEmptyEvents(turns), unknownTopLevel);
+  return attachGrokSidecars(ref.filePath, stripEmptyEvents(turns), unknownTopLevel, preUserRecordsNote('Grok', preUser.assistant, preUser.process));
 }
 
 /**
@@ -283,6 +285,7 @@ async function attachGrokSidecars(
   chatPath: string,
   turns: UnifiedTurn[],
   unknownTopLevel: Map<string, number>,
+  preUserNote: string | null = null,
 ): Promise<UnifiedTurn[]> {
   // 不让纯工具轮的空正文被披露文本替换；有真实用户轮或非空助手正文才挂载声明。
   const carrier = [...turns].reverse().find((turn) => turn.role === 'user' || turn.text.trim());
@@ -295,6 +298,8 @@ async function attachGrokSidecars(
   // 这条只依赖 chat_history 的事实也会跟着消失。
   const unknownNote = unknownTopLevelNote(unknownTopLevel);
   if (unknownNote) disclose(unknownNote);
+  // 同样只依赖 chat_history：放在旁路扫描之前，updates.jsonl 读失败时不跟着消失。
+  if (preUserNote) disclose(preUserNote);
   let scan: Awaited<ReturnType<typeof grokUpdateScan>>;
   try {
     scan = await grokUpdateScan(join(dirname(chatPath), 'updates.jsonl'));

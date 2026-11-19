@@ -7,6 +7,7 @@ import {
   normalizeUserText,
   PI_BRANCH_SUMMARY_PREFIX,
   PI_COMPACTION_SUMMARY_PREFIX,
+  preUserRecordsNote,
   pushEvent,
   stripEmptyEvents,
   summarize,
@@ -64,6 +65,8 @@ export async function parsePiSession(ref: SessionRef): Promise<UnifiedTurn[]> {
   const turns: UnifiedTurn[] = [];
   const pairing = new ToolResultPairing(turns, 'pi', 'Pi');
   let sawUser = false;
+  // 首条用户消息之前的助手消息 / 工具结果：只计数，解析结束后披露（第 252 轮）。
+  const preUser = { assistant: 0, process: 0 };
   // 整份日志里 context_edit / custom_message 的计数（见循环里的注释）
   const contextEntries: PiContextEntryCounts = {
     removed: 0,
@@ -184,7 +187,7 @@ export async function parsePiSession(ref: SessionRef): Promise<UnifiedTurn[]> {
       continue;
     }
     if (role === 'toolResult') {
-      if (!sawUser) continue;
+      if (!sawUser) { preUser.process += 1; continue; }
       const callId = typeof msg.toolCallId === 'string' ? msg.toolCallId : undefined;
       const name = typeof msg.toolName === 'string' ? msg.toolName : undefined;
       pairing.result({
@@ -202,7 +205,7 @@ export async function parsePiSession(ref: SessionRef): Promise<UnifiedTurn[]> {
       continue;
     }
     if (role !== 'assistant') continue;
-    if (!sawUser) continue;
+    if (!sawUser) { preUser.assistant += 1; continue; }
     const usage = readPiUsage(msg);
 
     // 失败 / 中止记录：只计数，循环结束后统一披露（逐条建事件会让 217 次失败的会话刷满同一句）。
@@ -314,6 +317,12 @@ export async function parsePiSession(ref: SessionRef): Promise<UnifiedTurn[]> {
       timestamp: last.timestamp,
       provider: 'pi',
     });
+  }
+  const preUserNote = preUserRecordsNote('Pi', preUser.assistant, preUser.process);
+  if (preUserNote && stripped.length > 0) {
+    const last = stripped.at(-1)!;
+    const text = `${WATCH_CONTEXT_DISCLOSURE_PREFIX}${preUserNote}]`;
+    pushEvent(last, { kind: 'text', summary: text.slice(0, 120), detail: text, timestamp: last.timestamp, provider: 'pi' });
   }
   const messageNote = unparsedMessageNote(unparsedMessages);
   if (messageNote && stripped.length > 0) {

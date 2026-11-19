@@ -3,6 +3,7 @@ import {
   CLAUDE_THINKING_PREFIX,
   ENCRYPTED_THINKING,
   ensureAssistant,
+  preUserRecordsNote,
   pushEvent,
   stripEmptyEvents,
   summarize,
@@ -77,6 +78,8 @@ function claudeTypeCounts(counts: Map<string, number>): string {
 export async function parseClaudeSession(ref: SessionRef): Promise<UnifiedTurn[]> {
   const turns: UnifiedTurn[] = [];
   let sawUser = false;
+  // 首条主线用户消息之前的助手记录 / 纯工具结果记录：只计数，循环结束后披露（第 252 轮）。
+  const preUser = { assistant: 0, process: 0 };
   const lastTextEvents = new Map<UnifiedTurn, ProcessEvent>();
   const continuation: ClaudeContinuationCounts = { count: 0, malformed: 0, sessionId: null };
   // 用户中途发来的消息（顶层 attachment / queued_command）：当场插成用户轮，之后到达的助手记录
@@ -186,7 +189,7 @@ export async function parseClaudeSession(ref: SessionRef): Promise<UnifiedTurn[]
 
     if (type === 'user') {
       if (onlyToolResult) {
-        if (!sawUser) continue; // 首条主线用户消息之前的记录仍跳过。
+        if (!sawUser) { preUser.process += 1; continue; } // 首条主线用户消息之前的记录仍跳过，只计数。
         for (const event of events) mountToolResult(event, pendingCalls, unpaired);
         continue;
       }
@@ -212,7 +215,7 @@ export async function parseClaudeSession(ref: SessionRef): Promise<UnifiedTurn[]
         if (event.kind === 'tool_result') mountToolResult(event, pendingCalls, unpaired);
       }
     } else {
-      if (!sawUser) continue;
+      if (!sawUser) { preUser.assistant += 1; continue; }
       // 真实助手记录到了：此前的失败已经被后续重试接上，「尾部失败」不再成立。
       tailFailure = false;
       const last = ensureAssistant(turns, timestamp, 'claude');
@@ -304,6 +307,11 @@ export async function parseClaudeSession(ref: SessionRef): Promise<UnifiedTurn[]
   // 复制到别的机器后不存在。只带走预览这件事必须披露，否则读者会以为工具输出是完整的。
   if (toolMedia.persisted > 0 && disclosureContext) {
     const text = `${WATCH_CONTEXT_DISCLOSURE_PREFIX}Claude 有 ${toolMedia.persisted} 条工具结果被 Claude Code 持久化到会话目录的 tool-results/ 旁路文件，记录里只剩预览与旁路文件路径；交接只带走这段预览，完整输出没有并入。旁路文件随来源会话目录保留或清理，换机器后该路径不可用——需要完整内容时请在来源文件或原生 Claude Code 中核对。]`;
+    pushEvent(disclosureContext, { kind: 'text', summary: text, detail: text, timestamp: disclosureContext.timestamp, provider: 'claude' });
+  }
+  const preUserNote = preUserRecordsNote('Claude', preUser.assistant, preUser.process);
+  if (preUserNote && disclosureContext) {
+    const text = `${WATCH_CONTEXT_DISCLOSURE_PREFIX}${preUserNote}]`;
     pushEvent(disclosureContext, { kind: 'text', summary: text, detail: text, timestamp: disclosureContext.timestamp, provider: 'claude' });
   }
   // 未识别的顶层记录类型只计数、不猜测语义：无法确认其中是否包含对话内容，也不能把它们的
