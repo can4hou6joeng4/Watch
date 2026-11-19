@@ -1653,12 +1653,14 @@ function parseOpencodeV2Turns(db: DatabaseSync, sessionId: string): UnifiedTurn[
   appendCallIdDisclosure(turns, callIds, 'OpenCode 2.x');
 
   // 统一披露必须独立于过程记录展示与选窗；无安全载体时不造新轮次。
+  // unknown 里既有表外类型，也有已知类型的坏形状（type / status 不是字符串、data 不是对象、
+  // part 无法解析）。只叫「未识别事件」会把损坏记录讲成新类型，与 1.x 的「未识别或无法解析」对齐。
   if (unknown.size > 0) {
     const total = [...unknown.values()].reduce((a, b) => a + b, 0);
     appendUnknownDisclosure(
       turns,
-      `OpenCode 2.x 有 ${total} 条未识别事件，未并入对话`,
-      `${describeCounts(unknown)}；Watch 按上游 v2.2.7 的会话消息语义识别 user / assistant / shell / system / synthetic / compaction / location-switched / skill（agent-switched / idle / model-switched 按上游记账忽略），其余原样跳过，不猜含义`,
+      `OpenCode 2.x 有 ${total} 处未识别或无法解析的数据，未并入对话`,
+      `${describeCounts(unknown)}；Watch 按上游 v2.2.7 的会话消息语义识别 user / assistant / shell / system / synthetic / compaction / location-switched / skill（agent-switched / idle / model-switched 按上游记账忽略）；表外类型与已知类型里的坏形状都按原因计数，其余原样跳过，不猜含义`,
     );
   }
   return turns;
