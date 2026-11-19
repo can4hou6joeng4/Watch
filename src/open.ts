@@ -1,6 +1,6 @@
 import { stat } from 'node:fs/promises';
 import { describeWriteFailureReason, type FileDigest } from './core/atomic.js';
-import { assertTargetUnchanged, blockedHint, describeSourceChangedDuringHandoff, diffTurns, HandoffBlockedError, snapshotSourceState, type SourceStateSnapshot } from './core/handoff.js';
+import { assertTargetUnchanged, describeVanishedTarget, blockedHint, describeSourceChangedDuringHandoff, diffTurns, HandoffBlockedError, snapshotSourceState, type SourceStateSnapshot } from './core/handoff.js';
 import { describeAttachmentLoss, describeBashControlLoss, describeTextEventLoss, describeToolFailureLoss, describeDanglingToolCalls, describeUnansweredTail, describeResumeTargetUnfinished, dedupeCallEvents, findContextDisclosure, countPairedTurnsMissingEvents } from './core/rich.js';
 import { Store, defaultDbPath, describeStoreErrorReason, describeStoreOpenFailure } from './core/store.js';
 import { clipCodePoints } from './core/display.js';
@@ -693,12 +693,17 @@ export async function openSession(
           const newRef = await target.adapter.importTurns(dedup, target.found.ref.cwd, target.found.ref);
           if (textLoss) warnings.push(textLoss);
           if (failureLoss) warnings.push(failureLoss);
+          const vanished = describeVanishedTarget(target.found.ref, newRef, target.adapter.displayName);
+          if (vanished) warnings.push(vanished);
           merged = dedup.length;
-          notes.push(`已把 ${escapeControlChars(from)} 的 ${merged} 轮新内容并入 ${target.adapter.displayName} 会话 ${newRef.sessionId}`);
+          notes.push(
+            `已把 ${escapeControlChars(from)} 的 ${merged} 轮新内容${vanished ? '写入' : '并入'} ` +
+              `${target.adapter.displayName} ${vanished ? '新会话' : '会话'} ${escapeControlChars(newRef.sessionId)}`,
+          );
           // 目标解析出 0 轮、文件却不是 0 字节：可能是刚建出来的空会话（并入即它的第一批内容），
           // 也可能是内容被清空只剩占位头的会话。无法区分，按事实说清「这是它的全部内容」，
           // 让「本该有更早历史」的人知道该去恢复备份。
-          if (targetZeroByte === null && dstTurns.length === 0) {
+          if (!vanished && targetZeroByte === null && dstTurns.length === 0) {
             notes.push(
               `目标会话 ${escapeControlChars(targetId)}（${target.adapter.displayName}）解析出 0 轮（没有可复用的对话），本次并入的 ${merged} 轮就是它的全部内容` +
                 `——如果它本该有更早的历史，先从备份恢复该文件再重试（Watch 不会替你重建历史）`,
@@ -1481,7 +1486,13 @@ export async function openInProvider(
     }
     const failureLoss = describeToolFailureLoss(plan.turns, target);
     if (failureLoss) warnings.push(failureLoss);
-    if (plan.note) notes.push(plan.note);
+    const vanished = plan.targetRef ? describeVanishedTarget(plan.targetRef, newRef, target.displayName) : null;
+    if (vanished) {
+      warnings.push(vanished);
+      notes.push(`已把 ${plan.merged} 轮新内容写入 ${target.displayName} 新会话 ${escapeControlChars(newRef.sessionId)}`);
+    } else if (plan.note) {
+      notes.push(plan.note);
+    }
     // 真的转入了内容才谈得上「转过去的是哪一刻的」：resume 快路径在上面已经返回
     if (plan.turns.length > 0) {
       const drift = await describeSourceChangedDuringHandoff(

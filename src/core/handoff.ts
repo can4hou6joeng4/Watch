@@ -180,6 +180,15 @@ export function currentChainShiftNote(
  */
 export { emptyChainBindHint };
 
+/** Claude / Codex 找不到要追加的目标时会新建会话，并返回不同的 id。 */
+export function describeVanishedTarget(into: SessionRef, written: SessionRef, providerName: string): string | null {
+  if (written.sessionId === into.sessionId) return null;
+  return (
+    `目标会话在写入前被移走或删除（原 id ${escapeControlChars(into.sessionId)}），本次改为新建 ${escapeControlChars(providerName)} 会话 ${escapeControlChars(written.sessionId)}；` +
+    '新会话只包含这次准备追加的内容，原目标里更早的历史没有并入。若要找回，请检查原文件或备份。'
+  );
+}
+
 /**
  * 写前 TOCTOU 校验：目标会话指纹与快照不一致（被外部写入）则拒绝。
  * `action` 只影响错误文案（“已中止本次<action>”）。open / switch 两条写入路径共用。
@@ -2007,6 +2016,8 @@ export async function handoff(
     emptiedTargetFile && isEmptySessionFileReason(emptiedTargetFile) ? emptiedTargetFile : null;
 
   const newRef = await guardedWrite(dedupeCallEvents(outgoing), replace ? { replace: true } : undefined);
+  const vanished = into && !replace ? describeVanishedTarget(into, newRef, target.displayName) : null;
+  if (vanished) warnings.push(vanished);
   // 期间来源被追加：交接的内容只到读取那一刻。只在真的写入了内容时说（`outgoing` 为空时
   // 这句「交接的是…」会与「已全部包含」自相矛盾）
   if (outgoing.length > 0) {
@@ -2029,17 +2040,18 @@ export async function handoff(
   // 不是 warning）：首条链「new 一个空会话再切过去」是正常路径，不该每次都冒降级警告；
   // 但「本该有更早历史」的人得知道这条会话现在只有这 N 轮。
   const notes: string[] = [];
-  if (into && destTurns.length === 0 && !emptiedTarget && outgoing.length > 0) {
+  if (into && !vanished && destTurns.length === 0 && !emptiedTarget && outgoing.length > 0) {
     notes.push(
       `目标会话 ${into.sessionId}（${target.displayName}）解析出 0 轮（没有可复用的对话），本次并入的 ${outgoing.length} 轮就是它的全部内容` +
         `——如果它本该有更早的历史，先从备份恢复该文件再重试（Watch 不会替你重建历史）`,
     );
   }
-  if (replace) addFinding(findings, 'handoff.rewrite', 'degraded', destTurns.length);
+  if (vanished) addFinding(findings, 'handoff.target_recreated', 'degraded', 1);
+  else if (replace) addFinding(findings, 'handoff.rewrite', 'degraded', destTurns.length);
   else addFinding(findings, 'handoff.append', 'exact', outgoing.length);
   // 追加之后最后一条 turn 已是并入的内容，「最后停在用户消息上」不再成立（merged > 0 只报
   // 工具调用没有结果这条 —— 它并入多少轮都不会闭合）。上面来源侧那条说的是另一条会话。
-  if (into) {
+  if (into && !vanished) {
     warnings.push(
       ...describeResumeTargetUnfinished(
         destTurns,
