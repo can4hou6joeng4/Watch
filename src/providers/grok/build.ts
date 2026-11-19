@@ -12,7 +12,7 @@ import { asJsonObject, parseJsonObject } from '../../core/jsonl.js';
 import { describePathReadFailureReason, emptySessionFileReasonFromStat, readTextOrEmpty } from '../../core/read-text.js';
 import { verifyWrittenTurns, expectAttachmentPlaceholders } from '../../core/verify.js';
 import { assistantOnlyIncrementReason, assistantTurnTextForWrite, mergeConsecutiveAssistant, userTurnTextForWrite } from '../../core/rich.js';
-import { parseGrokSession } from './parse.js';
+import { parseGrokSession, parseToolArguments } from './parse.js';
 
 const execFileAsync = promisify(execFile);
 import type { ImportTurnsOpts } from '../adapter.js';
@@ -732,6 +732,15 @@ function toolInputString(input: unknown): string {
   }
 }
 
+/**
+ * 写后校验的期望（`verifyWrittenTurns` 的 `expectToolCall`）：写入把入参转成 `arguments`
+ * 字符串（`toolInputString`），回读走 `parseToolArguments`——JSON 形状的字符串会变成对象，
+ * 期望必须与两端同源派生，不能只拿来源 `input` 直接比较。
+ */
+export function expectGrokToolCall(ev: ProcessEvent): { name: unknown; input: unknown } {
+  return { name: ev.name || 'tool', input: parseToolArguments(toolInputString(ev.input)) };
+}
+
 function toolOutputString(output: unknown): string {
   if (typeof output === 'string') return output;
   try {
@@ -1025,6 +1034,7 @@ export async function importTurnsToGrok(
         turns,
         provider: 'grok',
         expect: expectAttachmentPlaceholders,
+        expectToolCall: expectGrokToolCall,
       }),
   });
 

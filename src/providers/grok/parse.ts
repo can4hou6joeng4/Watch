@@ -88,7 +88,8 @@ function unknownTopLevelNote(unknown: Map<string, number>): string {
   return `Grok 的 chat_history.jsonl 有 ${total} 条未识别的顶层记录（${counts}），Watch 暂不解析：无法确认其中是否包含对话内容，这些记录没有并入交接；需要时请在原生 Grok 里核对。`;
 }
 
-function parseToolArguments(raw: unknown): unknown {
+/** 把 `tool_calls[].arguments` 还原成 `ProcessEvent.input`；写后校验的期望也走这里。 */
+export function parseToolArguments(raw: unknown): unknown {
   if (typeof raw === 'string') {
     try {
       return JSON.parse(raw);
