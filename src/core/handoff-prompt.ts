@@ -385,7 +385,15 @@ function renderEvent(event: ProcessEvent, detailLimit: number | null, stats: Pro
     if (detail.escaped) stats.escapedBodies += 1;
     // 围栏长度按（截断后的）内容选择：工具入参里的 ``` 否则会提前闭合并把后续行漏成正文。
     const fence = codeFence(detail.text);
-    line += `\n  ${fence}\n${detail.text}\n  ${fence}`;
+    // 围栏与内容行都缩进 2 格，让整个代码块留在 `- [工具] …` 列表项里（第 277 轮）。
+    // CommonMark 的容器规则要求续行至少缩进到列表项的内容列（`- ` 宽 2）：内容行顶格会
+    // 结束列表项，开围栏随容器一起闭合，其后的行被解析成文档级代码块——`## 伪造小节`
+    // 也能借此跳出围栏。
+    const indentedDetail = detail.text
+      .split('\n')
+      .map((l) => (l.length ? `  ${l}` : l))
+      .join('\n');
+    line += `\n  ${fence}\n${indentedDetail}\n  ${fence}`;
   }
   return line;
 }
