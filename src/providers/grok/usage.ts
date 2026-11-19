@@ -1,5 +1,6 @@
 import { iterateFileLines } from '../../core/read-text.js';
-import { dirname, join } from 'node:path';
+import { isAbsolute, join, relative, resolve, dirname } from 'node:path';
+import { lstat, readFile } from 'node:fs/promises';
 import type { SessionRef, TokenUsage } from '../../core/types.js';
 import { escapeControlChars } from '../../core/display.js';
 import { parseJsonObject } from '../../core/jsonl.js';
@@ -114,6 +115,114 @@ const KNOWN_GROK_UPDATE_TYPES = new Set([
   'subagent_finished',
 ]);
 
+export type GrokCheckpointStatus = 'read' | 'missing' | 'unsafe' | 'unreadable' | 'bad' | 'oversize';
+
+/** 最后一条 `compaction_checkpoint` 的检查点文件读取结果；只有 `read` 才带快照规模。 */
+export type GrokCheckpointLast = {
+  status: GrokCheckpointStatus;
+  /** `compacted_history` 的条数（Grok 压缩后重建、模型当时可见的上下文） */
+  messages?: number;
+  /** 快照里的 role → 条数（role 缺失计「（缺 role）」） */
+  roles?: Map<string, number>;
+  schemaVersion?: number;
+};
+
+/** `updates.jsonl` 里全部 `compaction_checkpoint` 的汇总（第 257 轮）。 */
+export type GrokCheckpointScan = {
+  total: number;
+  read: number;
+  missing: number;
+  unsafe: number;
+  unreadable: number;
+  bad: number;
+  oversize: number;
+  last: GrokCheckpointLast | null;
+};
+
+/** 检查点 JSON 体积上限：只需要 `compacted_history` 的规模，不解析超大文件。 */
+const GROK_CHECKPOINT_SIZE_LIMIT = 16 * 1024 * 1024;
+
+function emptyCheckpointScan(): GrokCheckpointScan {
+  return { total: 0, read: 0, missing: 0, unsafe: 0, unreadable: 0, bad: 0, oversize: 0, last: null };
+}
+
+/**
+ * 读一个压缩检查点文件，只保留规模信息（`compacted_history` 条数与 role 计数），
+ * 不复制摘要正文，也不把它拼进交接。
+ *
+ * `checkpoint_file` 是不可信输入：必须是相对路径、解析后仍落在本会话的
+ * `compaction_checkpoints/` 目录里，绝对路径与 `..` 逃逸一律拒绝（不读）。
+ */
+async function readGrokCheckpoint(sessionDir: string, file: unknown): Promise<GrokCheckpointLast> {
+  if (typeof file !== 'string' || !file.trim() || file.includes('\0') || isAbsolute(file)) return { status: 'unsafe' };
+  const root = join(sessionDir, 'compaction_checkpoints');
+  const abs = resolve(sessionDir, file);
+  const rel = relative(root, abs);
+  if (!rel || rel.startsWith('..') || isAbsolute(rel)) return { status: 'unsafe' };
+  try {
+    // lstat 不跟随符号链接：检查点应是原生写出的普通文件，符号链接一律不算可读
+    // （与 Grok `.cwd` 的处理同口径，避免指向 FIFO / 设备文件）。
+    const st = await lstat(abs);
+    if (!st.isFile()) return { status: 'unreadable' };
+    if (st.size > GROK_CHECKPOINT_SIZE_LIMIT) return { status: 'oversize' };
+    const rec = parseJsonObject(await readFile(abs, 'utf8'));
+    if (!rec) return { status: 'bad' };
+    const history = rec.compacted_history;
+    if (!Array.isArray(history)) return { status: 'bad' };
+    const roles = new Map<string, number>();
+    for (const item of history) {
+      const rec2 = asRecord(item);
+      const role = rec2 && typeof rec2.role === 'string' && rec2.role ? rec2.role : '（缺 role）';
+      const label = escapeControlChars(role.length > 64 ? `${role.slice(0, 64)}…` : role);
+      roles.set(label, (roles.get(label) ?? 0) + 1);
+    }
+    return {
+      status: 'read',
+      messages: history.length,
+      roles,
+      ...(typeof rec.schema_version === 'number' ? { schemaVersion: rec.schema_version } : {}),
+    };
+  } catch (error) {
+    return { status: isMissingPathError(error) ? 'missing' : 'unreadable' };
+  }
+}
+
+/** 披露用的检查点规模说明；没有检查点时返回空串。 */
+export function describeGrokCheckpoints(scan: GrokCheckpointScan): string {
+  if (scan.total === 0) return '';
+  const lastLabels: Record<GrokCheckpointStatus, string> = {
+    read: '可读',
+    missing: '文件缺失',
+    unsafe: '路径不安全',
+    unreadable: '读取失败',
+    bad: '内容无法解析',
+    oversize: '文件体积过大',
+  };
+  const parts: string[] = [];
+  if (scan.last?.status === 'read' && scan.last.messages !== undefined) {
+    const roles = [...(scan.last.roles ?? new Map<string, number>()).entries()]
+      .map(([role, count]) => `${role}×${count}`)
+      .join('、');
+    parts.push(
+      `最近一次压缩留下的上下文快照可读：压缩后重建的上下文有 ${scan.last.messages} 条记录` +
+      (roles ? `（${roles}）` : '') +
+      '；快照内容只统计规模，没有并入交接',
+    );
+  } else if (scan.last) {
+    parts.push(`最近一次压缩的上下文快照不可读（${lastLabels[scan.last.status]}）`);
+  }
+  const failures: string[] = [];
+  if (scan.missing) failures.push(`文件缺失 ${scan.missing}`);
+  if (scan.unsafe) failures.push(`路径不安全 ${scan.unsafe}`);
+  if (scan.unreadable) failures.push(`读取失败 ${scan.unreadable}`);
+  if (scan.bad) failures.push(`内容无法解析 ${scan.bad}`);
+  if (scan.oversize) failures.push(`文件体积过大 ${scan.oversize}`);
+  if (failures.length > 0 && (scan.read > 0 || failures.length > 1 || scan.total > 1)) {
+    parts.push(`检查点文件合计 ${scan.total} 个，其中 ${failures.join('、')}`);
+  }
+  return parts.join('；');
+}
+
 export type GrokUpdateScan = {
   usages: TokenUsage[];
   compactions: number;
@@ -125,6 +234,8 @@ export type GrokUpdateScan = {
   imagesDropped: number;
   /** 表外 `sessionUpdate` 类型 → 条数（类型名已转义、截断）。 */
   unknownUpdates: Map<string, number>;
+  /** 压缩检查点文件的可读性与快照规模（第 257 轮，只读不移交）。 */
+  checkpoints: GrokCheckpointScan;
 };
 
 export async function grokUpdateScan(updatesPath: string): Promise<GrokUpdateScan | null> {
@@ -135,6 +246,7 @@ export async function grokUpdateScan(updatesPath: string): Promise<GrokUpdateSca
   let rewinds = 0;
   let imagesDropped = 0;
   const unknownUpdates = new Map<string, number>();
+  const checkpoints = emptyCheckpointScan();
   try {
     // 逐行流式读取：ACP `updates.jsonl` 连流式增量都逐条落盘，整份 `readFile` 在超过
     // V8 字符串上限（约 512 MB）时抛 `Invalid string length`——那会被讲成「读取失败」，
@@ -162,9 +274,14 @@ export async function grokUpdateScan(updatesPath: string): Promise<GrokUpdateSca
         continue;
       }
       if (updateType === 'compaction_checkpoint') {
-        // Grok 每次压缩上下文都写一条；摘要正文在会话目录的 compaction_checkpoints/ 旁路文件里，
-        // 格式未经验证，这里只计数、不读也不拼进交接（见 parseGrokSession 的披露）。
+        // Grok 每次压缩上下文都写一条，检查点文件在会话目录的 compaction_checkpoints/ 里。
+        // 这里只读规模（compacted_history 条数与 role 计数）用于披露，不复制快照正文、
+        // 也不把它拼进交接；文件缺失 / 路径不安全 / 读不出来都要有计数，不能静默当「没有」。
         compactions += 1;
+        checkpoints.total += 1;
+        const result = await readGrokCheckpoint(dirname(updatesPath), update.checkpoint_file);
+        checkpoints[result.status] += 1;
+        checkpoints.last = result;
         continue;
       }
       if (updateType === 'retry_state') {
@@ -194,7 +311,7 @@ export async function grokUpdateScan(updatesPath: string): Promise<GrokUpdateSca
   }
   // 末尾没有 turn_completed 的重试单独计数，不归属给任何轮（第 256 轮）。
   finalizeGrokRetryAttribution(failures);
-  return { usages, compactions, badLines, failures, rewinds, imagesDropped, unknownUpdates };
+  return { usages, compactions, badLines, failures, rewinds, imagesDropped, unknownUpdates, checkpoints };
 }
 
 function pick(usage: unknown): TokenUsage | null {
