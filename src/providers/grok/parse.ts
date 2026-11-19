@@ -5,6 +5,7 @@ import { dirname, join } from 'node:path';
 import { ensureAssistant, formatUnknownTypeCounts, normalizeUserText, preUserRecordsNote, pushEvent, stripEmptyEvents, summarize, WATCH_CONTEXT_DISCLOSURE_PREFIX } from '../../core/rich.js';
 import { asJsonObject, parseJsonObject } from '../../core/jsonl.js';
 import { clipCodePoints } from '../../core/display.js';
+import { isoFromEpochMs } from '../../core/time.js';
 import type { ProcessEvent, SessionRef, UnifiedTurn } from '../../core/types.js';
 import { grokFailureDisclosure, grokTailFailed } from './failure.js';
 import { describeGrokCheckpoints, grokUpdateScan } from './usage.js';
@@ -144,11 +145,18 @@ export async function parseGrokSession(ref: SessionRef): Promise<UnifiedTurn[]> 
     if (r) records.push(r);
   }
   const base = anchor === null ? null : anchor.fromMtime ? anchor.ms - (records.length - 1) : anchor.ms;
+  // 锚点越界的条数：`created_at` 恰好落在可表示上限（+275760-09-13T00:00:00.000Z =
+  // 8.64e15）时，`Date.parse` 为有限值、第一行合法，第二行 `+index` 就越出 `toISOString()`
+  // 的范围并抛 `RangeError`——整条会话解析失败，`watch prompt` / `open` / `switch` 全打不开
+  // （第 282 轮，`isoFromEpochMs()` 是现成的守卫）。置空不编造时间，并在这条会话上披露。
+  let timestampOverflow = 0;
 
   for (let lineIndex = 0; lineIndex < records.length; lineIndex += 1) {
     const r = records[lineIndex];
     const type = typeof r.type === 'string' ? r.type : '';
-    const timestamp = grokTimestamp(base, lineIndex);
+    const stamp = grokTimestamp(base, lineIndex);
+    const timestamp = stamp.text;
+    if (stamp.overflow) timestampOverflow += 1;
 
     if (!KNOWN_TOP_LEVEL_TYPES.has(type)) {
       const label = type || '（缺 type）';
@@ -264,7 +272,7 @@ export async function parseGrokSession(ref: SessionRef): Promise<UnifiedTurn[]> 
   }
 
   pairing.finish();
-  return attachGrokSidecars(ref.filePath, stripEmptyEvents(turns), unknownTopLevel, preUserRecordsNote('Grok', preUser.assistant, preUser.process));
+  return attachGrokSidecars(ref.filePath, stripEmptyEvents(turns), unknownTopLevel, preUserRecordsNote('Grok', preUser.assistant, preUser.process), timestampOverflow);
 }
 
 /**
@@ -295,6 +303,7 @@ async function attachGrokSidecars(
   turns: UnifiedTurn[],
   unknownTopLevel: Map<string, number>,
   preUserNote: string | null = null,
+  timestampOverflow = 0,
 ): Promise<UnifiedTurn[]> {
   // 不让纯工具轮的空正文被披露文本替换；有真实用户轮或非空助手正文才挂载声明。
   const carrier = [...turns].reverse().find((turn) => turn.role === 'user' || turn.text.trim());
@@ -309,6 +318,9 @@ async function attachGrokSidecars(
   if (unknownNote) disclose(unknownNote);
   // 同样只依赖 chat_history：放在旁路扫描之前，updates.jsonl 读失败时不跟着消失。
   if (preUserNote) disclose(preUserNote);
+  if (timestampOverflow > 0) {
+    disclose(`Grok 的会话锚点与可表示时间范围冲突：有 ${timestampOverflow} 条记录按锚点推算的时间超出可表示范围（summary.json 的 created_at 可能已损坏），这些记录没有时间戳；对话内容照常保留。`);
+  }
   let scan: Awaited<ReturnType<typeof grokUpdateScan>>;
   try {
     scan = await grokUpdateScan(join(dirname(chatPath), 'updates.jsonl'));
@@ -408,9 +420,13 @@ async function grokAnchorMs(filePath: string): Promise<{ ms: number; fromMtime: 
   }
 }
 
-function grokTimestamp(anchor: number | null, index: number): string {
-  if (anchor === null) return isoTimestamp();
-  return new Date(anchor + index).toISOString();
+function grokTimestamp(anchor: number | null, index: number): { text: string; overflow: boolean } {
+  if (anchor === null) return { text: isoTimestamp(), overflow: false };
+  // `Number.isFinite(anchor + index)` 不够：8.64e15 是 Date 的可表示上限，超出后
+  // `.toISOString()` 抛 RangeError。越界的行时间戳置空（= 项目统一的「没有时间戳」），
+  // 由调用方计数披露，不退回 now()、也不截到边界值冒充真实时间。
+  const text = isoFromEpochMs(anchor + index);
+  return { text, overflow: text === '' };
 }
 
 function isoTimestamp(): string {
