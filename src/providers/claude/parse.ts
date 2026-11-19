@@ -6,6 +6,7 @@ import {
   pushEvent,
   stripEmptyEvents,
   summarize,
+  unwrapMarkedToolInput,
   unwrapUserQuery,
   WATCH_CONTEXT_DISCLOSURE_PREFIX,
 } from '../../core/rich.js';
@@ -135,7 +136,7 @@ export async function parseClaudeSession(ref: SessionRef): Promise<UnifiedTurn[]
     if (r.isMeta === true || r.isSidechain === true) continue;
 
     const content = (r.message as Record<string, unknown> | undefined)?.content;
-    const extracted = extractRich(content, timestamp, type, r.watchGeneratedThinking === true, toolMedia);
+    const extracted = extractRich(content, timestamp, type, r.watchGeneratedThinking === true, r.watchWrappedToolInput === true, toolMedia);
     if (!extracted) continue;
     const { text, onlyToolResult, events } = extracted;
 
@@ -447,6 +448,7 @@ function extractRich(
   timestamp: string,
   role: 'user' | 'assistant',
   watchGeneratedThinking: boolean,
+  watchWrappedToolInput: boolean,
   toolMedia: ClaudeToolMediaCounts,
 ): { text: string; onlyToolResult: boolean; events: ProcessEvent[] } | null {
   let blocks: unknown[];
@@ -521,7 +523,10 @@ function extractRich(
         onlyToolResult = false;
         const name = typeof b.name === 'string' ? b.name : 'tool';
         const callId = typeof b.id === 'string' ? b.id : undefined;
-        const input = b.input;
+        // `tool_use.input` 必须是对象，写入侧把非对象入参包成 `{ input: 原值 }` 并在记录顶层写
+        // `watchWrappedToolInput`。只还原带标记的 assistant 记录：同形的原生入参不靠形状猜。
+        // 改键名或标记要 writer / parser 同改（`build.ts` 的 tool_call 分支）。
+        const input = role === 'assistant' && watchWrappedToolInput ? unwrapMarkedToolInput(b.input, 'input') : b.input;
         const detail = typeof input === 'string' ? input : JSON.stringify(input ?? {});
         events.push({
           ...base,

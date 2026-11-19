@@ -7,7 +7,7 @@ import { escapeControlChars } from '../../core/display.js';
 import { assertDataDirectory, providerDirectoryFromEnv } from '../../core/provider-directory.js';
 import { iterateFileLines } from '../../core/read-text.js';
 import { verifyWrittenTurns } from '../../core/verify.js';
-import { claudeBashInput, CLAUDE_THINKING_PREFIX, ENCRYPTED_THINKING, toClaudeToolName, turnHasContent, WATCH_CONTEXT_DISCLOSURE_PREFIX } from '../../core/rich.js';
+import { claudeBashInput, CLAUDE_THINKING_PREFIX, ENCRYPTED_THINKING, toClaudeToolName, toolInputAsRecord, turnHasContent, WATCH_CONTEXT_DISCLOSURE_PREFIX } from '../../core/rich.js';
 import { parseClaudeSession } from './parse.js';
 import type { ProcessEvent, SessionRef, TokenUsage, UnifiedTurn } from '../../core/types.js';
 import type { ImportTurnsOpts } from '../adapter.js';
@@ -323,14 +323,27 @@ function emitClaudeEvent(
     const callId = ev.callId || `call_${randomUUID()}`;
     ctx.setLastCallId(callId);
     const name = toClaudeToolName(ev.name ?? 'tool');
-    const input =
-      name === 'Bash'
-        ? claudeBashInput(ev)
-        : ev.input && typeof ev.input === 'object'
-          ? ev.input
-          : { input: ev.detail ?? ev.summary };
+    // `tool_use.input` 必须是对象（Messages API 请求侧类型是字典），resume 又会把这段历史发回模型。
+    // 来源里 `apply_patch` 的自由文本补丁、解析不了的 JSON 参数都是字符串，不能拿 `detail` / `summary`
+    // 顶替：Pi / OpenCode 的事件没有 `detail`，摘要只是工具名或入参前 200 字符；Kimi 的 `detail` 是
+    // 入参的 JSON 序列化，字符串会多一层引号与转义。数组也是 object，原样写进去同样不是字典。
+    // 非对象值包成 `{ input: 原值 }`，并在记录顶层（`message` 之外，不进入模型请求）写
+    // `watchWrappedToolInput`；parser 只认带标记的记录才还原——`{ input: "…" }` 也可以是原生入参。
+    // 没有结构化入参（缺省 / null）时沿用来源原文、再退到摘要：那不是来源入参，不带标记。
+    let input: Record<string, unknown>;
+    let wrapped = false;
+    if (name === 'Bash') {
+      input = claudeBashInput(ev);
+    } else if (ev.input === undefined || ev.input === null) {
+      input = { input: ev.detail ?? ev.summary };
+    } else {
+      const asRecord = toolInputAsRecord(ev.input, 'input');
+      input = asRecord.record;
+      wrapped = asRecord.wrapped;
+    }
     const record = ctx.baseRecord();
     record.type = 'assistant';
+    if (wrapped) record.watchWrappedToolInput = true;
     record.message = ctx.assistantMessage(ctx.messageId, [{ type: 'tool_use', id: callId, name, input }], 'tool_use', ctx.usage);
     ctx.push(record);
     return;
