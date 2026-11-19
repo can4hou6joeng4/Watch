@@ -855,6 +855,13 @@ function eventToWireLines(ev: ProcessEvent, turnId: string, stepUuid: string, ti
 }
 
 /** UnifiedTurn[] → Kimi wire.jsonl；无 into 时新建真实会话，再重写历史 */
+/**
+ * 写后校验的期望：Kimi 的 `args` 接受任意 JSON 值，写入用 `ev.input ?? {}`，回读原样返回。
+ */
+export function expectKimiToolCall(ev: ProcessEvent): { name: unknown; input: unknown } {
+  return { name: ev.name ?? 'tool', input: ev.input ?? {} };
+}
+
 export async function importTurnsToKimi(
   turns: UnifiedTurn[],
   cwd: string,
@@ -901,6 +908,7 @@ export async function importTurnsToKimi(
         turns,
         provider: 'kimi',
         expect: expectAttachmentPlaceholders,
+        expectToolCall: expectKimiToolCall,
       }),
   });
 
