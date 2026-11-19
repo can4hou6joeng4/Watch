@@ -538,7 +538,8 @@ function isGeneratedCommentaryMirror(turn: UnifiedTurn, text: string): boolean {
   return text.trim() === clipped.trim();
 }
 
-function parseToolInput(raw: unknown): unknown {
+/** 回读 `function_call` / `custom_tool_call` 的入参；写后校验的期望也走这里。 */
+export function parseToolInput(raw: unknown): unknown {
   if (raw && typeof raw === 'object') return unwrapLegacyWrappedInput(raw as Record<string, unknown>);
   if (typeof raw === 'string') {
     try {

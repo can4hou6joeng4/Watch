@@ -9,10 +9,10 @@ import { escapeControlChars } from '../../core/display.js';
 import { providerDirectoryFromEnv } from '../../core/provider-directory.js';
 import { asJsonObject, parseJsonObject } from '../../core/jsonl.js';
 import { verifyWrittenTurns } from '../../core/verify.js';
-import { ENCRYPTED_THINKING, codexToolInput, isCodexExecScript, toCodexToolName, turnHasContent } from '../../core/rich.js';
+import { ENCRYPTED_THINKING, codexToolInput, extractExecCommand, isCodexExecScript, toCodexToolName, turnHasContent } from '../../core/rich.js';
 import { codexUserTurnContent } from './media.js';
 import { describePathReadFailureReason, isMissingPathError, iterateFileLines } from '../../core/read-text.js';
-import { isLegacyEventMsgRollout, parseCodexSession } from './parse.js';
+import { isLegacyEventMsgRollout, parseCodexSession, parseToolInput } from './parse.js';
 import { codexSessionUsage } from './usage.js';
 import type { ProcessEvent, SessionRef, TokenUsage, UnifiedTurn } from '../../core/types.js';
 import type { ImportTurnsOpts } from '../adapter.js';
@@ -498,6 +498,19 @@ function wrapExecInput(name: string, input: string, cwd: string): string {
   return `const r = await tools.exec_command({cmd:${JSON.stringify(input)},workdir:${JSON.stringify(cwd)},yield_time_ms:10000,max_output_tokens:4000}); text(r.output);\n`;
 }
 
+/**
+ * 写后校验的期望（`verifyWrittenTurns` 的 `expectToolCall`）：与写入共用
+ * `codexToolInput()` / `wrapExecInput()`，再按 parser 的规则给出回读形状——
+ * `parseToolInput()` 解得出对象就取对象，否则 exec 取解码后的命令、其余取写入文本。
+ * 与 parser 同一套派生，才不会把「JSON 文本回读成对象」误报成入参不一致。
+ */
+export function expectCodexToolCall(ev: ProcessEvent, cwd: string): { name: unknown; input: unknown } {
+  const name = toCodexToolName(ev.name ?? 'tool');
+  const written = wrapExecInput(name, codexToolInput(ev, name), cwd);
+  const detail = name === 'exec' ? extractExecCommand(written) : written;
+  return { name, input: parseToolInput(written) ?? detail };
+}
+
 function pushCommentary(
   push: (type: string, payload: Record<string, unknown>) => void,
   text: string,
@@ -630,6 +643,7 @@ export async function importTurnsToCodex(
           turns,
           provider: 'codex',
           expect: expectCodexRoundTrip,
+          expectToolCall: (ev) => expectCodexToolCall(ev, cwd),
         }),
     });
     return into;
@@ -680,6 +694,7 @@ export async function importTurnsToCodex(
             turns,
             provider: 'codex',
             expect: expectCodexRoundTrip,
+            expectToolCall: (ev) => expectCodexToolCall(ev, cwd),
           }),
       });
       return into;
@@ -706,6 +721,7 @@ export async function importTurnsToCodex(
         turns,
         provider: 'codex',
         expect: expectCodexRoundTrip,
+        expectToolCall: (ev) => expectCodexToolCall(ev, cwd),
       }),
   });
   return { provider: 'codex', sessionId, filePath, cwd };
