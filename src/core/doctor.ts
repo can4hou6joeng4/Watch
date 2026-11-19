@@ -900,10 +900,12 @@ export async function doctorReport(cwd: string, deps: DoctorDeps): Promise<Docto
   const unreadableBeyondTips = unreadableSessions.filter((item) => !tipFiles.has(item.filePath));
   // 与 sessions / recent 的 pushPreviewErrorWarning() 同一分档：0 字节是内容已经没了，
   // 「先确认这些文件可读（权限、路径）」对它不成立，照着做只会白检查一遍权限。
+  // sessionId 来自各家存储（grok 目录名 / kimi 索引 / opencode TEXT 列），是不可信字符串；
+  // 警告会原样进文本模式，必须在这里转义。reason 里可能嵌路径，同一档处理。
   const sample = (list: typeof unreadableBeyondTips): string =>
     list
       .slice(0, 3)
-      .map((item) => `${item.provider}:${item.sessionId}（${item.reason}）`)
+      .map((item) => `${escapeControlChars(item.provider)}:${escapeControlChars(item.sessionId)}（${escapeControlChars(item.reason)}）`)
       .join('、') + (list.length > 3 ? ` 等 ${list.length} 条` : '');
   const emptyFiles = unreadableBeyondTips.filter((item) => isEmptySessionFileReason(item.reason));
   const deniedFiles = unreadableBeyondTips.filter((item) => !isEmptySessionFileReason(item.reason));

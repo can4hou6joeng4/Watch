@@ -2351,7 +2351,8 @@ async function cmdDoctor(cwd: string, json: boolean, strict: boolean): Promise<v
     }
     if (report.warnings.length) {
       console.error('警告:');
-      for (const w of report.warnings) console.error(`  - ${w}`);
+      // 与其余命令的 warnings 打印点同一口径：报告里的会话 id / 路径来自不可信存储
+      for (const w of report.warnings) console.error(`  - ${escapeControlChars(w)}`);
     }
     // 结论行必须在 stdout 最后：`watch doctor | tail -1` 与只看退出码的脚本要拿到同一句话
     const s = report.summary;
