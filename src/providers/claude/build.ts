@@ -289,6 +289,37 @@ function expectClaudeRoundTrip(turns: UnifiedTurn[]): UnifiedTurn[] {
   return out;
 }
 
+/**
+ * 一条 tool_call 写进 Claude 的形状（`emitClaudeEvent` 与写后校验共用同一份派生）。
+ *
+ * `tool_use.input` 必须是对象（Messages API 请求侧类型是字典），resume 又会把这段历史发回模型。
+ * 来源里 `apply_patch` 的自由文本补丁、解析不了的 JSON 参数都是字符串，不能拿 `detail` / `summary`
+ * 顶替：Pi / OpenCode 的事件没有 `detail`，摘要只是工具名或入参前 200 字符；Kimi 的 `detail` 是
+ * 入参的 JSON 序列化，字符串会多一层引号与转义。数组也是 object，原样写进去同样不是字典。
+ * 非对象值包成 `{ input: 原值 }`，并在记录顶层（`message` 之外，不进入模型请求）写
+ * `watchWrappedToolInput`；parser 只认带标记的记录才还原——`{ input: "…" }` 也可以是原生入参。
+ * 没有结构化入参（缺省 / null）时沿用来源原文、再退到摘要：那不是来源入参，不带标记。
+ */
+function claudeWrittenToolCall(ev: ProcessEvent): { name: string; input: Record<string, unknown>; wrapped: boolean } {
+  const name = toClaudeToolName(ev.name ?? 'tool');
+  if (name === 'Bash') return { name, input: claudeBashInput(ev), wrapped: false };
+  if (ev.input === undefined || ev.input === null) {
+    return { name, input: { input: ev.detail ?? ev.summary }, wrapped: false };
+  }
+  const asRecord = toolInputAsRecord(ev.input, 'input');
+  return { name, input: asRecord.record, wrapped: asRecord.wrapped };
+}
+
+/**
+ * 写后校验的期望（`verifyWrittenTurns` 的 `expectToolCall`）：与写入共用派生，
+ * 唯一差异是带标记的包装值——parser 回读时会还原成来源原值，期望侧也要还原，
+ * 否则每次合法包装都会被自己的校验拒掉。
+ */
+export function expectClaudeToolCall(ev: ProcessEvent): { name: unknown; input: unknown } {
+  const written = claudeWrittenToolCall(ev);
+  return { name: written.name, input: written.wrapped ? ev.input : written.input };
+}
+
 function emitClaudeEvent(
   ev: ProcessEvent,
   ctx: {
@@ -322,29 +353,16 @@ function emitClaudeEvent(
   if (ev.kind === 'tool_call') {
     const callId = ev.callId || `call_${randomUUID()}`;
     ctx.setLastCallId(callId);
-    const name = toClaudeToolName(ev.name ?? 'tool');
-    // `tool_use.input` 必须是对象（Messages API 请求侧类型是字典），resume 又会把这段历史发回模型。
-    // 来源里 `apply_patch` 的自由文本补丁、解析不了的 JSON 参数都是字符串，不能拿 `detail` / `summary`
-    // 顶替：Pi / OpenCode 的事件没有 `detail`，摘要只是工具名或入参前 200 字符；Kimi 的 `detail` 是
-    // 入参的 JSON 序列化，字符串会多一层引号与转义。数组也是 object，原样写进去同样不是字典。
-    // 非对象值包成 `{ input: 原值 }`，并在记录顶层（`message` 之外，不进入模型请求）写
-    // `watchWrappedToolInput`；parser 只认带标记的记录才还原——`{ input: "…" }` 也可以是原生入参。
-    // 没有结构化入参（缺省 / null）时沿用来源原文、再退到摘要：那不是来源入参，不带标记。
-    let input: Record<string, unknown>;
-    let wrapped = false;
-    if (name === 'Bash') {
-      input = claudeBashInput(ev);
-    } else if (ev.input === undefined || ev.input === null) {
-      input = { input: ev.detail ?? ev.summary };
-    } else {
-      const asRecord = toolInputAsRecord(ev.input, 'input');
-      input = asRecord.record;
-      wrapped = asRecord.wrapped;
-    }
+    const written = claudeWrittenToolCall(ev);
     const record = ctx.baseRecord();
     record.type = 'assistant';
-    if (wrapped) record.watchWrappedToolInput = true;
-    record.message = ctx.assistantMessage(ctx.messageId, [{ type: 'tool_use', id: callId, name, input }], 'tool_use', ctx.usage);
+    if (written.wrapped) record.watchWrappedToolInput = true;
+    record.message = ctx.assistantMessage(
+      ctx.messageId,
+      [{ type: 'tool_use', id: callId, name: written.name, input: written.input }],
+      'tool_use',
+      ctx.usage,
+    );
     ctx.push(record);
     return;
   }
@@ -481,7 +499,14 @@ export async function importTurnsToClaude(
     await writeFileAtomic(into.filePath, lines.join('\n') + '\n', {
       backup: true,
       verify: async (tmp) =>
-        verifyWrittenTurns({ parse: (p) => parseClaudeSession({ ...into, filePath: p }), filePath: tmp, turns, provider: 'claude', expect: expectClaudeRoundTrip }),
+        verifyWrittenTurns({
+          parse: (p) => parseClaudeSession({ ...into, filePath: p }),
+          filePath: tmp,
+          turns,
+          provider: 'claude',
+          expect: expectClaudeRoundTrip,
+          expectToolCall: expectClaudeToolCall,
+        }),
     });
     return into;
   }
@@ -506,6 +531,7 @@ export async function importTurnsToClaude(
             turns,
             provider: 'claude',
             expect: expectClaudeRoundTrip,
+            expectToolCall: expectClaudeToolCall,
           }),
       });
       return into;
@@ -527,6 +553,7 @@ export async function importTurnsToClaude(
         turns,
         provider: 'claude',
         expect: expectClaudeRoundTrip,
+        expectToolCall: expectClaudeToolCall,
       }),
   });
   return { provider: 'claude', sessionId, filePath, cwd };
