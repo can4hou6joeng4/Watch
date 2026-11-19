@@ -9,6 +9,7 @@ import { homedir } from 'node:os';
 import { randomBytes, randomUUID } from 'node:crypto';
 import { writeFileAtomic } from '../../core/atomic.js';
 import { parseJsonObject } from '../../core/jsonl.js';
+import { isoFromEpochMs } from '../../core/time.js';
 import { readTextOrEmpty } from '../../core/read-text.js';
 import { assistantOnlyIncrementReason, assistantTurnTextForWrite, piBashTimeoutFromClaude, toolInputAsRecord, userTurnTextForWrite } from '../../core/rich.js';
 import { expectAttachmentPlaceholders, verifyWrittenTurns } from '../../core/verify.js';
@@ -333,14 +334,14 @@ export async function importTurnsToPi(
       if (ev.kind !== 'tool_result') continue;
       const baseMs = Date.parse(ev.timestamp || turn.timestamp) || Date.now();
       // 确保 tool_result message 时间严格晚于 assistant message，避免 Pi TUI 排序错乱
-      const shifted = new Date(baseMs + 1000 + toolResultIndex * 100).toISOString();
+      const shifted = shiftedPiTimestamp(baseMs, 1000 + toolResultIndex * 100);
       toolResultIndex += 1;
       parentId = pushMessage(pieces, parentId, 'toolResult', shifted, [
         { type: 'text', text: ev.detail ?? ev.summary },
       ], ev);
     }
     if (hasToolEvents && bodyText.trim()) {
-      const finalTs = new Date((Date.parse(turn.timestamp) || Date.now()) + 2000 + toolResultIndex * 100).toISOString();
+      const finalTs = shiftedPiTimestamp(Date.parse(turn.timestamp) || Date.now(), 2000 + toolResultIndex * 100);
       parentId = pushMessage(pieces, parentId, 'assistant', finalTs, [{ type: 'text', text: bodyText }], undefined, turn.usage);
     }
   }
@@ -359,6 +360,23 @@ export async function importTurnsToPi(
       }),
   });
   return { provider: 'pi', sessionId, filePath, cwd };
+}
+
+/** Date 可表示的毫秒上限（±8.64e15）；越过它 `.toISOString()` 抛 `RangeError`。 */
+const MAX_DATE_MS = 8_640_000_000_000_000;
+
+/**
+ * 给 tool_result / final text 推算「严格晚于 assistant」的时间戳。
+ *
+ * 来源时间戳可能是**可表示上限本身**（`Date.parse('+275760-09-13T00:00:00.000Z')`
+ * 是有限值 8.64e15，第 282 轮同族）：再加 1000ms 就超出范围，旧实现的 `toISOString()`
+ * 抛 `RangeError`，整次 Pi 写入失败。这里把平移结果夹在上限内并用 `isoFromEpochMs()`
+ * 格式化——越界时与 assistant 消息同一时刻（宁可失去 1ms 的严格先后，也不编造时间或
+ * 让交接失败）；`isoFromEpochMs` 理论上不会返回空，兜底回上限值。
+ */
+function shiftedPiTimestamp(baseMs: number, offset: number): string {
+  const shifted = Math.min(baseMs + offset, MAX_DATE_MS);
+  return isoFromEpochMs(shifted) || isoFromEpochMs(MAX_DATE_MS);
 }
 
 function pushMessage(
