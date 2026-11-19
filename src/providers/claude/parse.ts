@@ -25,7 +25,7 @@ import { describeQueuedImages, readQueuedUserPrompt } from './queued.js';
 
 /**
  * Claude JSONL → 统一时间线（Rich）：
- * - 跳过 isMeta/isSidechain、custom-title/ai-title、未知 type、坏行
+ * - 跳过 isMeta/isSidechain、坏行；未知顶层记录类型按 type 计数披露，不静默丢
  * - thinking / tool_use 挂到当前助手轮；tool_result 按调用 ID 回到对应助手轮，未配对结果保留并披露
  * - 工具结果里的图片 / 文件 / 未识别块留占位并计数披露，不复制 data / url，不产 attachment
  * - 仅含 tool_result 的 user 记录不当作用户消息
@@ -39,6 +39,41 @@ import { describeQueuedImages, readQueuedUserPrompt } from './queued.js';
  *   插在日志里的原位置才能让「助手续写」成为它的回复；工具结果另按调用 ID 配对
  * - 丢弃首条 user 之前的记录
  */
+
+/**
+ * Claude 会话 .jsonl 的顶层记录类型。`user` / `assistant` 是对话本体；`system` 由 failure.ts
+ * 读取；`attachment` / `continued-in` 有各自的读取器；其余是会话状态、标题、检查点、请求遥测
+ * 与任务记账——本机 964 个会话的只读采样（只统计类型名与字段名）里它们都不构成对话轮次，
+ * Watch 有意不并入。表外类型由 parseClaudeSession() 计数后披露：Claude 新版本新增内容型
+ * 顶层记录时，交接不能在没有提示的情况下丢掉。
+ */
+const KNOWN_TOP_LEVEL_TYPES = new Set([
+  'user', 'assistant', 'system', 'attachment', 'continued-in',
+  // 历史版本写的 resume 摘要，派生自对话、不是一轮发言（本机采样未出现，老会话可能还有）。
+  'summary',
+  // 会话状态 / 标题 / 队列与恢复指针。
+  'queue-operation', 'last-prompt', 'ai-title', 'custom-title', 'agent-name', 'pr-link',
+  'mode', 'permission-mode', 'atis-latch',
+  // 文件检查点（Claude Code 自己的回退状态）。
+  'file-history-snapshot', 'file-history-delta',
+  // 请求遥测：params / message 是已由 user / assistant 记录承载的请求副本，不重复并入。
+  'api-request', 'api-request-blob', 'api-request-shape',
+  // 子代理 / 远程任务记账：正文属于各自的会话或旁路记录，主时间线只读 conversation。
+  'started', 'launched', 'result', 'tools-used', 'cost-state',
+]);
+
+/** 未知顶层类型的清单展示：有界、转义，防止记录里的类型名把控制字符带进终端。 */
+function claudeTypeCounts(counts: Map<string, number>): string {
+  const entries = [...counts];
+  const label = (type: string): string => {
+    const escaped = escapeControlChars(type);
+    return escaped.length > 60 ? `${escaped.slice(0, 60)}…` : escaped;
+  };
+  const shown = entries.slice(0, 8).map(([type, n]) => `${label(type)}×${n}`);
+  if (entries.length > 8) shown.push(`另有 ${entries.length - 8} 种`);
+  return shown.join('、');
+}
+
 export async function parseClaudeSession(ref: SessionRef): Promise<UnifiedTurn[]> {
   const turns: UnifiedTurn[] = [];
   let sawUser = false;
@@ -56,6 +91,9 @@ export async function parseClaudeSession(ref: SessionRef): Promise<UnifiedTurn[]
   // 逐条挂事件会让一个 146 次错误的会话刷满同一句话。
   const failures: ClaudeFailureCounts = createClaudeFailureCounts();
   const toolMedia: ClaudeToolMediaCounts = { images: 0, files: 0, unknown: new Map(), persisted: 0 };
+  // 顶层记录类型：认识的有意不并入对话（状态 / 标题 / 检查点 / 请求遥测 / 任务记账），
+  // 其余计数披露——Claude 新版本新增内容型顶层记录时不能静默丢掉（与 Codex / Grok / Kimi / Pi 同口径）。
+  const unknownTopLevel = new Map<string, number>();
   let lastFailureTimestamp = '';
   // 失败之后是否再没有产生轮次的记录。只有这种**尾部**失败才补空正文助手轮：
   // 中途失败当场造轮时，写入侧会跳过「无正文且无事件」的轮次，目标永远比来源少一轮，
@@ -132,7 +170,13 @@ export async function parseClaudeSession(ref: SessionRef): Promise<UnifiedTurn[]
       tailFailure = true;
       continue;
     }
-    if (type !== 'user' && type !== 'assistant') continue;
+    if (type !== 'user' && type !== 'assistant') {
+      // 表外类型按 type 计数，循环结束后合成一条披露；不认识的记录不能静默跳过。
+      if (typeof type === 'string' && type !== '' && !KNOWN_TOP_LEVEL_TYPES.has(type)) {
+        unknownTopLevel.set(type, (unknownTopLevel.get(type) ?? 0) + 1);
+      }
+      continue;
+    }
     if (r.isMeta === true || r.isSidechain === true) continue;
 
     const content = (r.message as Record<string, unknown> | undefined)?.content;
@@ -260,6 +304,13 @@ export async function parseClaudeSession(ref: SessionRef): Promise<UnifiedTurn[]
   // 复制到别的机器后不存在。只带走预览这件事必须披露，否则读者会以为工具输出是完整的。
   if (toolMedia.persisted > 0 && disclosureContext) {
     const text = `${WATCH_CONTEXT_DISCLOSURE_PREFIX}Claude 有 ${toolMedia.persisted} 条工具结果被 Claude Code 持久化到会话目录的 tool-results/ 旁路文件，记录里只剩预览与旁路文件路径；交接只带走这段预览，完整输出没有并入。旁路文件随来源会话目录保留或清理，换机器后该路径不可用——需要完整内容时请在来源文件或原生 Claude Code 中核对。]`;
+    pushEvent(disclosureContext, { kind: 'text', summary: text, detail: text, timestamp: disclosureContext.timestamp, provider: 'claude' });
+  }
+  // 未识别的顶层记录类型只计数、不猜测语义：无法确认其中是否包含对话内容，也不能把它们的
+  // 字段当正文并入。披露是提示而不是解析支持——读者需要时回来源核对。
+  if (unknownTopLevel.size > 0 && disclosureContext) {
+    const total = [...unknownTopLevel.values()].reduce((sum, n) => sum + n, 0);
+    const text = `${WATCH_CONTEXT_DISCLOSURE_PREFIX}Claude 有 ${total} 条未识别的顶层记录（${claudeTypeCounts(unknownTopLevel)}），Watch 暂不解析：无法确认其中是否包含对话内容，这些记录没有并入交接，请在来源核对。]`;
     pushEvent(disclosureContext, { kind: 'text', summary: text, detail: text, timestamp: disclosureContext.timestamp, provider: 'claude' });
   }
   const detected = await probeClaudeContinuation(continuation, ref.filePath);
