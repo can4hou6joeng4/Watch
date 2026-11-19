@@ -643,7 +643,7 @@ async function runCodex(args: string[], cwd: string, onEvent?: (e: ProcessEvent)
         : '';
     const detail = stderr.trim() || eventErrorSummary(stdoutErr) || String(error);
     await rm(outDir, { recursive: true, force: true });
-    throw new Error(`codex CLI 调用失败: ${detail.slice(0, 500)}`);
+    throw new Error(`codex CLI 调用失败: ${clipCodePoints(detail, 500).text}`);
   }
   let replyText = '';
   try {
@@ -656,7 +656,7 @@ async function runCodex(args: string[], cwd: string, onEvent?: (e: ProcessEvent)
     replyText = lastAgentMessageFromEvents(stdout);
   }
   if (!replyText) {
-    throw new Error(`codex 输出中找不到最终回复: ${stdout.slice(0, 500)}`);
+    throw new Error(`codex 输出中找不到最终回复: ${clipCodePoints(stdout, 500).text}`);
   }
   return { stdout, replyText };
 }
@@ -874,7 +874,7 @@ export const codexAdapter: ProviderAdapter = {
     const { stdout, replyText } = await runCodex(['resume', ref.sessionId, text], cwd, onEvent);
     const sessionId = threadIdFromEvents(stdout);
     if (!sessionId) {
-      throw new Error(`codex 输出缺少 thread.started: ${stdout.slice(0, 500)}`);
+      throw new Error(`codex 输出缺少 thread.started: ${clipCodePoints(stdout, 500).text}`);
     }
     return { ref, turn: replyTurn(replyText) };
   },

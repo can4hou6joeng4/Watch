@@ -3,7 +3,7 @@ import { quoteCommandArg } from '../../core/shell-quote.js';
 import { describeDetectFailure, isCommandMissing, resolveCli } from '../../core/platform.js';
 import { PreflightBlockedError, type PreflightContext, type ProviderAdapter, type WriteLimit } from '../adapter.js';
 import type { ProcessEvent, SessionRef, TokenUsage, UnifiedTurn } from '../../core/types.js';
-import { escapeControlChars } from '../../core/display.js';
+import { clipCodePoints, escapeControlChars } from '../../core/display.js';
 import { parseOpencodeSession } from './parse.js';
 import { detectOpencodeLayout } from './paths.js';
 import { checkOpencodeTargetRevert } from './revert.js';
@@ -74,7 +74,7 @@ async function runOpencode(args: string[], cwd: string): Promise<string> {
     child.on('exit', (code, signal) => {
       clearTimeout(timeout);
       if (code !== 0) {
-        const detail = stderr.slice(0, 500) || `exit ${code} signal ${signal}`;
+        const detail = clipCodePoints(stderr, 500).text || `exit ${code} signal ${signal}`;
         reject(new Error(`opencode CLI 调用失败: ${detail}`));
         return;
       }

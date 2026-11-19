@@ -352,16 +352,16 @@ async function runClaude(
   } catch (error) {
     const stderr =
       typeof error === 'object' && error !== null && 'stderr' in error
-        ? String((error as { stderr: unknown }).stderr).slice(0, 500)
+        ? clipCodePoints(String((error as { stderr: unknown }).stderr), 500).text
         : String(error);
     throw new Error(`claude CLI 调用失败: ${stderr}`);
   }
   const result = claudeResultFromStream(stdout);
   if (!result) {
-    throw new Error(`claude 输出缺少 result 事件: ${stdout.slice(0, 500)}`);
+    throw new Error(`claude 输出缺少 result 事件: ${clipCodePoints(stdout, 500).text}`);
   }
   if (result.is_error === true || typeof result.result !== 'string') {
-    throw new Error(`claude 会话出错: ${stdout.slice(0, 500)}`);
+    throw new Error(`claude 会话出错: ${clipCodePoints(stdout, 500).text}`);
   }
   return result;
 }
@@ -419,7 +419,7 @@ export const claudeAdapter: ProviderAdapter = {
     const result = await runClaude([text], cwd, onEvent);
     const sessionId = result.session_id;
     if (typeof sessionId !== 'string' || !sessionId) {
-      throw new Error(`claude 输出缺少 session_id: ${JSON.stringify(result).slice(0, 500)}`);
+      throw new Error(`claude 输出缺少 session_id: ${clipCodePoints(JSON.stringify(result), 500).text}`);
     }
     const ref: SessionRef = {
       provider: 'claude',

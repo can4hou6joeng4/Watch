@@ -76,12 +76,12 @@ async function runKimi(args: string[], cwd: string): Promise<{ stdout: string; t
       throw new Error('找不到 kimi code：当前进程 PATH 中没有 kimi 命令');
     }
     const pick = (v: unknown): string => (typeof v === 'string' ? v.trim() : '');
-    const detail = (pick(err.stderr) || pick(err.stdout) || err.message || String(error)).slice(0, 500);
+    const detail = clipCodePoints(pick(err.stderr) || pick(err.stdout) || err.message || String(error), 500).text;
     throw new Error(`kimi CLI 调用失败: ${detail}`);
   }
   const parsed = parseStreamJson(stdout);
   if (!parsed.text) {
-    throw new Error(`kimi 输出中找不到 assistant 回复: ${stdout.slice(0, 500)}`);
+    throw new Error(`kimi 输出中找不到 assistant 回复: ${clipCodePoints(stdout, 500).text}`);
   }
   return { stdout, text: parsed.text };
 }
@@ -400,7 +400,7 @@ export const kimiAdapter: ProviderAdapter = {
     const { stdout, text: replyText } = await runKimi(['-p', text], cwd);
     const parsed = parseStreamJson(stdout);
     if (!parsed.sessionId) {
-      throw new Error(`kimi 输出缺少 session.resume_hint: ${stdout.slice(0, 500)}`);
+      throw new Error(`kimi 输出缺少 session.resume_hint: ${clipCodePoints(stdout, 500).text}`);
     }
     if (onEvent) {
       // stream-json 当前不输出细粒度过程事件；如有需要后续可扩展
