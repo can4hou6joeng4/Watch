@@ -214,11 +214,17 @@ function firstString(obj: Record<string, unknown>, keys: readonly string[]): str
 export function normalizeManifestPath(raw: string, cwd: string): string {
   const trimmed = raw.trim();
   if (!trimmed) return trimmed;
-  if (!path.isAbsolute(trimmed)) return trimmed;
+  // 相对路径也要折叠 `./` 与中间的 `..`：直接改文件的工具用绝对路径，补丁标记用相对路径，
+  // 同一文件两种写法并存时（`./src/a.ts` 与 `/proj/src/a.ts`）不折叠就会被记成两条改动。
+  if (!path.isAbsolute(trimmed)) {
+    const normalized = path.normalize(trimmed);
+    return normalized || trimmed;
+  }
   if (!cwd || !path.isAbsolute(cwd)) return trimmed;
   const rel = path.relative(cwd, trimmed);
-  // `path.relative` 在外面前缀不同（Windows 跨盘）时返回绝对路径，这种原样保留
-  if (!rel || rel.startsWith('..') || path.isAbsolute(rel)) return trimmed;
+  // `path.relative` 在外面前缀不同（Windows 跨盘）时返回绝对路径，这种原样保留。
+  // 只有真正的父目录段才表示 cwd 之外：文件名本身可以以 `..` 开头（如 `..foo`）。
+  if (!rel || rel === '..' || rel.startsWith(`..${path.sep}`) || path.isAbsolute(rel)) return trimmed;
   return rel;
 }
 
@@ -266,7 +272,9 @@ function classify(event: ProcessEvent): Classified {
       if (paths.length > 0) return { kind: 'patch', paths };
     }
     if (rawInput && EXEC_NAME.test(name)) return { kind: 'command', command: rawInput };
-    if (rawInput && isKnownFileWriter(name)) return { kind: 'unreadable-write' };
+    // 入参整个缺失（旧记录、被裁剪的参数）时也要披露：工具名属于已知写入类，
+    // 拿不到路径不等于「没写」；`rawInput` 为空不能成为静默跳过的理由。
+    if (isKnownFileWriter(name)) return { kind: 'unreadable-write' };
     return null;
   }
 
@@ -278,6 +286,19 @@ function classify(event: ProcessEvent): Classified {
     typeof obj.old_str === 'string' ||
     typeof obj.oldString === 'string' ||
     typeof obj.oldStr === 'string';
+
+  // Anthropic 文本编辑器工具把动作放在 `command` 键里，而工具名本身含 `replace`。
+  // 不先按子命令分流，`view`（只读）会落到下面按名字的兜底被记成编辑——健康会话里
+  // 凭空多出一条「改过这个文件」，与「只读工具不算改动」的约束冲突。
+  const editorCommand =
+    name.toLowerCase() === 'str_replace_editor' && typeof obj.command === 'string'
+      ? obj.command.trim().toLowerCase()
+      : '';
+  if (editorCommand === 'view') return null;
+  if (editorCommand === 'create') {
+    // create 的正文在 `file_text`（不在 WRITE_VALUE_KEYS 里），必须单独认成整文件写。
+    return filePath ? { kind: 'file', path: filePath, mode: 'write' } : { kind: 'unreadable-write' };
+  }
 
   if (filePath && (writeValue || hasOld)) {
     // 整文件写 vs 局部编辑：有 content / new_source 的算写，其余算编辑
@@ -572,7 +593,9 @@ export function renderWorkManifest(manifest: WorkManifest): string[] {
       '只统计参数里写明文件路径的写入 / 编辑与明确的 shell 命令，工具输出不复制。',
   );
   lines.push('');
-  if (manifest.files.length) {
+  // 上限为 0 时成功条目为空、但被省略的条数不为空：只按 `files.length` 决定是否输出，
+  // 截断披露会整段消失，正文只剩「没有记录到改动」——把「有、但没列」讲成了「没有」。
+  if (manifest.files.length || manifest.omittedFiles > 0) {
     lines.push('### 改动过的文件');
     lines.push('');
     for (const file of manifest.files) {
@@ -586,7 +609,7 @@ export function renderWorkManifest(manifest: WorkManifest): string[] {
     }
     lines.push('');
   }
-  if (manifest.commands.length) {
+  if (manifest.commands.length || manifest.omittedCommands > 0) {
     lines.push('### 运行过的命令');
     lines.push('');
     for (const cmd of manifest.commands) {
@@ -628,7 +651,16 @@ export function renderWorkManifest(manifest: WorkManifest): string[] {
     );
     lines.push('');
   }
-  if (!manifest.files.length && !manifest.commands.length) {
+  // 「没有记录」只适用于上面确实什么都没披露的情况：有截断、读不出路径或失败写入时，
+  // 上面几行已经说明了发生过什么，再说一句「没有记录到」会把它们盖掉。
+  if (
+    !manifest.files.length &&
+    !manifest.commands.length &&
+    manifest.omittedFiles === 0 &&
+    manifest.omittedCommands === 0 &&
+    manifest.unreadableWrites === 0 &&
+    manifest.failedFileWrites === 0
+  ) {
     lines.push('这次会话没有记录到文件改动或命令（或来源工具的入参形状尚未被识别）。');
     lines.push('');
   }
