@@ -317,7 +317,16 @@ async function readSummary(
   }
   // 非对象 summary（`"bad"` / `42` / `[]`）以前被当成对象返回，随后 `summary.updated_at = now`
   // 在严格模式下抛 TypeError；按「读不出可用摘要」处理，由调用方重建。
-  return parseJsonObject(raw);
+  // 写路径不能重建：半截 JSON / 0 字节 / 非对象都是内容已损坏，重建会覆盖原生字段
+  // （`generated_title` 等），与上面「读失败抛错」同一档取舍——只有 ENOENT 才是可重建的「没有摘要」。
+  const parsed = parseJsonObject(raw);
+  if (opts.write && parsed === null) {
+    throw new Error(
+      `读取既有 Grok 会话摘要失败：文件内容解析不出对象（可能被截断或写坏）：${escapeControlChars(filePath)}；` +
+        '未写入，避免用重建的摘要覆盖原生字段——可从备份恢复该文件；确认它确实可丢弃时删除它再重试（chat_history / updates 不受影响）',
+    );
+  }
+  return parsed;
 }
 
 /** 本机最近的 grok 会话 summary.json（按 mtime 降序）；用于探测原生身份 */
