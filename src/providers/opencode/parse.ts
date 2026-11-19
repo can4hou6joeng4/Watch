@@ -254,7 +254,32 @@ function v1AssistantErrorEvent(
   };
 }
 
-function partToEvents(part: OpencodePartData, baseTime: number, recordKey: string[], callIds: CallIdContext): ProcessEvent[] {
+/**
+ * 1.x 工具 error 状态的正文（第 259 轮）：上游 `ToolStateError.error` 是字符串。其它形状
+ * 以前直接落回 `state.output`（通常 undefined），结果事件整条消失，配对层报
+ * 「工具调用没有结果，可能在中断或仍在运行」。现在按上游 NamedError 的持久化形状
+ * （`{ name, data: { message } }`）与 2.x 的扁平 `{ message }` 各取一次 message；
+ * 都没有就序列化原值（不复制其它字段，避免把凭据一类的附加信息带进交接），并计形状异常。
+ */
+function v1ToolErrorMessage(raw: unknown): string | undefined {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return undefined;
+  const rec = raw as { message?: unknown; data?: { message?: unknown } };
+  if (typeof rec.message === 'string' && rec.message) return rec.message;
+  const inner = rec.data;
+  if (inner && typeof inner === 'object' && !Array.isArray(inner)) {
+    const message = (inner as { message?: unknown }).message;
+    if (typeof message === 'string' && message) return message;
+  }
+  return undefined;
+}
+
+function partToEvents(
+  part: OpencodePartData,
+  baseTime: number,
+  recordKey: string[],
+  callIds: CallIdContext,
+  unknown?: Map<string, number>,
+): ProcessEvent[] {
   const events: ProcessEvent[] = [];
   if (isReasoningPart(part)) {
     events.push({
@@ -284,9 +309,20 @@ function partToEvents(part: OpencodePartData, baseTime: number, recordKey: strin
       provider: 'opencode',
     });
     const errored = part.state?.status === 'error';
-    const output = errored && typeof part.state?.error === 'string'
-      ? `${OPENCODE_TOOL_FAILURE_PREFIX}${part.state.error}`
-      : part.state?.output;
+    let output: unknown = part.state?.output;
+    if (errored && part.state?.error !== undefined) {
+      // 第 259 轮：非字符串 error（NamedError 对象等）不能把结果整条吞掉。
+      const rawError = part.state.error;
+      if (typeof rawError !== 'string') {
+        if (unknown) bumpCount(unknown, `tool:error（${v2ValueShape(rawError)}，不是字符串）`);
+      }
+      const text = typeof rawError === 'string' ? rawError : v1ToolErrorMessage(rawError) ?? v2JsonText(rawError);
+      output = text ? `${OPENCODE_TOOL_FAILURE_PREFIX}${text}` : part.state?.output;
+    } else if (!errored && output !== undefined && typeof output !== 'string') {
+      // 上游 `ToolStateCompleted.output` 是字符串；其它形状以前被 JSON.stringify 静默改写。
+      if (unknown) bumpCount(unknown, `tool:output（${v2ValueShape(output)}，不是字符串）`);
+      output = v2JsonText(output);
+    }
     if (!unfinished && output !== undefined) {
       events.push({
         kind: 'tool_result',
@@ -429,7 +465,7 @@ function messageToTurn(
       if (isToolPart(part)) hasToolEvents = true;
       const partEvent = filePartToEvent(part, partTime);
       if (partEvent) events.push(partEvent);
-      events.push(...partToEvents(part, partTime, ['v1', msg.id, partRow.id], stats.callIds));
+      events.push(...partToEvents(part, partTime, ['v1', msg.id, partRow.id], stats.callIds, unknown));
     } else {
       // 已知记账类型已在上方排除；其余未知类型不猜内容，按类型与条数汇入上下文披露。
       bumpCount(unknown, `part:${partType}`);
