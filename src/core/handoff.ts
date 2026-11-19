@@ -10,7 +10,7 @@ import { escapeControlChars } from './display.js';
 import { describeBadLinesScanFailure, lineageFromHistory, scanUnparsableJsonLines, type LineageGraph } from './jsonl.js';
 import { usageBadLinesDetail, usageContentBadLinesDetail, usageContentFileProblem, usageSidecarProblem } from './usage-integrity.js';
 import { cwdAliasHint, splitElsewhereByDirectory } from './cwd.js';
-import { compressedCopy, compressedRetryAdvice, describePathReadFailureReason, describeReadFailureOrSelf, emptySessionFileReasonFromStat, isEmptySessionFileReason, probeSessionReadable, sessionFilePresence } from './read-text.js';
+import { compressedCopy, compressedRetryAdvice, describePathReadFailureReason, describeReadFailureOrSelf, emptySessionFileReasonFromStat, isEmptySessionFileReason, isMissingPathError, probeSessionReadable, sessionFilePresence } from './read-text.js';
 import { noSessionHint, unknownProviderMessage } from '../providers/registry.js';
 import { collectUnattributable, unattributableNoPickMessage, unattributablePickWarning } from './session-coverage.js';
 
@@ -272,32 +272,70 @@ export async function assertTargetUnchanged(
  *
  * 用 stat 而不是内容指纹：这里只需要「有没有变」，不必证明内容一定不同，省一次全文件读取。
  * 代价是同一时间戳精度内等长改写会漏报——漏报只是少一句提示，不会说出错的结论。
+ *
+ * 但 `stat` **失败**时不能沿用「漏报只是少一句话」：读取后文件被删 / 被目录占住 / 权限变了，
+ * 这一档连「有没有变」都不知道，静默等于向读者断言「没变过」。三态由 `probeSourceState()`
+ * 区分，`sourceChangeSince()` 把「量不出来」单独成档并给出原因。
  */
 export type SourceStateSnapshot = { size: number; mtimeMs: number };
 
-export async function snapshotSourceState(filePath: string): Promise<SourceStateSnapshot | null> {
+/** stat 来源文件的三态：ok / 现在不存在 / 量不出来（权限、I/O、被同名目录占住） */
+export type SourceStateProbe =
+  | { state: 'ok'; snapshot: SourceStateSnapshot }
+  | { state: 'missing'; reason: string }
+  | { state: 'unreadable'; reason: string };
+
+export async function probeSourceState(filePath: string): Promise<SourceStateProbe> {
   try {
     const st = await stat(filePath);
-    return { size: st.size, mtimeMs: st.mtimeMs };
-  } catch {
-    // 读的时候还在、备份时又不在了：这一档由各命令自己的读取失败分支处理，这里不另起结论
-    return null;
+    if (!st.isFile()) {
+      return { state: 'unreadable', reason: '它现在不是普通文件（被同名目录或设备文件占住了）' };
+    }
+    return { state: 'ok', snapshot: { size: st.size, mtimeMs: st.mtimeMs } };
+  } catch (error) {
+    const reason = describePathReadFailureReason(error);
+    return isMissingPathError(error)
+      ? { state: 'missing', reason: `它现在不存在了：${reason}` }
+      : { state: 'unreadable', reason: `读不出它的文件状态：${reason}` };
   }
+}
+
+export async function snapshotSourceState(filePath: string): Promise<SourceStateSnapshot | null> {
+  const probe = await probeSourceState(filePath);
+  return probe.state === 'ok' ? probe.snapshot : null;
 }
 
 /** 结构化来源漂移：只有 stat 得到的字节数与方向，不含会话正文 */
 export type SourceChangeSince = { from: number; to: number; growth: boolean };
 
-/** 来源文件在读取前后有没有变；变了就给出方向与字节差，没变返回 null */
+/**
+ * 来源文件在读取前后有没有变。**「量不出来」是独立一档，不是「没有变化」**：
+ * 读取后来源被删、被换成目录、或权限变了时 stat 会失败，旧实现 `return null`
+ * 把这一档和「逐字节相同」压成同一个结论，结果只说「已交接 N 轮」——
+ * 读者会当成期间没有被写入。这里不猜方向（不编造 growth），只把「没量成」说清楚。
+ */
+export type SourceChangeProbe =
+  | ({ kind: 'changed' } & SourceChangeSince)
+  | { kind: 'unchanged' }
+  | { kind: 'unverifiable'; reason: string };
+
 export async function sourceChangeSince(
   filePath: string,
   before: SourceStateSnapshot | null,
-): Promise<SourceChangeSince | null> {
-  if (!before) return null;
-  const after = await snapshotSourceState(filePath);
-  if (!after) return null;
-  if (after.size === before.size && after.mtimeMs === before.mtimeMs) return null;
-  return { from: before.size, to: after.size, growth: after.size > before.size };
+): Promise<SourceChangeProbe> {
+  if (!before) {
+    return {
+      kind: 'unverifiable',
+      reason: '读取前没能取到它的文件状态（可能是权限、I/O 问题，或它当时已经不在）',
+    };
+  }
+  const after = await probeSourceState(filePath);
+  if (after.state !== 'ok') {
+    return { kind: 'unverifiable', reason: `读取后再量时${after.reason}` };
+  }
+  const { size, mtimeMs } = after.snapshot;
+  if (size === before.size && mtimeMs === before.mtimeMs) return { kind: 'unchanged' };
+  return { kind: 'changed', from: before.size, to: size, growth: size > before.size };
 }
 
 export async function describeSourceChangedDuringHandoff(
@@ -307,7 +345,13 @@ export async function describeSourceChangedDuringHandoff(
   action = '交接',
 ): Promise<string | null> {
   const change = await sourceChangeSince(filePath, before);
-  if (!change) return null;
+  if (change.kind === 'unchanged') return null;
+  if (change.kind === 'unverifiable') {
+    return (
+      `无法确认来源会话 ${label} 在这次${action}期间有没有被写入（${change.reason}）：` +
+      '转过去的是开始读取时的内容，之后若有新增记录不会带上——先确认来源文件仍在且可读，再执行一次同一条命令核对'
+    );
+  }
   const { from, to, growth } = change;
   // 增长与改写/截断的下一步不一样：前者再执行一次就能补齐；后者要先确认文件本身没坏
   // （内容变了的那部分不会被 diff 当成增量，重跑也补不回来）
@@ -333,12 +377,17 @@ export async function describeSourceChangedDuringPrompt(
   filePath: string,
   before: SourceStateSnapshot | null,
   label: string,
-  change?: SourceChangeSince | null,
+  change?: SourceChangeProbe,
 ): Promise<string | null> {
   // 调用方已经量过一次时复用同一份结论：再量一次可能得到不同结果，
   // 于是 `--json` 的结构化字段与正文各说一套。undefined 才表示「这里自己量」。
   const actual = change === undefined ? await sourceChangeSince(filePath, before) : change;
-  if (!actual) return null;
+  if (actual.kind === 'unchanged') return null;
+  if (actual.kind === 'unverifiable') {
+    // 量不出来同样是「不能确认」，不能在文档里留白让读者当成没变过
+    return `来源会话 ${label} 在读取前后的文件状态无法核对（${actual.reason}），无法确认正文是否已包含全部记录。` +
+      '如需核对当前记录，请重新执行一次 watch prompt；已生成的文档不会更新。';
+  }
   const { from, to, growth } = actual;
   const prefix = `来源会话 ${label} 在读取前后的文件状态有变化（${from} → ${to} 字节`;
   if (growth) {

@@ -151,6 +151,11 @@ export type PromptSessionMeta = {
    */
   sourceDriftNote?: string;
   /**
+   * 来源文件状态**无法核对**（读取前后有一次 stat 失败 / 没有基线）。
+   * 必须与「有变化」分开渲染：标签写「生成期间有变化」会在事实是「不知道」时误导读者。
+   */
+  sourceDriftUnknownNote?: string;
+  /**
    * 来源会话记录的 `cwd` **现在**是什么状态（不存在 / 不是目录 / 读不出来）。
    *
    * 与「本轮 `--cwd` 有没有问题」是两回事：这里没有查询发生，文档会被复制到另一台机器或
@@ -846,6 +851,11 @@ export function buildHandoffPrompt(
   if (meta.sourceDriftNote) {
     addFinding(findings, 'prompt_source_changed_during_render', 'degraded', 1);
     lines.push(`- 生成期间有变化：${headerLine(meta.sourceDriftNote)}`);
+  }
+  if (meta.sourceDriftUnknownNote) {
+    // 「量不出来」不是「有变化」：同一件事的第三种结论要有自己的标签与 finding code
+    addFinding(findings, 'prompt_source_drift_unverifiable', 'degraded', 1);
+    lines.push(`- 生成期间无法核对：${headerLine(meta.sourceDriftUnknownNote)}`);
   }
   lines.push('');
   // 改动概览放在「会话记录」之前：接手者先要知道动了哪些文件、跑过什么命令，

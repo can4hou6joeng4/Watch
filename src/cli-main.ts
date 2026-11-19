@@ -1937,15 +1937,15 @@ async function cmdPrompt(
 
   // 对比读取前后的文件状态。正文、用量与坏行扫描分别读取，stat 无法判定其中各自包含哪些记录。
   const sourceChange = await sourceChangeSince(foundRef.filePath, sourceSnapshot);
-  // 与正文同一份判据：把这次 stat 结论传进去，不再让正文函数自己重测一次
-  const sourceDrift = sourceChange
-    ? await describeSourceChangedDuringPrompt(
-        foundRef.filePath,
-        sourceSnapshot,
-        `${foundRef.sessionId}（${adapter.displayName}）`,
-        sourceChange,
-      )
-    : null;
+  // 与正文同一份判据：把这次 stat 结论传进去，不再让正文函数自己重测一次。
+  // sourceChange 现在有三态（changed / unchanged / unverifiable），「量不出来」也要进正文与 warnings，
+  // 不能因为旧实现用 null 表示「没变」就把这一档静默掉。
+  const sourceDrift = await describeSourceChangedDuringPrompt(
+    foundRef.filePath,
+    sourceSnapshot,
+    `${foundRef.sessionId}（${adapter.displayName}）`,
+    sourceChange,
+  );
   if (sourceDrift) warnings.push(sourceDrift);
 
   // 来源记录里的 cwd 现在还在不在：与本次 `--cwd` 无关（那由上面的 cwdIssue 管）。文档会被复制走，
@@ -2020,8 +2020,10 @@ async function cmdPrompt(
       // 文档会被复制走：这一条必须写在正文里，stderr 的警告不会跟着文档
       ...(autoPicked ? { autoPicked: true } : {}),
       ...(autoPicked && diagnostics.length ? { sourceSelectionWarnings: diagnostics } : {}),
-      // 文档会被复制走：这条也必须进正文，不能只留在 stderr
-      ...(sourceDrift ? { sourceDriftNote: sourceDrift } : {}),
+      // 文档会被复制走：这条也必须进正文，不能只留在 stderr。
+      // 「有变化」与「无法核对」分开：前者是结论，后者是「不知道」，标签不能共用
+      ...(sourceDrift && sourceChange.kind === 'changed' ? { sourceDriftNote: sourceDrift } : {}),
+      ...(sourceDrift && sourceChange.kind === 'unverifiable' ? { sourceDriftUnknownNote: sourceDrift } : {}),
       ...(sourceCwdNote ? { sourceCwdNote } : {}),
       ...(sourceWorktreeNote ? { sourceWorktreeNote } : {}),
       ...(sourceBranchNote ? { sourceBranchNote } : {}),
@@ -2044,7 +2046,9 @@ async function cmdPrompt(
       // 脚本要能区分「按 id 查到的」与「替你猜的」：两者的可信度不一样
       ...(autoPicked ? { autoPicked: true } : {}),
       markdown: result.markdown,
-      ...(sourceChange ? { sourceDrift: sourceChange } : {}),
+      ...(sourceChange.kind === 'changed' ? { sourceDrift: { from: sourceChange.from, to: sourceChange.to, growth: sourceChange.growth } } : {}),
+      // 「量不出来」单独给结构化字段：脚本不能把缺字段当成「没变化」
+      ...(sourceChange.kind === 'unverifiable' ? { sourceDriftUnknown: sourceChange.reason } : {}),
       ...(sourceBranch ? { sourceBranch } : {}),
       ...(sourceWorktree ? { sourceWorktree } : {}),
       stats: result.stats,
