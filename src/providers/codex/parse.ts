@@ -97,6 +97,8 @@ async function parseCodexLines(
       pushEvent(turn, { kind: 'text', summary: text, detail: text, timestamp, provider: 'codex' });
       return;
     }
+    // 真实助手正文到了：此前的中断 / 错误已被后续输出接上，不再算尾部失败。
+    lastOutcome = null;
     const isMidTurn = p.phase === 'commentary' || p.phase === 'partial_answer';
     // 只跳过带 Watch 标记且与最近结构事件对应的回显；原生同文说明仍须保留。
     const meta = p.internal_chat_message_metadata_passthrough;
@@ -147,6 +149,14 @@ async function parseCodexLines(
   // 本机只读采样里，从另一条会话分叉出来的 Codex Desktop 会话（session_meta.forked_from_id）
   // 开头就带一条沿用自原会话的助手终稿；以前直接 continue，没有任何披露。只计数、不复制正文。
   const preUser = { assistant: 0, process: 0, fallbackAssistant: 0 };
+  // 失败 / 中止 / 警告类事件与未知事件类型（第 253 轮）：只计数，循环结束后统一披露。
+  // 失败类不受「event_msg 是否是活动时间线」限制——现代 rollout 的中断 / 错误只写在事件流里，
+  // response_item 不会留下对应记录，整份丢弃事件流就等于把「这一轮为什么没有答复」也丢掉。
+  const abortReasons = new Map<string, number>();
+  let errorEvents = 0;
+  let warningEvents = 0;
+  const unknownEvents = new Map<string, number>();
+  let lastOutcome: 'error' | 'cancelled' | null = null;
   let forked = false;
   let lineIndex = 0;
   let synthesizedInlineCalls = 0;
@@ -181,7 +191,10 @@ async function parseCodexLines(
       continue;
     }
     const p = asJsonObject(payload);
-    if (!p) continue;
+    if (!p) {
+      if (r.type === 'event_msg') unknownEvents.set('（缺少可解析的 payload）', (unknownEvents.get('（缺少可解析的 payload）') ?? 0) + 1);
+      continue;
+    }
     if (r.type === 'session_meta') {
       if (typeof p.forked_from_id === 'string' && p.forked_from_id) forked = true;
       continue;
@@ -272,7 +285,8 @@ async function parseCodexLines(
     }
 
     if (r.type === 'event_msg') {
-      if (p.type === 'token_count') {
+      const eventType = typeof p.type === 'string' && p.type ? p.type : null;
+      if (eventType === 'token_count') {
         const usage = readTurnUsage(p.info);
         if (usage) {
           // 挂到这一轮最后一条 assistant 上——原生 rollout 里 `token_count` 紧跟在本次模型调用
@@ -286,7 +300,11 @@ async function parseCodexLines(
         }
         continue;
       }
-      if (p.type === 'user_message' && typeof p.message === 'string') {
+      if (eventType === 'user_message') {
+        if (typeof p.message !== 'string') {
+          unknownEvents.set('user_message（无法解析）', (unknownEvents.get('user_message（无法解析）') ?? 0) + 1);
+          continue;
+        }
         const text = p.message;
         // 旧版事件可能只带媒体字段、message 为空；有附件内容时不能整条丢掉
         const legacy = legacyUserMedia(p, timestamp);
@@ -304,7 +322,11 @@ async function parseCodexLines(
         };
         if (legacy.events.length) turn.events = legacy.events;
         fallback.push(turn);
-      } else if (p.type === 'agent_message' && typeof p.message === 'string') {
+      } else if (eventType === 'agent_message') {
+        if (typeof p.message !== 'string') {
+          unknownEvents.set('agent_message（无法解析）', (unknownEvents.get('agent_message（无法解析）') ?? 0) + 1);
+          continue;
+        }
         const text = p.message;
         if (text.trim() === '') continue;
         if (!sawFallbackUser) {
@@ -312,6 +334,23 @@ async function parseCodexLines(
           continue;
         }
         acceptAssistant(ensureAssistant(fallback, timestamp, 'codex'), text, timestamp, p);
+      } else if (eventType === 'turn_aborted') {
+        // 原因只有结构取值（interrupted / replaced / review_ended / budget_limited），不复制其它字段。
+        const reason = typeof p.reason === 'string' && p.reason ? codexLabel(p.reason) : '未记录原因';
+        abortReasons.set(reason, (abortReasons.get(reason) ?? 0) + 1);
+        lastOutcome = 'cancelled';
+      } else if (eventType === 'error' || eventType === 'stream_error') {
+        // 与 Pi 的 errorMessage / Grok 的 retry_state.reason 同口径：只计数，不复制错误正文
+        // （可能带上游响应片段与 URL）。
+        errorEvents += 1;
+        lastOutcome = 'error';
+      } else if (eventType === 'warning' || eventType === 'guardian_warning') {
+        warningEvents += 1;
+      } else if (!eventType) {
+        unknownEvents.set('（缺少 type）', (unknownEvents.get('（缺少 type）') ?? 0) + 1);
+      } else if (!KNOWN_CODEX_EVENT_TYPES.has(eventType)) {
+        const label = codexLabel(eventType);
+        unknownEvents.set(label, (unknownEvents.get(label) ?? 0) + 1);
       }
     }
   }
@@ -356,6 +395,26 @@ async function parseCodexLines(
       const origin = forked ? '（这条会话是从另一条会话分叉出来的，它们通常是沿用自原会话的上下文）' : '';
       appendCodexDisclosure(active, `Codex 日志在首条用户消息之前有 ${parts.join('、')}${origin}，Watch 的对话从首条用户消息开始：这些记录没有并入交接，请在来源核对。`);
     }
+  }
+  {
+    const abortCount = [...abortReasons.values()].reduce((a, b) => a + b, 0);
+    const failureParts = [
+      abortCount ? `${abortCount} 次轮次中断（${codexTypeCounts(abortReasons)}）` : '',
+      errorEvents ? `${errorEvents} 条错误记录（error / stream_error）` : '',
+      warningEvents ? `${warningEvents} 条警告` : '',
+    ].filter(Boolean);
+    if (failureParts.length) {
+      const tailIsUser = active.at(-1)?.role === 'user';
+      appendCodexDisclosure(
+        active,
+        `Codex 事件流里有 ${failureParts.join('、')}；失败或中断之前的输出可能不完整，Watch 只保留已写出的对话，没有重试或补全，请在来源核对。`,
+        { tailFailure: tailIsUser && lastOutcome ? lastOutcome : undefined },
+      );
+    }
+  }
+  if (unknownEvents.size) {
+    const total = [...unknownEvents.values()].reduce((a, b) => a + b, 0);
+    appendCodexDisclosure(active, `Codex 有 ${total} 条未识别的事件流记录（${codexTypeCounts(unknownEvents)}），Watch 暂不解析：无法确认其中是否包含对话内容，这些记录没有并入交接，请在来源核对。`);
   }
   if (unknownTopLevel.size) {
     const total = [...unknownTopLevel.values()].reduce((a, b) => a + b, 0);
@@ -486,6 +545,105 @@ type CodexItem =
   | { events: ProcessEvent[]; placement?: 'before' | 'turn'; output?: CodexOutputProjection; generatedImage?: boolean }
   | { unknown: unknown }
   | { compaction: true };
+
+/**
+ * Codex `event_msg.payload.type` 的已知类型：上游 `codex-rs/protocol/src/protocol.rs` 的
+ * `EventMsg` 枚举按 snake_case 序列化（`TurnStarted` / `TurnComplete` 显式改名为
+ * `task_started` / `task_complete`，旧别名 `turn_started` / `turn_complete` 一并收下）。
+ * 对话（user_message / agent_message）与用量（token_count）另有读取器；失败 / 中止 / 警告类
+ * 单独计数披露；其余是元数据、进度与流式增量，有意不并入对话、也不逐条披露。
+ * 表外类型按 type 计数并披露（第 253 轮）——新增已知类型必须对上游枚举核对后登记。
+ */
+const KNOWN_CODEX_EVENT_TYPES = new Set<string>([
+  'agent_message',
+  'agent_message_content_delta',
+  'agent_reasoning',
+  'agent_reasoning_raw_content',
+  'agent_reasoning_section_break',
+  'apply_patch_approval_request',
+  'auth_recovery_completed',
+  'auth_recovery_started',
+  'collab_agent_interaction_begin',
+  'collab_agent_interaction_end',
+  'collab_agent_spawn_begin',
+  'collab_agent_spawn_end',
+  'collab_close_begin',
+  'collab_close_end',
+  'collab_resume_begin',
+  'collab_resume_end',
+  'collab_waiting_begin',
+  'collab_waiting_end',
+  'context_compacted',
+  'deprecation_notice',
+  'dynamic_tool_call_request',
+  'dynamic_tool_call_response',
+  'elicitation_abandoned',
+  'elicitation_request',
+  'entered_review_mode',
+  'environment_connected',
+  'environment_disconnected',
+  'error',
+  'exec_approval_request',
+  'exec_command_begin',
+  'exec_command_end',
+  'exec_command_output_delta',
+  'exited_review_mode',
+  'guardian_assessment',
+  'guardian_warning',
+  'hook_completed',
+  'hook_started',
+  'image_generation_begin',
+  'image_generation_end',
+  'item_completed',
+  'item_started',
+  'mcp_startup_complete',
+  'mcp_startup_update',
+  'mcp_tool_call_begin',
+  'mcp_tool_call_end',
+  'model_reroute',
+  'model_verification',
+  'network_approval_resolved',
+  'patch_apply_begin',
+  'patch_apply_end',
+  'patch_apply_updated',
+  'plan_delta',
+  'plan_update',
+  'private_session_event',
+  'raw_response_completed',
+  'raw_response_item',
+  'realtime_conversation_closed',
+  'realtime_conversation_list_voices_response',
+  'realtime_conversation_realtime',
+  'realtime_conversation_sdp',
+  'realtime_conversation_started',
+  'reasoning_content_delta',
+  'reasoning_raw_content_delta',
+  'request_permissions',
+  'request_user_input',
+  'safety_buffering',
+  'session_configured',
+  'shutdown_complete,',
+  'stream_error',
+  'sub_agent_activity',
+  'task_complete',
+  'task_started',
+  'terminal_interaction',
+  'thread_goal_updated',
+  'thread_queue_changed',
+  'thread_rolled_back',
+  'thread_settings_applied',
+  'token_count',
+  'turn_aborted',
+  'turn_complete',
+  'turn_diff',
+  'turn_moderation_metadata',
+  'turn_started',
+  'user_message',
+  'view_image_tool_call',
+  'warning',
+  'web_search_begin',
+  'web_search_end',
+]);
 
 const IGNORED_ITEMS = new Set(['additional_tools', 'configuration_update', 'compaction_trigger', 'tool_search_call', 'tool_search_output', 'ghost_snapshot']);
 /**

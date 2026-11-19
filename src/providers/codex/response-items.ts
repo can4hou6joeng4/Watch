@@ -144,9 +144,16 @@ export class CodexItemNotes {
   }
 }
 
-export function appendCodexDisclosure(turns: UnifiedTurn[], detail: string): void {
+export function appendCodexDisclosure(
+  turns: UnifiedTurn[],
+  detail: string,
+  options: { tailFailure?: 'error' | 'cancelled' } = {},
+): void {
   const turn = [...turns].reverse().find(t => t.role === 'user' || t.text.trim()) ?? turns.at(-1);
   if (!turn || !detail) return;
   const text = `${WATCH_CONTEXT_DISCLOSURE_PREFIX}${detail}]`;
-  pushEvent(turn, { kind: 'text', summary: text, detail: text, timestamp: turn.timestamp, provider: 'codex' });
+  pushEvent(turn, {
+    kind: 'text', summary: text, detail: text, timestamp: turn.timestamp, provider: 'codex',
+    ...(options.tailFailure ? { tailFailure: options.tailFailure } : {}),
+  });
 }
