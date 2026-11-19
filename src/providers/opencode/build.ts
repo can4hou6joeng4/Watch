@@ -6,6 +6,7 @@ import { SessionLookupFailureError } from '../adapter.js';
 import type { ProcessEvent, SessionRef, TokenUsage, UnifiedTurn } from '../../core/types.js';
 import { escapeControlChars } from '../../core/display.js';
 import { stripToolFailurePrefix, toolInputAsRecord } from '../../core/rich.js';
+import { sameToolInput } from '../../core/verify.js';
 import {
   assertUsableOpencodeDb,
   detectOpencodeLayout,
@@ -16,6 +17,7 @@ import {
 } from './paths.js';
 
 import { assertOpencodeTargetNotReverted } from './revert.js';
+import { opencodeToolCallsFromRows } from './parse.js';
 
 export { opencodeDbPath, opencodeSessionsRoot } from './paths.js';
 
@@ -371,6 +373,78 @@ function buildToolPartData(ev: ProcessEvent, fallbackCallId: string, time: numbe
   return JSON.stringify({ type: 'tool', callID: ev.callId || fallbackCallId, tool: ev.kind === 'tool_call' ? ev.name ?? 'tool' : 'tool', state });
 }
 
+/** 事务内新写入的 part id 快照（append 时用来只校验本次增量）。 */
+function snapshotOpencodePartIds(db: DatabaseSync, sessionId: string): Set<string> {
+  const rows = db.prepare('SELECT id FROM part WHERE session_id = ?').all(sessionId) as { id: string }[];
+  return new Set(rows.map((row) => row.id));
+}
+
+/** 写出侧对工具调用的受控变换：回读后应有的工具名与入参（与 buildToolPartData / parser 同源）。 */
+function expectedOpencodeToolCalls(turns: UnifiedTurn[]): { callId?: string; name: string; input: unknown }[] {
+  const expected: { callId?: string; name: string; input: unknown }[] = [];
+  for (const turn of turns) {
+    if (turn.role !== 'assistant') continue;
+    const events = turn.events ?? [];
+    if (!events.some((ev) => ev.kind === 'tool_call')) continue;
+    const pending = new Set<string>();
+    for (const ev of events) {
+      if (ev.kind === 'tool_call') {
+        if (ev.callId) pending.add(ev.callId);
+        const wrapped = toolInputAsRecord(ev.input, 'value');
+        expected.push({ callId: ev.callId, name: ev.name ?? 'tool', input: wrapped.wrapped ? ev.input : wrapped.record });
+      } else if (ev.kind === 'tool_result') {
+        if (ev.callId && pending.has(ev.callId)) {
+          pending.delete(ev.callId);
+          continue;
+        }
+        // 未配对的 tool_result 单独成 part；写出侧此时 name 固定为 'tool'，入参同样按对象包装规则写。
+        const wrapped = toolInputAsRecord(ev.input, 'value');
+        expected.push({ callId: ev.callId, name: 'tool', input: wrapped.wrapped ? ev.input : wrapped.record });
+      }
+    }
+  }
+  return expected;
+}
+
+/**
+ * 事务内读后校验（v0.1.162）：本次新写入的 tool part 必须能按真实解析规则还原成预期的
+ * 工具名与入参。SQLite 不走文件型 round-trip，这一层补上同样的逐值对账；失败时调用方
+ * ROLLBACK，库回到写入前状态。
+ */
+export function assertOpencodeToolPayloads(
+  db: DatabaseSync,
+  sessionId: string,
+  before: Set<string>,
+  turns: UnifiedTurn[],
+): void {
+  const rows = db
+    .prepare('SELECT id, message_id, time_created, data FROM part WHERE session_id = ? ORDER BY time_created, id')
+    .all(sessionId) as { id: string; message_id: string; time_created: number; data: string }[];
+  const fresh = rows.filter((row) => !before.has(row.id));
+  const got = opencodeToolCallsFromRows(fresh, sessionId);
+  const want = expectedOpencodeToolCalls(turns);
+  if (got.length !== want.length) {
+    throw new Error(
+      `OpenCode 写后校验失败：新写入的工具调用应为 ${want.length} 个，回读只有 ${got.length} 个；已回滚本次写入，库内容保持写入前状态`,
+    );
+  }
+  for (let i = 0; i < want.length; i++) {
+    const w = want[i]!;
+    const g = got[i]!;
+    const label = w.callId ? `callId: ${w.callId}` : `第 ${i + 1} 个调用`;
+    if (g.name !== w.name) {
+      throw new Error(
+        `OpenCode 写后校验失败：${label} 的工具名不一致，期望 ${w.name} 实得 ${g.name}；已回滚本次写入，库内容保持写入前状态`,
+      );
+    }
+    if (!sameToolInput(g.input, w.input)) {
+      throw new Error(
+        `OpenCode 写后校验失败：工具 ${w.name} 的入参不一致（${label}）；已回滚本次写入，库内容保持写入前状态`,
+      );
+    }
+  }
+}
+
 export async function importTurnsToOpencode(
   turns: UnifiedTurn[],
   cwd: string,
@@ -405,8 +479,10 @@ export async function importTurnsToOpencode(
       const baseline = opts?.replace
         ? { user: 0, assistant: 0, reasoning: 0, tool: 0, text: 0 }
         : snapshotOpencodeCounts(db, ref.sessionId);
+      const partsBefore = snapshotOpencodePartIds(db, ref.sessionId);
       await writeOpencodeTurns(db, ref, turns, cwd, into, opts);
       assertOpencodeWrite(baseline, snapshotOpencodeCounts(db, ref.sessionId), turns);
+      assertOpencodeToolPayloads(db, ref.sessionId, partsBefore, turns);
       db.exec('COMMIT');
     } catch (error) {
       try { db.exec('ROLLBACK'); } catch { /* ignore */ }

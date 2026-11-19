@@ -306,6 +306,27 @@ function partToEvents(part: OpencodePartData, baseTime: number, recordKey: strin
 }
 
 /**
+ * 写后校验（v0.1.162）：按与 `parseOpencodeSession()` 完全相同的规则，把事务内新写入的
+ * part 行还原成工具调用。build 侧只负责比较，规则本身只有这一份——否则镜像实现会随
+ * parser 演进悄悄漂移，校验通过而真实读取失败。
+ */
+export function opencodeToolCallsFromRows(
+  rows: { id: string; message_id: string; time_created: number; data: string }[],
+  sessionId: string,
+): { callId: string; name: string; input: unknown }[] {
+  const calls: { callId: string; name: string; input: unknown }[] = [];
+  const callIds: CallIdContext = { sessionId, synthesized: new Map() };
+  for (const row of rows) {
+    const part = parseJson<OpencodePartData>(row.data);
+    if (!part || typeof part !== 'object' || Array.isArray(part)) continue;
+    for (const ev of partToEvents(part, row.time_created, [`part:${row.id}`], callIds)) {
+      if (ev.kind === 'tool_call') calls.push({ callId: ev.callId ?? '', name: ev.name ?? 'tool', input: ev.input });
+    }
+  }
+  return calls;
+}
+
+/**
  * 1.x 原生会写、但不承载对话内容的记账 / 身份 part。
  *
  * 依据上游 v1.18.29（16747470f976aca3d362ad730bcd3fe82ecc2c9a）：
