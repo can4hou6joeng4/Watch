@@ -21,7 +21,10 @@ import type { ProcessEvent, SessionRef, UnifiedTurn } from '../../core/types.js'
 
 const execFileAsync = promisify(execFile);
 
-const HEADER_TYPES = new Set(['metadata', 'runtime.set_binding', 'profile.bind', 'permission.set_mode']);
+// wire.jsonl 的头部记录类型：`session_meta` 等正文之外的状态行，重写 / 截断时原样保留。
+// `environment.set_binding` 是上游 1.5 清单里的环境绑定（agentId / environmentId / cwd）；
+// `runtime.set_binding` 是更早的头部形状，Watch 一直按头部保留，解析侧同样认识它。
+const HEADER_TYPES = new Set(['metadata', 'runtime.set_binding', 'environment.set_binding', 'profile.bind', 'permission.set_mode']);
 
 /**
  * Kimi 数据目录：官方 `getDataDir()` 优先读 `KIMI_CODE_HOME`，否则 `~/.kimi-code`

@@ -21,7 +21,8 @@ import type { ProcessEvent, SessionRef, TokenUsage, UnifiedTurn } from '../../co
  * - context.append_message → 旧格式消息回退；现代用户回声以已接受的 turn.prompt 为准
  * - context.apply_compaction → 有可读摘要时还原带来源前缀的用户轮，否则只披露、不设裁剪边界
  *
- * 跳过：llm.*、permission.*、plugin.*、token_counting.*、interaction.* 等内部事件。
+ * 跳过：llm.*、permission.*、plugin.*、token_counting.*、interaction.* 等内部事件
+ * （KNOWN_KIMI_TOP_LEVEL_TYPES 逐条登记已知类型，表外类型计数披露）。
  *
  * 逐行流式读取（`iterateFileLines()`），不整份 `readFile`：wire.jsonl 连流式增量（`llm.*`）
  * 都逐条落盘，长会话可以超过 V8 字符串上限（约 512 MB），整份读取会抛 `Invalid string length`
@@ -33,6 +34,66 @@ const END_REASON_LABELS: Record<string, string> = {
   blocked: '被阻止',
   '（缺 reason）': '缺少结束原因',
 };
+
+/**
+ * wire.jsonl 的持久化记录类型（协议 1.5）。上游 `packages/agent-core-v2/docs/wire-manifest.d.ts`
+ * 列出 67 种（生成自 EVENT2_REGISTRY，min_protocol_version 1.5）；`metadata` 是日志头部行
+ * （`{"type":"metadata","protocol_version",…}`），`goal.account_usage` / `goal.continuation`
+ * 是协议 ≤1.3 的旧类型（v1.3→v1.4 迁移并入 `goal.update`）。
+ *
+ * Watch 解析 turn.prompt / turn.steer / context.append_message / context.append_loop_event /
+ * context.apply_compaction / usage.record / turn.ended；`context.clear` / `context.undo` 另有
+ * 计数披露（它们改变模型上下文，但 Watch 不重建上下文投影）。其余都是有意的记账记录：
+ * 计划 / 模式、工具注册、子代理与后台任务生命周期、MCP、权限、LLM 请求追踪、文件检查点、
+ * 定时任务、记账与用量明细——它们不构成对话轮次，也不带需要并入的用户 / 助手正文。
+ * 表外类型由 parseKimiSession() 按 type 计数披露：Kimi 新增内容型记录时不能静默丢掉。
+ */
+const KNOWN_KIMI_TOP_LEVEL_TYPES = new Set([
+  'metadata',
+  // 更早的头部绑定形状（不在 1.5 清单里）：build.ts 的 HEADER_TYPES 会原样保留它，
+  // 解析侧必须同样认识，否则 Watch 改写过的旧日志会被自己的披露当成未知记录。
+  'runtime.set_binding',
+  'changeNotifier.snapshot', 'config.update',
+  'context.append_loop_event', 'context.append_message', 'context.apply_compaction',
+  'context.clear', 'context.undo',
+  'cron.add', 'cron.cursor', 'cron.delete',
+  'environment.set_binding',
+  'file_history.checkpoint', 'file_history.tracked',
+  'forked',
+  'full_compaction.begin', 'full_compaction.cancel', 'full_compaction.complete',
+  'goal.account_usage', 'goal.clear', 'goal.continuation', 'goal.create', 'goal.update',
+  'interaction.request', 'interaction.resolved',
+  'interruptionReminder.recorded', 'interruptionReminder.requested',
+  'llm.request', 'llm.tools_snapshot',
+  'mcp.server_failed', 'mcp.server_failure_resolved', 'mcp.tools_discovered',
+  'permission.record_approval_result', 'permission.set_mode',
+  'plan_mode.cancel', 'plan_mode.enter', 'plan_mode.exit', 'plan.revision',
+  'plugin.session_start',
+  'profile.bind',
+  'prompt.aborted', 'prompt.completed', 'prompt.steered',
+  'subagent.cancelled', 'subagent.completed', 'subagent.failed', 'subagent.spawned', 'subagent.started',
+  'swarm_mode.enter', 'swarm_mode.exit',
+  'task.started', 'task.terminated',
+  'token_counting.measured', 'token_counting.rebased', 'token_counting.truncated', 'token_counting.turn_recorded',
+  'tool_select.initialized', 'tool_select.tools_changed',
+  'tools.register_user_tool', 'tools.reset_active_tools', 'tools.set_active_tools',
+  'tools.unregister_user_tool', 'tools.update_store',
+  'tower_mode.enter', 'tower_mode.exit',
+  'turn.cancel', 'turn.ended', 'turn.prompt', 'turn.steer',
+  'usage.record',
+]);
+
+/** 未知顶层类型的清单展示：有界、转义，防止记录里的类型名把控制字符带进终端。 */
+function kimiTypeCounts(counts: Map<string, number>): string {
+  const entries = [...counts];
+  const label = (type: string): string => {
+    const escaped = escapeControlChars(type);
+    return escaped.length > 60 ? `${escaped.slice(0, 60)}…` : escaped;
+  };
+  const shown = entries.slice(0, 8).map(([type, n]) => `${label(type)}×${n}`);
+  if (entries.length > 8) shown.push(`另有 ${entries.length - 8} 种`);
+  return shown.join('、');
+}
 
 export async function parseKimiSession(ref: SessionRef): Promise<UnifiedTurn[]> {
   const turns: UnifiedTurn[] = [];
@@ -56,6 +117,14 @@ export async function parseKimiSession(ref: SessionRef): Promise<UnifiedTurn[]> 
   // 不能逐条计数：流式 delta 也走 context.append_loop_event，正常会话会被刷满；
   // 也正因如此以前完全不计——新出现的内容类事件就连痕迹都没有。聚合后一条披露。
   const unknownLoopEvents = new Map<string, number>();
+  // 顶层记录类型：表外类型按 type 计数（与 Pi / Codex / Claude 同口径）；缺 type 与
+  // type 不是字符串分开点名，避免把人引向错误的核对方向。
+  const unknownTopLevel = new Map<string, number>();
+  // context.clear / context.undo 不改变日志本身，却改变模型当时可见的上下文：Watch 不重建
+  // 上下文投影，交接保留日志原文（可能比当时上下文更多），按次数与撤销条数披露。
+  let contextClears = 0;
+  let contextUndos = 0;
+  let contextUndoItems = 0;
   // 顶层 `turn.ended` 的 `reason`（上游 TurnEndReason：completed / cancelled / failed /
   // blocked）以前只用来把 state 归零，失败 / 中止 / 权限阻止与正常完成同形。
   // 按原因计数而不是保留 `error.message`：那是 KimiErrorPayload，可能带上游响应片段。
@@ -75,6 +144,13 @@ export async function parseKimiSession(ref: SessionRef): Promise<UnifiedTurn[]> 
     const time = typeof r.time === 'number' ? r.time : undefined;
     // 越界数值（1e30 / 单位写错）只让这一条记录失去时间戳，不能让整条会话解析抛错
     const timestamp = time ? isoFromEpochMs(time) : '';
+    if (typeof type !== 'string' || type === '' || !KNOWN_KIMI_TOP_LEVEL_TYPES.has(type)) {
+      const label = typeof type === 'string' && type !== ''
+        ? type
+        : type === undefined ? '（缺 type）' : '（type 不是字符串）';
+      unknownTopLevel.set(label, (unknownTopLevel.get(label) ?? 0) + 1);
+      continue;
+    }
 
     if (type === 'turn.prompt' || type === 'turn.steer') {
       const extracted = extractUserInput(r, timestamp);
@@ -236,6 +312,19 @@ export async function parseKimiSession(ref: SessionRef): Promise<UnifiedTurn[]> 
       }
       continue;
     }
+
+    if (type === 'context.clear') {
+      contextClears += 1;
+      continue;
+    }
+    if (type === 'context.undo') {
+      contextUndos += 1;
+      const count = typeof r.count === 'number' && Number.isFinite(r.count) && r.count > 0
+        ? Math.floor(r.count)
+        : 0;
+      contextUndoItems += count;
+      continue;
+    }
   }
 
   // 未识别的 content.part 类型跟着文本走（与 claude / pi / grok 同一口径）：正文会被
@@ -301,6 +390,20 @@ export async function parseKimiSession(ref: SessionRef): Promise<UnifiedTurn[]> 
   }
   if (unmatchedLegacyUsers > 0) {
     disclose(`Kimi 日志里有 ${unmatchedLegacyUsers} 条旧格式用户消息（context.append_message）没能对应到任何 turn.prompt 记录，可能没有被并入交接；需要时请在原生 Kimi 中核对。`);
+  }
+  // 未识别的顶层记录类型只计数、不猜测语义：无法确认其中是否包含对话内容，也不能把它们的
+  // 字段当正文并入。披露是提示而不是解析支持——读者需要时回来源核对。
+  if (unknownTopLevel.size > 0) {
+    const total = [...unknownTopLevel.values()].reduce((a, b) => a + b, 0);
+    disclose(`Kimi 日志里有 ${total} 条未识别的顶层记录（${kimiTypeCounts(unknownTopLevel)}），Watch 暂不解析：无法确认其中是否包含对话内容，这些记录没有并入交接，需要时请在原生 Kimi 中核对`);
+  }
+  if (contextClears > 0 || contextUndos > 0) {
+    const parts: string[] = [];
+    if (contextClears > 0) parts.push(`${contextClears} 次上下文清理（context.clear）`);
+    if (contextUndos > 0) {
+      parts.push(`${contextUndos} 次撤销${contextUndoItems > 0 ? `（共 ${contextUndoItems} 条消息）` : ''}`);
+    }
+    disclose(`Kimi 日志里有 ${parts.join('与 ')}，Watch 不重建上下文投影：交接保留日志原文，可能比模型当时的上下文更多，需要时请在原生 Kimi 中核对`);
   }
   pairing.finish();
   return stripEmptyEvents(turns);
