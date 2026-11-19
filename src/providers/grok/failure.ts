@@ -37,6 +37,20 @@ export type GrokFailureCounts = {
   retryClasses: Map<string, number>;
   /** `retry_state.type === "failed"`（重试耗尽）的条数 */
   retryFailed: number;
+  /** 有重试记录的轮次数（`retry_state` 出现在该轮 `turn_completed` 之前） */
+  retryTurns: number;
+  /** 重试后仍以 `end_turn` 正常结束的轮次数 */
+  retryTurnsRecovered: number;
+  /** 重试耗尽（`type: "failed"`）的轮次数 */
+  retryTurnsExhausted: number;
+  /** 单轮最多的重试次数 */
+  maxRetriesInTurn: number;
+  /** 末尾没有对应 `turn_completed` 的重试条数（会话在轮次中途被结束） */
+  trailingRetries: number;
+  /** 当前轮尚未归属的重试条数（扫描内部状态，见 finalizeGrokRetryAttribution） */
+  pendingRetries: number;
+  /** 当前轮里已耗尽的重试条数（内部状态） */
+  pendingRetryFailed: number;
   /** `turn_completed` 总条数：逐轮用量能否挂回按它和助手轮数比对 */
   turnCompletions: number;
   /** 最后一条 `turn_completed` 的 `stop_reason`（由扫描侧填；用于判断尾部是否失败） */
@@ -55,6 +69,13 @@ export function createGrokFailureCounts(): GrokFailureCounts {
     retries: 0,
     retryClasses: new Map(),
     retryFailed: 0,
+    retryTurns: 0,
+    retryTurnsRecovered: 0,
+    retryTurnsExhausted: 0,
+    maxRetriesInTurn: 0,
+    trailingRetries: 0,
+    pendingRetries: 0,
+    pendingRetryFailed: 0,
     turnCompletions: 0,
     lastStopReason: '',
     unknownStops: new Map(),
@@ -65,11 +86,25 @@ const bump = (map: Map<string, number>, key: string): void => {
   map.set(key, (map.get(key) ?? 0) + 1);
 };
 
+/** 把当前轮累积的重试归属到这一轮（在读到 `turn_completed` 时调用）。 */
+function attributePendingRetries(counts: GrokFailureCounts, stop: string): void {
+  if (counts.pendingRetries > 0) {
+    counts.retryTurns += 1;
+    if (counts.pendingRetries > counts.maxRetriesInTurn) counts.maxRetriesInTurn = counts.pendingRetries;
+    if (counts.pendingRetryFailed > 0) counts.retryTurnsExhausted += 1;
+    else if (stop === 'end_turn') counts.retryTurnsRecovered += 1;
+  }
+  counts.pendingRetries = 0;
+  counts.pendingRetryFailed = 0;
+}
+
 /** 读一条 `turn_completed` 的结束原因；返回是否为失败 / 中止。 */
 export function readGrokTurnCompleted(update: Record<string, unknown>, counts: GrokFailureCounts): boolean {
   counts.turnCompletions += 1;
   const stop = typeof update.stop_reason === 'string' ? update.stop_reason : '';
   if (stop) counts.lastStopReason = stop;
+  // 重试按「出现在哪条 turn_completed 之前」归属到轮次（第 256 轮）。
+  attributePendingRetries(counts, stop);
   if (stop === 'error') {
     counts.errors += 1;
     return true;
@@ -93,9 +128,20 @@ export function grokTailFailed(counts: GrokFailureCounts): boolean {
  */
 export function readGrokRetryState(update: Record<string, unknown>, counts: GrokFailureCounts): void {
   counts.retries += 1;
+  counts.pendingRetries += 1;
   const kind = typeof update.error_type === 'string' && update.error_type.trim() ? update.error_type.trim() : '（未标注类型）';
   bump(counts.retryClasses, kind);
-  if (update.type === 'failed') counts.retryFailed += 1;
+  if (update.type === 'failed') {
+    counts.retryFailed += 1;
+    counts.pendingRetryFailed += 1;
+  }
+}
+
+/** 扫描结束后调用：末尾没有 `turn_completed` 的重试只能算「没有轮次结束记录」，不归属给任何轮。 */
+export function finalizeGrokRetryAttribution(counts: GrokFailureCounts): void {
+  counts.trailingRetries = counts.pendingRetries;
+  counts.pendingRetries = 0;
+  counts.pendingRetryFailed = 0;
 }
 
 function describeCountMap(map: Map<string, number>): string {
@@ -126,7 +172,17 @@ export function describeGrokFailures(counts: GrokFailureCounts, tailUnanswered =
   }
   if (counts.retries > 0) {
     const failed = counts.retryFailed > 0 ? `，其中 ${counts.retryFailed} 次已耗尽重试` : '';
-    parts.push(`另有 ${counts.retries} 次自动重试（${describeCountMap(counts.retryClasses)}${failed}）`);
+    let line = `另有 ${counts.retries} 次自动重试（${describeCountMap(counts.retryClasses)}${failed}）`;
+    if (counts.retryTurns > 0) {
+      const bits = [`单轮最多 ${counts.maxRetriesInTurn} 次`];
+      if (counts.retryTurnsRecovered > 0) bits.push(`${counts.retryTurnsRecovered} 轮重试后成功`);
+      if (counts.retryTurnsExhausted > 0) bits.push(`${counts.retryTurnsExhausted} 轮以耗尽重试收尾`);
+      line += `；这些重试分布在 ${counts.retryTurns} 轮里（${bits.join('，')}）`;
+    }
+    if (counts.trailingRetries > 0) {
+      line += `；末尾另有 ${counts.trailingRetries} 次重试没有对应的轮次结束记录`;
+    }
+    parts.push(line);
   }
   if (counts.unknownStops.size > 0) {
     parts.push(`另有 ${describeCountMap(counts.unknownStops)} 轮未识别的结束原因，Watch 暂不解析`);

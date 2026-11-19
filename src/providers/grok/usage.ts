@@ -4,7 +4,13 @@ import type { SessionRef, TokenUsage } from '../../core/types.js';
 import { escapeControlChars } from '../../core/display.js';
 import { parseJsonObject } from '../../core/jsonl.js';
 import { describeSessionReadFailure, isMissingPathError } from '../../core/read-text.js';
-import { createGrokFailureCounts, readGrokRetryState, readGrokTurnCompleted, type GrokFailureCounts } from './failure.js';
+import {
+  createGrokFailureCounts,
+  finalizeGrokRetryAttribution,
+  readGrokRetryState,
+  readGrokTurnCompleted,
+  type GrokFailureCounts,
+} from './failure.js';
 
 /**
  * 用量所在的旁路文件：与 `chat_history.jsonl` 同目录的 `updates.jsonl`。
@@ -186,6 +192,8 @@ export async function grokUpdateScan(updatesPath: string): Promise<GrokUpdateSca
     if (isMissingPathError(error)) return null;
     throw new Error(describeSessionReadFailure(updatesPath, error));
   }
+  // 末尾没有 turn_completed 的重试单独计数，不归属给任何轮（第 256 轮）。
+  finalizeGrokRetryAttribution(failures);
   return { usages, compactions, badLines, failures, rewinds, imagesDropped, unknownUpdates };
 }
 
