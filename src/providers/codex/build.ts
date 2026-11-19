@@ -9,7 +9,7 @@ import { escapeControlChars } from '../../core/display.js';
 import { providerDirectoryFromEnv } from '../../core/provider-directory.js';
 import { asJsonObject, parseJsonObject } from '../../core/jsonl.js';
 import { verifyWrittenTurns } from '../../core/verify.js';
-import { ENCRYPTED_THINKING, codexToolInput, extractExecCommand, isCodexExecScript, toCodexToolName, turnHasContent } from '../../core/rich.js';
+import { ENCRYPTED_THINKING, codexToolInput, extractExecCommand, isCodexExecScript, toCodexToolName, turnHasContent, usableBashWorkdir } from '../../core/rich.js';
 import { codexUserTurnContent } from './media.js';
 import { describePathReadFailureReason, isMissingPathError, iterateFileLines } from '../../core/read-text.js';
 import { isLegacyEventMsgRollout, parseCodexSession, parseToolInput } from './parse.js';
@@ -493,9 +493,16 @@ export function buildCodexLines(
   return lines;
 }
 
-function wrapExecInput(name: string, input: string, cwd: string): string {
+/** 来源工具入参里可以带进 `exec_command.workdir` 的绝对路径工作目录（其余形状由披露负责）。 */
+function sourceExecWorkdir(ev: ProcessEvent): string | undefined {
+  const input = ev.input;
+  if (!input || typeof input !== 'object' || Array.isArray(input)) return undefined;
+  return usableBashWorkdir((input as Record<string, unknown>).workdir);
+}
+
+function wrapExecInput(name: string, input: string, cwd: string, workdir = cwd): string {
   if (name !== 'exec' || isCodexExecScript(input)) return input;
-  return `const r = await tools.exec_command({cmd:${JSON.stringify(input)},workdir:${JSON.stringify(cwd)},yield_time_ms:10000,max_output_tokens:4000}); text(r.output);\n`;
+  return `const r = await tools.exec_command({cmd:${JSON.stringify(input)},workdir:${JSON.stringify(workdir)},yield_time_ms:10000,max_output_tokens:4000}); text(r.output);\n`;
 }
 
 /**
@@ -506,7 +513,8 @@ function wrapExecInput(name: string, input: string, cwd: string): string {
  */
 export function expectCodexToolCall(ev: ProcessEvent, cwd: string): { name: unknown; input: unknown } {
   const name = toCodexToolName(ev.name ?? 'tool');
-  const written = wrapExecInput(name, codexToolInput(ev, name), cwd);
+  const workdir = sourceExecWorkdir(ev) ?? cwd;
+  const written = wrapExecInput(name, codexToolInput(ev, name), cwd, workdir);
   const detail = name === 'exec' ? extractExecCommand(written) : written;
   return { name, input: parseToolInput(written) ?? detail };
 }
@@ -558,7 +566,7 @@ function emitCodexEvent(
     const name = toCodexToolName(ev.name ?? 'tool');
     // 写出的 input 与下面的回显必须同源：parser 用回读到的入参重建回显来识别并跳过它。
     const text = codexToolInput(ev, name);
-    const input = wrapExecInput(name, text, cwd);
+    const input = wrapExecInput(name, text, cwd, sourceExecWorkdir(ev) ?? cwd);
     push('response_item', {
       type: 'custom_tool_call',
       id: `ctc_${randomUUID().replace(/-/g, '')}`,
