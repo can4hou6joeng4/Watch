@@ -5,7 +5,7 @@ import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { parse as parseToml, type TomlTable } from 'smol-toml';
 import { appendFileAtomic, writeFileAtomic } from '../../core/atomic.js';
-import { escapeControlChars } from '../../core/display.js';
+import { clipCodePointsToWidth, escapeControlChars } from '../../core/display.js';
 import { providerDirectoryFromEnv } from '../../core/provider-directory.js';
 import { asJsonObject, parseJsonObject } from '../../core/jsonl.js';
 import { verifyWrittenTurns } from '../../core/verify.js';
@@ -577,7 +577,7 @@ function emitCodexEvent(
       internal_chat_message_metadata_passthrough: meta,
     });
     const shown = name === 'exec' ? text : `${name}: ${text}`;
-    pushCommentary(push, shown.length > 200 ? `${shown.slice(0, 199)}…` : shown, turnId, true);
+    pushCommentary(push, clipCodePointsToWidth(shown, 200), turnId, true);
     return;
   }
   if (ev.kind === 'tool_result') {

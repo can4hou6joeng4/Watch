@@ -1,5 +1,6 @@
 import { ToolResultPairing } from '../../core/tool-pairing.js';
 import { asJsonObject } from '../../core/jsonl.js';
+import { clipCodePoints } from '../../core/display.js';
 import { iterateFileLines } from '../../core/read-text.js';
 import {
   ensureAssistant,
@@ -189,7 +190,7 @@ export async function parsePiSession(ref: SessionRef): Promise<UnifiedTurn[]> {
       const name = typeof msg.toolName === 'string' ? msg.toolName : undefined;
       pairing.result({
         kind: 'tool_result',
-        summary: extracted.text.slice(0, 80) || 'tool result',
+        summary: clipCodePoints(extracted.text, 80).text || 'tool result',
         detail: extracted.text || undefined,
         timestamp,
         provider: 'pi',
@@ -298,7 +299,7 @@ export async function parsePiSession(ref: SessionRef): Promise<UnifiedTurn[]> {
     const last = stripped.at(-1)!;
     pushEvent(last, {
       kind: 'text',
-      summary: `${WATCH_CONTEXT_DISCLOSURE_PREFIX}${argumentErrorNote.slice(0, 120)}]`,
+      summary: `${WATCH_CONTEXT_DISCLOSURE_PREFIX}${clipCodePoints(argumentErrorNote, 120).text}]`,
       detail: `${WATCH_CONTEXT_DISCLOSURE_PREFIX}${argumentErrorNote}]`,
       timestamp: last.timestamp,
       provider: 'pi',
@@ -309,7 +310,7 @@ export async function parsePiSession(ref: SessionRef): Promise<UnifiedTurn[]> {
     const last = stripped.at(-1)!;
     pushEvent(last, {
       kind: 'text',
-      summary: `${WATCH_CONTEXT_DISCLOSURE_PREFIX}${topLevelNote.slice(0, 120)}]`,
+      summary: `${WATCH_CONTEXT_DISCLOSURE_PREFIX}${clipCodePoints(topLevelNote, 120).text}]`,
       detail: `${WATCH_CONTEXT_DISCLOSURE_PREFIX}${topLevelNote}]`,
       timestamp: last.timestamp,
       provider: 'pi',
@@ -319,7 +320,7 @@ export async function parsePiSession(ref: SessionRef): Promise<UnifiedTurn[]> {
   if (preUserNote && stripped.length > 0) {
     const last = stripped.at(-1)!;
     const text = `${WATCH_CONTEXT_DISCLOSURE_PREFIX}${preUserNote}]`;
-    pushEvent(last, { kind: 'text', summary: text.slice(0, 120), detail: text, timestamp: last.timestamp, provider: 'pi' });
+    pushEvent(last, { kind: 'text', summary: clipCodePoints(text, 120).text, detail: text, timestamp: last.timestamp, provider: 'pi' });
   }
   const messageNote = unparsedMessageNote(unparsedMessages);
   if (messageNote && stripped.length > 0) {
@@ -327,7 +328,7 @@ export async function parsePiSession(ref: SessionRef): Promise<UnifiedTurn[]> {
     const text = `${WATCH_CONTEXT_DISCLOSURE_PREFIX}${messageNote}]`;
     pushEvent(last, {
       kind: 'text',
-      summary: text.slice(0, 120),
+      summary: clipCodePoints(text, 120).text,
       detail: text,
       timestamp: last.timestamp,
       provider: 'pi',

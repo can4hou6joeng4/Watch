@@ -1,4 +1,5 @@
 import { asJsonObject, parseJsonObject } from '../../core/jsonl.js';
+import { clipCodePointsToWidth } from '../../core/display.js';
 import type { ProcessEvent } from '../../core/types.js';
 import { truncateDetail } from '../claude/events.js';
 
@@ -26,7 +27,7 @@ export function codexLineToProcessEvents(line: string): ProcessEvent[] {
         {
           ...base,
           kind: 'thinking',
-          summary: text ? `思考: ${text.split('\n')[0].slice(0, 80)}` : '思考中…（加密）',
+          summary: text ? `思考: ${clipCodePointsToWidth(text.split('\n')[0], 80)}` : '思考中…（加密）',
           detail: text ? truncateDetail(text) : undefined,
         },
       ];

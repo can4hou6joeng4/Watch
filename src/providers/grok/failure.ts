@@ -1,4 +1,4 @@
-import { escapeControlChars } from '../../core/display.js';
+import { clipCodePoints, escapeControlChars } from '../../core/display.js';
 import { WATCH_CONTEXT_DISCLOSURE_PREFIX } from '../../core/rich.js';
 import type { ProcessEvent } from '../../core/types.js';
 
@@ -205,7 +205,7 @@ export function grokFailureDisclosure(
   return {
     kind: 'text',
     timestamp,
-    summary: `${WATCH_CONTEXT_DISCLOSURE_PREFIX}${text.slice(0, 120)}]`,
+    summary: `${WATCH_CONTEXT_DISCLOSURE_PREFIX}${clipCodePoints(text, 120).text}]`,
     detail: `${WATCH_CONTEXT_DISCLOSURE_PREFIX}${text}]`,
     provider: 'grok',
     // 结构化标记：`describeUnansweredTail()` 据此把「可能还在生成」换成已确认的失败 / 中止。
@@ -235,7 +235,7 @@ export function grokUsageMismatchDisclosure(
   return {
     kind: 'text',
     timestamp,
-    summary: `${WATCH_CONTEXT_DISCLOSURE_PREFIX}${text.slice(0, 120)}]`,
+    summary: `${WATCH_CONTEXT_DISCLOSURE_PREFIX}${clipCodePoints(text, 120).text}]`,
     detail: `${WATCH_CONTEXT_DISCLOSURE_PREFIX}${text}]`,
     provider: 'grok',
   };

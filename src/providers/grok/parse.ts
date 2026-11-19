@@ -4,6 +4,7 @@ import { iterateFileLines } from '../../core/read-text.js';
 import { dirname, join } from 'node:path';
 import { ensureAssistant, formatUnknownTypeCounts, normalizeUserText, preUserRecordsNote, pushEvent, stripEmptyEvents, summarize, WATCH_CONTEXT_DISCLOSURE_PREFIX } from '../../core/rich.js';
 import { asJsonObject, parseJsonObject } from '../../core/jsonl.js';
+import { clipCodePoints } from '../../core/display.js';
 import type { ProcessEvent, SessionRef, UnifiedTurn } from '../../core/types.js';
 import { grokFailureDisclosure, grokTailFailed } from './failure.js';
 import { describeGrokCheckpoints, grokUpdateScan } from './usage.js';
@@ -210,7 +211,7 @@ export async function parseGrokSession(ref: SessionRef): Promise<UnifiedTurn[]> 
           name,
           callId,
           input: parseToolArguments(t.arguments),
-          summary: `${name}: ${typeof t.arguments === 'string' ? t.arguments.slice(0, 200) : JSON.stringify(t.arguments ?? {}).slice(0, 200)}`,
+          summary: `${name}: ${clipCodePoints(typeof t.arguments === 'string' ? t.arguments : JSON.stringify(t.arguments ?? {}), 200).text}`,
           detail: typeof t.arguments === 'string' ? t.arguments : JSON.stringify(t.arguments ?? {}),
           timestamp,
           provider: 'grok',

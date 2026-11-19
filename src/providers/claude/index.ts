@@ -9,7 +9,7 @@ import type { FileDigest } from '../../core/atomic.js';
 import { describeEmptySessionFile, describePathReadFailureReason, isMissingPathError, iterateFileLines, readTextHeadDetail } from '../../core/read-text.js';
 import type { TextHeadDetail } from '../../core/read-text.js';
 import { asJsonObject, parseJsonObject } from '../../core/jsonl.js';
-import { escapeControlChars } from '../../core/display.js';
+import { clipCodePoints, escapeControlChars } from '../../core/display.js';
 import { SessionLookupFailureError } from '../adapter.js';
 import { directoryWriteChecks } from '../directory-preflight.js';
 import type { ProviderAdapter } from '../adapter.js';
@@ -320,7 +320,7 @@ async function claudeFirstUserText(filePath: string): Promise<{ text: string | n
                 .join(' ')
             : '';
       const clean = text.replace(/\s+/g, ' ').trim();
-      if (clean) return { text: clean.slice(0, 80) };
+      if (clean) return { text: clipCodePoints(clean, 80).text };
     }
   } catch (error) {
     // 上面 stat 成功后文件仍可能读不出来（权限、I/O、边读边删），照样不能讲成「没有预览」

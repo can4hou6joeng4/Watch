@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
 import { normalizeUserText, OPENCODE_COMPACTION_SUMMARY_PREFIX, OPENCODE_SYNTHETIC_TEXT_PREFIX, OPENCODE_TOOL_FAILURE_PREFIX, unknownTypeLabel, unwrapMarkedToolInput, WATCH_CONTEXT_DISCLOSURE_PREFIX } from '../../core/rich.js';
+import { clipCodePoints } from '../../core/display.js';
 import { isoFromEpochMs } from '../../core/time.js';
 import type { ProcessEvent, SessionRef, TokenUsage, UnifiedTurn } from '../../core/types.js';
 import { detectOpencodeLayout, opencodeDbPath, opencodeDbSqliteError, probeOpencodeDbFile } from './paths.js';
@@ -247,7 +248,7 @@ function v1AssistantErrorEvent(
   return {
     kind: 'text',
     timestamp,
-    summary: `${WATCH_CONTEXT_DISCLOSURE_PREFIX}助手请求失败${parsed.label}：${parsed.message.slice(0, 120)}]`,
+    summary: `${WATCH_CONTEXT_DISCLOSURE_PREFIX}助手请求失败${parsed.label}：${clipCodePoints(parsed.message, 120).text}]`,
     detail: `${WATCH_CONTEXT_DISCLOSURE_PREFIX}助手请求失败${parsed.label}：${parsed.message}]`,
     provider: 'opencode',
   };
@@ -318,7 +319,7 @@ function partToEvents(
       name: toolName,
       callId,
       input,
-      summary: `${unfinished ? '[未完成工具调用] ' : ''}${toolName} ${JSON.stringify(input).slice(0, 200)}`,
+      summary: `${unfinished ? '[未完成工具调用] ' : ''}${toolName} ${clipCodePoints(JSON.stringify(input), 200).text}`,
       provider: 'opencode',
     });
     const errored = part.state?.status === 'error';
@@ -342,7 +343,7 @@ function partToEvents(
         timestamp: isoFromEpochMs(baseTime),
         callId,
         detail: typeof output === 'string' ? output : JSON.stringify(output),
-        summary: typeof output === 'string' ? output : JSON.stringify(output).slice(0, 200),
+        summary: typeof output === 'string' ? output : clipCodePoints(JSON.stringify(output), 200).text,
         provider: 'opencode',
         // 原生 `state.status === 'error'`：失败的文件写入不进「改动概览」。
         // `unfinished`（Watch 自己写的「来源未记录结果」）不算失败——那条根本没执行，
@@ -1127,7 +1128,7 @@ function v2UserAttachmentEvents(
         events.push({
           kind: 'text',
           timestamp,
-          summary: `[技能已激活：${skill.name}] ${text.slice(0, 160)}`.trim(),
+          summary: `[技能已激活：${skill.name}] ${clipCodePoints(text, 160).text}`.trim(),
           detail: text,
           provider: 'opencode',
         });
@@ -1188,7 +1189,7 @@ function v2AssistantErrorEvent(
   return {
     kind: 'text',
     timestamp,
-    summary: `${WATCH_CONTEXT_DISCLOSURE_PREFIX}助手请求失败${label}：${err.message.slice(0, 120)}]`,
+    summary: `${WATCH_CONTEXT_DISCLOSURE_PREFIX}助手请求失败${label}：${clipCodePoints(err.message, 120).text}]`,
     detail: `${WATCH_CONTEXT_DISCLOSURE_PREFIX}助手请求失败${label}：${err.message}]`,
     provider: 'opencode',
   };
@@ -1274,7 +1275,7 @@ function v2AssistantTurn(
         name: toolName,
         callId,
         input,
-        summary: `${toolName} ${inputText.slice(0, 200)}`,
+        summary: `${toolName} ${clipCodePoints(inputText, 200).text}`,
         provider: 'opencode',
       });
       const output = v2ToolResultText(item.state, unknown);
@@ -1284,7 +1285,7 @@ function v2AssistantTurn(
           timestamp,
           callId,
           detail: output,
-          summary: output.slice(0, 200),
+          summary: clipCodePoints(output, 200).text,
           provider: 'opencode',
           // 原生 `state.status === 'error'`：失败的文件写入不进「改动概览」。
           ...(item.state?.status === 'error' ? { failed: true } : {}),
@@ -1359,7 +1360,7 @@ function v2AuxEvents(
       ];
       const out = v2ShellOutputText(data.output, unknown);
       if (out) {
-        events.push({ kind: 'tool_result', timestamp, callId, detail: out, summary: out.slice(0, 200), provider: 'opencode' });
+        events.push({ kind: 'tool_result', timestamp, callId, detail: out, summary: clipCodePoints(out, 200).text, provider: 'opencode' });
       }
       return events;
     }
@@ -1449,7 +1450,7 @@ function v2AuxEvents(
         {
           kind: 'text',
           timestamp,
-          summary: `[工作目录已切换] ${directory.slice(0, 200)}`,
+          summary: `[工作目录已切换] ${clipCodePoints(directory, 200).text}`,
           detail: `工作目录已切换到 ${directory}。`,
           provider: 'opencode',
         },
@@ -1469,7 +1470,7 @@ function v2AuxEvents(
         {
           kind: 'text',
           timestamp,
-          summary: `[技能已激活：${data.name}] ${data.text.slice(0, 160)}`.trim(),
+          summary: `[技能已激活：${data.name}] ${clipCodePoints(data.text, 160).text}`.trim(),
           detail: data.text,
           provider: 'opencode',
         },
@@ -1479,7 +1480,7 @@ function v2AuxEvents(
     case 'synthetic': {
       const text = typeof data.text === 'string' ? data.text : '';
       const label = row.type === 'system' ? '系统事件' : '系统生成事件';
-      return [{ kind: 'text', timestamp, summary: `[${label}] ${text.slice(0, 160)}`.trim(), detail: text, provider: 'opencode' }];
+      return [{ kind: 'text', timestamp, summary: `[${label}] ${clipCodePoints(text, 160).text}`.trim(), detail: text, provider: 'opencode' }];
     }
     default:
       return null;

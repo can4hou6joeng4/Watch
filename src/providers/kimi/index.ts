@@ -13,7 +13,7 @@ import {
   isMissingPathError,
   iterateFileLines,
 } from '../../core/read-text.js';
-import { escapeControlChars } from '../../core/display.js';
+import { clipCodePoints, escapeControlChars } from '../../core/display.js';
 import { SessionLookupFailureError } from '../adapter.js';
 import { directoryWriteChecks } from '../directory-preflight.js';
 import type { ProviderAdapter } from '../adapter.js';
@@ -124,7 +124,7 @@ async function firstUserText(filePath: string): Promise<{ text: string | null; e
         if (b?.type === 'text') {
           const text = typeof b.text === 'string' ? b.text : '';
           const clean = text.replace(/\s+/g, ' ').trim();
-          if (clean) return { text: clean.slice(0, 80) };
+          if (clean) return { text: clipCodePoints(clean, 80).text };
         }
       }
     }

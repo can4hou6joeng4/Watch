@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { ToolResultPairing } from '../../core/tool-pairing.js';
 import { iterateFileLines } from '../../core/read-text.js';
+import { clipCodePointsToWidth } from '../../core/display.js';
 import { asJsonObject, parseJsonObject } from '../../core/jsonl.js';
 import {
   ENCRYPTED_THINKING,
@@ -744,7 +745,7 @@ function isGeneratedCommentaryMirror(turn: UnifiedTurn, text: string): boolean {
   if (event.kind !== 'tool_call') return false;
   const detail = event.detail ?? event.summary;
   const shown = event.name === 'exec' ? detail : `${event.name ?? 'tool'}: ${detail}`;
-  const clipped = shown.length > 200 ? `${shown.slice(0, 199)}…` : shown;
+  const clipped = clipCodePointsToWidth(shown, 200);
   return text.trim() === clipped.trim();
 }
 

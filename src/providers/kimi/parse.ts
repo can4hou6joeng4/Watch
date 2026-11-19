@@ -1,6 +1,7 @@
 import { ToolResultPairing } from '../../core/tool-pairing.js';
 import { iterateFileLines } from '../../core/read-text.js';
 import { asJsonObject, parseJsonObject } from '../../core/jsonl.js';
+import { clipCodePoints } from '../../core/display.js';
 import { isoFromEpochMs } from '../../core/time.js';
 import { ensureAssistant, formatUnknownTypeCounts, KIMI_COMPACTION_SUMMARY_PREFIX, normalizeUserText, pushEvent, stripEmptyEvents, summarize, unknownTypeLabel, WATCH_CONTEXT_DISCLOSURE_PREFIX } from '../../core/rich.js';
 import type { ProcessEvent, SessionRef, TokenUsage, UnifiedTurn } from '../../core/types.js';
@@ -336,7 +337,7 @@ export async function parseKimiSession(ref: SessionRef): Promise<UnifiedTurn[]> 
     const note = `${WATCH_CONTEXT_DISCLOSURE_PREFIX}${text}]`;
     pushEvent(carrier, {
       kind: 'text',
-      summary: note.slice(0, 120),
+      summary: clipCodePoints(note, 120).text,
       detail: note,
       timestamp: carrier.timestamp,
       provider: 'kimi',

@@ -1,10 +1,13 @@
 import { asJsonObject, parseJsonObject } from '../../core/jsonl.js';
+import { clipCodePoints, clipCodePointsToWidth } from '../../core/display.js';
 import type { ProcessEvent } from '../../core/types.js';
 
 const MAX_DETAIL = 500;
 
-export const truncateDetail = (s: string): string =>
-  s.length > MAX_DETAIL ? `${s.slice(0, MAX_DETAIL)}…` : s;
+export const truncateDetail = (s: string): string => {
+  const clipped = clipCodePoints(s, MAX_DETAIL);
+  return clipped.truncated ? `${clipped.text}…` : s;
+};
 
 /** 工具调用的单行摘要：按工具挑最有信息量的参数 */
 export function toolCallSummary(name: string, input: unknown): string {
@@ -65,7 +68,7 @@ export function claudeLineToProcessEvents(line: string): ProcessEvent[] {
         events.push({
           ...base,
           kind: 'thinking',
-          summary: encrypted || !text ? '思考中…（加密）' : `思考: ${text.split('\n')[0].slice(0, 80)}`,
+          summary: encrypted || !text ? '思考中…（加密）' : `思考: ${clipCodePointsToWidth(text.split('\n')[0], 80)}`,
           detail: encrypted ? undefined : truncateDetail(text),
         });
         break;

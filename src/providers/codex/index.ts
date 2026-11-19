@@ -1,7 +1,7 @@
 import { execFile } from 'node:child_process';
 import { quoteCommandArg } from '../../core/shell-quote.js';
 import { describeDetectFailure, isCommandMissing, resolveCli } from '../../core/platform.js';
-import { escapeControlChars } from '../../core/display.js';
+import { clipCodePoints, escapeControlChars } from '../../core/display.js';
 import { createReadStream } from 'node:fs';
 import { lstat, mkdtemp, open, readdir, readFile, rm, stat } from 'node:fs/promises';
 import { homedir, tmpdir } from 'node:os';
@@ -478,7 +478,7 @@ async function codexFirstUserText(filePath: string): Promise<{ text: string | nu
       }
       const clean = text.replace(/\s+/g, ' ').trim();
       if (clean && !clean.startsWith('<environment_context>') && !clean.startsWith('<user_instructions>')) {
-        return { text: clean.slice(0, 80) };
+        return { text: clipCodePoints(clean, 80).text };
       }
     }
   } catch (error) {

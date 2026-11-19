@@ -1,4 +1,4 @@
-import { escapeControlChars } from '../../core/display.js';
+import { clipCodePoints, escapeControlChars } from '../../core/display.js';
 import { WATCH_CONTEXT_DISCLOSURE_PREFIX } from '../../core/rich.js';
 import type { ProcessEvent } from '../../core/types.js';
 
@@ -130,7 +130,7 @@ export function claudeFailureDisclosure(counts: ClaudeFailureCounts, timestamp: 
   return {
     kind: 'text',
     timestamp,
-    summary: `${WATCH_CONTEXT_DISCLOSURE_PREFIX}${text.slice(0, 120)}]`,
+    summary: `${WATCH_CONTEXT_DISCLOSURE_PREFIX}${clipCodePoints(text, 120).text}]`,
     detail: `${WATCH_CONTEXT_DISCLOSURE_PREFIX}${text}]`,
     provider: 'claude',
   };
