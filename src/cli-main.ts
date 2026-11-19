@@ -736,7 +736,7 @@ async function cmdStatus(cwd: string, json: boolean, chain?: string): Promise<vo
     // 排在 `--cwd` 不可用之前：项目目录被删掉、链尾会话文件却还在 ~/.claude 下是最常见的一种，
     // 这时「链尾记录的是谁、该修哪个文件」比「--cwd 写错了」更对症（两句警告都会打出来）
     console.log(
-      `未发现可列出的原生会话；链尾记录的是 ${chainTip.provider} 会话 ${chainTip.ref.sessionId}，` +
+      `未发现可列出的原生会话；链尾记录的是 ${chainTip.provider} 会话 ${escapeControlChars(chainTip.ref.sessionId)}，` +
         `其文件当前不可用（原因见上方警告）——可先恢复该文件，或 ${rebindHint(chainTip.provider)}`,
     );
   } else if (!tips.length && cwdIssue) {
@@ -2796,7 +2796,7 @@ async function cmdChain(cwd: string, json: boolean, action?: string, a?: string,
         const here = current && c.id === current.id ? ' ← 当前' : '';
         const tip = tips.get(c.id);
         const tipText = tip
-          ? `  → ${tip.provider}:${tip.sessionId}${
+          ? `  → ${tip.provider}:${escapeControlChars(tip.sessionId)}${
               tip.missing
                 ? tip.error && !tip.unreadable
                   ? tip.compressedEmpty
@@ -3317,7 +3317,7 @@ async function cmdUsage(cwd: string, json: boolean, chain?: string): Promise<voi
       const note = notes.length ? `（${notes.join('；')}）` : '';
       console.log(
         // 打全 id：截成 8 位再省略号就复制不了，接不上 watch adopt --session / 原生 resume
-        `  ${item.provider.padEnd(8)} ${item.sessionId}  in=${u.inputTokens}  out=${u.outputTokens}${note}`,
+        `  ${item.provider.padEnd(8)} ${escapeControlChars(item.sessionId)}  in=${u.inputTokens}  out=${u.outputTokens}${note}`,
       );
     }
   } catch (error) {
