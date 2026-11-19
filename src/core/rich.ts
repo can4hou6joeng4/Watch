@@ -3,6 +3,34 @@ import type { ProcessEvent, UnifiedTurn } from './types.js';
 import { commandArgv, formatCommandArgv } from './command-argv.js';
 import { escapeControlChars, hasControlChars } from './display.js';
 
+/**
+ * 未知类型 / 角色的展示名：先按原文码点截到 `limit` 再加省略号，然后转义控制字符。
+ * 类型名来自会话文件，属于不可信字符串：不转义会把 ESC / CSI 带进目标会话与警告，不截断
+ * 会让一条披露被单个超长类型撑爆。先截断再转义，避免把 `\u001B` 这类转义序列从中间切开
+ * （先转义后截断会留下 `\u001` 这样的半截序列）。
+ */
+export function unknownTypeLabel(value: string, limit = 64): string {
+  const chars = [...value];
+  return escapeControlChars(chars.length > limit ? `${chars.slice(0, limit).join('')}…` : value);
+}
+
+/**
+ * 「type×n」有界汇总（未知块 / 片段正文占位与上下文披露共用）：最多展示 8 种，余量写
+ * 「另有 N 种」；计数为 1 时只显示类型名。类型名经 `unknownTypeLabel()` 转义与截断。
+ * 不做上限时，损坏日志里的类型名集合能把一行披露撑成巨串。
+ */
+export function formatUnknownTypeCounts(counts: Map<string, number>, limit = 64): string {
+  const entries = [...counts.entries()];
+  const shown = entries
+    .slice(0, 8)
+    .map(([type, n]) => {
+      const label = unknownTypeLabel(type, limit);
+      return n > 1 ? `${label}×${n}` : label;
+    });
+  if (entries.length > 8) shown.push(`另有 ${entries.length - 8} 种`);
+  return shown.join('、');
+}
+
 export const ENCRYPTED_THINKING = '思考中…（加密）';
 
 /**
