@@ -3,6 +3,7 @@ import { describeWriteFailureReason, type FileDigest } from './core/atomic.js';
 import { assertTargetUnchanged, blockedHint, describeSourceChangedDuringHandoff, diffTurns, HandoffBlockedError, snapshotSourceState, type SourceStateSnapshot } from './core/handoff.js';
 import { describeAttachmentLoss, describeBashControlLoss, describeTextEventLoss, describeToolFailureLoss, describeDanglingToolCalls, describeUnansweredTail, describeResumeTargetUnfinished, dedupeCallEvents, findContextDisclosure, countPairedTurnsMissingEvents } from './core/rich.js';
 import { Store, defaultDbPath, describeStoreErrorReason, describeStoreOpenFailure } from './core/store.js';
+import { clipCodePoints } from './core/display.js';
 import { IS_WIN, normalizePath, stripDevicePrefix } from './core/platform.js';
 import { trimUserKey } from './core/cli-input.js';
 import type { SessionRef, TokenUsage, UnifiedTurn } from './core/types.js';
@@ -806,9 +807,11 @@ export async function openSession(
         turnCount: turns.length,
         userTurnCount: userTurns.length,
         assistantTurnCount: assistantTurns.length,
-        firstUserPrompt: userTurns.at(0)?.text.slice(0, 160),
-        lastUserPrompt: userTurns.at(-1)?.text.slice(0, 160),
-        lastAssistantReply: assistantTurns.at(-1)?.text.slice(0, 240),
+        firstUserPrompt: userTurns.at(0) ? clipCodePoints(userTurns[0].text, 160).text : undefined,
+        lastUserPrompt: userTurns.at(-1) ? clipCodePoints(userTurns[userTurns.length - 1].text, 160).text : undefined,
+        lastAssistantReply: assistantTurns.at(-1)
+          ? clipCodePoints(assistantTurns[assistantTurns.length - 1].text, 240).text
+          : undefined,
         hasThinking,
         hasTools: toolEvents.length > 0,
         hasAttachments,
