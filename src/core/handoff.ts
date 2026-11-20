@@ -1657,7 +1657,13 @@ export async function handoff(
     let resumeTurns: UnifiedTurn[];
     try {
       resumeTurns = await target.parse(ref);
-    } catch {
+    } catch (error) {
+      // 读不出来不能静默返回 false：这条会话正是用户要 resume 的那一条，而「没有未完成轮次」
+      // 与「读不出来所以没查」在 warnings 里不能长得一样
+      warnings.push(
+        `目标会话 ${ref.sessionId}（${displayName}）读不出内容，无法确认它是否停在做了一半的一轮上：` +
+          `${describeReadFailureOrSelf(error)}；先确认这个会话文件可读再 resume`,
+      );
       return false;
     }
     warnings.push(
@@ -1683,11 +1689,14 @@ export async function handoff(
       const boundTarget = opts?.forceNew ? null : pairedRef(history, targetId);
       if (boundTarget) {
         try {
+          // 指纹必须早于 parse：两者之间被外部追加时，快照会含新内容而 destTurns 是旧的，
+          // 按旧内容算出的增量会重复追加，写前比对却看不出差异（与 open --from 同一规则）
+          destDigest = (await target.contentFingerprint?.(boundTarget)) ?? null;
           destTurns = await target.parse(boundTarget);
           into = boundTarget;
-          destDigest = (await target.contentFingerprint?.(boundTarget)) ?? null;
         } catch (error) {
           into = undefined;
+          destDigest = null;
           // 「解析失败」把 ENOENT（文件被删）、压缩副本（原路径不在、同名 .zst 在）与格式问题
           // 讲成同一件事：压缩时文件还在，下一步是让原生展开，而不是重建历史
           const copy = compressedCopy(await sessionFilePresence(boundTarget.filePath));
@@ -1805,11 +1814,13 @@ export async function handoff(
     }
     if (into === undefined && mtimeTip.provider === targetId) {
       try {
+        // 与链绑定分支同一顺序：先指纹再 parse
+        destDigest = (await target.contentFingerprint?.(mtimeTip.ref)) ?? null;
         destTurns = await target.parse(mtimeTip.ref);
         into = mtimeTip.ref;
-        destDigest = (await target.contentFingerprint?.(mtimeTip.ref)) ?? null;
       } catch (error) {
         into = undefined;
+        destDigest = null;
         const copy = compressedCopy(await sessionFilePresence(mtimeTip.ref.filePath));
         warnings.push(
           copy

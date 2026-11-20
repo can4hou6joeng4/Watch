@@ -553,9 +553,12 @@ export async function openSession(
       try {
         srcTurns = await source.adapter.parse(source.found.ref);
       } catch (error) {
+        // 已经发生的降级（用量读取失败、坏行扫描失败等）不能因为这次读失败就丢掉：
+        // 与写入失败的 catch 同一条规则——失败不代表降级事实没发生
         return {
           ok: false,
           error: `来源会话 ${source.found.ref.sessionId}（${source.adapter.displayName}）读取失败：${describeReadFailureOrSelf(error)}；本次未写入任何内容`,
+          ...(warnings.length ? { warnings } : {}),
         };
       }
       // 整份来源的上下文差异不随增量裁剪；即使没有新轮次，也不能丢掉这条声明。
@@ -574,6 +577,11 @@ export async function openSession(
         '并入内容是否完整无法确认——先确认该文件可读再重试',
       );
       if (srcBadScanFailure) warnings.push(srcBadScanFailure);
+      // 写前快照必须在目标 parse **之前**取：parse 之后到写入之间还有坏行扫描等步骤，
+      // 期间被外部追加的内容会被算进快照，而 `dstTurns` 是旧的——diffTurns 据此判出的增量
+      // 会与已存在的记录重复，assertTargetUnchanged 却因为快照已含新内容而放行。
+      // 来源侧（上面的 srcSnapshot）同样是先快照再 parse。
+      const dstDigest = (await target.adapter.contentFingerprint?.(target.found.ref)) ?? null;
       let dstTurns: UnifiedTurn[];
       try {
         dstTurns = await target.adapter.parse(target.found.ref);
@@ -581,6 +589,7 @@ export async function openSession(
         return {
           ok: false,
           error: `目标会话 ${target.found.ref.sessionId}（${target.adapter.displayName}）读取失败：${describeReadFailureOrSelf(error)}；本次未写入任何内容`,
+          ...(warnings.length ? { warnings } : {}),
         };
       }
       // 目标自身的上下文差异（OpenCode 回退标记 / Pi context_edit / Codex compacted 等）不在
@@ -626,7 +635,7 @@ export async function openSession(
             `目标会话 ${escapeControlChars(targetId)}（${target.adapter.displayName}）的${targetZeroByte}；` +
               (srcTurns.length === 0
                 ? `它原有的历史已经没了，而来源也没有可并入的内容——这次什么都没写；如果目标会话本该有内容，先从备份恢复该文件（Watch 不会替你重建历史）`
-                : `它原有的历史已经没了，本次并入的只有来源的内容——如果目标会话本该有内容，先从备份恢复该文件再重试（Watch 不会替你重建历史）`),
+                : `它原有的历史已经没了；如果这次写入成功，并入的只有来源的内容——如果目标会话本该有内容，先从备份恢复该文件再重试（Watch 不会替你重建历史）`),
           );
         }
       }
@@ -647,8 +656,6 @@ export async function openSession(
         '增量判定是否偏多无法确认——先确认该文件可读再重试',
       );
       if (dstBadScanFailure) warnings.push(dstBadScanFailure);
-      // 写前快照：与 handoff 一致，写入前再比一次（目标被外部写入则中止）
-      const dstDigest = (await target.adapter.contentFingerprint?.(target.found.ref)) ?? null;
       const outgoing = diffTurns(srcTurns, dstTurns);
       // `diffTurns` 按 role + 文本 + callId 对齐：目标已有一段同文本、但没有来源那份思考 /
       // 过程文本的回复时，这一轮被判成「已包含」而跳过——过程事件静默消失，`notes` 还会说
@@ -1170,6 +1177,9 @@ async function planOpenInProvider(
   const chainPaired = mapping ? findChainPaired(mapping, sourceProvider, sourceId, providerId, cwd) : null;
   if (chainPaired) {
     let pairTurns: UnifiedTurn[] | null = null;
+    // 写前指纹先于 parse（与 --from 目标侧同一规则）：期间外部追加的内容会进快照，
+    // 而按旧内容算出的 delta 会重复追加，守卫却看不出差异
+    let pairDigest: FileDigest | null = null;
     // 0 字节的配对目标 parse 会返回 0 轮，delta 等于全部来源轮次，于是静默落进内容复用/新建：
     // 用户只看到「已转入新会话」，不知道链上原本那一条的历史已经没了、链绑定仍指向它。
     const pairedEmpty = await zeroByteSessionReason(chainPaired);
@@ -1180,6 +1190,7 @@ async function planOpenInProvider(
       );
     } else {
       try {
+        pairDigest = (await target.contentFingerprint?.(chainPaired)) ?? null;
         pairTurns = await target.parse(chainPaired);
       } catch (error) {
         // 链上配对会话的文件可能已被删掉、截断或只剩压缩副本（doctor 的 brokenTips 报的正是
@@ -1214,7 +1225,6 @@ async function planOpenInProvider(
         );
         const pairContext = findContextDisclosure(pairTurns);
         if (pairContext) diagnostics?.push(pairContext.summary);
-        const snapshot = (await target.contentFingerprint?.(chainPaired)) ?? null;
         return {
           ...base,
           plan: {
@@ -1222,7 +1232,7 @@ async function planOpenInProvider(
             targetRef: chainPaired,
             turns: delta,
             merged: delta.length,
-            snapshot,
+            snapshot: pairDigest,
             note:
               delta.length === 0
                 ? `回到链上 ${target.displayName} 会话 ${chainPaired.sessionId}，无需并入`
@@ -1302,6 +1312,9 @@ async function planOpenInProvider(
     }
   }
   if (reuse) {
+    // 写前指纹先于 parse：两者之间被外部追加时，快照会含新内容而 destinationTurns 是旧的，
+    // delta 会重复追加且 assertTargetUnchanged 放行
+    const snapshot = (await target.contentFingerprint?.(reuse)) ?? null;
     let destinationTurns: UnifiedTurn[];
     try {
       // 扫描时刚解析成功过；这里再读失败说明文件正被并发改写（半截写入 / 被删），
@@ -1324,7 +1337,6 @@ async function planOpenInProvider(
     warnResumeTargetUnfinished(destinationTurns, `目标会话 ${reuse.sessionId}（${target.displayName}）`, delta.length, (msg) =>
       diagnostics?.push(msg),
     );
-    const snapshot = (await target.contentFingerprint?.(reuse)) ?? null;
     return {
       ...base,
       plan: {
