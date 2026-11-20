@@ -1,5 +1,6 @@
 import path from 'node:path';
 import { parseArgs } from 'node:util';
+import { closestCommand, closestFlag } from './core/cli-commands.js';
 import { trimUserKey } from './core/cli-input.js';
 import { escapeControlChars } from './core/display.js';
 import { createOfficialCodexImport } from './providers/codex/official-import.js';
@@ -88,7 +89,9 @@ function validateImportArgs(args: string[]): void {
       if (inline === undefined) continue;
       throw new Error(`${flag} 不接受取值，写成 ${flag} 即可；可用: ${IMPORT_USAGE_HINT}`);
     }
-    throw new Error(`未知参数: ${arg}；可用: ${IMPORT_USAGE_HINT}`);
+    // 与主 CLI 同一条规则：只在唯一的近邻（或唯一前缀，如 `--desktop`）上给建议，否则只列可用项
+    const near = closestFlag(arg, [...IMPORT_BOOLEAN_FLAGS, ...IMPORT_VALUE_FLAGS]);
+    throw new Error(`未知参数: ${arg}${near ? `；最接近的是 ${near}` : ''}；可用: ${IMPORT_USAGE_HINT}`);
   }
 }
 
@@ -125,8 +128,9 @@ export async function runImportCodex(args: string[]): Promise<void> {
     // 子命令拼错与「少给位置参数」以前落到同一条整页用法：用户得逐字比对六条子命令才知道
     // `prepr` 是 `prepare` 打错，还是确实少给了一个参数。两种分开说，与 `cmdChain` 对齐。
     if (action && !(IMPORT_ACTIONS as readonly string[]).includes(action)) {
+      const near = closestCommand(action, IMPORT_ACTIONS);
       throw new Error(
-        `未知的 import-codex 子命令: ${action}；可用: ${IMPORT_ACTIONS.join(' / ')}（详见 docs/import-codex.md）`,
+        `未知的 import-codex 子命令: ${action}${near ? `；最接近的是 ${near}` : ''}；可用: ${IMPORT_ACTIONS.join(' / ')}（详见 docs/import-codex.md）`,
       );
     }
     if (!action) {
