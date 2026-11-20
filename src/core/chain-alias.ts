@@ -89,9 +89,10 @@ export async function aliasChainGroupWarning(
     // 而这正是这次写入最需要核对的事。链记录已经写进去了，只能把「没查成」讲清楚。
     return (
       `无法确认 ${escapeControlChars(cwd)} 的其它写法下是否已有链（本地库查询失败：${describeStoreErrorReason(error)}）：` +
-      '这次写的链记录只在当前 --cwd 的写法下可见——同一个目录换成另一种写法（软链、/private 前缀、尾斜杠）' +
+      '这次写的链记录只在当前 --cwd 的写法下可见——同一个目录换成另一种写法（软链、/private 与 /var 前缀、名字大小写）' +
       '在本地库里是另一个目录，两组链互相看不到。先按上面的原因处理本地库，' +
-      `或用当初建链时的 --cwd 原字符串重跑同一条命令核对${cwdControlCharsNote(cwd)}`
+      '再用其它写法逐个执行只读的 watch chain list --cwd <写法> 核对（不会新建链，也不需要重跑写入命令）' +
+      cwdControlCharsNote(cwd)
     );
   }
   const { same } = await splitChainsElsewhere(rows, cwd);
