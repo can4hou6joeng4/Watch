@@ -674,7 +674,7 @@ dependencies = [
 
 [[package]]
 name = "desktop"
-version = "0.1.221"
+version = "0.1.222"
 dependencies = [
  "serde_json",
  "tauri",
