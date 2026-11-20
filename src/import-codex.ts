@@ -28,6 +28,22 @@ const IMPORT_POSITIONAL_HINT: Record<string, string> = {
 };
 
 /**
+ * `watch import-codex --help` / `-h` / `help` 的用法文本。
+ *
+ * 这条路径在主 CLI 的参数解析之前就分派了，主 CLI 的 `--help` 到不了这里：以前三种写法分别得到
+ * 「未知参数: --help」「未知参数: -h」「未知的 import-codex 子命令: help」——用户来问怎么用，
+ * 得到的是「你写错了」。逐条说明直接取自缺位置参数时的那张表，两处不会各说各的。
+ */
+export function importUsageText(): string {
+  return [
+    '用法（官方单会话导入，详见 docs/import-codex.md）:',
+    ...IMPORT_ACTIONS.map((action) => `  ${IMPORT_POSITIONAL_HINT[action]}`),
+    '  写操作（prepare / confirm / project-prepare / project-confirm）必须带 --experimental；--cwd 只有 prepare 接受且必须是绝对路径',
+    '  任一子命令加 --json 输出单行 JSON；prepare 可加 --desktop-project',
+  ].join('\n');
+}
+
+/**
  * 项目关联计划的文本模式摘要（三行）。`projectName` / `projectId` 来自原生 app-server 的
  * `project/read` 响应，是 Codex 侧写入的名字——与本仓库所有插值进终端的字符串同属不可信输入，
  * 必须过 `escapeControlChars()`（ESC 能改颜色 / 窗口标题 / 清屏，而 stdout 没有第二个显示层）。
@@ -97,6 +113,13 @@ function validateImportArgs(args: string[]): void {
 
 export async function runImportCodex(args: string[]): Promise<void> {
   const json = args.includes('--json');
+  // 与主 CLI 的 `--help` 同一份契约：用法走 stderr、exit 1，`--json` 时补一行说明
+  if (args.includes('--help') || args.includes('-h') || args[0] === 'help') {
+    console.error(importUsageText());
+    if (json) console.log(JSON.stringify({ ok: false, error: '已打印用法到 stderr（--json 模式下不输出结果）' }));
+    process.exitCode = 1;
+    return;
+  }
   try {
     validateImportArgs(args);
     let parsed;
