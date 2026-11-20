@@ -26,6 +26,19 @@ import type { ProcessEvent, UnifiedTurn } from './types.js';
  * - **成败都要披露**：认得出是写入类工具却拿不到路径时计数，让人知道清单可能不全。
  */
 
+/**
+ * 磁盘对照的旁证：只用来判断「这条路径能不能核对、核对结果算哪一档」，
+ * **不渲染、不进 `--json` 的 `manifest.files`**——它是判据，不是清单内容。
+ */
+export type ManifestDiskProbe = {
+  /** 与 `files[].path` 同一个归一化路径 */
+  path: string;
+  /** 工具参数里至少有一次写的是绝对路径：这类路径的 ENOENT 是确定结论 */
+  absolute: boolean;
+  /** 补丁里按定义移除了它（`Delete File` / `Move` 的源）：不参与核对 */
+  removed: boolean;
+};
+
 export type WorkManifestFile = {
   /** 相对会话 cwd 的路径（不在 cwd 下时保留原样） */
   path: string;
@@ -33,6 +46,13 @@ export type WorkManifestFile = {
   writes: number;
   /** 编辑类调用次数（Edit / search_replace 这类局部修改） */
   edits: number;
+  /**
+   * 磁盘对照结论，仅在 `watch prompt` 拿到可用的会话目录并真的核对过时出现：
+   * `missing` = 按工具参数里写明的绝对路径核对，确实不在磁盘上；
+   * `unverified` = 无法确认（相对路径没找到，或探测本身出错）。
+   * 没有这一项表示核对过且还在，或者根本没核对——两者不能混为一谈，见 `manifestDisk`。
+   */
+  disk?: 'missing' | 'unverified';
 };
 
 export type WorkManifestCommand = {
@@ -89,6 +109,11 @@ export type WorkManifest = {
   failedAttemptsTruncated: boolean;
   /** 确有路径 / 命令被记录、但因上限被截断时为 true */
   truncated: boolean;
+  /**
+   * 磁盘对照的旁证（与 `files` 一一对应，顺序相同）。只供调用方判断核对口径，
+   * 不渲染也不进 `--json`——「是否来自绝对路径」是判据，不是清单内容。
+   */
+  diskProbes: ManifestDiskProbe[];
 };
 
 export type WorkManifestLimits = {
@@ -228,26 +253,57 @@ export function normalizeManifestPath(raw: string, cwd: string): string {
   return rel;
 }
 
-/** 从命令字符串里按固定标记取出补丁涉及的文件路径（Codex 的补丁格式）。 */
-export function extractPatchPaths(command: string): string[] {
-  const found: string[] = [];
+/**
+ * 补丁里的一条路径。`removed` 表示这条补丁**按定义**让该路径不再存在：
+ * `*** Delete File:` 的目标，以及带 `*** Move to:` 的 `*** Update File:` 源。
+ *
+ * 磁盘对照必须知道这件事：否则「删掉的文件」「移走的源文件」会被当成「改了但磁盘上没了」，
+ * 每一条都变成一句假警告。
+ */
+export type PatchEntry = { path: string; removed: boolean };
+
+/**
+ * 从命令字符串里按固定标记取出补丁涉及的路径（Codex 的补丁格式）。
+ *
+ * `*** Move to:` 只是目的路径，它前面最近的那条 `*** Update File:` 才是源：标记源为 removed。
+ * 补丁里没有 `*** Update File:` 时（少见）`*** Move to:` 单独出现，按普通路径处理。
+ */
+export function extractPatchEntries(command: string): PatchEntry[] {
+  const entries: PatchEntry[] = [];
+  let lastUpdate: PatchEntry | null = null;
   for (const line of command.split(/\r?\n/)) {
     const trimmed = line.trim();
     for (const marker of PATCH_MARKERS) {
-      if (trimmed.startsWith(marker)) {
-        const target = trimmed.slice(marker.length).trim();
-        if (target) found.push(target);
-        break;
+      if (!trimmed.startsWith(marker)) continue;
+      const target = trimmed.slice(marker.length).trim();
+      if (!target) break;
+      if (marker === '*** Delete File: ') {
+        entries.push({ path: target, removed: true });
+        lastUpdate = null;
+      } else if (marker === '*** Move to: ') {
+        if (lastUpdate) lastUpdate.removed = true;
+        entries.push({ path: target, removed: false });
+        lastUpdate = null;
+      } else {
+        const entry: PatchEntry = { path: target, removed: false };
+        entries.push(entry);
+        lastUpdate = marker === '*** Update File: ' ? entry : null;
       }
+      break;
     }
   }
-  return found;
+  return entries;
+}
+
+/** 只要路径时的旧入口：与 `extractPatchEntries()` 同一份解析，保留既有调用点与回归。 */
+export function extractPatchPaths(command: string): string[] {
+  return extractPatchEntries(command).map((entry) => entry.path);
 }
 
 /** 单条工具调用的归类结果。`null` = 这条调用不是文件写入也不是命令（搜索 / TODO / 子代理…）。 */
 type Classified =
   | { kind: 'file'; path: string; mode: 'write' | 'edit' }
-  | { kind: 'patch'; paths: string[] }
+  | { kind: 'patch'; entries: PatchEntry[] }
   // `scanPatch: false` 表示命令由普通 argv 拼接而来：参数里的补丁标记只是数据，不提取路径。
   // `patchSource` 用于展示成完整 argv、但真正会执行的是另一个脚本的情况：只扫描脚本本身。
   | { kind: 'command'; command: string; workdir?: string; scanPatch?: false; patchSource?: string }
@@ -269,8 +325,8 @@ function classify(event: ProcessEvent): Classified {
   // Codex 的 freeform apply_patch 直接传补丁字符串；它不是 shell 命令。
   if (!obj) {
     if (rawInput && name.toLowerCase() === 'apply_patch') {
-      const paths = extractPatchPaths(rawInput);
-      if (paths.length > 0) return { kind: 'patch', paths };
+      const entries = extractPatchEntries(rawInput);
+      if (entries.length > 0) return { kind: 'patch', entries };
     }
     if (rawInput && EXEC_NAME.test(name)) return { kind: 'command', command: rawInput };
     // 入参整个缺失（旧记录、被裁剪的参数）时也要披露：工具名属于已知写入类，
@@ -325,9 +381,9 @@ function classify(event: ProcessEvent): Classified {
       const workdir = typeof obj.workdir === 'string' && obj.workdir.trim() ? obj.workdir.trim() : undefined;
       // 官方 maybe_parse_apply_patch：argv 恰好 [apply_patch, 补丁正文] 时它是补丁，不是 shell 命令。
       if (isPatchArgv(argv)) {
-        const paths = extractPatchPaths(argv[1]!);
+        const entries = extractPatchEntries(argv[1]!);
         // 补丁正文读不出路径时与字符串形式同档：认得出是写入类工具，但清单可能不全。
-        if (paths.length > 0) return { kind: 'patch', paths };
+        if (entries.length > 0) return { kind: 'patch', entries };
         return { kind: 'unreadable-write' };
       }
       // 只有 shell 脚本包装才是「命令里内嵌补丁」；普通 argv 里出现标记只是数据。
@@ -411,7 +467,7 @@ function collectFailedAttemptsFromCalls(
         add(tool, classified.path, undefined);
       } else if (classified?.kind === 'patch') {
         // 多文件补丁仍是一次调用；列表按显式路径各记一条便于核对，failedAttemptCalls 只算一次。
-        const paths = new Set(classified.paths.map((p) => normalizeManifestPath(p, cwd)).filter(Boolean));
+        const paths = new Set(classified.entries.map((entry) => normalizeManifestPath(entry.path, cwd)).filter(Boolean));
         if (paths.size === 0) add(tool, undefined, undefined);
         else for (const patchPath of paths) add(tool, patchPath, undefined);
       } else if (classified?.kind === 'command') {
@@ -471,10 +527,19 @@ export function collectWorkManifest(
   const commandIndex = new Map<string, WorkManifestCommand>();
   let unreadableWrites = 0;
   let failedFileWrites = 0;
+  // 磁盘对照的旁证（与 files 同键）。`absolute` 表示至少有一次写的是绝对路径：那种路径的
+  // ENOENT 是确定结论；`removed` 表示补丁里按定义移除了它（删除 / 移动的源），不该拿去核对。
+  const probes = new Map<string, { absolute: boolean; removed: boolean }>();
 
-  const addFile = (rawPath: string, mode: 'write' | 'edit'): void => {
+  const addFile = (rawPath: string, mode: 'write' | 'edit', removed = false): void => {
     const key = normalizeManifestPath(rawPath, cwd);
     if (!key) return;
+    // 旁证看**原始**参数，不看归一化后的 key：`/proj/src/a.ts` 归一成 `src/a.ts` 之后，
+    // 就看不出这条路径原本是绝对的，磁盘对照也就分不清「确定不在」与「无法确认」。
+    const probe = probes.get(key) ?? { absolute: false, removed: false };
+    if (path.isAbsolute(rawPath.trim())) probe.absolute = true;
+    if (removed) probe.removed = true;
+    probes.set(key, probe);
     const existing = files.get(key);
     if (existing) {
       if (mode === 'write') existing.writes += 1;
@@ -522,16 +587,16 @@ export function collectWorkManifest(
       if (classified.kind === 'patch') {
         // 多文件补丁仍是一次调用；失败时按调用计数，不把路径数当失败次数。
         if (failed) failedFileWrites += 1;
-        else for (const patchPath of classified.paths) addFile(patchPath, 'edit');
+        else for (const entry of classified.entries) addFile(entry.path, 'edit', entry.removed);
         continue;
       }
       // 失败的命令仍运行过；内嵌补丁的文件则不能据此认定成功改动。
       addCommand(classified.command, classified.workdir);
       if (classified.scanPatch === false) continue;
       // 展示用完整 argv 与可扫描脚本不同时，只扫描脚本：尾随参数里的标记只是数据。
-      const patchPaths = extractPatchPaths(classified.patchSource ?? classified.command);
-      if (failed && patchPaths.length > 0) failedFileWrites += 1;
-      else for (const patchPath of patchPaths) addFile(patchPath, 'edit');
+      const patchEntries = extractPatchEntries(classified.patchSource ?? classified.command);
+      if (failed && patchEntries.length > 0) failedFileWrites += 1;
+      else for (const entry of patchEntries) addFile(entry.path, 'edit', entry.removed);
     }
   }
 
@@ -567,6 +632,10 @@ export function collectWorkManifest(
     failedFileWrites,
     ...failedAttempts,
     truncated: omittedFiles > 0 || omittedCommands > 0,
+    diskProbes: keptFiles.map((file) => ({
+      path: file.path,
+      ...(probes.get(file.path) ?? { absolute: false, removed: false }),
+    })),
   };
 }
 
@@ -624,10 +693,28 @@ export function renderWorkManifest(manifest: WorkManifest, onRewrite?: () => voi
       const parts: string[] = [];
       if (file.writes) parts.push(`写入 ${file.writes} 次`);
       if (file.edits) parts.push(`编辑 ${file.edits} 次`);
+      // 磁盘对照只改这一行的括注，不动路径：读者要的是「写了没」与「现在还在不在」两件事。
+      if (file.disk === 'missing') parts.push('本次生成时磁盘上已不在');
+      else if (file.disk === 'unverified') parts.push('本次生成时按会话目录没找到，无法确认');
       lines.push(`- ${inlineCode(oneLine(file.path))}（${parts.join('，')}）`);
     }
     if (manifest.omittedFiles > 0) {
       lines.push(`- 另有 ${manifest.omittedFiles} 个文件未列出（超出本节上限）`);
+    }
+    // 单看每一行容易被读成「Watch 认为这个文件不该在」：这句把口径钉死——清单记的是
+    // 会话里写过什么，磁盘对照只是生成那一刻的旁证，删除 / 改名 / 换机器都会让它变成「不在」。
+    const missingFiles = manifest.files.filter((file) => file.disk === 'missing').length;
+    const unverifiedFiles = manifest.files.filter((file) => file.disk === 'unverified').length;
+    if (missingFiles > 0 || unverifiedFiles > 0) {
+      const parts = [
+        missingFiles > 0 ? `${missingFiles} 个已不在磁盘上` : '',
+        unverifiedFiles > 0 ? `${unverifiedFiles} 个没能核对` : '',
+      ].filter(Boolean);
+      lines.push(
+        `- 磁盘对照（生成这份文档时）：${parts.join('、')}——「已不在」可能被删除、改名或移动，` +
+          '也可能这份记录来自另一台机器；「没能核对」是按会话目录没找到，但无法确认原因。' +
+          '这一节记的是会话里写过什么，不是文件现在的状态。',
+      );
     }
     lines.push('');
   }

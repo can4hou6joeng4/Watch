@@ -15,6 +15,8 @@ import {
   parsePromptProfile,
   PROMPT_PROFILES,
 } from './core/handoff-prompt.js';
+import { inspectManifestFilesOnDisk } from './core/manifest-disk.js';
+import { collectWorkManifest } from './core/work-manifest.js';
 import { getAdapter, listAdapters, listProviders, noSessionHint, unknownProviderMessage } from './providers/registry.js';
 import { checkOpenInProvider, LOOKUP_NEXT_STEP, lookupMissHeadline, openInProvider, openSession, resolveById } from './open.js';
 import type { LookupMiss } from './open.js';
@@ -1926,8 +1928,11 @@ async function cmdPrompt(
   // 结构化字段给脚本用：Markdown 里的分支行是给人读的，脚本不该去解析正文。
   // 链接工作树的情况已在 worktree 说明里，形状不同（主工作树可能读不出来），这里只放普通仓库根。
   let sourceBranch: { branch: string; repoRoot: string } | { detached: true; repoRoot: string } | undefined;
+  // 磁盘对照只看会话记录里的目录：目录进不去时整件事不做（见 inspectManifestFilesOnDisk）。
+  let recordedCwdUsable = false;
   if (foundRef.cwd.trim()) {
     const recordedProbe = await inspectCwd(foundRef.cwd);
+    recordedCwdUsable = recordedProbe.state === 'ok';
     const recordedCwdNote = describeRecordedCwd(recordedProbe, foundRef.cwd);
     if (recordedCwdNote) {
       sourceCwd = recordedProbe;
@@ -1953,6 +1958,23 @@ async function cmdPrompt(
           else if (branchProbe.state === 'detached') sourceBranch = { detached: true, repoRoot: branchProbe.repoRoot };
         }
       }
+    }
+  }
+
+  // 「改动概览」的磁盘对照：必须在这里做完（要 stat），`buildHandoffPrompt()` 保持纯函数。
+  // 清单先汇总一次，同一份同时用于对照与渲染——两份各算一遍会让状态的键与 files 对不上。
+  const manifestPreview = collectWorkManifest(turns, foundRef.cwd);
+  const manifestDisk = await inspectManifestFilesOnDisk(manifestPreview, foundRef.cwd, recordedCwdUsable);
+  if (manifestDisk) {
+    const notes: string[] = [];
+    if (manifestDisk.missing > 0) notes.push(`${manifestDisk.missing} 个已不在磁盘上`);
+    if (manifestDisk.unverified > 0) notes.push(`${manifestDisk.unverified} 个没能核对`);
+    if (notes.length) {
+      warnings.push(
+        `改动清单里有文件在生成时查不到：${notes.join('、')}（核对 ${manifestDisk.checked} 个，` +
+          `${manifestDisk.outside} 个在会话目录之外未核对、${manifestDisk.removed} 个按补丁已被删除 / 移走）；` +
+          '清单记的是会话里写过什么，不代表文件现在的状态，正文「改动过的文件」已逐条标注',
+      );
     }
   }
 
@@ -1989,7 +2011,7 @@ async function cmdPrompt(
       ...(sourceBranchUnreadable ? { sourceBranchUnreadable: true } : {}),
     },
     profile,
-    { ...(lastUserTurns !== undefined ? { lastUserTurns } : {}), ...(sinceCompact ? { sinceCompact: true } : {}) },
+    { ...(lastUserTurns !== undefined ? { lastUserTurns } : {}), ...(sinceCompact ? { sinceCompact: true } : {}), manifest: manifestPreview, ...(manifestDisk ? { manifestDisk } : {}) },
   );
 
   if (json) {
@@ -2024,6 +2046,9 @@ async function cmdPrompt(
           ...(result.manifest.failedFileWrites ? { failedFileWrites: result.manifest.failedFileWrites } : {}),
         },
       } : {}),
+      // 磁盘对照的计数：`files[].disk` 缺省既可能是「都还在」也可能是「没核对」，
+      // 脚本只有靠这个字段才能分辨，所以核对过就一定出现（哪怕全是 0）。
+      ...(result.manifestDisk ? { manifestDisk: result.manifestDisk } : {}),
       // 明确失败的工具调用单独输出：它们不在成功改动清单里，脚本也不该靠解析正文拿这份信息。
       // 没有任何明确失败结果时整个字段都不出现。
       ...(result.manifest.failedAttemptCalls || result.manifest.unclassifiedFailures ? {
