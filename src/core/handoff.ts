@@ -439,6 +439,12 @@ export async function adoptIntoChain(
   unchanged?: boolean;
   /** `unchanged` 时的结果说明，或接入时说明接入的会话是自动挑的（走 stdout；与 `warnings` 的降级原因分开） */
   note?: string;
+  /**
+   * 这次有没有把链绑定 / 切换记录写进去（同 `HandoffResult.chainRecordState`）：
+   * `unchanged`、本地库不可用都是 not-attempted，`recordSwitch` 抛错是 failed。
+   * 调用方不得在 failed / not-attempted 时说「链记录已写入」。内部协调字段，不进 `--json`。
+   */
+  chainRecordState?: 'written' | 'failed' | 'not-attempted';
 }> {
   const warnings: string[] = [];
   const adapter = adapters.find((a) => a.id === providerId);
@@ -587,6 +593,8 @@ export async function adoptIntoChain(
       replacedRef: null,
       warnings,
       unchanged: true,
+      // 空操作：本次没有写任何链记录，调用方不得说「链记录已写入」
+      chainRecordState: 'not-attempted',
       note: autoPickedNote ? `${note}；${autoPickedNote}` : note,
     };
   }
@@ -607,6 +615,8 @@ export async function adoptIntoChain(
       replacedRef: null,
       warnings,
       unchanged: true,
+      // 自动挑到的会话与链上绑定不一致，本次没有改动：同样没写链记录
+      chainRecordState: 'not-attempted',
       note: autoPickedNote,
     };
   }
@@ -619,6 +629,7 @@ export async function adoptIntoChain(
     return r;
   })();
 
+  let chainRecordState: 'written' | 'failed' | 'not-attempted' = 'not-attempted';
   if (store) {
     try {
       const id = store.getOrCreateChainSession(cwd, chainId);
@@ -630,8 +641,10 @@ export async function adoptIntoChain(
         replacedFrom = otherBound.provider;
       }
       store.recordSwitch(id, replacedFrom, replaced, providerId, found.ref);
+      chainRecordState = 'written';
     } catch (error) {
       console.error('[watch] 记录接入失败:', error);
+      chainRecordState = 'failed';
       warnings.push(`链记录失败: ${describeStoreErrorReason(error)}`);
     }
   }
@@ -641,7 +654,7 @@ export async function adoptIntoChain(
   const note = autoPicked
     ? `未指定 --session，本次挑的是${pickedLabel}的会话 ${found.ref.sessionId}；要接入指定会话请用 watch adopt ${providerId} --session <会话 id>`
     : undefined;
-  return { adoptedRef: found.ref, replacedRef: replaced, warnings, ...(note ? { note } : {}) };
+  return { adoptedRef: found.ref, replacedRef: replaced, warnings, chainRecordState, ...(note ? { note } : {}) };
 }
 
 /**
@@ -1218,11 +1231,16 @@ export type HandoffResult = {
    */
   chainTipState?: 'recorded' | 'empty' | 'unknown';
   /**
-   * 链绑定 / 切换记录没写进去（库只读、磁盘满、SQLITE_BUSY 等）：`warnings` 里已有一条
-   * 「链记录失败」。调用方不得再按「这次写了链记录」生成补充说明——`new` 的别名组警告
-   * 就是这种说明，链没写成时它说的每个字都与前一条警告相反。
+   * 这次到底有没有把链绑定 / 切换记录写进去：
+   * - written：写成了；
+   * - failed：尝试过但抛错（库只读、磁盘满、SQLITE_BUSY 等），`warnings` 里已有一条
+   *   「链记录失败」——调用方不得再按「链尾已更新 / 这次写了链记录」措辞生成结论；
+   * - not-attempted：本次没有写（alreadyAtTarget 直接返回、本地库不可用、无需改动）。
+   *
+   * 之所以要三态而不是布尔：`alreadyAtTarget` 与「写失败」都会让「链尾已更新」成为假话，
+   * 但下一步不同——前者本来就不需要写，后者要按警告里的原因处理。内部协调字段，不进 `--json`。
    */
-  chainRecordFailed?: boolean;
+  chainRecordState?: 'written' | 'failed' | 'not-attempted';
   /**
    * alreadyAtTarget 时这条 resume 指向的会话文件现在读不出来（`chmod 000` 之类）。
    *
@@ -1812,6 +1830,8 @@ export async function handoff(
         turnCount: 0,
         alreadyAtTarget: true,
         chainTipState,
+        // 这条分支从不写链记录：调用方不得据此说「这次写了链记录」（第 310 轮）
+        chainRecordState: 'not-attempted',
         ...(resumeReadProblem ? { resumeUnreadable: true } : {}),
         ...(resumeTargetReadableEmpty ? { resumeTargetEmpty: true } : {}),
         warnings,
@@ -2073,14 +2093,15 @@ export async function handoff(
         warnings.push(`重写目标会话失败，目标内容可能未更新: ${reason}`);
       }
     }
-    let chainRecordFailed = false;
+    let chainRecordState: 'written' | 'failed' | 'not-attempted' = 'not-attempted';
     if (store && sourceTip) {
       try {
         const id = store.getOrCreateChainSession(cwd, opts?.chainId);
         store.recordSwitch(id, sourceTip.provider, sourceTip.ref, targetId, resumeRef);
+        chainRecordState = 'written';
       } catch (error) {
         console.error('[watch] 记录 switch_events 失败，交接仍完成:', error);
-        chainRecordFailed = true;
+        chainRecordState = 'failed';
         warnings.push(`链记录失败: ${describeStoreErrorReason(error)}`);
       }
     }
@@ -2090,7 +2111,7 @@ export async function handoff(
       fromProvider: sourceTip?.provider ?? targetId,
       turnCount: 0,
       zeroIncrementReason: turns.length === 0 ? 'source-empty' : 'up-to-date',
-      ...(chainRecordFailed ? { chainRecordFailed: true } : {}),
+      chainRecordState,
       warnings,
       findings,
     };
@@ -2152,14 +2173,15 @@ export async function handoff(
     );
   }
 
-  let chainRecordFailed = false;
+  let chainRecordState: 'written' | 'failed' | 'not-attempted' = 'not-attempted';
   if (store) {
     try {
       const id = store.getOrCreateChainSession(cwd, opts?.chainId);
       store.recordSwitch(id, sourceTip.provider, sourceTip.ref, targetId, newRef);
+      chainRecordState = 'written';
     } catch (error) {
       console.error('[watch] 记录 switch_events 失败，交接仍完成:', error);
-      chainRecordFailed = true;
+      chainRecordState = 'failed';
       warnings.push(`链记录失败: ${describeStoreErrorReason(error)}`);
     }
   }
@@ -2170,7 +2192,7 @@ export async function handoff(
     fromProvider: sourceTip.provider,
     turnCount: outgoing.length,
     ...(notes.length ? { notes } : {}),
-    ...(chainRecordFailed ? { chainRecordFailed: true } : {}),
+    chainRecordState,
     warnings,
     findings,
   };
