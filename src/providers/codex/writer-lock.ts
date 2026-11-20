@@ -73,23 +73,37 @@ export async function probeThreadWriterHolders(lockPath: string): Promise<Writer
  * Node 没有 flock API，而 macOS 没有 `flock(1)`；python3 随 macOS/多数 Linux 自带。
  * 持有期间原生 writer（codex 进程）无法取得同一把锁，从而把「探测 → 写入」之间的
  * 竞态窗口收窄为「原子取锁」。helper 退出（正常或被杀）由内核自动释放锁。
+ *
+ * 用 `-I` 启动：`python3 -c` 的 `sys.path[0]` 默认是进程 CWD，项目目录里一个同名
+ * `fcntl.py` 就能顶替标准库——实测它把 flock 定义成空操作后 helper 仍打印 locked，
+ * Watch 会相信「已独占原生锁」而实际什么都没锁；抛错则让 helper 无输出退出、
+ * 锁静默消失。`-I` 同时忽略 PYTHON* 环境变量与 user site。
  */
 const PY_HELPER = [
-  'import fcntl, os, sys',
+  'import errno, fcntl, os, sys',
+  'def code(e):',
+  '    return errno.errorcode.get(e.errno) or str(e.errno)',
   'path = sys.argv[1]',
   // 打开锁文件失败（目录已存在但不可写 / 同名目录占位 / 磁盘满）必须显式报告：
   // 否则 helper 带着 traceback 退出，stdout 一个字都没有，调用方只能等满超时并把它
-  // 当成「机制不可用」——与第 302 轮「目录故障必须披露」的口径相反。
+  // 当成「机制不可用」——与第 302 轮「目录故障必须披露」的口径相反。errno 一并带出，
+  // 让调用方给出真实原因（EMFILE 与 ENOSPC 的下一步完全不同）。
   'try:',
   '    fd = os.open(path, os.O_RDWR | os.O_CREAT, 0o644)',
-  'except OSError:',
-  "    print('unavailable', flush=True)",
+  'except OSError as e:',
+  "    print('unavailable:' + code(e), flush=True)",
   '    sys.exit(4)',
+  // flock 的 OSError 不能一律报 busy：EAGAIN/EACCES 是「别人持有」，而 ENOLCK/ENOTSUP
+  // （SMB / NFS / exFAT 一类不支持文件锁的挂载）报 busy 会让用户对着「稍后重试」永远重试，
+  // 预检还同时说可写——正是仓库修过两次的「预检与写入结论相反」。其余 errno 按可修故障披露。
   'try:',
   '    fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)',
-  'except OSError:',
-  "    print('busy', flush=True)",
-  '    sys.exit(3)',
+  'except OSError as e:',
+  '    if e.errno in (errno.EACCES, errno.EAGAIN, getattr(errno, "EWOULDBLOCK", errno.EAGAIN)):',
+  "        print('busy', flush=True)",
+  '        sys.exit(3)',
+  "    print('unavailable:' + code(e), flush=True)",
+  '    sys.exit(4)',
   "print('locked', flush=True)",
   'sys.stdin.buffer.read()',
   'fcntl.flock(fd, fcntl.LOCK_UN)',
@@ -144,11 +158,36 @@ async function readFirstLine(child: ChildProcess, timeoutMs: number): Promise<st
   });
 }
 
+/** helper 报告的 lock errno → 中文原因（真原因在前，下一步才落得住） */
+function lockFailureReason(raw: string | null): string {
+  const code = (raw ?? '').trim().toUpperCase();
+  const detail =
+    code === 'EACCES' || code === 'EPERM'
+      ? '权限不足（锁目录或锁文件拒绝写入）'
+      : code === 'ENOENT'
+        ? '锁文件或它的上级目录在准备期间消失'
+        : code === 'ENOSPC'
+          ? '磁盘空间不足'
+          : code === 'EROFS'
+            ? '文件系统是只读的'
+            : code === 'EISDIR'
+              ? '锁路径被同名目录占住了'
+              : code === 'EMFILE' || code === 'ENFILE'
+                ? '打开的文件数达到上限'
+                : code === 'ENOLCK' || code === 'ENOTSUP' || code === 'EOPNOTSUPP'
+                  ? '这个文件系统不支持文件锁，协作写锁无法生效'
+                  : code
+                    ? `失败原因代码 ${code}`
+                    : '权限、同名目录占位或磁盘空间不足';
+  return `无法创建或打开锁文件：${detail}`;
+}
+
 /**
  * 尝试以协作方式取得目标会话的原生 writer 锁。
  * - 返回 guard：已独占持有，写入完成后必须 release()
- * - 返回 undefined：机制不可用（无 python3 / 平台不支持）→ 调用方退回「只探测」的旧行为
- * - 抛错：锁已被别的 writer 持有（探测与取锁之间的竞态）→ 调用方应拒绝写入
+ * - 返回 undefined：机制不可用（无 python3 / 平台不支持 / helper 无输出就退出）→ 调用方退回「只探测」的旧行为
+ * - 抛错：锁已被别的 writer 持有（探测与取锁之间的竞态）→ 调用方应拒绝写入；
+ *   `WriterLockDirError` 是可修故障 → 调用方降级为警告后继续写入
  */
 export async function acquireThreadWriterLock(lockPath: string): Promise<WriterLockGuard | undefined> {
   // 原生锁文件在 writer 退出时会被删除，所以不能“只在文件存在时取锁”：
@@ -161,7 +200,7 @@ export async function acquireThreadWriterLock(lockPath: string): Promise<WriterL
     // 协作写锁整条消失却没有任何警告。抛专用错误让调用方区分「机制不可用」与「可修的降级」。
     throw new WriterLockDirError(lockPath, error);
   }
-  const child = spawn('python3', ['-c', PY_HELPER, lockPath], { stdio: ['pipe', 'pipe', 'ignore'] });
+  const child = spawn('python3', ['-I', '-c', PY_HELPER, lockPath], { stdio: ['pipe', 'pipe', 'ignore'] });
   const first = await readFirstLine(child, 5_000);
   if (first === 'locked') {
     return {
@@ -187,13 +226,20 @@ export async function acquireThreadWriterLock(lockPath: string): Promise<WriterL
   }
   closeChild(child);
   if (first === 'busy') throw new Error('writer lock is held by another process');
-  if (first === 'unavailable') {
-    // 目录在、但锁文件建不出来：与 mkdir 失败同一档（可修故障），不能用「机制不可用」静默吞掉
+  if (first?.startsWith('unavailable')) {
+    // 锁文件建不出来 / 文件系统不支持 flock：与 mkdir 失败同一档（可修故障），
+    // 不能用「机制不可用」静默吞掉；errno 决定下一步（权限 / 空间 / 换文件系统）。
+    const code = first.includes(':') ? first.slice(first.indexOf(':') + 1).trim() : '';
+    throw new WriterLockDirError(lockPath, new Error(lockFailureReason(code || null)), 'file');
+  }
+  if (first) {
+    // 非空但认不出的首行（标准库被顶替、解释器包装脚本改写了输出）：同样不能说成
+    // 「机制不可用」——那等于放行一次没有任何锁保护的写入且不留痕迹。
     throw new WriterLockDirError(
       lockPath,
-      new Error('无法创建或打开锁文件（权限、同名目录占位或磁盘空间不足）'),
+      new Error(`锁 helper 输出了无法识别的结果：${escapeControlChars(first)}`),
       'file',
     );
   }
-  return undefined; // 无 python3 或超时：机制不可用
+  return undefined; // 无 python3、超时或 helper 无输出就退出：确实无法判定，按机制不可用
 }

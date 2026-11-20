@@ -765,8 +765,8 @@ async function acquireCodexWriteLock(
     if (error instanceof WriterLockDirError) {
       return {
         warning:
-          `${error.message}；本次仍会写入，但写入期间无法独占原生 writer 锁——` +
-          '若 Codex 正在写同一会话，仍可能互相覆盖；修好该目录（权限、同名文件占位或磁盘空间）后重试可恢复保护',
+          `${error.message}；这次没有取得协作写锁，并发写入保护不生效（不会因此单独中止本次操作）——` +
+          '若 Codex 正在写同一会话，仍可能互相覆盖；修好锁路径后重试可恢复保护',
       };
     }
     // 锁在探测与取锁之间被别的 writer 拿走（或取锁失败）→ 拒绝写入，交由调用方转成结构化 blocked

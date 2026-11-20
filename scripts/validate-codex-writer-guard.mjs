@@ -115,7 +115,7 @@ async function lsofHolders(lockPath) {
 }
 
 async function flockProbe(lockPath) {
-  return execFileAsync('python3', ['-c', FLOCK_PROBE, lockPath], { timeout: 10_000 })
+  return execFileAsync('python3', ['-I', '-c', FLOCK_PROBE, lockPath], { timeout: 10_000 })
     .then((result) => result.stdout.trim())
     .catch(() => 'error');
 }
