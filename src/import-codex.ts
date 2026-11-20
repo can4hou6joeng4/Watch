@@ -1,6 +1,6 @@
 import path from 'node:path';
 import { parseArgs } from 'node:util';
-import { closestCommand, closestFlag } from './core/cli-commands.js';
+import { closestCommand, closestFlag, optionArgs } from './core/cli-commands.js';
 import { trimUserKey } from './core/cli-input.js';
 import { escapeControlChars } from './core/display.js';
 import { createOfficialCodexImport } from './providers/codex/official-import.js';
@@ -112,9 +112,11 @@ function validateImportArgs(args: string[]): void {
 }
 
 export async function runImportCodex(args: string[]): Promise<void> {
-  const json = args.includes('--json');
+  // 开关只在 `--` 之前找：之后的 token 是位置参数，下面的参数校验与 parseArgs 也都这样处理
+  const options = optionArgs(args);
+  const json = options.includes('--json');
   // 与主 CLI 的 `--help` 同一份契约：用法走 stderr、exit 1，`--json` 时补一行说明
-  if (args.includes('--help') || args.includes('-h') || args[0] === 'help') {
+  if (options.includes('--help') || options.includes('-h') || args[0] === 'help') {
     console.error(importUsageText());
     if (json) console.log(JSON.stringify({ ok: false, error: '已打印用法到 stderr（--json 模式下不输出结果）' }));
     process.exitCode = 1;

@@ -61,6 +61,16 @@ export const CHAIN_POSITIONAL: Record<string, number> = { list: 1, new: 2, renam
 export const EARLY_DISPATCH_COMMANDS: readonly string[] = ['import-codex'];
 
 /**
+ * `--` 之前的那一段参数。`--` 是「选项到此为止」的通用约定：之后的 token 一律是位置参数，
+ * 即使长得像 `--json` / `--help` / `--version`。全局开关都要在这一段里找，否则
+ * `watch search -- --json`（搜的就是 `--json` 这个词）会被当成要 JSON 输出。
+ */
+export function optionArgs(args: readonly string[]): string[] {
+  const end = args.indexOf('--');
+  return end === -1 ? [...args] : args.slice(0, end);
+}
+
+/**
  * 命令位置上的帮助 / 版本写法。`watch -h`、`watch help`、`watch -v`、`watch version` 是用户
  * 拿到一个陌生 CLI 时最先敲的四样，以前全部落进「未知命令: -h；可用: …」。它们不是命令
  * （不进 `COMMAND_NAMES`、不参与拼写建议），只在**第一个参数**上等同 `--help` / `--version`。

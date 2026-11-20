@@ -31,7 +31,7 @@ import type { StoreFootprint } from './core/doctor.js';
 import { CLAUDE_PROJECT_SETTINGS_RELATIVE_PATHS, type ClaudeRetentionProbe } from './providers/claude/retention.js';
 import { cwdAliasHint, cwdProblem, describeCwdProblem, describeRecordedCwd, describeRepoBranchNote, describeWorktreeNote, describeWriteCwd, inspectCwd, inspectRepoBranch, inspectWorktree, sameDirectorySync, splitElsewhereByDirectory, type CwdInspection } from './core/cwd.js';
 import { escapeControlChars, hasControlChars } from './core/display.js';
-import { BOOLEAN_FLAGS, CHAIN_POSITIONAL, COMMAND_LIST, FLAGS_BY_COMMAND, HELP_COMMAND_ALIASES, POSITIONAL_BY_COMMAND, VALUE_FLAGS, VERSION_COMMAND_ALIASES, closestCommand, closestFlag } from './core/cli-commands.js';
+import { BOOLEAN_FLAGS, CHAIN_POSITIONAL, COMMAND_LIST, FLAGS_BY_COMMAND, HELP_COMMAND_ALIASES, POSITIONAL_BY_COMMAND, VALUE_FLAGS, VERSION_COMMAND_ALIASES, closestCommand, closestFlag, optionArgs } from './core/cli-commands.js';
 import { commandControlWarnings } from './core/terminal-command.js';
 import { trimUserKey } from './core/cli-input.js';
 import { describeResumeTargetUnfinished } from './core/rich.js';
@@ -50,12 +50,14 @@ import { CAPABILITY_VERIFICATION_NOTE, describeCapabilities, formatCapabilities 
  * 用法文本始终走 stderr；带 `--json` 时再补一行 JSON 错误，否则 stdout 为空，
  * Rust 桥只能把整段用法当错误文本显示给桌面端。
  */
-const JSON_REQUESTED = process.argv.includes('--json');
+/** 全局开关只在 `--` 之前找：之后的 token 是位置参数（见 `optionArgs()`） */
+const OPTION_ARGS = optionArgs(process.argv.slice(2));
+const JSON_REQUESTED = OPTION_ARGS.includes('--json');
 /**
  * 用户是来要用法的，不是写错了参数：`--help` 出现在任意位置，或第一个参数是 `help` / `-h`；
  * 命令之后的 `-h` 在参数解析时补记。只影响 `--json` 下那一句说明，用法文本与退出码不变。
  */
-let helpRequested = process.argv.includes('--help') || HELP_COMMAND_ALIASES.includes(process.argv[2] ?? '');
+let helpRequested = OPTION_ARGS.includes('--help') || HELP_COMMAND_ALIASES.includes(process.argv[2] ?? '');
 
 /**
  * `reason` 用来把「哪里不对」讲清楚：只打一整段用法时，用户得自己翻整页才知道
@@ -81,7 +83,7 @@ function usage(reason?: string): never {
   watch doctor [--json] [--strict] [--cwd <path>]   只读环境诊断：Agent 检测、本地库、导入日志（不写盘）
   watch new <provider> [--json] [--cwd <path>] [--chain <id|name>]
   watch chain list|new <name>|rename <id|name> <new>|archive <id|name>|use <id|name> [--json] [--cwd]
-  watch search <query> [--json] [--cwd <path>] [--reset-index]
+  watch search <query> [--json] [--cwd <path>] [--reset-index]   查询词以 - 开头时写成 watch search -- <query>
   watch usage [--json] [--cwd <path>] [--chain <id|name>]
   watch import-codex prepare|confirm|status <id> [--cwd <path>] [--desktop-project] [--experimental] [--json]
   watch import-codex project-prepare|project-confirm|project-status <plan-id> [--project <project-id>] [--experimental] [--json]
@@ -420,7 +422,7 @@ function parseArgs(argv: string[]): {
   positional: string[];
 } {
   const args = argv.slice(2);
-  const json = args.includes('--json');
+  const json = optionArgs(args).includes('--json');
   let cwd = process.cwd();
   // 是否显式给了 --cwd：`recent` 的映射表分支只在显式指定时才按目录过滤，
   // 否则桌面桥（不传 cwd）会从「这个目录的会话」退化成「只有 CORE_ROOT 的会话」
@@ -454,6 +456,8 @@ function parseArgs(argv: string[]): {
   const seenValues = new Map<string, string>();
   /** 当前 token 写成 `--flag=值` 时等号后面的部分；空格写法为 undefined */
   let inlineValue: string | undefined;
+  /** 已经遇到过 `--`：之后的 token 不再当选项解析 */
+  let afterSeparator = false;
   /** 取下一个 token 作为参数值；缺值、误吞下一个 flag、或同一选项给了两次都按用法错误处理 */
   const takeValue = (flag: string): string => {
     let next: string | undefined;
@@ -481,6 +485,16 @@ function parseArgs(argv: string[]): {
   for (i = 0; i < args.length; i++) {
     let a = args[i]!;
     inlineValue = undefined;
+    // `--`：选项到此为止，之后全部是位置参数。以前报「未知参数: --」，于是以 `--` 开头的查询词
+    // （`watch search -- --experimental`）没有任何写法能搜；`import-codex` 那条路径一直认这个约定。
+    if (afterSeparator) {
+      positional.push(a);
+      continue;
+    }
+    if (a === '--') {
+      afterSeparator = true;
+      continue;
+    }
     // 等号写法：以前 `--chain=foo` 整个落进「未知参数: --chain=foo」，而 `--chain` 明明是认识的参数，
     // 同一个 CLI 的 `import-codex` 又接受 `--cwd=/path`。取值选项拆成名字 + 取值；布尔开关带等号
     // 时说「不接受取值」，不能把 `--json=1` 当成 `--json` 悄悄放行；不认识的名字照旧走未知参数。
@@ -570,7 +584,9 @@ function parseArgs(argv: string[]): {
       // 未知 flag 不能滑进位置参数：`watch status --chian foo` 会被当成 cwd 之外的多余位置参数静默忽略
       if (a === '--help') usage();
       const near = closestFlag(a);
-      rejectArguments(json, `未知参数: ${a}${near ? `；最接近的是 ${near}` : ''}`);
+      // search 的查询词是自由文本：用户很可能就是想搜这个词，给出能照抄的写法
+      const asQuery = positional[0] === 'search' ? `；要搜索这个词本身，写成 watch search -- ${a}` : '';
+      rejectArguments(json, `未知参数: ${a}${near ? `；最接近的是 ${near}` : ''}${asQuery}`);
     }
     positional.push(a);
   }
@@ -3099,9 +3115,9 @@ async function main(): Promise<void> {
   // 而唯一带版本号的地方是 `watch doctor` 的「环境: watch x.y.z · node …」（还要能跑通诊断）。
   // 读不出版本时不编一个数：文本说「未知版本」，`--json` 给 `version: null`。
   const first = process.argv[2] ?? '';
-  if (process.argv.slice(2).includes('--version') || VERSION_COMMAND_ALIASES.includes(first)) {
+  if (OPTION_ARGS.includes('--version') || VERSION_COMMAND_ALIASES.includes(first)) {
     const version = readWatchVersion();
-    if (process.argv.includes('--json')) {
+    if (JSON_REQUESTED) {
       console.log(JSON.stringify({ ok: true, version }));
     } else {
       console.log(`watch ${version ?? '未知版本'}`);
@@ -3544,7 +3560,7 @@ main().catch((error) => {
   // `--json` 的契约是「成功与失败都向 stdout 输出单行 JSON」：命令级 fail() 之外逃出来的异常
   // 也要遵守，否则 Rust 桥只能回「CLI 无输出, exit=1」。已经写过 stdout 的命令不再补第二行。
   handleFatal(error, {
-    json: process.argv.includes('--json'),
+    json: JSON_REQUESTED,
     bytesWritten: Number(process.stdout.bytesWritten ?? 0),
     // 写完再退出：管道 / 重定向下 process.exit() 会丢掉还没刷出去的缓冲
     writeJson: (line) => process.stdout.write(line, () => process.exit(1)),
