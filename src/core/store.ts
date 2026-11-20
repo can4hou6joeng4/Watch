@@ -957,10 +957,15 @@ export class Store {
     // 归一必须在包引号**之前**做，且保留用户自己的引号语义（内部引号仍按原有规则换成空格）。
     const match = ftsPhrase(q);
     if (match === null) return { hits: [], saturated: false };
+    // 片段优先由 `excerpt()` 从正文里取（命中两侧各 20 个字符），FTS 自带的 `snippet()` 只作兜底：
+    // trigram 分词下它的窗口按 token 算，10 个 token 只有 12 个字符——查询词一长，窗口连命中本身都
+    // 装不下，高亮与上下文一起消失：2026-11-21 实测搜 `--experimental`（14 个字符）得到的片段是
+    // `…-experimenta…`，既没有方括号也看不出是哪句话。查询词越完整片段反而越差，而「按原文粘贴一句」
+    // 正是搜索最常见的用法。短查询那条路径（`searchShort`）一直用 `excerpt()`，两条路径现在同一口径。
     const sql = cwd
-      ? `SELECT session_id, provider, cwd, file_path, snippet(messages_fts, 0, '[', ']', '…', 10) AS snippet
+      ? `SELECT session_id, provider, cwd, file_path, text, snippet(messages_fts, 0, '[', ']', '…', 10) AS snippet
          FROM messages_fts WHERE messages_fts MATCH ? AND cwd=? LIMIT ${SCAN_LIMIT}`
-      : `SELECT session_id, provider, cwd, file_path, snippet(messages_fts, 0, '[', ']', '…', 10) AS snippet
+      : `SELECT session_id, provider, cwd, file_path, text, snippet(messages_fts, 0, '[', ']', '…', 10) AS snippet
          FROM messages_fts WHERE messages_fts MATCH ? LIMIT ${SCAN_LIMIT}`;
     const rows = (
       cwd ? this.db.prepare(sql).all(match, cwd) : this.db.prepare(sql).all(match)
@@ -969,6 +974,7 @@ export class Store {
       provider: string;
       cwd: string;
       file_path: string;
+      text: string;
       snippet: string;
     }[];
     // 截断统一在 searchMessagesWithMeta 里做，这里只负责取候选；撞上 LIMIT 说明候选可能不全
@@ -978,7 +984,10 @@ export class Store {
         provider: r.provider,
         cwd: r.cwd,
         filePath: r.file_path,
-        snippet: r.snippet,
+        // FTS 判定命中、而 JS 侧的大小写折叠在正文里对不上位置时（分词器与 `toLowerCase()` 的折叠规则
+        // 不完全相同），退回 FTS 自己的片段，不拿「正文开头 80 个字符」冒充命中处
+        // 定位用的是送进 MATCH 的那个短语本身（查询里的引号已换成空格），与 FTS 找的是同一串
+        snippet: excerptAtHit(r.text, match.slice(1, -1)) ?? r.snippet,
       })),
       saturated: rows.length >= SCAN_LIMIT,
     };
@@ -1551,11 +1560,16 @@ function capPerSession(hits: SearchHit[]): Pick<SearchResult, 'hits' | 'truncate
 }
 
 function excerpt(text: string, q: string): string {
+  return excerptAtHit(text, q) ?? clipCodePoints(text, 80).text;
+}
+
+/** 命中处两侧各带 20 个字符的片段；在正文里定位不到查询词时返回 null，由调用方决定兜底 */
+function excerptAtHit(text: string, q: string): string | null {
   // 索引里的文本是折叠过空白的；查询同样归一后再找位置，否则多行片段永远对不上、只能退成
   // 「取开头 80 字符」，高亮消失、片段看似无关
   const needle = normalizeQueryWhitespace(q);
   const found = findFoldAware(text, needle);
-  if (!found) return clipCodePoints(text, 80).text;
+  if (!found) return null;
   // 命中位置已换算回原文坐标（见 findFoldAware）；上下文窗口按原文码元算，
   // 两端要落在码点边界上：截在 emoji 这类代理对中间时，片段首尾会出现孤立的一半。
   const at = found.at;

@@ -3429,7 +3429,11 @@ async function cmdSearch(cwd: string, json: boolean, query: string, resetIndex =
     // 走 `warnings`（不是 notes）：同一件事实在四条命令上必须落在同一个通道。
     // 索引里已经知道这个目录的另一种写法是什么字符串时用它当下一步，与 notes 里那条保持一致
     // （realpath 未必查得到：索引按记录里的原字符串存）
-    if (!hits.length && !cwdIssue) {
+    // 这句说明的前提是「本目录没扫到任何会话」（文案里就这么写）。本目录扫到了会话、只是没搜到这个词时
+    // 不能套用：以前只看零命中，于是在软链 / `/var` 这类有别名的目录里，每一次没搜到都被讲成
+    // 「本目录没扫到任何会话…换个 --cwd 重试」——会话明明在，换了写法反而一条都查不到。
+    // 另一种写法下确有匹配时，下面的 notes 会用索引里记的那个字符串单独指路。
+    if (!hits.length && !cwdIssue && !coverage.sessions) {
       // 有一家没读成、达到列表上限、或有一批文件压根没进/未完整进索引时，零命中只说明「没搜到」，不是「写法不对」
       const alias = await cwdAliasHint(cwd, sameDirectoryElsewhere[0]?.cwd, [
         ...unavailable,

@@ -51,6 +51,12 @@ export type SearchCoverage = {
   capped: string[];
   /** 本次至少有一个会话未完整进入索引（解析失败 / 写索引失败 / 含坏行 / 读不出状态 / 非普通文件） */
   incomplete: string[];
+  /**
+   * 本次在这个 cwd 下枚举到的会话总数（各家 `listSessions` 之和，含 0 字节会话）。
+   * 零命中时用来分清「这个写法下一条会话都没有」与「有会话、只是没搜到这个词」——
+   * 前者才谈得上「`--cwd` 的写法不对」。
+   */
+  sessions?: number;
 };
 
 export async function reindexCwd(
@@ -76,6 +82,7 @@ export async function reindexCwd(
       );
       continue;
     }
+    if (coverage) coverage.sessions = (coverage.sessions ?? 0) + list.length;
     const stats = store.indexedStats(cwd, adapter.id);
     // listSessions 有上限时，更早的会话本轮根本不会被枚举到，索引里也就永远没有它们——
     // 不说清楚，「搜不到」会被当成「没聊过」
