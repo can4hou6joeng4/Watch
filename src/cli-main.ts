@@ -31,6 +31,7 @@ import type { StoreFootprint } from './core/doctor.js';
 import { CLAUDE_PROJECT_SETTINGS_RELATIVE_PATHS, type ClaudeRetentionProbe } from './providers/claude/retention.js';
 import { cwdAliasHint, cwdProblem, describeCwdProblem, describeRecordedCwd, describeRepoBranchNote, describeWorktreeNote, describeWriteCwd, inspectCwd, inspectRepoBranch, inspectWorktree, sameDirectorySync, splitElsewhereByDirectory, type CwdInspection } from './core/cwd.js';
 import { escapeControlChars, hasControlChars } from './core/display.js';
+import { CHAIN_POSITIONAL, COMMAND_LIST, FLAGS_BY_COMMAND, POSITIONAL_BY_COMMAND, closestCommand } from './core/cli-commands.js';
 import { commandControlWarnings } from './core/terminal-command.js';
 import { trimUserKey } from './core/cli-input.js';
 import { describeResumeTargetUnfinished } from './core/rich.js';
@@ -3014,7 +3015,10 @@ async function cmdChain(cwd: string, json: boolean, action?: string, a?: string,
     }
     // 拼错的子命令（`chain lsit`）以前一律落到通用用法错误「参数不完整或不合法」，
     // 用户看不出是子命令写错、也不知道有哪几个，得自己翻整页用法
-    throw new Error(`未知的 chain 子命令: ${action}；可用: ${CHAIN_SUBCOMMANDS}`);
+    const nearAction = closestCommand(action, Object.keys(CHAIN_POSITIONAL));
+    throw new Error(
+      `未知的 chain 子命令: ${escapeControlChars(action)}${nearAction ? `；最接近的是 ${nearAction}` : ''}；可用: ${CHAIN_SUBCOMMANDS}`,
+    );
   } catch (error) {
     // 链库读写失败（缺列 / 表被改坏）时把原因翻成中文；业务结论（「链已归档」「找不到链」）
     // 原样带出，翻译只会破坏已经写好的下一步
@@ -3025,31 +3029,6 @@ async function cmdChain(cwd: string, json: boolean, action?: string, a?: string,
     fail(json, error instanceof ChainLookupError && cwdIssue ? `${cwdIssue}；${message}` : message);
   }
 }
-
-/**
- * 每个命令真正消费的参数。`parseArgs` 只挡未知 flag（白名单是全局的），
- * `--chain` 给 `recent`、`--session` 给 `status` 这类「认识但不吃」的组合以前被静默忽略，
- * 用户会以为已经按链过滤 / 指定了会话。`--cwd` / `--json` 全局有效，不参与校验。
- */
-/** 顶层命令清单：命令名拼错时要能列出可用的那几个（`import-codex` 在 parseArgs 之前就分派了，单独标注） */
-const COMMANDS = 'status / switch / adopt / sessions / recent / providers / doctor / new / chain / search / usage / open';
-
-const FLAGS_BY_COMMAND: Record<string, string[]> = {
-  status: ['chain'],
-  switch: ['chain'],
-  adopt: ['chain', 'session'],
-  sessions: ['chain'],
-  recent: ['limit'],
-  providers: [],
-  capabilities: [],
-  prompt: ['provider', 'profile', 'last', 'since-compact'],
-  doctor: ['strict'],
-  new: ['chain'],
-  chain: [],
-  search: ['reset-index'],
-  usage: ['chain'],
-  open: ['from', 'provider', 'to', 'check'],
-};
 
 function rejectUnusedFlags(cmd: string, usedFlags: string[], json: boolean): void {
   const allowed = FLAGS_BY_COMMAND[cmd];
@@ -3065,29 +3044,6 @@ function rejectUnusedFlags(cmd: string, usedFlags: string[], json: boolean): voi
   console.error(`[watch] ${message}`);
   usage();
 }
-
-/**
- * 每个命令接受的位置参数（命令名之后）。`rejectUnusedFlags` 只管 `--flag`；
- * `watch recent 3`（本意是 `--limit 3`）、`watch status foo` 这类多给的位置参数
- * 以前被静默吞掉、照样 exit 0，用户会以为参数生效了。`search` 不限：查询词本身就是位置参数。
- */
-const POSITIONAL_BY_COMMAND: Record<string, { max: number; hint: string }> = {
-  status: { max: 0, hint: '无位置参数（目录用 --cwd 传）' },
-  switch: { max: 1, hint: '<provider>' },
-  adopt: { max: 1, hint: '<provider>（会话用 --session 传）' },
-  sessions: { max: 0, hint: '无位置参数（目录用 --cwd 传）' },
-  recent: { max: 0, hint: '无位置参数（条数用 --limit 传）' },
-  providers: { max: 0, hint: '无位置参数' },
-  doctor: { max: 0, hint: '无位置参数（目录用 --cwd 传）' },
-  new: { max: 1, hint: '<provider>' },
-  chain: { max: Infinity, hint: '<list|new|rename|archive|use> [名字或 id] [新名字]' },
-  usage: { max: 0, hint: '无位置参数' },
-  open: { max: 1, hint: '<session-id>' },
-  prompt: { max: 1, hint: '[<session-id>]（省略时自动挑本目录最新的可读会话）' },
-};
-
-/** `chain` 各子命令吃的位置参数个数；未知子命令交给 cmdChain 自己报错，这里不拦 */
-const CHAIN_POSITIONAL: Record<string, number> = { list: 1, new: 2, rename: 3, archive: 2, use: 2 };
 
 function rejectExtraPositionals(cmd: string, positional: string[], json: boolean): void {
   const spec = POSITIONAL_BY_COMMAND[cmd];
@@ -3196,8 +3152,13 @@ async function main(): Promise<void> {
   }
   // 命令名拼错时参数其实是完整的，说「参数不完整或不合法」会让人去补参数；
   // 与 cmdChain 的「未知的 chain 子命令」保持一致，直接列出可用命令
-  if (cmd) usage(`未知命令: ${cmd}；可用: ${COMMANDS} / import-codex`);
-  usage(`缺少子命令；可用: ${COMMANDS} / import-codex`);
+  if (cmd) {
+    // 最接近的那个放在清单前面：十几个命令里逐个比对，不如直接指出差一两个字符的那一个。
+    // 只在唯一近邻上给（见 closestCommand），猜不准就只列清单。
+    const near = closestCommand(cmd);
+    usage(`未知命令: ${escapeControlChars(cmd)}${near ? `；最接近的是 ${near}` : ''}；可用: ${COMMAND_LIST}`);
+  }
+  usage(`缺少子命令；可用: ${COMMAND_LIST}`);
 }
 
 async function cmdUsage(cwd: string, json: boolean, chain?: string): Promise<void> {
