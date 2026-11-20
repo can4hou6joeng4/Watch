@@ -140,7 +140,7 @@ import-codex  prepare|confirm|status|project-prepare|project-confirm|project-sta
 
 `doctor --json` 的 `claudeRetention` 报告 Claude Code 用户设置中的保留期，`claudeProjectRetention` 报告项目设置里读到的值：当前目录下的 `.claude/settings.local.json` 与 `.claude/settings.json`，以及在普通 Git 仓库子目录运行时仓库根目录的 `.claude/settings.local.json`（`scope` 为 `repository-local`）。设置路径异常、文件不可读或超过 1 MiB 时，返回 `unknown` 并给出原因。`cleanupPeriodDays` 允许写在任意设置文件里，项目设置可以覆盖用户设置；工作树 / 子模块（`.git` 是文件）、仓库根就是家目录或目录所有权不符时跳过仓库根这一份（工作树的估算因此可能偏保守），`--settings` 与管理设置不在范围内，实际清理期限取决于 Claude Code 加载的全部设置。`doctor` 判断链尾风险时按已探测文件的优先级取会被读取的那一份，而不是取所有文件里的最短值：仓库根的 local 覆盖启动目录的 local，项目 local 覆盖 shared，项目设置再覆盖用户设置；被覆盖的短值不报警，高层设置读不出来时也不拿低层值猜测。若这份保留期显式低于官方默认，而链尾的 Claude Code 会话文件比该天数更旧，`doctor` 会把这条链标成清理风险（按文件最后修改时间估算，不宣称一定会被删除）。
 
-`usage` 的合计只是「读得出来的部分之和」：读取失败、没有 usage 字段、适配器不提供用量，都会在合计行括注；某个会话的用量数据源有无法解析的行时，合计后另起一行说明这轮是下界，按会话那一行也会就地标出「这个数是下界」——`--json` 对应 `totalExcluded` / `totalMissingUsage` / `byProvider[].usageBadLines`。内容文件有坏行时同样会披露，`byProvider[].contentBadLines` 给出坏行数；旁路文件里已经读到的用量仍会保留在合计里，不会因为内容文件的坏行而消失。只有解析确实为 0 轮时，警告才会说它不能当作空会话；已有轮次时只说明内容可能不完整。
+`usage` 的合计只是「读得出来的部分之和」：读取失败、没有 usage 字段、适配器不提供用量，都会在合计行括注；某个会话的用量数据源有无法解析的行时，合计后另起一行说明这轮是下界，按会话那一行也会就地标出「这个数是下界」——`--json` 对应 `totalExcluded` / `totalMissingUsage` / `byProvider[].usageBadLines`。内容文件有坏行时同样会披露，`byProvider[].contentBadLines` 给出坏行数；旁路文件里已经读到的用量仍会保留在合计里，不会因为内容文件的坏行而消失。内容根本解析不出来时，这条会话按读取失败计入合计（说「内容读取失败」而不是「无 usage 数据」），并在 `--json` 里带 `byProvider[].contentUnreadable: true`——脚本靠字段就能与「用量读出来了、只是内容可能不完整」的 `contentProblem` 分开。只有解析确实为 0 轮时，警告才会说它不能当作空会话；已有轮次时只说明内容可能不完整。
 
 `search` 同理：某条会话的文件里有无法解析的行时，这些行的内容不会进索引，搜索会在 `warnings` 里说明（文件没变、复用索引时也照样说），而不是只回一句「无结果」。
 
