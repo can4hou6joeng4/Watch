@@ -115,9 +115,19 @@ async function startAppServer() {
   };
   // app-server 也可能只关掉 stdout、不抛 'error'：没有超时的话 rpc 永远等不到响应，
   // 整个验收挂在一条没有输出的命令上。超时结算成结构化失败，由 record() 记成这次没跑成（第 310 轮）。
+  // 计时器要 unref 并在结算后清掉：成功跑完时留着它，进程会被最后一个 15s 定时器多拖十几秒（第 311 轮）。
   const withTimeout = async (promise, ms, label) => {
-    const outcome = await Promise.race([promise, sleep(ms).then(() => ({ __timeout: true }))]);
-    return outcome.__timeout ? { error: { message: `${label} 超时（${ms}ms 内没有响应）` } } : outcome;
+    let timer;
+    const timeout = new Promise((resolve) => {
+      timer = setTimeout(() => resolve({ __timeout: true }), ms);
+      timer.unref?.();
+    });
+    try {
+      const outcome = await Promise.race([promise, timeout]);
+      return outcome.__timeout ? { error: { message: `${label} 超时（${ms}ms 内没有响应）` } } : outcome;
+    } finally {
+      clearTimeout(timer);
+    }
   };
   const initialized = await withTimeout(
     rpc('initialize', {
