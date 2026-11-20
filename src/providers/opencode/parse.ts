@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
-import { normalizeUserText, OPENCODE_COMPACTION_SUMMARY_PREFIX, OPENCODE_SYNTHETIC_TEXT_PREFIX, OPENCODE_TOOL_FAILURE_PREFIX, unknownTypeLabel, unwrapMarkedToolInput, WATCH_CONTEXT_DISCLOSURE_PREFIX } from '../../core/rich.js';
+import { normalizeUserText, OPENCODE_COMPACTION_SUMMARY_PREFIX, OPENCODE_SYNTHETIC_TEXT_PREFIX, OPENCODE_TOOL_FAILURE_PREFIX, OPENCODE_UNFINISHED_TOOL_PREFIX, unknownTypeLabel, unwrapMarkedToolInput, WATCH_CONTEXT_DISCLOSURE_PREFIX } from '../../core/rich.js';
 import { clipCodePoints } from '../../core/display.js';
 import { isoFromEpochMs } from '../../core/time.js';
 import type { ProcessEvent, SessionRef, TokenUsage, UnifiedTurn } from '../../core/types.js';
@@ -319,7 +319,7 @@ function partToEvents(
       name: toolName,
       callId,
       input,
-      summary: `${unfinished ? '[未完成工具调用] ' : ''}${toolName} ${clipCodePoints(JSON.stringify(input), 200).text}`,
+      summary: `${unfinished ? OPENCODE_UNFINISHED_TOOL_PREFIX : ''}${toolName} ${clipCodePoints(JSON.stringify(input), 200).text}`,
       provider: 'opencode',
     });
     const errored = part.state?.status === 'error';

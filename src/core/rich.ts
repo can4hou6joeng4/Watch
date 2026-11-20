@@ -81,6 +81,12 @@ export const OPENCODE_SYNTHETIC_TEXT_PREFIX = '[OpenCode 注入内容（由 Open
  */
 export const OPENCODE_TOOL_FAILURE_PREFIX = '[工具执行失败] ';
 
+/**
+ * OpenCode 1.x 里「来源没有记录结果」的工具调用，摘要以这段标记开头（`parse.ts` 写、
+ * `watch prompt` 渲染工具行时要先跳过它再判断摘要是否已带工具名）。
+ */
+export const OPENCODE_UNFINISHED_TOOL_PREFIX = '[未完成工具调用] ';
+
 /** 两条 OpenCode 写出路径共用，避免把显示前缀重复写入原生 error 字段。 */
 export function stripToolFailurePrefix(text: string): string {
   let out = text.trim();

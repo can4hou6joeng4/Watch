@@ -3,7 +3,7 @@ import { addFinding } from './findings.js';
 import type { ManifestDiskReport } from './manifest-disk.js';
 import { summarizeManifestDisk } from './manifest-disk.js';
 import { codeFence, inlineCode, singleLineText } from './markdown.js';
-import { CLAUDE_COMPACT_SUMMARY_PREFIX, findContextDisclosure, KIMI_COMPACTION_SUMMARY_PREFIX, OPENCODE_COMPACTION_SUMMARY_PREFIX, PI_COMPACTION_SUMMARY_PREFIX, WATCH_CONTEXT_DISCLOSURE_PREFIX } from './rich.js';
+import { CLAUDE_COMPACT_SUMMARY_PREFIX, findContextDisclosure, KIMI_COMPACTION_SUMMARY_PREFIX, OPENCODE_COMPACTION_SUMMARY_PREFIX, OPENCODE_UNFINISHED_TOOL_PREFIX, PI_COMPACTION_SUMMARY_PREFIX, WATCH_CONTEXT_DISCLOSURE_PREFIX } from './rich.js';
 import { isoFromEpochMs } from './time.js';
 import type { ProcessEvent, TokenUsage, UnifiedTurn } from './types.js';
 import { collectWorkManifest, isEmptyWorkManifest, renderFailedAttempts, renderWorkManifest, type FailedAttempt, type ManifestDiskSummary, type WorkManifest } from './work-manifest.js';
@@ -422,6 +422,27 @@ function clipInline(text: string, limit: number): { text: string; truncated: boo
   return { text: `${chars.slice(0, limit).join('')}…`, truncated: true };
 }
 
+/**
+ * 工具行必须看得出调用的是哪个工具（第 327 轮）。各家 parser 的 `summary` 形状不一：
+ * Grok / Kimi / Codex 通用工具是 `名字: 入参`，OpenCode 是 `名字 入参`，Pi 只有名字——
+ * 这些已经带名字；Claude 的摘要是入参 JSON 的第一行、Codex 的 exec / web_search 只有命令
+ * 或查询词，渲染出来是 `- [工具] {"file_path":…`，读者分不出这是 Read、Edit 还是 Write
+ * （读过与改过是两回事）。这里只在摘要没带名字时补上，不改各家 parser 的 `summary`
+ * （搜索索引与回显判定都在用它）。
+ */
+function withToolName(event: ProcessEvent, summary: string, stats: PromptStats): string {
+  if (event.kind !== 'tool_call' || typeof event.name !== 'string') return summary;
+  const name = clipInline(event.name.replace(/\s+/g, ' ').trim(), 64);
+  if (!name.text) return summary;
+  if (name.truncated) stats.truncatedTexts += 1;
+  if (!summary) return name.text;
+  const rest = summary.startsWith(OPENCODE_UNFINISHED_TOOL_PREFIX)
+    ? summary.slice(OPENCODE_UNFINISHED_TOOL_PREFIX.length)
+    : summary;
+  if (rest === name.text || rest.startsWith(`${name.text}:`) || rest.startsWith(`${name.text} `)) return summary;
+  return `${name.text}: ${summary}`;
+}
+
 /** 事件渲染成一行摘要：`- [工具] Bash: ls -la` */
 function renderEvent(event: ProcessEvent, detailLimit: number | null, stats: PromptStats): string {
   const kindLabel: Record<ProcessEvent['kind'], string> = {
@@ -437,7 +458,8 @@ function renderEvent(event: ProcessEvent, detailLimit: number | null, stats: Pro
   if (summary.truncated) stats.truncatedTexts += 1;
   // 摘要里的控制字符同样被转义成字面量，必须计数（第 276 轮）：读者看到 `\u001B`
   // 时应该能从 findings 里知道这是被改写过的原文，而不是会话里真有这串字符。
-  const summarySanitized = sanitizeBody(summary.text);
+  // 工具名同样来自会话文件：与摘要拼成一行后一起转义、一起计数。
+  const summarySanitized = sanitizeBody(withToolName(event, summary.text, stats));
   if (summarySanitized.escaped) stats.escapedBodies += 1;
   let line = `- [${kindLabel[event.kind]}] ${summarySanitized.text}`;
   if (event.detail && detailLimit !== 0) {
