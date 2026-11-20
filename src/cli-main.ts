@@ -2858,11 +2858,13 @@ async function cmdChain(cwd: string, json: boolean, action?: string, a?: string,
       if (!found) throw new ChainLookupError(store.missingChainMessage(cwd, a));
       // 已是归档状态时 `archiveChain()` 直接 return，什么都没做。
       // 照旧打「已归档」会让用户以为刚刚归档成功，看不出本次是空操作。
+      // 领头词与 `chain rename <同名>` 的「未改动:」对齐：补一句说明还不够，
+      // 扫一眼就走的读者只会看到行首那个动作词（第 311 轮）。
       if (found.status === 'archived') {
         const shown = escapeControlChars(found.name);
         const note = `链「${shown}」本来就是归档状态，本次没有做任何改动；可用 watch chain use ${shown} 把它恢复成当前链`;
         if (json) console.log(JSON.stringify({ ok: true, unchanged: true, id: found.id, warnings: [note] }));
-        else console.log(`已归档: ${shown}（${note}）`);
+        else console.log(`未改动: ${shown}（${note}）`);
         return;
       }
       // 归档**当前链**时，当前链会静默换成另一条活跃链：之后所有不带 `--chain` 的
