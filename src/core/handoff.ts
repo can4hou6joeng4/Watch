@@ -422,6 +422,30 @@ export function diffTurns(source: UnifiedTurn[], dest: UnifiedTurn[]): UnifiedTu
   return out;
 }
 
+/**
+ * `recordSwitch()` 失败时的警告文案。
+ *
+ * `getOrCreateChainSession()` 与 `recordSwitch()` 是两次独立提交：空库上第一条链由前者
+ * 建出来并已落库，后者再失败时，库里已经多了一条没有任何切换记录的链——旧文案只说
+ * 「链记录失败」，用户 `chain list` 时凭空看到一条「默认」，会以为是自己弄坏的。
+ * 失败后只读地确认一次：链在、且没有任何切换记录时，把这件事说出来。
+ */
+function chainRecordFailureWarning(store: Store, cwd: string, chainId: string | undefined, error: unknown): string {
+  const reason = describeStoreErrorReason(error);
+  let emptyChain: string | null = null;
+  try {
+    const chain = store.findActiveChain(cwd, chainId);
+    if (chain && store.listSwitchEvents(chain.id).length === 0) emptyChain = chain.name;
+  } catch {
+    // 链状态本身也读不出来：真正的原因已在 reason 里，不再叠第二句
+  }
+  if (!emptyChain) return `链记录失败: ${reason}`;
+  return (
+    `链记录失败: ${reason}；链「${escapeControlChars(emptyChain)}」本身已经在本地库里（建链是单独一次提交），` +
+    `但这条链上没有任何切换记录——本次切换没有记到链上（链尾没有切换）；重跑同一条命令即可补上`
+  );
+}
+
 /** 把 provider 指定会话（缺省取 mtime 最新）接入链：链上该 provider 的绑定替换为该会话 */
 export async function adoptIntoChain(
   providerId: string,
@@ -643,9 +667,10 @@ export async function adoptIntoChain(
       store.recordSwitch(id, replacedFrom, replaced, providerId, found.ref);
       chainRecordState = 'written';
     } catch (error) {
-      console.error('[watch] 记录接入失败:', error);
+      // 不直接转储 Error 对象：堆栈与英文 errstr 在 `--json` 下只会干扰，
+      // 真原因（含触发器 RAISE 的文案）已由 describeStoreErrorReason 翻进警告
       chainRecordState = 'failed';
-      warnings.push(`链记录失败: ${describeStoreErrorReason(error)}`);
+      warnings.push(chainRecordFailureWarning(store, cwd, chainId, error));
     }
   }
   // 链上这一家原本没绑会话时仍然接入「最新会话」（这是 adopt 的既定语义），
@@ -2108,9 +2133,8 @@ export async function handoff(
         store.recordSwitch(id, sourceTip.provider, sourceTip.ref, targetId, resumeRef);
         chainRecordState = 'written';
       } catch (error) {
-        console.error('[watch] 记录 switch_events 失败，交接仍完成:', error);
         chainRecordState = 'failed';
-        warnings.push(`链记录失败: ${describeStoreErrorReason(error)}`);
+        warnings.push(chainRecordFailureWarning(store, cwd, opts?.chainId, error));
       }
     }
     // 来源 0 轮的披露推迟到这里：链尾到底切没切，要看上面 recordSwitch 的结果。
