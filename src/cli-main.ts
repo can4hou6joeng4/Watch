@@ -198,6 +198,16 @@ function storeUnavailableError(): string {
 }
 
 /**
+ * `chainRecordState` 是 core 与命令层之间的协调字段：只描述这次链记录写没写成，
+ * 失败原因已经在 `warnings` 里。`--json` 不带它——否则脚本会把它当公开契约，
+ * 而它只在部分分支出现（空链分支根本没有这个字段）。
+ */
+function publicResult<T extends { chainRecordState?: unknown }>(result: T): Omit<T, 'chainRecordState'> {
+  const { chainRecordState: _internal, ...rest } = result;
+  return rest;
+}
+
+/**
  * `WATCH_DB=:memory:` 的披露文案，`subject` 说明这条命令本来写进去了什么。
  *
  * 这一档与「库打不开」完全不同：库是好的，`ok:true` 也是真的，只是它随进程消失。
@@ -747,7 +757,7 @@ async function cmdSwitch(cwd: string, targetId: string, json: boolean, chain?: s
       console.log(
         JSON.stringify({
           ok: true,
-          ...result,
+          ...publicResult(result),
           ...(shiftNote ? { warnings: [...result.warnings, shiftNote], previousChain, currentChain } : {}),
         }),
       );
@@ -791,12 +801,27 @@ async function cmdSwitch(cwd: string, targetId: string, json: boolean, chain?: s
     }
     // 零增量不是「交接了 0 轮」：来源可能是 0 轮空会话，也可能目标已包含全部内容。
     // 两种都只更新了链尾，结论必须与事实一致（旧的「已从 X 交接 → Y（0 轮）」两边都不像）。
+    //
+    // 链尾没更新时不能说「已切到 / 链尾已更新」：同一份输出里上面刚有一条「链记录失败」。
+    // 内容确实就位了（没写会话文件 / 没追加），所以只讲内容，链尾那截单独说。
+    const chainTailFailed = result.chainRecordState === 'failed';
     if (result.turnCount === 0 && result.zeroIncrementReason === 'source-empty') {
-      console.log(`已切到 ${targetId}（链尾已更新；来源会话没有可交接的内容，本次未写入会话文件）`);
+      console.log(
+        chainTailFailed
+          ? `内容已就位：来源会话没有可交接的内容，本次未写入会话文件；但链尾未更新（链记录写入失败，原因见上方警告）`
+          : `已切到 ${targetId}（链尾已更新；来源会话没有可交接的内容，本次未写入会话文件）`,
+      );
     } else if (result.turnCount === 0 && result.zeroIncrementReason === 'up-to-date') {
-      console.log(`已切到 ${targetId}（链尾已更新；目标会话已包含全部内容，本次未追加）`);
+      console.log(
+        chainTailFailed
+          ? `内容已就位：目标会话已包含全部内容，本次未追加；但链尾未更新（链记录写入失败，原因见上方警告）`
+          : `已切到 ${targetId}（链尾已更新；目标会话已包含全部内容，本次未追加）`,
+      );
     } else {
-      console.log(`已从 ${result.fromProvider} 交接 → ${targetId}（${result.turnCount} 轮）`);
+      console.log(
+        `已从 ${result.fromProvider} 交接 → ${targetId}（${result.turnCount} 轮` +
+          (chainTailFailed ? '；链尾未更新，链记录写入失败，原因见上方警告）' : '）'),
+      );
     }
     console.log(`新会话: ${escapeControlChars(result.newRef.sessionId)}`);
     console.log(`文件:   ${escapeControlChars(result.newRef.filePath)}`);
@@ -974,8 +999,14 @@ async function cmdAdopt(
     const adoptedAdapter = listAdapters().find((a) => a.id === result.adoptedRef.provider);
     const resumeCommand = adoptedAdapter ? adoptedAdapter.resumeCommand(result.adoptedRef) : undefined;
     // 链记录这次到底写没写：`unchanged` 时什么都没写（已绑定 / 自动挑到别条链两条空操作分支都会走到
-    // 这里），不能再沿用「链记录已写入」——接入一条读不出来或空着的会话时，这句话会变成假话。
-    const chainWriteNote = result.unchanged ? '这条会话本来就在链上，本次没有改动任何链记录' : '链记录已写入';
+    // 这里），`recordSwitch` 失败或无库时同样没写；只有 written 才能说「已写入」。下面三处警告都会把
+    // 这句话原样带出去，接入一条读不出来 / 空着的会话时说错就是假话（第 310 轮）。
+    const chainWriteNote =
+      result.unchanged
+        ? '这条会话本来就在链上，本次没有改动任何链记录'
+        : result.chainRecordState === 'written'
+          ? '链记录已写入'
+          : '本次未写入链记录（原因见上方警告）';
     // adopt 只写链记录、不读会话内容，所以「文件本身读不出来」在这里一点都看不出来：
     // `sessions` / `recent` 会为同一条会话警告「open / switch 读它时同样会失败」，
     // adopt 却回 ok:true 并给出一条一执行就失败的 resume。`stat` 对 `chmod 000` 照常成功
@@ -1052,7 +1083,7 @@ async function cmdAdopt(
       console.log(
         JSON.stringify({
           ok: true,
-          ...result,
+          ...publicResult(result),
           ...(shiftNote ? { warnings: [...result.warnings, shiftNote], previousChain, currentChain } : {}),
           ...(resumeCommand ? { resumeCommand } : {}),
         }),
@@ -1062,9 +1093,16 @@ async function cmdAdopt(
     // 与 switch 一致：警告先打（未写入链记录这类说明不能排在成功之后被漏看），且走 stderr
     for (const warning of result.warnings) console.error(`警告: ${escapeControlChars(warning)}`);
     // 空操作（这条会话本来就绑在这家）时不能打「已接入链」：链上什么都没有变，
-    // 而它可能正是用户想修的那件事（链尾还停在另一家）
+    // 而它可能正是用户想修的那件事（链尾还停在另一家）。
+    // 链记录写失败 / 无库时同样什么都没变：`replacedRef` 只是打算替换的那条，
+    // 说「已接入 / 替换了」会和上面的「链记录失败」互相矛盾（第 310 轮）。
     if (result.unchanged) {
       console.log(`未改动: ${escapeControlChars(result.adoptedRef.sessionId)}`);
+      if (result.note) console.log(`  ${escapeControlChars(result.note)}`);
+    } else if (result.chainRecordState !== 'written') {
+      console.log(
+        `未接入链: ${escapeControlChars(result.adoptedRef.sessionId)}（链记录没写成，原因见上方警告；这条会话仍可用下面的命令打开）`,
+      );
       if (result.note) console.log(`  ${escapeControlChars(result.note)}`);
     } else {
       console.log(`已接入链: ${escapeControlChars(result.adoptedRef.sessionId)}`);
@@ -2404,27 +2442,34 @@ async function cmdNew(cwd: string, providerId: string, json: boolean, chain?: st
       } else {
         fail(json, `${providerId} 不支持从零开聊`);
       }
-      let chainRecordWritten = false;
+      // 这里有两个不同的事实：链行是否已建（`chains` 表）、切换记录是否写成（`switch_events` 表）。
+      // `getOrCreateChainSession()` 先建链行再 `recordSwitch()`，后者失败时链行已经提交——
+      // 别名组警告讲的是「这个 --cwd 写法下多了一条链」，只要链行写成就是真的（第 310 轮审查：
+      // 第 309 轮把门禁挂在 `recordSwitch` 之后，等于把一条真实的两组链警告吞掉了）。
+      let chainGroupWritten = false;
       if (store) {
         try {
           const id = store.getOrCreateChainSession(cwd, chain);
+          chainGroupWritten = true;
           // 把首开聊记录为链的起点，后续 handoff 才能正确判断链尾
           store.recordSwitch(id, null, null, providerId, ref);
-          chainRecordWritten = true;
         } catch (error) {
           // 会话已经建出来了，不能因为写链失败整条命令报错（用户拿到的 ref 仍可 resume），
-          // 但后续 switch 不会认这条绑定，必须说明——否则 status 里看不到它却毫无提示
+          // 但后续 switch 不会认这条绑定，必须说明——否则 status 里看不到它却毫无提示。
+          // 措辞分开：链行都没建成时说「链记录失败」，只有切换记录失败时说「切换记录失败」，
+          // 免得与随后那条「这次建了链」的别名组警告互相矛盾。
           console.error('[watch] 记录 switch_events 失败，新会话仍已创建:', error);
-          warnings.push(`链记录失败，后续切换不会认这条绑定：${describeStoreErrorReason(error)}`);
+          warnings.push(
+            (chainGroupWritten ? '切换记录失败' : '链记录失败') +
+              `，后续切换不会认这条绑定：${describeStoreErrorReason(error)}`,
+          );
         }
       }
       // 会话已经建出来、链绑定也写好了，但目录进不去：与查询类命令不同，这里必须说清
       // 「已经写进去的是什么」以及「resume 会失败」，否则 ok:true + resume 会被读成马上能用
       if (cwdWriteIssue) warnings.push(newSessionCwdWarning(cwdWriteIssue, ref.filePath));
-      // 这次在 `--cwd` 下写出了链记录：同一个目录的另一种写法下若已有链，说明会有两组（见 helper）。
-      // 链记录没写成时不能说这句——同一份 warnings 里已经有「链记录失败」，再说「这次写了」
-      // 会互相矛盾（第 309 轮审查实测：空链分支写失败后仍打出「这次…写了链记录」）。
-      if (chainRecordWritten) await aliasWarnings();
+      // 链行写成（无论切换记录是否写成）：同一个目录的另一种写法下若已有链，说明会有两组（见 helper）
+      if (chainGroupWritten) await aliasWarnings();
       const resumeCommand = adapter.resumeCommand(ref);
       warnings.push(...commandControlWarnings(resumeCommand));
       // 空链分支同样会 touchChain（getOrCreateChainSession 在建会话之后就跑过）
@@ -2464,8 +2509,9 @@ async function cmdNew(cwd: string, providerId: string, json: boolean, chain?: st
     const result = await createChainSession(providerId, cwd, listAdapters(), getAdapter, store, chain);
     // 链已存在时的表单同样要带出 cwd / 读库 / 交接降级说明，不能只在空链分支打印
     // 先把「另一种写法下已有链」并进 warnings，再由这里统一带出（两条通道共用同一份）。
-    // `createChainSession()` 写链记录失败时只把原因放进 result.warnings，这里同样不能再说「写了」。
-    if (!result.chainRecordFailed) await aliasWarnings();
+    // 只有这次真的写了切换记录（written）才谈得上「这次写了链记录」：alreadyAtTarget /
+    // 链记录失败时这句是假话（第 309/310 轮）。
+    if (result.chainRecordState === 'written') await aliasWarnings();
     const allWarnings = [...warnings, ...result.warnings, ...commandControlWarnings(result.resumeCommand)];
     // 已有链分支可能复用配对会话，也可能新建；无论哪种，只要目录进不去，resume 都会在这一步失败
     if (cwdWriteIssue) allWarnings.push(newSessionCwdWarning(cwdWriteIssue, result.newRef.filePath));
@@ -2476,7 +2522,7 @@ async function cmdNew(cwd: string, providerId: string, json: boolean, chain?: st
       console.log(
         JSON.stringify({
           ok: true,
-          ...result,
+          ...publicResult(result),
           ...(shiftNote ? { previousChain, currentChain } : {}),
           ...(allWarnings.length || shiftNote ? { warnings: shiftNote ? [...allWarnings, shiftNote] : allWarnings } : {}),
         }),
