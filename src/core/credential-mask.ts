@@ -14,7 +14,13 @@ import type { ProcessEvent } from './types.js';
  * 纯函数，不读盘、不联网；不记录也不输出凭据原文（去重用的集合只在一次渲染内存活）。
  */
 
-type CredentialKind = { label: string; pattern: RegExp };
+/**
+ * `cut` 认的是**被上游截断的**同一种凭据（第 330 轮）：各家 parser 的事件摘要只留首行的前 79 个
+ * 码点再加 `…`，一个 36 位的令牌可能在第 35 位被切断——长度不够、整条规则认不出来，于是几乎
+ * 完整的令牌留在了文档里。只在紧跟 `…` 时才认，且要求前缀之后至少还有 8 个字符：
+ * `ghp_xxxx…`、`sk-ant-…` 这类人手写的占位写法不动。
+ */
+type CredentialKind = { label: string; pattern: RegExp; cut?: RegExp };
 
 // 顺序即优先级：PEM 块最先（块里可能含形似其它种类的片段），带厂商前缀的先于通用 `sk-`。
 // 左侧一律用否定后行断言卡住边界，避免从更长的标识符中间截出一段「密钥」。
@@ -22,24 +28,74 @@ const KINDS: readonly CredentialKind[] = [
   {
     label: 'PEM 私钥',
     // 有 END 行时整块替换（上限 8192 字符，避免把两处相隔很远的标记之间整段吞掉）；
-    // 被截断、没有 END 时只吞后续的 base64 行。`\\n` 覆盖 JSON 字符串里的字面换行。
+    // 被截断、没有 END 时只吞后续的 base64 行，末尾紧跟 `…` 的半行也一并吞掉。
+    // `\\n` 覆盖 JSON 字符串里的字面换行。
     pattern:
-      /-----BEGIN ((?:[A-Z0-9]+ )*)PRIVATE KEY-----(?:[\s\S]{0,8192}?-----END \1PRIVATE KEY-----|(?:(?:\r?\n|\\r\\n|\\n)[ \t]*[A-Za-z0-9+/=]{16,})*)/g,
+      /-----BEGIN ((?:[A-Z0-9]+ )*)PRIVATE KEY-----(?:[\s\S]{0,8192}?-----END \1PRIVATE KEY-----|(?:(?:\r?\n|\\r\\n|\\n)[ \t]*[A-Za-z0-9+/=]{16,})*(?:(?:\r?\n|\\r\\n|\\n)[ \t]*[A-Za-z0-9+/=]*(?=…))?)/g,
   },
-  { label: 'Anthropic API 密钥', pattern: /(?<![A-Za-z0-9_-])sk-ant-[A-Za-z0-9_-]{20,}/g },
-  { label: 'OpenRouter API 密钥', pattern: /(?<![A-Za-z0-9_-])sk-or-v1-[A-Za-z0-9]{32,}/g },
-  { label: 'OpenAI API 密钥', pattern: /(?<![A-Za-z0-9_-])sk-(?:proj|svcacct|admin)-[A-Za-z0-9_-]{20,}/g },
+  {
+    label: 'Anthropic API 密钥',
+    pattern: /(?<![A-Za-z0-9_-])sk-ant-[A-Za-z0-9_-]{20,}/g,
+    cut: /(?<![A-Za-z0-9_-])sk-ant-[A-Za-z0-9_-]{12,}(?=…)/g,
+  },
+  {
+    label: 'OpenRouter API 密钥',
+    pattern: /(?<![A-Za-z0-9_-])sk-or-v1-[A-Za-z0-9]{32,}/g,
+    cut: /(?<![A-Za-z0-9_-])sk-or-v1-[A-Za-z0-9]{8,}(?=…)/g,
+  },
+  {
+    label: 'OpenAI API 密钥',
+    pattern: /(?<![A-Za-z0-9_-])sk-(?:proj|svcacct|admin)-[A-Za-z0-9_-]{20,}/g,
+    cut: /(?<![A-Za-z0-9_-])sk-(?:proj|svcacct|admin)-[A-Za-z0-9_-]{8,}(?=…)/g,
+  },
   // 不带子前缀的 `sk-`（OpenAI 旧式、DeepSeek、Moonshot 等）：只认纯字母数字、至少 32 位且含数字，
   // 这样 `sk-folding-cube-…` 这类带连字符的 CSS 类名不会命中。
-  { label: 'sk- 开头的 API 密钥', pattern: /(?<![A-Za-z0-9_-])sk-(?=[A-Za-z0-9]*[0-9])[A-Za-z0-9]{32,}/g },
-  { label: 'GitHub 令牌', pattern: /(?<![A-Za-z0-9_])(?:gh[pousr]_[A-Za-z0-9]{36,}|github_pat_[A-Za-z0-9_]{40,})/g },
-  { label: 'GitLab 令牌', pattern: /(?<![A-Za-z0-9_-])glpat-[A-Za-z0-9_-]{20,}/g },
-  { label: 'AWS 访问密钥 ID', pattern: /(?<![A-Z0-9])(?:AKIA|ASIA)[0-9A-Z]{16}(?![0-9A-Z])/g },
-  { label: 'Google API 密钥', pattern: /(?<![A-Za-z0-9_-])AIza[0-9A-Za-z_-]{35}(?![0-9A-Za-z_-])/g },
-  { label: 'Slack 令牌', pattern: /(?<![A-Za-z0-9])xox[abeprs]-[A-Za-z0-9-]{10,}/g },
-  { label: 'Stripe 密钥', pattern: /(?<![A-Za-z0-9_])(?:sk|rk)_live_[A-Za-z0-9]{16,}/g },
-  { label: 'npm 令牌', pattern: /(?<![A-Za-z0-9_])npm_[A-Za-z0-9]{36}(?![A-Za-z0-9])/g },
-  { label: 'Hugging Face 令牌', pattern: /(?<![A-Za-z0-9_])hf_[A-Za-z0-9]{30,}/g },
+  {
+    label: 'sk- 开头的 API 密钥',
+    pattern: /(?<![A-Za-z0-9_-])sk-(?=[A-Za-z0-9]*[0-9])[A-Za-z0-9]{32,}/g,
+    cut: /(?<![A-Za-z0-9_-])sk-(?=[A-Za-z0-9]*[0-9])[A-Za-z0-9]{12,}(?=…)/g,
+  },
+  {
+    label: 'GitHub 令牌',
+    pattern: /(?<![A-Za-z0-9_])(?:gh[pousr]_[A-Za-z0-9]{36,}|github_pat_[A-Za-z0-9_]{40,})/g,
+    cut: /(?<![A-Za-z0-9_])(?:gh[pousr]_[A-Za-z0-9]{8,}|github_pat_[A-Za-z0-9_]{8,})(?=…)/g,
+  },
+  {
+    label: 'GitLab 令牌',
+    pattern: /(?<![A-Za-z0-9_-])glpat-[A-Za-z0-9_-]{20,}/g,
+    cut: /(?<![A-Za-z0-9_-])glpat-[A-Za-z0-9_-]{8,}(?=…)/g,
+  },
+  {
+    label: 'AWS 访问密钥 ID',
+    pattern: /(?<![A-Z0-9])(?:AKIA|ASIA)[0-9A-Z]{16}(?![0-9A-Z])/g,
+    cut: /(?<![A-Z0-9])(?:AKIA|ASIA)[0-9A-Z]{8,15}(?=…)/g,
+  },
+  {
+    label: 'Google API 密钥',
+    pattern: /(?<![A-Za-z0-9_-])AIza[0-9A-Za-z_-]{35}(?![0-9A-Za-z_-])/g,
+    cut: /(?<![A-Za-z0-9_-])AIza[0-9A-Za-z_-]{8,34}(?=…)/g,
+  },
+  {
+    label: 'Slack 令牌',
+    pattern: /(?<![A-Za-z0-9])xox[abeprs]-[A-Za-z0-9-]{10,}/g,
+    cut: /(?<![A-Za-z0-9])xox[abeprs]-[A-Za-z0-9-]{8,}(?=…)/g,
+  },
+  {
+    label: 'Stripe 密钥',
+    pattern: /(?<![A-Za-z0-9_])(?:sk|rk)_live_[A-Za-z0-9]{16,}/g,
+    cut: /(?<![A-Za-z0-9_])(?:sk|rk)_live_[A-Za-z0-9]{8,}(?=…)/g,
+  },
+  {
+    label: 'npm 令牌',
+    pattern: /(?<![A-Za-z0-9_])npm_[A-Za-z0-9]{36}(?![A-Za-z0-9])/g,
+    cut: /(?<![A-Za-z0-9_])npm_[A-Za-z0-9]{8,35}(?=…)/g,
+  },
+  {
+    label: 'Hugging Face 令牌',
+    pattern: /(?<![A-Za-z0-9_])hf_[A-Za-z0-9]{30,}/g,
+    cut: /(?<![A-Za-z0-9_])hf_[A-Za-z0-9]{8,}(?=…)/g,
+  },
+  // JWT 不设 `cut`：被截断的 JWT 没有完整签名段，剩下的头部 / 载荷不是可用的凭据。
   { label: 'JWT', pattern: /(?<![A-Za-z0-9_-])eyJ[A-Za-z0-9_-]{8,}\.eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}/g },
 ];
 
@@ -65,7 +121,7 @@ export function maskCredentials(text: string, collector: CredentialCollector): s
   if (!text || !QUICK_CHECK.test(text)) return text;
   let out = text;
   for (const kind of KINDS) {
-    out = out.replace(kind.pattern, (match) => {
+    const replace = (match: string): string => {
       let seen = collector.get(kind.label);
       if (!seen) {
         seen = new Set();
@@ -73,7 +129,10 @@ export function maskCredentials(text: string, collector: CredentialCollector): s
       }
       seen.add(match);
       return `[已隐去：${kind.label}]`;
-    });
+    };
+    out = out.replace(kind.pattern, replace);
+    // 截断的那一截排在整条之后：够长的已经被上一行换掉，这里只剩长度不够、紧跟 `…` 的。
+    if (kind.cut) out = out.replace(kind.cut, replace);
   }
   return out;
 }
