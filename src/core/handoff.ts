@@ -912,7 +912,7 @@ export async function chainUsage(
     /**
      * 内容解析抛错、因而不确定是不是空会话（同时计入 `totalExcluded`，`error` 里是同一句话）。
      *
-     * 与「用量读完但内容文件有问题」的 `contentProblem` 不是一回事：那档有数字、只是内容可能不完整；
+     * 与「用量读完、但内容文件已空 / 缺失 / 不可用」的 `contentProblem` 不是一回事：那档有数字，丢的是内容本身；
      * 这一档连是不是空会话都不知道。脚本不该靠解析中文文案分辨两者（第 316 轮）。
      */
     contentUnreadable?: true;
@@ -982,7 +982,7 @@ export async function chainUsage(
     /**
      * 内容解析抛错、因而不确定是不是空会话（同时计入 `totalExcluded`，`error` 里是同一句话）。
      *
-     * 与「用量读完但内容文件有问题」的 `contentProblem` 不是一回事：那档有数字、只是内容可能不完整；
+     * 与「用量读完、但内容文件已空 / 缺失 / 不可用」的 `contentProblem` 不是一回事：那档有数字，丢的是内容本身；
      * 这一档连是不是空会话都不知道。脚本不该靠解析中文文案分辨两者（第 316 轮）。
      */
     contentUnreadable?: true;

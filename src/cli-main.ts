@@ -17,6 +17,7 @@ import {
 } from './core/handoff-prompt.js';
 import { inspectManifestFilesOnDisk } from './core/manifest-disk.js';
 import { collectWorkManifest } from './core/work-manifest.js';
+import { handleFatal } from './core/fatal.js';
 import { getAdapter, listAdapters, listProviders, noSessionHint, unknownProviderMessage } from './providers/registry.js';
 import { checkOpenInProvider, LOOKUP_NEXT_STEP, lookupMissHeadline, openInProvider, openSession, resolveById } from './open.js';
 import type { LookupMiss } from './open.js';
@@ -3545,6 +3546,14 @@ async function cmdSearch(cwd: string, json: boolean, query: string, resetIndex =
 }
 
 main().catch((error) => {
-  console.error(error);
-  process.exit(1);
+  // `--json` 的契约是「成功与失败都向 stdout 输出单行 JSON」：命令级 fail() 之外逃出来的异常
+  // 也要遵守，否则 Rust 桥只能回「CLI 无输出, exit=1」。已经写过 stdout 的命令不再补第二行。
+  handleFatal(error, {
+    json: process.argv.includes('--json'),
+    bytesWritten: Number(process.stdout.bytesWritten ?? 0),
+    // 写完再退出：管道 / 重定向下 process.exit() 会丢掉还没刷出去的缓冲
+    writeJson: (line) => process.stdout.write(line, () => process.exit(1)),
+    writeError: (fatal) => console.error(fatal),
+    exit: (code) => process.exit(code),
+  });
 });
