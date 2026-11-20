@@ -96,6 +96,10 @@ function editDistance(a: string, b: string): number {
  * 拼错的命令名最接近哪一个。只在**唯一**的近邻上给建议：两个候选一样近时宁可不猜——
  * 建议错了比不建议更糟，用户会照着一个不相干的命令去跑。
  * 阈值随长度放宽（短命令 1 次编辑，较长的 2 次），且不超过输入长度的一半。
+ *
+ * 编辑距离够不着时再看「只打了前半截」：`stat` / `--desktop` 离 `status` / `--desktop-project`
+ * 的编辑距离都超过阈值，却是最常见的写法之一。同样只认**唯一**命中，且至少三个字符——
+ * `pro` 同时是 `providers` 与 `prompt` 的开头，不猜。
  */
 export function closestCommand(input: string, candidates: readonly string[] = COMMAND_NAMES): string | null {
   const typed = input.trim().toLowerCase();
@@ -115,6 +119,30 @@ export function closestCommand(input: string, candidates: readonly string[] = CO
       tied = true;
     }
   }
-  if (bestDistance > limit || tied) return null;
-  return best;
+  if (bestDistance <= limit) return tied ? null : best;
+  if (typed.length < 3) return null;
+  const prefixed = candidates.filter((candidate) => candidate.startsWith(typed));
+  return prefixed.length === 1 ? prefixed[0]! : null;
+}
+
+/**
+ * 主 CLI 认识的全部 `--flag`，按是否带取值分两组。
+ *
+ * 解析本身是 `cli-main.ts` 里的逐个分支，这两张表不参与取值，只回答三件事：
+ * `--chain=foo` 这种等号写法该不该拆开（取值选项）、`--json=1` 该不该拒绝（布尔开关），
+ * 以及 `--chian` 拼错时最接近哪一个。两张表与解析分支的一致性由回归逐个 flag 实跑核对。
+ */
+export const VALUE_FLAGS: readonly string[] = ['cwd', 'session', 'chain', 'from', 'provider', 'to', 'profile', 'last', 'limit'];
+export const BOOLEAN_FLAGS: readonly string[] = ['json', 'check', 'strict', 'since-compact', 'reset-index', 'help', 'version'];
+export const FLAG_NAMES: readonly string[] = [...VALUE_FLAGS, ...BOOLEAN_FLAGS];
+
+/**
+ * 拼错的 `--flag` 最接近哪一个，返回带 `--` 的写法；`--chian=foo` 只比较等号之前的名字。
+ * 规则与 `closestCommand()` 完全相同（唯一近邻或唯一前缀），只是候选换成 flag 名。
+ */
+export function closestFlag(arg: string, candidates: readonly string[] = FLAG_NAMES): string | null {
+  const eq = arg.indexOf('=');
+  const name = (eq === -1 ? arg : arg.slice(0, eq)).replace(/^-+/, '');
+  const near = closestCommand(name, candidates);
+  return near ? `--${near}` : null;
 }

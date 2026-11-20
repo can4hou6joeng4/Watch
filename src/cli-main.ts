@@ -31,7 +31,7 @@ import type { StoreFootprint } from './core/doctor.js';
 import { CLAUDE_PROJECT_SETTINGS_RELATIVE_PATHS, type ClaudeRetentionProbe } from './providers/claude/retention.js';
 import { cwdAliasHint, cwdProblem, describeCwdProblem, describeRecordedCwd, describeRepoBranchNote, describeWorktreeNote, describeWriteCwd, inspectCwd, inspectRepoBranch, inspectWorktree, sameDirectorySync, splitElsewhereByDirectory, type CwdInspection } from './core/cwd.js';
 import { escapeControlChars, hasControlChars } from './core/display.js';
-import { CHAIN_POSITIONAL, COMMAND_LIST, FLAGS_BY_COMMAND, POSITIONAL_BY_COMMAND, closestCommand } from './core/cli-commands.js';
+import { BOOLEAN_FLAGS, CHAIN_POSITIONAL, COMMAND_LIST, FLAGS_BY_COMMAND, POSITIONAL_BY_COMMAND, VALUE_FLAGS, closestCommand, closestFlag } from './core/cli-commands.js';
 import { commandControlWarnings } from './core/terminal-command.js';
 import { trimUserKey } from './core/cli-input.js';
 import { describeResumeTargetUnfinished } from './core/rich.js';
@@ -57,7 +57,9 @@ const JSON_REQUESTED = process.argv.includes('--json');
  * 是命令名拼错了、少了 provider，还是 `--limit` 越界。
  */
 function usage(reason?: string): never {
-  if (reason) console.error(`[watch] ${reason}`);
+  // 用法错误里插值的是命令行原文（拼错的 flag、多给的位置参数、给了两次的取值）：与路径、链名
+  // 同属不可信字符串，进终端前转义；下面的 JSON 保留原值（JSON.stringify 自己会编码控制字符）
+  if (reason) console.error(`[watch] ${escapeControlChars(reason)}`);
   console.error(`用法:
   watch --version [--json]                          打印版本号（读 package.json；读不出来给 null）
   watch status [--json] [--cwd <path>] [--chain <id|name>]
@@ -92,6 +94,19 @@ function usage(reason?: string): never {
     );
   }
   process.exit(1);
+}
+
+/**
+ * 「参数层就能判定的错误」的统一出口：`--json` 只回一行 `{ ok:false, error }`（保留原值），
+ * 文本模式先说原因再打印整页用法。以前这段在三处各写一遍，三处都把命令行原文直接拼进 stderr——
+ * `watch status $'--ch\x1b[31main'` 会把 ESC 原样送进终端。
+ */
+function rejectArguments(json: boolean, message: string): never {
+  if (json) {
+    console.log(JSON.stringify({ ok: false, error: message }));
+    process.exit(1);
+  }
+  usage(message);
 }
 
 function fail(json: boolean, message: string, extra?: Record<string, unknown>): never {
@@ -431,12 +446,21 @@ function parseArgs(argv: string[]): {
    * environment"）。布尔开关（`--json` / `--check` / `--strict`）重复是幂等的，不在此列。
    */
   const seenValues = new Map<string, string>();
+  /** 当前 token 写成 `--flag=值` 时等号后面的部分；空格写法为 undefined */
+  let inlineValue: string | undefined;
   /** 取下一个 token 作为参数值；缺值、误吞下一个 flag、或同一选项给了两次都按用法错误处理 */
   const takeValue = (flag: string): string => {
-    const next = args[++i];
-    if (!next) usage(`${flag} 缺少取值`);
-    // 下一个 token 仍是 flag：说明取值漏了，别把它吞成值
-    if (next.startsWith('--')) usage(`${flag} 缺少取值（后面跟着 ${next}）`);
+    let next: string | undefined;
+    if (inlineValue !== undefined) {
+      // `--chain=foo`：取值就在等号后面，不再吞下一个 token；值以 `--` 开头也照收（这正是等号写法的用处）
+      next = inlineValue;
+      if (!next) usage(`${flag} 缺少取值（等号后面是空的）；写成 ${flag} <值> 或 ${flag}=<值>`);
+    } else {
+      next = args[++i];
+      if (!next) usage(`${flag} 缺少取值`);
+      // 下一个 token 仍是 flag：说明取值漏了，别把它吞成值
+      if (next.startsWith('--')) usage(`${flag} 缺少取值（后面跟着 ${next}）`);
+    }
     // 同时说出两个值：只说「不能给两次」的话，用户还得回头翻命令才知道自己写了哪两处
     const first = seenValues.get(flag);
     if (first !== undefined) {
@@ -449,7 +473,21 @@ function parseArgs(argv: string[]): {
     return next;
   };
   for (i = 0; i < args.length; i++) {
-    const a = args[i]!;
+    let a = args[i]!;
+    inlineValue = undefined;
+    // 等号写法：以前 `--chain=foo` 整个落进「未知参数: --chain=foo」，而 `--chain` 明明是认识的参数，
+    // 同一个 CLI 的 `import-codex` 又接受 `--cwd=/path`。取值选项拆成名字 + 取值；布尔开关带等号
+    // 时说「不接受取值」，不能把 `--json=1` 当成 `--json` 悄悄放行；不认识的名字照旧走未知参数。
+    const eq = a.startsWith('--') ? a.indexOf('=') : -1;
+    if (eq !== -1) {
+      const name = a.slice(2, eq);
+      if (VALUE_FLAGS.includes(name)) {
+        inlineValue = a.slice(eq + 1);
+        a = a.slice(0, eq);
+      } else if (BOOLEAN_FLAGS.includes(name)) {
+        usage(`--${name} 不接受取值，写成 --${name} 即可`);
+      }
+    }
     if (a === '--json') continue;
     if (a === '--check') {
       check = true;
@@ -520,13 +558,8 @@ function parseArgs(argv: string[]): {
     if (a.startsWith('--')) {
       // 未知 flag 不能滑进位置参数：`watch status --chian foo` 会被当成 cwd 之外的多余位置参数静默忽略
       if (a === '--help') usage();
-      const message = `未知参数: ${a}`;
-      if (json) {
-        console.log(JSON.stringify({ ok: false, error: message }));
-        process.exit(1);
-      }
-      console.error(`[watch] ${message}`);
-      usage();
+      const near = closestFlag(a);
+      rejectArguments(json, `未知参数: ${a}${near ? `；最接近的是 ${near}` : ''}`);
     }
     positional.push(a);
   }
@@ -3036,13 +3069,7 @@ function rejectUnusedFlags(cmd: string, usedFlags: string[], json: boolean): voi
   const bad = usedFlags.find((flag) => !allowed.includes(flag));
   if (!bad) return;
   const supports = allowed.length ? allowed.map((flag) => `--${flag}`).join(' / ') : '（无，仅 --cwd / --json）';
-  const message = `--${bad} 不能与 ${cmd} 同用；${cmd} 支持的参数: ${supports}`;
-  if (json) {
-    console.log(JSON.stringify({ ok: false, error: message }));
-    process.exit(1);
-  }
-  console.error(`[watch] ${message}`);
-  usage();
+  rejectArguments(json, `--${bad} 不能与 ${cmd} 同用；${cmd} 支持的参数: ${supports}`);
 }
 
 function rejectExtraPositionals(cmd: string, positional: string[], json: boolean): void {
@@ -3051,13 +3078,7 @@ function rejectExtraPositionals(cmd: string, positional: string[], json: boolean
   const max = cmd === 'chain' ? (CHAIN_POSITIONAL[positional[0] ?? ''] ?? Infinity) : spec.max;
   if (positional.length <= max) return;
   const overflow = positional.slice(max);
-  const message = `多余的参数: ${overflow.join(' ')}；${cmd} 接受的位置参数: ${spec.hint}`;
-  if (json) {
-    console.log(JSON.stringify({ ok: false, error: message }));
-    process.exit(1);
-  }
-  console.error(`[watch] ${message}`);
-  usage();
+  rejectArguments(json, `多余的参数: ${overflow.join(' ')}；${cmd} 接受的位置参数: ${spec.hint}`);
 }
 
 async function main(): Promise<void> {
