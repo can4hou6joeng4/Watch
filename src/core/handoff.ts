@@ -2038,19 +2038,27 @@ export async function handoff(
     // 「内容被清空、只剩占位头」两种形状都落在这里。以前既不拒绝也不披露，直接回 ok +
     // turnCount:0，文本模式还印「已从 X 交接 → Y（0 轮）」——与「来源 0 轮必须拒绝或披露」相悖。
     // 有 `into` 时不能拒绝（用户就是要切到目标那一侧），所以披露；目标同样不改动。
+    //
+    // 这条披露里的「只把链尾切到 X」依赖下面 recordSwitch 的结果：写失败 / 无库时链尾根本
+    // 没切。先攒着，等 chainRecordState 定下来再按三态推（第 311 轮）。
+    let zeroTurnDisclosure:
+      | { head: string; targetName: string; targetLabel: string; sourceName: string; sourceProvider: string }
+      | null = null;
     if (into && turns.length === 0) {
       if (!emptiedSourceFile) {
         const subject = `来源会话 ${sourceTip.ref.sessionId}（${source.displayName}）`;
         const reason = sourceBadScan.count > 0
           ? `文件里有 ${sourceBadScan.count} 行无法解析（截断或损坏），这些内容已被跳过——更可能是文件被截断或损坏，不能当成「刚建出来的空会话」`
           : sourceBadScanFailure ?? '可能已被清空';
-        warnings.push(
-          `${subject} 解析出 0 轮，没有可接力的对话：${reason}` +
-            `${sourceBadScanFailure ? `；${sourceBadScanFailure}` : ''}；` +
-            `本次只把链尾切到 ${target.displayName}，目标会话 ${into.sessionId}（${target.displayName}）未被改动` +
-            `——如果这条会话本该有内容，先在 ${source.displayName} 里打开它确认，或从备份恢复该文件（Watch 不会替你重建历史）；` +
-            `如果只是挑错了会话，用 watch adopt ${sourceTip.provider} --session <另一个会话 id> 换绑`,
-        );
+        zeroTurnDisclosure = {
+          head:
+            `${subject} 解析出 0 轮，没有可接力的对话：${reason}` +
+            `${sourceBadScanFailure ? `；${sourceBadScanFailure}` : ''}；`,
+          targetName: target.displayName,
+          targetLabel: `目标会话 ${into.sessionId}（${target.displayName}）`,
+          sourceName: source.displayName,
+          sourceProvider: sourceTip.provider,
+        };
       }
       // 目标也可能同时是 0 字节（两边都没内容）：这次 resume 打开的就是一条空会话，
       // 不能只说「目标未被改动」。非零增量分支有一模一样的披露（`emptiedTarget`）。
@@ -2104,6 +2112,22 @@ export async function handoff(
         chainRecordState = 'failed';
         warnings.push(`链记录失败: ${describeStoreErrorReason(error)}`);
       }
+    }
+    // 来源 0 轮的披露推迟到这里：链尾到底切没切，要看上面 recordSwitch 的结果。
+    // 写失败 / 无库时它仍必须出现（0 轮披露不能丢），但只能讲「链尾没有切到」。
+    if (zeroTurnDisclosure) {
+      const d = zeroTurnDisclosure;
+      const chainTail =
+        chainRecordState === 'written'
+          ? `本次只把链尾切到 ${d.targetName}`
+          : chainRecordState === 'failed'
+            ? `本次链记录写入失败，链尾没有切到 ${d.targetName}`
+            : `本次没有写入链记录（本地库不可用），链尾没有切到 ${d.targetName}`;
+      warnings.push(
+        `${d.head}${chainTail}，${d.targetLabel}未被改动` +
+          `——如果这条会话本该有内容，先在 ${d.sourceName} 里打开它确认，或从备份恢复该文件（Watch 不会替你重建历史）；` +
+          `如果只是挑错了会话，用 watch adopt ${d.sourceProvider} --session <另一个会话 id> 换绑`,
+      );
     }
     return {
       newRef: resumeRef,
