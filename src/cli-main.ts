@@ -2077,6 +2077,15 @@ async function cmdPrompt(
     { ...(lastUserTurns !== undefined ? { lastUserTurns } : {}), ...(sinceCompact ? { sinceCompact: true } : {}), manifest: manifestPreview, ...(manifestDisk ? { manifestDisk } : {}) },
   );
 
+  // 隐去凭据是对原文的改写：终端 / 脚本侧也要有一句人话，不能只剩 findings 里的一个代码。
+  if (result.credentialsMasked) {
+    warnings.push(
+      `文档里识别并隐去了 ${result.credentialsMasked.total} 个格式固定的密钥 / 令牌（${result.credentialsMasked.kinds
+        .map((kind) => `${kind.label} ${kind.count}`)
+        .join('、')}），原文仍在源文件里；只认固定格式，口令与其它形式的敏感内容不会被识别，转交前请自行检查`,
+    );
+  }
+
   if (json) {
     console.log(JSON.stringify({
       ok: true,
@@ -2112,6 +2121,8 @@ async function cmdPrompt(
       // 磁盘对照的计数：`files[].disk` 缺省既可能是「都还在」也可能是「没核对」，
       // 脚本只有靠这个字段才能分辨，所以核对过就一定出现（哪怕全是 0）。
       ...(result.manifestDisk ? { manifestDisk: result.manifestDisk } : {}),
+      // 隐去凭据的计数（只有种类与个数，不含原文）；没识别到时不出现，不等于文档里没有敏感内容。
+      ...(result.credentialsMasked ? { credentialsMasked: result.credentialsMasked } : {}),
       // 明确失败的工具调用单独输出：它们不在成功改动清单里，脚本也不该靠解析正文拿这份信息。
       // 没有任何明确失败结果时整个字段都不出现。
       ...(result.manifest.failedAttemptCalls || result.manifest.unclassifiedFailures ? {
