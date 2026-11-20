@@ -49,10 +49,11 @@ export type WorkManifestFile = {
   /**
    * 磁盘对照结论，仅在 `watch prompt` 拿到可用的会话目录并真的核对过时出现：
    * `missing` = 按工具参数里写明的绝对路径核对，确实不在磁盘上；
-   * `unverified` = 无法确认（相对路径没找到，或探测本身出错）。
+   * `unverified` = 无法确认（相对路径没找到，或探测本身出错）；
+   * `removed` = 本次会话的补丁按定义删除了 / 移走了它，因而不去 stat。
    * 没有这一项表示核对过且还在，或者根本没核对——两者不能混为一谈，见 `manifestDisk`。
    */
-  disk?: 'missing' | 'unverified';
+  disk?: 'missing' | 'unverified' | 'removed';
 };
 
 export type WorkManifestCommand = {
@@ -271,7 +272,19 @@ export type PatchEntry = { path: string; removed: boolean };
 export function extractPatchEntries(command: string): PatchEntry[] {
   const entries: PatchEntry[] = [];
   let lastUpdate: PatchEntry | null = null;
+  // `@@` 之后是 hunk 正文：上下文行以空格开头、增删行以 `+` / `-` 开头。这些行里可能出现
+  // 与标记同名的文本（例如一份记录补丁格式的文档），`trim()` 后照样 `startsWith` 命中。
+  // 第 313 轮的磁盘对照让这个老问题有了新后果：上下文行会把「没删的文件」标成 removed，
+  // 于是它既不被核对、又背上一句「按补丁已被删除」。hunk 之外才认标记。
+  let inHunk = false;
   for (const line of command.split(/\r?\n/)) {
+    if (line.startsWith('@@')) {
+      inHunk = true;
+      continue;
+    }
+    // 下一条补丁头（`*** Add File:` / `*** End Patch` …）在 hunk 之后照常出现：先离开 hunk。
+    if (line.startsWith('*** ')) inHunk = false;
+    if (inHunk) continue;
     const trimmed = line.trim();
     for (const marker of PATCH_MARKERS) {
       if (!trimmed.startsWith(marker)) continue;
@@ -538,7 +551,10 @@ export function collectWorkManifest(
     // 就看不出这条路径原本是绝对的，磁盘对照也就分不清「确定不在」与「无法确认」。
     const probe = probes.get(key) ?? { absolute: false, removed: false };
     if (path.isAbsolute(rawPath.trim())) probe.absolute = true;
-    if (removed) probe.removed = true;
+    // **按最后一次操作覆盖**：先 `*** Delete File: a` 再 `Write a`（或反过来）时，只有最后
+    // 一次决定它现在该不该在磁盘上。只置位不清除会把「删除后又重建」的文件永久跳过核对，
+    // 还会让「按补丁已被删除」这句出现在一个刚重建的文件上。
+    probe.removed = removed;
     probes.set(key, probe);
     const existing = files.get(key);
     if (existing) {
@@ -662,6 +678,18 @@ function singleLineCounter(onRewrite?: () => void): (text: string) => string {
   };
 }
 
+/** 渲染「磁盘对照」一行所需的计数（由 `handoff-prompt` 从 `manifest-disk.ts` 的结论里取）。 */
+export type ManifestDiskSummary = {
+  /** 真正核对过的条数 */
+  checked: number;
+  /** 会话目录之外、没有核对的条数 */
+  outside: number;
+  /** 本次会话的补丁按定义删除 / 移走的条数 */
+  removed: number;
+  /** 有文件、但这次根本没核对（会话目录不可用或没有记录） */
+  unchecked: boolean;
+};
+
 /**
  * 把清单渲染成 Markdown 行（不含尾部空行）。调用方负责做转义与计数。
  *
@@ -673,8 +701,16 @@ function singleLineCounter(onRewrite?: () => void): (text: string) => string {
  *
  * `onRewrite`：单行化（换行 → 字面 `\n`）会改写原文，每折一行回调一次，供调用方计数披露；
  * 旧实现里清单折行从不计数（第 281 轮）。
+ *
+ * `disk`：磁盘对照的计数。**「核对过且都在」与「根本没核对」必须在正文里分得开**——
+ * 只靠 `files[].disk` 缺省分不开（两种情况都不带标注），而这份文档会被复制走，
+ * `--json` 的 `manifestDisk` 不跟着它。
  */
-export function renderWorkManifest(manifest: WorkManifest, onRewrite?: () => void): string[] {
+export function renderWorkManifest(
+  manifest: WorkManifest,
+  onRewrite?: () => void,
+  disk?: ManifestDiskSummary,
+): string[] {
   const oneLine = singleLineCounter(onRewrite);
   const lines: string[] = [];
   lines.push('## 改动概览');
@@ -683,6 +719,17 @@ export function renderWorkManifest(manifest: WorkManifest, onRewrite?: () => voi
     '> 这一节从工具调用参数汇总，**不受档位裁剪影响**，覆盖整条会话（即使正文只保留了部分轮次）；' +
       '只统计参数里写明文件路径的写入 / 编辑与明确的 shell 命令，工具输出不复制。',
   );
+  if (disk && (manifest.files.length || manifest.omittedFiles > 0)) {
+    if (disk.unchecked) {
+      lines.push('> 本次没有核对这些文件现在是否还在磁盘上（会话记录的工作目录不可用或没有记录）。');
+    } else if (disk.checked === 0 && disk.outside > 0) {
+      // 一条都没核对成：说「核对了 0 个」会被读成「都在」，这里要把原因写出来。
+      lines.push(`> 磁盘对照：清单里的文件都在会话目录之外（${disk.outside} 个），本次没有核对。`);
+    } else {
+      const outside = disk.outside > 0 ? `；另有 ${disk.outside} 个在会话目录之外，没有核对` : '';
+      lines.push(`> 磁盘对照：生成这份文档时核对了 ${disk.checked} 个会话目录内的路径${outside}。`);
+    }
+  }
   lines.push('');
   // 上限为 0 时成功条目为空、但被省略的条数不为空：只按 `files.length` 决定是否输出，
   // 截断披露会整段消失，正文只剩「没有记录到改动」——把「有、但没列」讲成了「没有」。
@@ -696,6 +743,9 @@ export function renderWorkManifest(manifest: WorkManifest, onRewrite?: () => voi
       // 磁盘对照只改这一行的括注，不动路径：读者要的是「写了没」与「现在还在不在」两件事。
       if (file.disk === 'missing') parts.push('本次生成时磁盘上已不在');
       else if (file.disk === 'unverified') parts.push('本次生成时按会话目录没找到，无法确认');
+      // 补丁自己写明删了 / 移走了它：这是会话里的高置信事实，不 stat 也要说出来，
+      // 否则读者仍会被引向一个不存在的文件。
+      else if (file.disk === 'removed') parts.push('本次会话里被补丁删除或移走');
       lines.push(`- ${inlineCode(oneLine(file.path))}（${parts.join('，')}）`);
     }
     if (manifest.omittedFiles > 0) {
@@ -703,16 +753,23 @@ export function renderWorkManifest(manifest: WorkManifest, onRewrite?: () => voi
     }
     // 单看每一行容易被读成「Watch 认为这个文件不该在」：这句把口径钉死——清单记的是
     // 会话里写过什么，磁盘对照只是生成那一刻的旁证，删除 / 改名 / 换机器都会让它变成「不在」。
-    const missingFiles = manifest.files.filter((file) => file.disk === 'missing').length;
-    const unverifiedFiles = manifest.files.filter((file) => file.disk === 'unverified').length;
-    if (missingFiles > 0 || unverifiedFiles > 0) {
+    const countOf = (state: 'missing' | 'unverified' | 'removed'): number =>
+      manifest.files.filter((file) => file.disk === state).length;
+    const missingFiles = countOf('missing');
+    const unverifiedFiles = countOf('unverified');
+    const removedFiles = countOf('removed');
+    const outsideFiles = disk?.unchecked ? 0 : (disk?.outside ?? 0);
+    if (missingFiles > 0 || unverifiedFiles > 0 || removedFiles > 0 || outsideFiles > 0) {
       const parts = [
         missingFiles > 0 ? `${missingFiles} 个已不在磁盘上` : '',
         unverifiedFiles > 0 ? `${unverifiedFiles} 个没能核对` : '',
+        removedFiles > 0 ? `${removedFiles} 个在本次会话里被补丁删除或移走` : '',
+        outsideFiles > 0 ? `${outsideFiles} 个在会话目录之外，没有核对` : '',
       ].filter(Boolean);
       lines.push(
         `- 磁盘对照（生成这份文档时）：${parts.join('、')}——「已不在」可能被删除、改名或移动，` +
-          '也可能这份记录来自另一台机器；「没能核对」是按会话目录没找到，但无法确认原因。' +
+          '也可能这份记录来自另一台机器；「没能核对」是按会话目录没找到，但无法确认原因；' +
+          '「被补丁删除或移走」与「在会话目录之外」都不是失败，只是这些文件没法或不必再核对。' +
           '这一节记的是会话里写过什么，不是文件现在的状态。',
       );
     }

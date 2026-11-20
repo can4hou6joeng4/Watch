@@ -1969,10 +1969,11 @@ async function cmdPrompt(
     const notes: string[] = [];
     if (manifestDisk.missing > 0) notes.push(`${manifestDisk.missing} 个已不在磁盘上`);
     if (manifestDisk.unverified > 0) notes.push(`${manifestDisk.unverified} 个没能核对`);
+    if (manifestDisk.outside > 0) notes.push(`${manifestDisk.outside} 个在会话目录之外没有核对`);
+    if (manifestDisk.removed > 0) notes.push(`${manifestDisk.removed} 个按补丁已被删除 / 移走`);
     if (notes.length) {
       warnings.push(
-        `改动清单里有文件在生成时查不到：${notes.join('、')}（核对 ${manifestDisk.checked} 个，` +
-          `${manifestDisk.outside} 个在会话目录之外未核对、${manifestDisk.removed} 个按补丁已被删除 / 移走）；` +
+        `改动清单的磁盘对照（核对 ${manifestDisk.checked} 个会话目录内的路径）：${notes.join('、')}；` +
           '清单记的是会话里写过什么，不代表文件现在的状态，正文「改动过的文件」已逐条标注',
       );
     }

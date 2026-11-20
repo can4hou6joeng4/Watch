@@ -1,4 +1,4 @@
-import { lstat } from 'node:fs/promises';
+import { lstat, realpath } from 'node:fs/promises';
 import path from 'node:path';
 import type { WorkManifest } from './work-manifest.js';
 
@@ -17,13 +17,18 @@ import type { WorkManifest } from './work-manifest.js';
  * - 相对路径没找到 → `unverified`：工具可能在自己的子目录里写（Codex 的 `workdir`）、
  *   补丁可能在子目录里应用，会话目录只是默认位置，说「已删除」就是替它猜。
  * - 其它 stat 错误（EACCES / ELOOP / 名称过长…）一律 `unverified`：读不出来不等于没有。
- * - `Delete File` / `Move` 的源路径按定义就不该还在，不参与核对（否则每条删除都变成假警告）。
+ * - `Delete File` / `Move` 的源路径按定义就不该还在：标成 `removed`（会话自己的补丁写明删了它，
+ *   这是高置信事实），不拿去 stat，也不说成「磁盘上不见了」。
  * - 会话目录之外的绝对路径不核对（`outside`）：那是另一棵树，可能属于另一台机器。
+ *
+ * **符号链接写法**：会话记录里的 cwd 可能是链接形式（macOS 的 `/tmp` → `/private/tmp`），
+ * 而工具参数里写出的是 realpath 形式。只按原样做一次 `path.relative` 会把它们全判成
+ * 「目录之外」，磁盘对照在这种会话里等于没开。所以两份 cwd（原样与 realpath）都算目录之内。
  *
  * 只用 `lstat`：不跟随符号链接，也不读内容——这份产物是交接文档，不需要、也不该去碰文件内容。
  */
 
-export type ManifestDiskState = 'missing' | 'unverified';
+export type ManifestDiskState = 'missing' | 'unverified' | 'removed';
 
 export type ManifestDiskReport = {
   /** 真正做了核对的条数（不含 removed / outside） */
@@ -34,7 +39,7 @@ export type ManifestDiskReport = {
   unverified: number;
   /** 会话目录之外、没有核对的条数 */
   outside: number;
-  /** 补丁按定义移除、因而不核对的条数（删除 / 移动的源） */
+  /** 补丁按定义移除、因而不去 stat 的条数（删除 / 移动的源） */
   removed: number;
   /** 路径（与 `manifest.files[].path` 同一个归一化形式）→ 结论；只含被标注的路径 */
   states: Map<string, ManifestDiskState>;
@@ -56,32 +61,58 @@ export async function inspectManifestFilesOnDisk(
 
   const report: ManifestDiskReport = { checked: 0, missing: 0, unverified: 0, outside: 0, removed: 0, states: new Map() };
   const probes = new Map(manifest.diskProbes.map((probe) => [probe.path, probe]));
+  // 两份 cwd 都算「目录之内」：会话记录可能记的是链接形式，工具参数写的是 realpath 形式。
+  let realCwd = cwd;
+  try {
+    realCwd = await realpath(cwd);
+  } catch {
+    // realpath 取不到（目录在探测后被移走等）只影响别名判定，不影响本次核对本身。
+    realCwd = cwd;
+  }
+  const roots = realCwd === cwd ? [cwd] : [cwd, realCwd];
+  const relativeInside = (absolutePath: string): string | null => {
+    for (const root of roots) {
+      const rel = path.relative(root, absolutePath);
+      if (!rel || rel === '..' || rel.startsWith(`..${path.sep}`) || path.isAbsolute(rel)) continue;
+      return rel;
+    }
+    return null;
+  };
 
   for (const file of manifest.files) {
     const probe = probes.get(file.path);
     if (probe?.removed) {
+      // 会话自己的补丁明确删了 / 移走了它：不 stat，但要说出这件事（见下面的 states）。
       report.removed += 1;
+      report.states.set(file.path, 'removed');
       continue;
     }
-    // 绝对路径只在 cwd 之内才核对；`files[].path` 本身是绝对的，说明它归一化不掉。
+    let target: string;
+    // `files[].path` 是绝对的 → 它在归一化时没能变成相对路径：要么在 cwd 之外，要么 cwd
+    // 是链接写法而参数是 realpath。前者不碰，后者按绝对路径核对（结论仍然确定）。
+    let absoluteParam = probe?.absolute === true;
     if (path.isAbsolute(file.path)) {
+      if (!relativeInside(file.path)) {
+        report.outside += 1;
+        continue;
+      }
+      target = file.path;
+      absoluteParam = true;
+    } else if (file.path === '..' || file.path.startsWith(`..${path.sep}`)) {
       report.outside += 1;
       continue;
-    }
-    if (file.path === '..' || file.path.startsWith(`..${path.sep}`)) {
-      report.outside += 1;
-      continue;
+    } else {
+      target = path.join(cwd, file.path);
     }
     report.checked += 1;
-    const absolute = probe?.absolute === true;
     try {
-      await lstat(path.join(cwd, file.path));
+      await lstat(target);
       continue;
     } catch (error) {
       const code = (error as NodeJS.ErrnoException).code;
       // 工具参数里写的是绝对路径：ENOENT 就是「那个路径现在没有东西」。
       // 相对路径则可能是写在了子目录里，只能算「没找到」。
-      if (absolute && (code === 'ENOENT' || code === 'ENOTDIR')) {
+      if (absoluteParam && (code === 'ENOENT' || code === 'ENOTDIR')) {
         report.missing += 1;
         report.states.set(file.path, 'missing');
       } else {

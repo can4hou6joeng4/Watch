@@ -6,7 +6,7 @@ import { codeFence, inlineCode, singleLineText } from './markdown.js';
 import { CLAUDE_COMPACT_SUMMARY_PREFIX, findContextDisclosure, KIMI_COMPACTION_SUMMARY_PREFIX, OPENCODE_COMPACTION_SUMMARY_PREFIX, PI_COMPACTION_SUMMARY_PREFIX, WATCH_CONTEXT_DISCLOSURE_PREFIX } from './rich.js';
 import { isoFromEpochMs } from './time.js';
 import type { ProcessEvent, TokenUsage, UnifiedTurn } from './types.js';
-import { collectWorkManifest, isEmptyWorkManifest, renderFailedAttempts, renderWorkManifest, type FailedAttempt, type WorkManifest } from './work-manifest.js';
+import { collectWorkManifest, isEmptyWorkManifest, renderFailedAttempts, renderWorkManifest, type FailedAttempt, type ManifestDiskSummary, type WorkManifest } from './work-manifest.js';
 
 /**
  * 「摘要交接」：把一条原生会话渲染成可粘贴给**任意** AI 编程助手的 Markdown 文档。
@@ -696,11 +696,19 @@ export function buildHandoffPrompt(
     }
   }
   // 磁盘对照的结论也走 findings：正文被复制走后没有第二个通道，计数必须与正文一致。
-  // 两档分开计——「确定不在」与「没能核对」是两件事，合成一个数会让读者以为都查实了。
-  const diskMissing = manifest.files.filter((file) => file.disk === 'missing').length;
-  const diskUnverified = manifest.files.filter((file) => file.disk === 'unverified').length;
+  // 四档分开计——「确定不在」「没能核对」「会话目录之外」是三件不同的事，合成一个数
+  // 会让读者以为都查实了；`removed` 是本会话的事实、不是降级，只进正文与 `--json`。
+  const diskCount = (state: 'missing' | 'unverified'): number =>
+    manifest.files.filter((file) => file.disk === state).length;
+  const diskMissing = diskCount('missing');
+  const diskUnverified = diskCount('unverified');
   if (diskMissing > 0) addFinding(findings, 'prompt_manifest_files_missing', 'degraded', diskMissing);
   if (diskUnverified > 0) addFinding(findings, 'prompt_manifest_files_unverified', 'degraded', diskUnverified);
+  // 「在会话目录之外、根本没查」同样要被披露：否则正文里一行标注都没有，读者会以为
+  // 这些文件都核对过且都还在（第 314 轮审查）。
+  if (options.manifestDisk && options.manifestDisk.outside > 0) {
+    addFinding(findings, 'prompt_manifest_files_outside', 'degraded', options.manifestDisk.outside);
+  }
   stats.manifestFiles = manifest.files.length;
   stats.manifestCommands = manifest.commands.length;
   stats.failedAttempts = manifest.failedAttempts.length;
@@ -726,8 +734,18 @@ export function buildHandoffPrompt(
     const countFold = () => {
       stats.escapedBodies += 1;
     };
+    // 「核对过且都在」与「根本没核对」在正文里必须能分开：后者给一句「本次没有核对」。
+    // 有文件而 options.manifestDisk 缺失，只可能是会话目录不可用 / 没记录（见 inspectManifestFilesOnDisk）。
+    const diskSummary: ManifestDiskSummary = options.manifestDisk
+      ? {
+          checked: options.manifestDisk.checked,
+          outside: options.manifestDisk.outside,
+          removed: options.manifestDisk.removed,
+          unchecked: false,
+        }
+      : { checked: 0, outside: 0, removed: 0, unchecked: manifest.files.length > 0 };
     const rawManifestLines = [
-      ...(hasManifestChanges ? renderWorkManifest(manifest, countFold) : []),
+      ...(hasManifestChanges ? renderWorkManifest(manifest, countFold, diskSummary) : []),
       ...renderFailedAttempts(manifest, countFold),
     ];
     for (const line of rawManifestLines) {
