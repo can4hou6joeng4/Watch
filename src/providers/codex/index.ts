@@ -14,7 +14,7 @@ import { asJsonObject, parseJsonObject } from '../../core/jsonl.js';
 import { describePathReadFailureReason, isMissingPathError, iterateFileLines } from '../../core/read-text.js';
 import type { ProviderAdapter, PreflightContext, WriteLimit } from '../adapter.js';
 import { PreflightBlockedError, SessionLookupFailureError } from '../adapter.js';
-import { acquireThreadWriterLock, probeThreadWriterHolders, threadWriterLockPath, WriterLockDirError, type WriterLockGuard } from './writer-lock.js';
+import { acquireThreadWriterLock, probeThreadWriterHolders, threadWriterLockPath, writerLockPathForRef, WriterLockDirError, type WriterLockGuard } from './writer-lock.js';
 export { threadWriterLockPath };
 import type { ProcessEvent, SessionRef, UnifiedTurn } from '../../core/types.js';
 import { streamCommand } from '../../core/streamCommand.js';
@@ -755,7 +755,7 @@ async function acquireCodexWriteLock(
   const ref = ctx.ref;
   if (!ref || process.platform !== 'darwin') return undefined;
   // 锁路径依赖数据目录：目录故障在这里原样抛出，不归入下面的「被其他 writer 抢先持有」。
-  const lockPath = threadWriterLockPath(ref.sessionId);
+  const lockPath = writerLockPathForRef(ref);
   try {
     const guard = await acquireThreadWriterLock(lockPath);
     return guard ? { guard } : undefined;
@@ -844,7 +844,7 @@ export const codexAdapter: ProviderAdapter = {
     const ref = ctx.ref;
     // 显式的新建会话（有 ctx、无 ref）：没有可冲突的既有文件，放行
     if (!ref) return;
-    const lockPath = threadWriterLockPath(ref.sessionId);
+    const lockPath = writerLockPathForRef(ref);
     // stat 失败不等于「没有锁」：只有 ENOENT 才是「没有 writer 登记，无共享文件可冲突」。
     // 路径被同名文件占住（ENOTDIR）/ 没有权限（EACCES）时读不出来 = 无法判定，按有锁处理；
     // stat 成功但不是普通文件（锁路径本身被同名目录占住）同样是「读不出锁状态」，

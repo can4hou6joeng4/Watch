@@ -34,6 +34,33 @@ export function threadWriterLockPath(sessionId: string, codexHome = codexDir()):
   return path.join(codexHome, 'thread-writer-locks', `${sessionId}.lock`);
 }
 
+/**
+ * 会话文件落在某个 Codex 数据目录的 `sessions/YYYY/MM/DD/` 下时，返回那个数据目录。
+ *
+ * 本地库的 `session_locations` 映射会记住扫描时的 filePath；用户在两次命令之间改了
+ * `CODEX_HOME`（映射来自另一份数据目录）时，按当前环境推导的锁路径会落在另一个目录：
+ * 原生 writer 在旧目录的 `thread-writer-locks/` 下持锁，而 Watch 的预检与取锁都看不到它，
+ * 两层保护同时失效（第 307 轮）。只认 `<home>/sessions/YYYY/MM/DD/<file>` 形状，
+ * 认不出返回 null，调用方退回当前环境。
+ */
+export function codexHomeForSessionFile(filePath: string): string | null {
+  if (!path.isAbsolute(filePath)) return null;
+  const day = path.dirname(filePath);
+  const month = path.dirname(day);
+  const year = path.dirname(month);
+  const sessions = path.dirname(year);
+  if (path.basename(sessions) !== 'sessions') return null;
+  if (!/^\d{4}$/.test(path.basename(year))) return null;
+  if (!/^\d{2}$/.test(path.basename(month)) || !/^\d{2}$/.test(path.basename(day))) return null;
+  return path.dirname(sessions);
+}
+
+/** 写锁路径：优先跟随会话文件实际所在的数据目录（见 `codexHomeForSessionFile()`）。 */
+export function writerLockPathForRef(ref: { sessionId: string; filePath?: string }): string {
+  const home = ref.filePath ? codexHomeForSessionFile(ref.filePath) : null;
+  return threadWriterLockPath(ref.sessionId, home ?? undefined);
+}
+
 export type WriterHolder = { pid: number; command: string };
 
 export function parseLsofHolders(stdout: string): WriterHolder[] {
