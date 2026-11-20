@@ -1,5 +1,5 @@
 {
-  "version": "0.1.244",
+  "version": "0.1.245",
   "width": 1200,
   "height": 630,
   "images": [
@@ -7,13 +7,13 @@
       "source": "scripts/media/og-zh.html",
       "output": "site/og.png",
       "templateSha256": "e3886f64b326496a4cd37e5bd945581c0264939ce80f7c67dec966b15663b1aa",
-      "sha256": "47d8c40b2487e51605a26445784772daf94ed33c35df39d7bb580510ba01a156"
+      "sha256": "9e6176514f9d5dab4621fce39d36a39d212fe243a5637eefd1e77c8d392051af"
     },
     {
       "source": "scripts/media/og-en.html",
       "output": "site/og-en.png",
       "templateSha256": "588f2064e0cc4022267b97da4138b91f9554253dd9abeeb146fb60ad041f34dc",
-      "sha256": "8c6ab5e5cc1fc7bc682585113a1ae25be38bdaf59dda28f658db88c9e46a3b0d"
+      "sha256": "7af7968b9ca32c13630f3d7a1c68bf8bf220aff4aca85510858a07129ba0582a"
     }
   ]
 }
