@@ -909,6 +909,13 @@ export async function chainUsage(
     zeroTurnProblem?: string;
     /** 用量来自旁路文件、已计入合计，但 `parse()` 读的内容文件已空 / 不可用 */
     contentProblem?: string;
+    /**
+     * 内容解析抛错、因而不确定是不是空会话（同时计入 `totalExcluded`，`error` 里是同一句话）。
+     *
+     * 与「用量读完但内容文件有问题」的 `contentProblem` 不是一回事：那档有数字、只是内容可能不完整；
+     * 这一档连是不是空会话都不知道。脚本不该靠解析中文文案分辨两者（第 316 轮）。
+     */
+    contentUnreadable?: true;
   }[];
   /** 链上有绑定、但适配器根本不给用量（未实现 `sessionUsage`；当前六家都已实现，留给将来新增的适配器）：不列出来会被当成「这一家没有用量」 */
   unsupported: string[];
@@ -972,6 +979,13 @@ export async function chainUsage(
     zeroTurnProblem?: string;
     /** 用量来自旁路文件、已计入合计，但 `parse()` 读的内容文件已空 / 不可用 */
     contentProblem?: string;
+    /**
+     * 内容解析抛错、因而不确定是不是空会话（同时计入 `totalExcluded`，`error` 里是同一句话）。
+     *
+     * 与「用量读完但内容文件有问题」的 `contentProblem` 不是一回事：那档有数字、只是内容可能不完整；
+     * 这一档连是不是空会话都不知道。脚本不该靠解析中文文案分辨两者（第 316 轮）。
+     */
+    contentUnreadable?: true;
   }[] = [];
   let total = { ...empty };
   let totalExcluded = 0;
@@ -1070,7 +1084,7 @@ export async function chainUsage(
             `会话内容读取失败：${describeReadFailureOrSelf(error)}；` +
             '无法确认它是不是空会话，也没有可用的用量数据';
           warnings.push(`${adapter.id} ${msg}`);
-          byProvider.push({ provider: adapter.id, sessionId: ref.sessionId, usage: null, error: msg });
+          byProvider.push({ provider: adapter.id, sessionId: ref.sessionId, usage: null, error: msg, contentUnreadable: true });
           totalExcluded += 1;
           continue;
         }
