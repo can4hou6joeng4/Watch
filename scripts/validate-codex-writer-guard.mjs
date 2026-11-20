@@ -76,7 +76,19 @@ async function startAppServer() {
   );
   child.stderr.resume();
   let nextId = 0;
+  let channelError = null;
   const pending = new Map();
+  // app-server 的 stdin / stdout 都可能先于 close 抛 'error'（EPIPE 最常见）。没有监听器时
+  // Node 以未捕获异常退出，报告只会留下一个堆栈；挂上监听后把在途 rpc 结算成结构化失败，
+  // 让 record() 记成「这次验收没跑成」，而不是进程直接崩掉。
+  const failChannel = (error) => {
+    channelError = error;
+    const message = { error: { message: `Codex app-server 通道中断：${error?.message ?? error}` } };
+    for (const resolve of pending.values()) resolve(message);
+    pending.clear();
+  };
+  child.stdin.on('error', failChannel);
+  child.stdout.on('error', failChannel);
   createInterface({ input: child.stdout }).on('line', (line) => {
     let message;
     try {
@@ -90,6 +102,9 @@ async function startAppServer() {
     }
   });
   const rpc = (method, params) => {
+    if (channelError) {
+      return Promise.resolve({ error: { message: `Codex app-server 通道中断：${channelError?.message ?? channelError}` } });
+    }
     const id = ++nextId;
     child.stdin.write(JSON.stringify({ jsonrpc: '2.0', id, method, params }) + '\n');
     return new Promise((resolve) => pending.set(id, resolve));
