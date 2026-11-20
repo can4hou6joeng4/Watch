@@ -461,7 +461,11 @@ function renderEvent(event: ProcessEvent, detailLimit: number | null, stats: Pro
   // 工具名同样来自会话文件：与摘要拼成一行后一起转义、一起计数。
   const summarySanitized = sanitizeBody(withToolName(event, summary.text, stats));
   if (summarySanitized.escaped) stats.escapedBodies += 1;
-  let line = `- [${kindLabel[event.kind]}] ${summarySanitized.text}`;
+  // 原生明确标记失败的工具结果要在这一行就看得出来（第 328 轮）：摘要多半只是「工具返回」，
+  // 详情在 verbose 档只留前 200 字符、在更低档位根本不展开，失败事实不能只靠读者从输出里猜。
+  // 只认 `failed === true`（各家 parser 只在原生标记为真时才写），不从输出文字推断。
+  const label = event.kind === 'tool_result' && event.failed === true ? '结果·失败' : kindLabel[event.kind];
+  let line = `- [${label}] ${summarySanitized.text}`;
   if (event.detail && detailLimit !== 0) {
     const clipped = clip(event.detail, detailLimit);
     if (clipped.truncated) stats.truncatedTexts += 1;
