@@ -89,7 +89,11 @@ async function startAppServer() {
   };
   child.stdin.on('error', failChannel);
   child.stdout.on('error', failChannel);
-  createInterface({ input: child.stdout }).on('line', (line) => {
+  const rl = createInterface({ input: child.stdout });
+  // readline 会把输入流的错误转发到 Interface 上；只挂 stream 级监听时，stdout 报错
+  // 仍会以未捕获异常退出（第 309 轮审查实测）。Interface 自己也要接住。
+  rl.on('error', failChannel);
+  rl.on('line', (line) => {
     let message;
     try {
       message = JSON.parse(line);
