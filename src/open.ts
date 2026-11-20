@@ -190,6 +190,10 @@ export function lookupMissHeadline(
  *
  * `lookupMisses` 收集「没查成」的结构化结论（见 `LookupMiss`）：失败原因进 `diagnostics`
  * 是给人看的，`lookupMisses` 是给调用方改第一句结论用的——两者不能互相替代。
+ *
+ * `mappingDiagnostics` 只收**映射侧**的毛病（映射读不出来 / 刷新失败 / 写入失败 / 文件状态读不出来）：
+ * 调用方命中后想保留它们，未命中时又想按「没查成」另作处理。以前命中就整块丢掉，
+ * 映射刷新失败于是只表现为「本地库里的时间戳一直不更新」，没有任何提示。
  */
 export async function resolveById(
   sessionId: string,
@@ -198,6 +202,7 @@ export async function resolveById(
   adapters: ProviderAdapter[] = listAdapters(),
   diagnostics?: string[],
   lookupMisses?: LookupMiss[],
+  mappingDiagnostics?: string[],
 ): Promise<{ adapter: ProviderAdapter; found: { ref: SessionRef; updatedAt: number } } | null> {
   // 会话 id 一律是各家 CLI 生成的 UUID，不会以空白开头结尾；而命令行里的首尾空白在终端里
   // 看不见（从 `watch sessions` / `chain list` 的表格里连空格复制、`$(…)` 带出换行都很常见）。
@@ -209,6 +214,13 @@ export async function resolveById(
     : adapters.filter((a) => typeof a.findById === 'function');
   if (providerId && !candidates.length) return null;
 
+  // 映射侧的问题同时进两个通道：`diagnostics` 给「没找到」时的第一句结论，
+  // `mappingDiagnostics` 给命中后仍要披露的调用方（映射与原生存储已经不同步了）
+  const noteMapping = (message: string): void => {
+    diagnostics?.push(message);
+    mappingDiagnostics?.push(message);
+  };
+
   if (store) {
     for (const a of candidates) {
       // 库查询与「探测映射文件」分开 catch：前者是本地库问题（按库的说法翻），后者是会话
@@ -217,7 +229,7 @@ export async function resolveById(
       try {
         loc = store.getSessionLocation(a.id, sessionId);
       } catch (error) {
-        diagnostics?.push(`${a.id} 映射读失败：${describeStoreErrorReason(error)}`);
+        noteMapping(`${a.id} 映射读失败：${describeStoreErrorReason(error)}`);
         continue;
       }
       // Windows canonicalize 会给路径加 `\\?\` 前缀，探测其去前缀形式
@@ -227,7 +239,7 @@ export async function resolveById(
         state = loc && filePath ? await probeMappedFile(filePath) : 'gone';
       } catch (error) {
         // 读不出来不能等同「没有这个会话」：记进 diagnostics，全扫也没找到时能说清原因
-        diagnostics?.push(
+        noteMapping(
           `${a.id} 会话 ${sessionId} 的映射记录指向的文件状态读不出来（${escapeControlChars(filePath ?? '')}）：${describeSessionReadFailureReason(error)}；已改为全盘扫描`,
         );
         continue;
@@ -238,7 +250,7 @@ export async function resolveById(
         } catch (error) {
           // 不影响本次反查，但本地库从此一直记得「很久没见」：只要写不进去就一直命中映射、
           // 也不会有任何提示。库坏了要让人知道，别等用户自己感觉到「越用越慢」
-          diagnostics?.push(
+          noteMapping(
             `${a.id} 会话 ${sessionId} 的映射刷新失败（${describeStoreErrorReason(error)}）；本次仍从映射命中，但本地库里的时间戳没更新`,
           );
         }
@@ -253,7 +265,7 @@ export async function resolveById(
       if (loc && filePath && state === 'not-file') {
         // 与 `recent` / `sessions --chain` / `search` 索引清理同一档说法：路径被同名目录或
         // 设备文件占住既不是「会话没了」也不是可用文件，全扫也找不到时要能说清原因
-        diagnostics?.push(
+        noteMapping(
           `${a.id} 会话 ${sessionId} 的映射记录指向的路径现在不是普通文件（被同名目录或设备文件占住了）：${escapeControlChars(loc.filePath)}；已改为全盘扫描`,
         );
       }
@@ -270,7 +282,7 @@ export async function resolveById(
             store.rememberSessionLocation(a.id, found.ref);
           } catch (error) {
             // 同上：写不进去不影响这次打开，但下次仍要重新全盘扫描。不披露就只剩「慢」这一个症状
-            diagnostics?.push(
+            noteMapping(
               `${a.id} 会话 ${sessionId} 的映射写入失败（${describeStoreErrorReason(error)}）；本次反查结果未记入本地库，下次 open 仍需重新全盘扫描`,
             );
           }
@@ -1031,10 +1043,13 @@ async function planOpenInProvider(
   // 用户会去查会话 id，而不是回头看 --to 的拼写。
   const target = getAdapter(providerId);
   if (!target) return { ok: false, error: unknownProviderMessage(providerId) };
-  // 反查失败原因只在「真的没找到」时报；命中了就别拿别家存储的毛病打扰用户
+  // 反查失败原因只在「真的没找到」时报；命中了就别拿别家存储的毛病打扰用户。
+  // 但**映射侧**的毛病是另一回事：映射读 / 刷新 / 写入失败说明本地库与原生存储已经不同步，
+  // 命中也照样要披露（以前整块随 `lookup` 丢掉，用户只能感觉到「越用越慢」）
   const lookup: string[] = [];
+  const mappingNotes: string[] = [];
   const misses: LookupMiss[] = [];
-  const source = await resolveById(sourceId, undefined, mapping, undefined, lookup, misses);
+  const source = await resolveById(sourceId, undefined, mapping, undefined, lookup, misses, mappingNotes);
   if (!source) {
     const detail = lookup.length ? `（${lookup.join('；')}）` : '';
     // 与 openSession 同理：这条路径也会被链 id 撞上（`open <链 id> --to codex`）
@@ -1053,6 +1068,9 @@ async function planOpenInProvider(
       error: `${chainUse ? `${chainUse}；` : ''}未找到来源会话: ${escapeControlChars(sourceId)}${detail}。${typo ? `${typo}。` : ''}请确认 id 正确且该会话属于已安装登录的 CLI；${LOOKUP_NEXT_STEP}。本次未写入任何内容`,
     };
   }
+  // 来源命中了：映射侧的问题仍要进本次诊断（`--check` 与执行都会带出）。
+  // 没命中时它们已经在 `lookup` 里拼进错误，不重复加
+  for (const note of mappingNotes) diagnostics?.push(note);
   const cwd = source.found.ref.cwd;
   // 预检与写入都用这个目录：它不在了要提前说，别等用户照着一句必失败的 cd 去执行
   const cwdIssue = await sessionCwdProblem(cwd);
