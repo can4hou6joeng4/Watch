@@ -2404,11 +2404,13 @@ async function cmdNew(cwd: string, providerId: string, json: boolean, chain?: st
       } else {
         fail(json, `${providerId} 不支持从零开聊`);
       }
+      let chainRecordWritten = false;
       if (store) {
         try {
           const id = store.getOrCreateChainSession(cwd, chain);
           // 把首开聊记录为链的起点，后续 handoff 才能正确判断链尾
           store.recordSwitch(id, null, null, providerId, ref);
+          chainRecordWritten = true;
         } catch (error) {
           // 会话已经建出来了，不能因为写链失败整条命令报错（用户拿到的 ref 仍可 resume），
           // 但后续 switch 不会认这条绑定，必须说明——否则 status 里看不到它却毫无提示
@@ -2419,8 +2421,10 @@ async function cmdNew(cwd: string, providerId: string, json: boolean, chain?: st
       // 会话已经建出来、链绑定也写好了，但目录进不去：与查询类命令不同，这里必须说清
       // 「已经写进去的是什么」以及「resume 会失败」，否则 ok:true + resume 会被读成马上能用
       if (cwdWriteIssue) warnings.push(newSessionCwdWarning(cwdWriteIssue, ref.filePath));
-      // 这次在 `--cwd` 下写出了链记录：同一个目录的另一种写法下若已有链，说明会有两组（见 helper）
-      await aliasWarnings();
+      // 这次在 `--cwd` 下写出了链记录：同一个目录的另一种写法下若已有链，说明会有两组（见 helper）。
+      // 链记录没写成时不能说这句——同一份 warnings 里已经有「链记录失败」，再说「这次写了」
+      // 会互相矛盾（第 309 轮审查实测：空链分支写失败后仍打出「这次…写了链记录」）。
+      if (chainRecordWritten) await aliasWarnings();
       const resumeCommand = adapter.resumeCommand(ref);
       warnings.push(...commandControlWarnings(resumeCommand));
       // 空链分支同样会 touchChain（getOrCreateChainSession 在建会话之后就跑过）
@@ -2459,8 +2463,9 @@ async function cmdNew(cwd: string, providerId: string, json: boolean, chain?: st
 
     const result = await createChainSession(providerId, cwd, listAdapters(), getAdapter, store, chain);
     // 链已存在时的表单同样要带出 cwd / 读库 / 交接降级说明，不能只在空链分支打印
-    // 先把「另一种写法下已有链」并进 warnings，再由这里统一带出（两条通道共用同一份）
-    await aliasWarnings();
+    // 先把「另一种写法下已有链」并进 warnings，再由这里统一带出（两条通道共用同一份）。
+    // `createChainSession()` 写链记录失败时只把原因放进 result.warnings，这里同样不能再说「写了」。
+    if (!result.chainRecordFailed) await aliasWarnings();
     const allWarnings = [...warnings, ...result.warnings, ...commandControlWarnings(result.resumeCommand)];
     // 已有链分支可能复用配对会话，也可能新建；无论哪种，只要目录进不去，resume 都会在这一步失败
     if (cwdWriteIssue) allWarnings.push(newSessionCwdWarning(cwdWriteIssue, result.newRef.filePath));
