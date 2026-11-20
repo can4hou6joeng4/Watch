@@ -229,11 +229,41 @@ export function describeStoreErrorReason(error: unknown): string {
     return '库结构不完整（缺少表或列，可能只迁移了一半或被外部改动过）';
   }
   if (/database is locked|database is busy|SQLITE_BUSY/i.test(raw)) return '库文件被其它进程占用（另一个 watch 正在使用）';
+  // 只读库（文件 chmod 444 / 目录不可写 / 只读挂载）在 node:sqlite 里是 errcode 8、
+  // message 只有一句英文；不翻出来只会落到兜底的「库操作失败（ERR_SQLITE_ERROR）」
+  if (/attempt to write a readonly database|SQLITE_READONLY/i.test(raw)) {
+    return '本地库当前不可写（库文件或其所在目录是只读的）';
+  }
+  if (/database or disk is full|SQLITE_FULL/i.test(raw)) return '磁盘或所在卷已满，本地库写不进去';
+  // 约束失败：`errstr` 只有通用的 `constraint failed`，真原因（触发器 RAISE 的文案 / 哪条约束）
+  // 在 message 里；带上它才知道是外部改动、重复写入还是别的原因
+  if (/constraint failed|constraint violation|SQLITE_CONSTRAINT/i.test(raw)) {
+    const detail = sqliteMessageDetail(error);
+    return detail
+      ? `本地库拒绝了这次写入（约束校验没通过：${detail}）`
+      : '本地库拒绝了这次写入（约束校验没通过，可能被外部改动过）';
+  }
   // 打开前的文件头检查自己抛的三句（已是完整中文说明），原样带出
   if (/^本地库路径上已有一个/.test(raw)) return raw;
   // 已是完整的中文说明（含两个版本号），原样带出，别降级成「库操作失败（…）」
   if (/本地库 schema 版本 \d+ 比本程序支持的 \d+ 更新/.test(raw)) return raw;
+  // 兜底也不能只给一个错误码：SQLite 的 message 才是真原因（表名、列名、触发器的 RAISE 文案），
+  // `ERR_SQLITE_ERROR` 这类码既不说是什么错也不给下一步。码放在后面留作排查线索。
+  const detail = sqliteMessageDetail(error);
+  if (detail) return `库操作失败（${detail}）`;
   return `库操作失败（${code ?? raw}）`;
+}
+
+/**
+ * `ERR_SQLITE_ERROR` 的 `message`：比 `errstr` 具体（`probe`、`no such column: x`），
+ * 但 `SQL logic error` / `constraint failed` 这类与 `errstr` 相同的通用句没有信息量，当作没有。
+ */
+function sqliteMessageDetail(error: unknown): string | null {
+  const message = error instanceof Error ? error.message : String(error);
+  const trimmed = message.trim();
+  if (!trimmed) return null;
+  if (/^(SQL logic error|constraint failed|unknown error|not an error)$/i.test(trimmed)) return null;
+  return escapeControlChars(trimmed).slice(0, 200);
 }
 
 /**
@@ -1369,8 +1399,13 @@ export class Store {
   restoreChain(id: string): Chain {
     const chain = this.mustChain(id);
     if (chain.status === 'active') return chain; // 已经是活跃链：空操作，不动 last_used_at
-    this.db.prepare("UPDATE chains SET status='active' WHERE id=?").run(id);
-    return this.touchChain(id);
+    // 恢复与抬高时间必须放进**同一条语句**：以前先 `UPDATE status='active'`、再 `touchChain()`
+    // （第二条 UPDATE），第二步失败时第一条已经提交——`chain use` 回报失败（exit 1），
+    // 库里这条链却已经恢复成活跃链，同目录出现两条 active。单条 UPDATE 由 SQLite 原子完成，
+    // 失败就整体不生效；时间取值与 `touchChain()` 保持一致。
+    const at = Math.max(Date.now(), chain.lastUsedAt + 1);
+    this.db.prepare("UPDATE chains SET status='active', last_used_at=? WHERE id=?").run(at, id);
+    return { ...chain, status: 'active', lastUsedAt: at };
   }
 
   /**
