@@ -748,17 +748,32 @@ async function desktopProcessRunning(): Promise<boolean | null> {
   return false;
 }
 
+/**
+ * 协作写锁实际生效的宿主平台。`flock` helper 与 `lsof` 探测都只在 macOS 上验证过，
+ * 其它平台 `acquireCodexWriteLock` 直接返回；能力矩阵据此如实报告，不把「接口存在」讲成「本机有锁」。
+ */
+export const CODEX_WRITE_LOCK_PLATFORMS: readonly string[] = ['darwin'];
+
 /** 协作写锁：写入前独占原生 per-thread 锁（收窄与原生 writer 的竞态窗口） */
 async function acquireCodexWriteLock(
   ctx: { ref?: SessionRef },
 ): Promise<{ guard?: WriterLockGuard; warning?: string } | undefined> {
   const ref = ctx.ref;
-  if (!ref || process.platform !== 'darwin') return undefined;
+  if (!ref || !CODEX_WRITE_LOCK_PLATFORMS.includes(process.platform)) return undefined;
   // 锁路径依赖数据目录：目录故障在这里原样抛出，不归入下面的「被其他 writer 抢先持有」。
   const lockPath = writerLockPathForRef(ref);
   try {
     const guard = await acquireThreadWriterLock(lockPath);
-    return guard ? { guard } : undefined;
+    if (guard) return { guard };
+    // 本平台本应有锁，helper 却没给出任何结果（没装 python3、macOS 上只有要求安装命令行工具的
+    // 占位程序、5 秒内无响应或无输出就退出）。以前这里返回 undefined，写入照常进行、结果里不留痕迹，
+    // 与下面「锁路径故障 → warning」不是同一个口径；这同样是一次没有锁保护的写入，必须说出来。
+    return {
+      warning:
+        '协作写锁 helper 没有给出结果（python3 不可用、5 秒内无响应或无输出就退出）；' +
+        '这次没有取得协作写锁，并发写入保护不生效（不会因此单独中止本次操作）——' +
+        '若 Codex 正在写同一会话，仍可能互相覆盖；确认 `python3 -c "import fcntl"` 能正常执行后重试可恢复保护',
+    };
   } catch (error) {
     // 锁目录建不出来是可修的环境故障，不是「别人正在写」：降级为只探测并披露。
     // 协作锁只是收窄竞态窗口的增强，preflight 已经做过只读探测，写入本身仍可继续。
@@ -931,6 +946,7 @@ export const codexAdapter: ProviderAdapter = {
   findById: findCodexSessionById,
 
   acquireWriteLock: acquireCodexWriteLock,
+  writeLockPlatforms: CODEX_WRITE_LOCK_PLATFORMS,
 
   sessionUsage: codexSessionUsage,
 

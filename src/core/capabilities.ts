@@ -33,8 +33,13 @@ export type ProviderCapability = {
   textEvents: 'none' | 'assistant';
   /** 工具结果的结构化失败标记；与结果正文是否保留独立 */
   toolFailures: 'none' | 'assistant';
-  /** 能原子取协作写锁，收窄「探测 → 写入」的竞态窗口 */
+  /**
+   * 能原子取协作写锁，收窄「探测 → 写入」的竞态窗口。实现了接口**且**在当前宿主平台生效才为 true；
+   * 是否真取到还取决于运行时条件（如 python3），取不到时由写入结果的 warnings 披露。
+   */
   writeLock: boolean;
+  /** 协作写锁只在这些平台生效（`process.platform` 取值）；缺省表示没有平台限定 */
+  writeLockPlatforms?: string[];
   /** 能扫 token 用量 */
   sessionUsage: boolean;
   /** 用量读的是旁路文件（grok 的 `updates.jsonl`）而不是 `parse` 读的那份 */
@@ -45,8 +50,12 @@ export type ProviderCapability = {
   listSessionsCap?: number;
 };
 
-/** 从适配器实例推导能力。纯函数：不 spawn CLI、不读盘，测试可直接喂假适配器 */
-export function describeProviderCapability(a: ProviderAdapter): ProviderCapability {
+/**
+ * 从适配器实例推导能力。纯函数：不 spawn CLI、不读盘，测试可直接喂假适配器。
+ * `platform` 只参与「有平台限定的能力在本机是否生效」这一项判断，缺省取宿主平台。
+ */
+export function describeProviderCapability(a: ProviderAdapter, platform: string = process.platform): ProviderCapability {
+  const lockPlatforms = a.writeLockPlatforms;
   return {
     id: a.id,
     displayName: a.displayName,
@@ -58,7 +67,8 @@ export function describeProviderCapability(a: ProviderAdapter): ProviderCapabili
     attachments: a.attachmentSupport ?? 'none',
     textEvents: a.textEventSupport ?? 'none',
     toolFailures: a.toolFailureSupport ?? 'none',
-    writeLock: typeof a.acquireWriteLock === 'function',
+    writeLock: typeof a.acquireWriteLock === 'function' && (!lockPlatforms || lockPlatforms.includes(platform)),
+    ...(lockPlatforms ? { writeLockPlatforms: [...lockPlatforms] } : {}),
     sessionUsage: typeof a.sessionUsage === 'function',
     sessionUsageSidecar: typeof a.sessionUsagePath === 'function',
     unattributable: typeof a.unattributable === 'function',
@@ -67,8 +77,18 @@ export function describeProviderCapability(a: ProviderAdapter): ProviderCapabili
 }
 
 /** 全部已注册适配器的能力矩阵（顺序即注册表顺序） */
-export function describeCapabilities(adapters: ProviderAdapter[]): ProviderCapability[] {
-  return adapters.map(describeProviderCapability);
+export function describeCapabilities(adapters: ProviderAdapter[], platform: string = process.platform): ProviderCapability[] {
+  return adapters.map((adapter) => describeProviderCapability(adapter, platform));
+}
+
+const PLATFORM_LABELS: Record<string, string> = { darwin: 'macOS', win32: 'Windows', linux: 'Linux' };
+
+/** 「协作写锁」一格：有平台限定时把限定写出来，本机不在其中时明说不生效，而不是只给一个 `-` */
+function writeLockCell(row: ProviderCapability): string {
+  const platforms = row.writeLockPlatforms;
+  if (!platforms?.length) return `协作写锁 ${mark(row.writeLock)}`;
+  const names = platforms.map((p) => PLATFORM_LABELS[p] ?? escapeControlChars(p)).join(' / ');
+  return row.writeLock ? `协作写锁 ✓（仅 ${names}）` : `协作写锁 -（仅 ${names} 生效，本机平台没有这层保护）`;
 }
 
 /**
@@ -109,7 +129,7 @@ export function formatCapabilities(rows: ProviderCapability[]): string {
       `附件 ${row.attachments === 'all' ? '图片与文件' : row.attachments === 'images' ? '仅图片' : row.attachments === 'user-images' ? '仅用户侧图片' : '仅占位'}`,
       `过程文本 ${row.textEvents === 'assistant' ? '仅助手侧' : '不保留'}`,
       `工具失败标记 ${row.toolFailures === 'assistant' ? '仅助手侧' : '不保留'}`,
-      `协作写锁 ${mark(row.writeLock)}`,
+      writeLockCell(row),
       `归属统计 ${mark(row.unattributable)}`,
       row.listSessionsCap === undefined ? '列表不截断' : `列表上限 ${row.listSessionsCap}`,
     ];
