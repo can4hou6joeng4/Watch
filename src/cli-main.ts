@@ -804,23 +804,29 @@ async function cmdSwitch(cwd: string, targetId: string, json: boolean, chain?: s
     //
     // 链尾没更新时不能说「已切到 / 链尾已更新」：同一份输出里上面刚有一条「链记录失败」。
     // 内容确实就位了（没写会话文件 / 没追加），所以只讲内容，链尾那截单独说。
-    const chainTailFailed = result.chainRecordState === 'failed';
+    // 判据是 `!== 'written'`：`not-attempted` 在零增量分支只出现在本地库不可用时——那时
+    // 链尾同样没更新，按成功措辞会与 stderr 的「本次切换未写入链记录」自相矛盾（第 311 轮）。
+    const chainTailFailed = result.chainRecordState !== 'written';
+    const tailFailure =
+      result.chainRecordState === 'failed'
+        ? '链记录写入失败，原因见上方警告'
+        : '本次没有写入链记录，原因见上方警告';
     if (result.turnCount === 0 && result.zeroIncrementReason === 'source-empty') {
       console.log(
         chainTailFailed
-          ? `内容已就位：来源会话没有可交接的内容，本次未写入会话文件；但链尾未更新（链记录写入失败，原因见上方警告）`
+          ? `内容已就位：来源会话没有可交接的内容，本次未写入会话文件；但链尾未更新（${tailFailure}）`
           : `已切到 ${targetId}（链尾已更新；来源会话没有可交接的内容，本次未写入会话文件）`,
       );
     } else if (result.turnCount === 0 && result.zeroIncrementReason === 'up-to-date') {
       console.log(
         chainTailFailed
-          ? `内容已就位：目标会话已包含全部内容，本次未追加；但链尾未更新（链记录写入失败，原因见上方警告）`
+          ? `内容已就位：目标会话已包含全部内容，本次未追加；但链尾未更新（${tailFailure}）`
           : `已切到 ${targetId}（链尾已更新；目标会话已包含全部内容，本次未追加）`,
       );
     } else {
       console.log(
         `已从 ${result.fromProvider} 交接 → ${targetId}（${result.turnCount} 轮` +
-          (chainTailFailed ? '；链尾未更新，链记录写入失败，原因见上方警告）' : '）'),
+          (chainTailFailed ? `；链尾未更新，${tailFailure}）` : '）'),
       );
     }
     console.log(`新会话: ${escapeControlChars(result.newRef.sessionId)}`);
@@ -1079,11 +1085,21 @@ async function cmdAdopt(
     const currentChain = safeActiveChain(store, cwd, result.warnings);
     const shiftNote = currentChainShiftNote(previousChain, currentChain);
     if (json) {
-      // `warnings` 只放降级原因，`note` 放结果说明（同 open 的 warnings / notes 分法）
+      // `warnings` 只放降级原因，`note` 放结果说明（同 open 的 warnings / notes 分法）。
+      // `replacedRef` 是「打算替换」的那条：unchanged / 写失败 / 无库时替换没有发生，
+      // --json 里照发会让脚本以为链已经从它改绑（第 311 轮）。
+      const publicAdopt = publicResult(result);
+      const publicJson =
+        result.unchanged || result.chainRecordState !== 'written'
+          ? (() => {
+              const { replacedRef: _planned, ...rest } = publicAdopt;
+              return rest;
+            })()
+          : publicAdopt;
       console.log(
         JSON.stringify({
           ok: true,
-          ...publicResult(result),
+          ...publicJson,
           ...(shiftNote ? { warnings: [...result.warnings, shiftNote], previousChain, currentChain } : {}),
           ...(resumeCommand ? { resumeCommand } : {}),
         }),
@@ -1100,8 +1116,15 @@ async function cmdAdopt(
       console.log(`未改动: ${escapeControlChars(result.adoptedRef.sessionId)}`);
       if (result.note) console.log(`  ${escapeControlChars(result.note)}`);
     } else if (result.chainRecordState !== 'written') {
+      // 「仍可用下面的命令打开」不能无条件说：文件读不出来时同一份 stderr 里刚说过
+      // resume 一执行就失败，空文件时打开的是空会话（第 311 轮）。
+      const openNote = emptyFileReason
+        ? 'resume 打开的是空会话，原因见上方警告'
+        : readProblem
+          ? '这条会话的文件现在读不出来，直接打开会失败（原因见上方警告）'
+          : '这条会话仍可用下面的命令打开';
       console.log(
-        `未接入链: ${escapeControlChars(result.adoptedRef.sessionId)}（链记录没写成，原因见上方警告；这条会话仍可用下面的命令打开）`,
+        `未接入链: ${escapeControlChars(result.adoptedRef.sessionId)}（链记录没写成，原因见上方警告；${openNote}）`,
       );
       if (result.note) console.log(`  ${escapeControlChars(result.note)}`);
     } else {
