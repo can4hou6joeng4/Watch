@@ -9,16 +9,22 @@ import { codexDir } from './build.js';
 const execFileAsync = promisify(execFile);
 
 /**
- * 锁目录建不出来（权限 / 同名文件占位 / 磁盘满）：与「没有 python3」不同，这是可修的环境故障，
- * 调用方必须把它披露成 warning，而不是当成机制不存在静默降级。
+ * 锁目录 / 锁文件准备失败（权限、同名文件占位、磁盘满）：与「没有 python3」不同，
+ * 这是可修的环境故障，调用方必须把它披露成 warning，而不是当成机制不存在静默降级。
+ * `phase` 区分是哪一步失败——目录已存在但不可写时 mkdir 是空操作，失败发生在 helper 打开锁文件。
  */
 export class WriterLockDirError extends Error {
   constructor(
     public lockPath: string,
     cause: unknown,
+    phase: 'dir' | 'file' = 'dir',
   ) {
     const reason = describeWriteFailureReason(cause) ?? (cause instanceof Error ? cause.message : String(cause));
-    super(`无法准备 Codex 写锁目录（${escapeControlChars(path.dirname(lockPath))}）：${reason}`);
+    super(
+      phase === 'dir'
+        ? `无法准备 Codex 写锁目录（${escapeControlChars(path.dirname(lockPath))}）：${reason}`
+        : `无法准备 Codex 写锁文件（${escapeControlChars(lockPath)}）：${reason}`,
+    );
     this.name = 'WriterLockDirError';
   }
 }
@@ -71,7 +77,14 @@ export async function probeThreadWriterHolders(lockPath: string): Promise<Writer
 const PY_HELPER = [
   'import fcntl, os, sys',
   'path = sys.argv[1]',
-  'fd = os.open(path, os.O_RDWR | os.O_CREAT, 0o644)',
+  // 打开锁文件失败（目录已存在但不可写 / 同名目录占位 / 磁盘满）必须显式报告：
+  // 否则 helper 带着 traceback 退出，stdout 一个字都没有，调用方只能等满超时并把它
+  // 当成「机制不可用」——与第 302 轮「目录故障必须披露」的口径相反。
+  'try:',
+  '    fd = os.open(path, os.O_RDWR | os.O_CREAT, 0o644)',
+  'except OSError:',
+  "    print('unavailable', flush=True)",
+  '    sys.exit(4)',
   'try:',
   '    fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)',
   'except OSError:',
@@ -92,21 +105,25 @@ function closeChild(child: ChildProcess): void {
   }
 }
 
-/** 读取子进程第一行（locked/busy）；超时或不可用返回 null */
+/** 读取子进程第一行（locked/busy/unavailable）；超时或不可用返回 null */
 async function readFirstLine(child: ChildProcess, timeoutMs: number): Promise<string | null> {
   const stdout = child.stdout;
   if (!stdout) return null;
   stdout.setEncoding('utf8');
   return new Promise((resolve) => {
     let buffer = '';
+    let settled = false;
     const timer = setTimeout(() => {
       closeChild(child);
       resolve(null);
     }, timeoutMs);
     const done = (value: string | null) => {
+      if (settled) return;
+      settled = true;
       clearTimeout(timer);
       stdout.off('data', onData);
       child.off('error', onError);
+      child.off('close', onClose);
       resolve(value);
     };
     const onData = (chunk: string) => {
@@ -115,8 +132,15 @@ async function readFirstLine(child: ChildProcess, timeoutMs: number): Promise<st
       if (index >= 0) done(buffer.slice(0, index).trim());
     };
     const onError = () => done(null);
+    // helper 在打印任何东西之前就退出（解释器缺失以外的启动失败、崩溃）时，
+    // 只等 stdout 会白等满 5 秒；'close' 一到就用已有输出结算（无输出即 null）。
+    const onClose = () => {
+      const index = buffer.indexOf('\n');
+      done(index >= 0 ? buffer.slice(0, index).trim() : buffer.trim() || null);
+    };
     stdout.on('data', onData);
     child.once('error', onError);
+    child.once('close', onClose);
   });
 }
 
@@ -163,5 +187,13 @@ export async function acquireThreadWriterLock(lockPath: string): Promise<WriterL
   }
   closeChild(child);
   if (first === 'busy') throw new Error('writer lock is held by another process');
+  if (first === 'unavailable') {
+    // 目录在、但锁文件建不出来：与 mkdir 失败同一档（可修故障），不能用「机制不可用」静默吞掉
+    throw new WriterLockDirError(
+      lockPath,
+      new Error('无法创建或打开锁文件（权限、同名目录占位或磁盘空间不足）'),
+      'file',
+    );
+  }
   return undefined; // 无 python3 或超时：机制不可用
 }

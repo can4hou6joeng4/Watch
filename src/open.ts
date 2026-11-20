@@ -729,8 +729,13 @@ export async function openSession(
     } catch (error) {
       const blocked = blockedFrom(error);
       const raw = error instanceof Error ? error.message : String(error);
-      // 写入被阻断走结构化 blocked（文案已是中文）；其余多半是写盘失败，原文只有英文 errno
-      return blocked ? { ok: false, error: raw, blocked } : { ok: false, error: `并入新内容失败: ${describeWriteFailureReason(error) ?? raw}` };
+      // 写入被阻断走结构化 blocked（文案已是中文）；其余多半是写盘失败，原文只有英文 errno。
+      // 已累积的 warnings（例如协作写锁目录故障）必须跟着失败结果一起返回：
+      // 写入失败不代表那条降级事实没发生，丢掉它会让用户以为这次本来是有锁保护的。
+      const carried = warnings.length ? { warnings } : {};
+      return blocked
+        ? { ok: false, error: raw, blocked, ...carried }
+        : { ok: false, error: `并入新内容失败: ${describeWriteFailureReason(error) ?? raw}`, ...carried };
     }
     // 写完了再比一次来源：期间被追加的话，并进去的只是开始那一刻的内容。
     // 只在真的并入了内容时说——一句都没并时这句「并进去的是…」会自相矛盾。

@@ -177,13 +177,16 @@ try {
 
   // 7) 协作写锁：Watch 独占锁文件期间，竞争 flock 必须 busy；释放后可再次取锁
   const ref = { provider: 'codex', sessionId: target.sessionId, filePath: target.filePath, cwd };
-  const guard = await codexAdapter.acquireWriteLock({ ref });
+  // 第 302 轮起契约是 { guard?, warning? } | undefined：warning 表示锁目录 / 锁文件可修故障，
+  // 此时没有 guard；直接当 guard 用会让 holderPid 变 undefined、release() 抛 TypeError。
+  const lock = await codexAdapter.acquireWriteLock({ ref });
+  const guard = lock?.guard;
   if (!guard) {
     const { existsSync } = await import('node:fs');
     record(
       '7 协作锁原子互斥',
       false,
-      `协作锁不可用（lockExists=${existsSync(lockPath)} lockPath=${lockPath.replace(root, '<ROOT>')} python3=${existsSync('/usr/bin/python3')}）`,
+      `协作锁不可用（lockExists=${existsSync(lockPath)} lockPath=${lockPath.replace(root, '<ROOT>')} python3=${existsSync('/usr/bin/python3')}${lock?.warning ? ` warning=${lock.warning}` : ''}）`,
     );
   } else {
     try {
@@ -202,7 +205,8 @@ try {
   }
 
   // 9) 协作锁语义与原生一致：Watch 持锁期间真实 app-server 必须被拒（active writer）
-  const duringGuard = await codexAdapter.acquireWriteLock({ ref });
+  const duringLock = await codexAdapter.acquireWriteLock({ ref });
+  const duringGuard = duringLock?.guard;
   if (duringGuard) {
     const duringServer = await startAppServer();
     try {
@@ -221,7 +225,11 @@ try {
       await duringGuard.release();
     }
   } else {
-    record('9 Watch 持协作锁时真实 codex 被拒（active writer）', false, '协作锁不可用');
+    record(
+      '9 Watch 持协作锁时真实 codex 被拒（active writer）',
+      false,
+      `协作锁不可用${duringLock?.warning ? `（${duringLock.warning}）` : ''}`,
+    );
   }
 
   // 10) 协作锁不破坏原生路径：释放后真实 app-server 仍能打开线程
