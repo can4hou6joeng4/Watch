@@ -113,12 +113,22 @@ async function startAppServer() {
     child.stdin.write(JSON.stringify({ jsonrpc: '2.0', id, method, params }) + '\n');
     return new Promise((resolve) => pending.set(id, resolve));
   };
-  const initialized = await rpc('initialize', {
-    clientInfo: { name: 'watch_codex_writer_guard', version: '0.0.1' },
-    capabilities: { experimentalApi: true },
-  });
+  // app-server 也可能只关掉 stdout、不抛 'error'：没有超时的话 rpc 永远等不到响应，
+  // 整个验收挂在一条没有输出的命令上。超时结算成结构化失败，由 record() 记成这次没跑成（第 310 轮）。
+  const withTimeout = async (promise, ms, label) => {
+    const outcome = await Promise.race([promise, sleep(ms).then(() => ({ __timeout: true }))]);
+    return outcome.__timeout ? { error: { message: `${label} 超时（${ms}ms 内没有响应）` } } : outcome;
+  };
+  const initialized = await withTimeout(
+    rpc('initialize', {
+      clientInfo: { name: 'watch_codex_writer_guard', version: '0.0.1' },
+      capabilities: { experimentalApi: true },
+    }),
+    15000,
+    'initialize',
+  );
   child.stdin.write(JSON.stringify({ method: 'initialized', params: {} }) + '\n');
-  return { child, rpc, initialized };
+  return { child, rpc, withTimeout, initialized };
 }
 
 async function lsofHolders(lockPath) {
@@ -151,7 +161,7 @@ try {
   const before = await codexAdapter.contentFingerprint(target);
 
   appServer = await startAppServer();
-  const resumed = await appServer.rpc('thread/resume', { threadId: target.sessionId, cwd });
+  const resumed = await appServer.withTimeout(appServer.rpc('thread/resume', { threadId: target.sessionId, cwd }), 15000, 'thread/resume');
   record(
     '1 真实 codex 打开线程',
     !appServer.initialized.error && !resumed.error,
@@ -254,7 +264,7 @@ try {
   // 10) 协作锁不破坏原生路径：释放后真实 app-server 仍能打开线程
   const second = await startAppServer();
   try {
-    const resumedAgain = await second.rpc('thread/resume', { threadId: target.sessionId, cwd });
+    const resumedAgain = await second.withTimeout(second.rpc('thread/resume', { threadId: target.sessionId, cwd }), 15000, 'thread/resume');
     record(
       '10 释放后真实 codex 仍能打开同一线程',
       !resumedAgain.error,
