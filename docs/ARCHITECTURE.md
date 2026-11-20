@@ -134,7 +134,7 @@ export type ProcessEvent = {
 
 | 写入路径 | 已有防护 | 不覆盖的部分 |
 |---|---|---|
-| `handoff.ts` 目标复用 | provider 提供指纹时比较目标变化 | 可选指纹不是锁；桌面 `open.ts` 没有同等完整守卫 |
+| `handoff.ts` 目标复用 | provider 提供指纹时比较目标变化 | 可选指纹不是锁（读指纹到写之间仍有窗口）；新建目标没有旧指纹可比 |
 | 文件新建/整文件替换 | `writeFileAtomic`，部分调用配置验证和备份 | 不是所有写入路径；备份是可选行为 |
 | Claude/Codex 既有文件追加 | `appendFileAtomic`，配置 verify 回读校验与 `.bak` 备份 | 备份仅保留上一代；自家解析器校验通过不证明目标客户端接受该扩展 |
 | OpenCode 私有导入 | SQLite 事务与数量核对 | 不证明 GUI 缓存、数据库迁移或并发模型兼容 |
@@ -144,7 +144,7 @@ export type ProcessEvent = {
 
 `verifyWrittenTurns` 对比角色、文本、事件计数和 callId，并有后缀匹配及 provider 声明的降级处理。附件不参与完整对账。自家解析器读回成功，不证明目标原生客户端接受该会话格式。
 
-直接写入路径已改为**目标级写保护**：按原生 per-thread writer 锁（`~/.codex/thread-writer-locks/<thread-id>.lock` + `lsof` 探测持有者）判定，只在目标会话真被持有才拒绝；写入期间还会以 `flock` 协作独占同一把锁（python3 helper，不可用时降级），把竞态窗口收窄为原子取锁；无目标上下文或 `lsof` 不可用时才回退桌面进程检查，并在写入前用 `contentFingerprint` 比对目标是否被外部改动（写后另由 rename 前的 parse 反解对账）。 桌面端可在点击前调用只读预检（CLI `watch open --to <provider> --check`，Tauri `check_open`）：它复用同一套转入决策解析目标会话（resume/chain/reuse/new）并跑一次目标级探测，返回 `writable`/`blocked` 且不写目标会话（命中本地映射时会刷新 `session_locations.lastSeenAt`，不触碰原生文件），预检不可用时不阻塞转入。官方导入仍采用独立的目标目录保护；限定原生验证见兼容性矩阵。保留已落盘的 `tui-chain` 标题与 `PRAGMA user_version` 幂等 schema 迁移；旧版 `~/.tongbu/tongbu.db` 自动迁入已于 2026-09-16 **有意移除**（兼容性破断：只装过旧版的机器不会再自动导入旧库，需手工另存），根 `package.json` 不再提供 `test` 脚本。
+直接写入路径已改为**目标级写保护**：按原生 per-thread writer 锁（`~/.codex/thread-writer-locks/<thread-id>.lock` + `lsof` 探测持有者）判定，只在目标会话真被持有才拒绝；写入期间还会以 `flock` 协作独占同一把锁（python3 helper，不可用时降级），把竞态窗口收窄为原子取锁；无目标上下文或 `lsof` 不可用时才回退桌面进程检查，并在写入前用 `contentFingerprint` 比对目标是否被外部改动（写后另由 rename 前的 parse 反解对账）。**writer 持有者探测与协作锁只在 macOS 生效**：`preflight()` 与协作取锁都在 `process.platform !== 'darwin'` 时直接返回（配置可读性检查在早退之前，仍会执行），Windows / Linux 上的 Codex 目标只有写前指纹比对与写后反解校验。启动器的 `open --from` / `open --to` 两条写入路径同样在写前调用 `assertTargetUnchanged`（`src/open.ts`），与 `handoff.ts` 同一道防线。 桌面端可在点击前调用只读预检（CLI `watch open --to <provider> --check`，Tauri `check_open`）：它复用同一套转入决策解析目标会话（resume/chain/reuse/new）并跑一次目标级探测，返回 `writable`/`blocked` 且不写目标会话（命中本地映射时会刷新 `session_locations.lastSeenAt`，不触碰原生文件），预检不可用时不阻塞转入。官方导入仍采用独立的目标目录保护；限定原生验证见兼容性矩阵。保留已落盘的 `tui-chain` 标题与 `PRAGMA user_version` 幂等 schema 迁移；旧版 `~/.tongbu/tongbu.db` 自动迁入已于 2026-09-16 **有意移除**（兼容性破断：只装过旧版的机器不会再自动导入旧库，需手工另存），根 `package.json` 不再提供 `test` 脚本。
 
 ---
 
@@ -198,4 +198,4 @@ Antigravity 2.0 → CLI 同样不是普通恢复参数。`agy --conversation <id
 
 发布工作流的 `quality` job 已内联在 `.github/workflows/release.yml`：根类型检查、前端构建，以及安装 Tauri 系统依赖后在 Linux 运行 Rust 桥接单测。**仓库不分发测试套件**：`tests/` 与本地测试运行器均已加入 `.gitignore`，根 `package.json` 不再提供 `test` 脚本，CI 也不跑回归测试；测试仅在开发者本地工作区存在。P3 新增目标指纹变化后的零写入/链尾不推进、`verifyWrittenTurns` 重复 user 后缀匹配，以及 OpenCode 锁文件的 `dev`、`ino`、`birthtimeNs`、`size` 替换校验；Rust job 会先安装根 Node 依赖，以满足 Tauri resources 检查。P3 记录的本地 Node 226 项 / Rust 7 项通过属当时本地证据；提交 `adce6a7` 对应的 GitHub Actions run `34374022914` 属当时含测试步骤的远程证据。单一 CI 宿主编译、跨平台类型检查和打包成功均不替代原生会话恢复验收。
 
-`scripts/validate-codex-native.mjs` 是手动原生验收工具，不属于自动单测：创建临时 HOME、关闭认证存储的 keychain 路径与分析反馈、仅连接不可用的本机模型地址，不发送 turn 或批准工具。官方导入须显式传 `--official-import`，且只选择合成样本的 `SESSIONS` 项。结果见兼容性矩阵，不能由脚本退出 0 推导 GUI 或模型继续已验证。
+`scripts/validate-codex-native.mjs` 是手动原生验收工具，不属于自动单测：创建临时 HOME、关闭认证存储的 keychain 路径与分析反馈、仅连接不可用的本机模型地址，不发送 turn 或批准工具。官方导入须显式传 `--official-import` 或 `--watch-importer`（二者互斥、择一即可；后者会真实 spawn 产品 CLI 的 prepare → confirm → status），且只选择合成样本的 `SESSIONS` 项。结果见兼容性矩阵，不能由脚本退出 0 推导 GUI 或模型继续已验证。
