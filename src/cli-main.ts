@@ -2082,7 +2082,7 @@ async function cmdPrompt(
     warnings.push(
       `文档里识别并隐去了 ${result.credentialsMasked.total} 个格式固定的密钥 / 令牌（${result.credentialsMasked.kinds
         .map((kind) => `${kind.label} ${kind.count}`)
-        .join('、')}），原文仍在源文件里；只认固定格式，口令与其它形式的敏感内容不会被识别，转交前请自行检查`,
+        .join('、')}），原文仍在源文件里；只认固定格式，单独出现的口令与其它形式的敏感内容不会被识别，转交前请自行检查`,
     );
   }
 
