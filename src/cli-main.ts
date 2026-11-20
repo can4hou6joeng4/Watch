@@ -1306,7 +1306,12 @@ async function cmdSessions(cwd: string, json: boolean, chain?: string): Promise<
         }
       }
     } catch (error) {
-      // 链查询失败时退化为全量列表，但要说清楚，否则 --chain 的输出会被误读
+      // 链查询失败时退化为全量列表，但要说清楚，否则 --chain 的输出会被误读。
+      // 「退化」必须真的退化成全量：以前只加警告、`chainRow` 仍是 null 之外的旧值 / `bound` 已填了一部分，
+      // 下面 `chainRow ? … : sessions` 会把全部会话滤掉（`chainRow` 有值但 `bound` 为空时尤其明显），
+      // stdout 说「未发现会话」、stderr 说「已列出该目录全部会话」——两句互相矛盾
+      chainRow = null;
+      bound.clear();
       warnings.push(`链查询失败，已列出该目录全部会话：${describeStoreErrorReason(error)}`);
     }
   }
@@ -3319,6 +3324,10 @@ function describeIndexReset(info: { rows: number; sessions: number; directories:
 async function cmdSearch(cwd: string, json: boolean, query: string, resetIndex = false): Promise<void> {
   const store = openStore();
   if (!store) fail(json, storeUnavailableError());
+  // 声明在 try 外面：`--reset-index` 成功之后、搜索本身才失败时，失败输出必须带上这件事。
+  // 以前 resetInfo 在 try 里，外层的 catch 看不见它——`--json` 回 `{ok:false,error}`，
+  // 两张表却已经从 1 行变 0 行，用户只看到「搜索失败」，不知道索引已经被清过
+  let resetInfo: ReturnType<Store['resetSearchIndex']> | null = null;
   try {
     const warnings: string[] = [];
     const unavailable: string[] = [];
@@ -3326,7 +3335,6 @@ async function cmdSearch(cwd: string, json: boolean, query: string, resetIndex =
     // `--reset-index`：只清搜索索引（全部目录），链与切换记录不动。索引每行都能由会话文件
     // 重建，所以这是唯一一条不丢东西的省空间路径；删库会连链一起丢，doctor 的体积一栏才要把
     // 这两条岔开说。失败时不能半途继续搜索——用户会以为「清过了还搜不到」是索引没建起来。
-    let resetInfo: ReturnType<Store['resetSearchIndex']> | null = null;
     if (resetIndex) {
       try {
         resetInfo = store.resetSearchIndex();
@@ -3447,16 +3455,27 @@ async function cmdSearch(cwd: string, json: boolean, query: string, resetIndex =
       }));
       return;
     }
+    // 零命中时正文该不该下「本目录没有匹配」的结论：上面任何一档缺口都说明这次没搜全
+    const coverageGap =
+      unavailable.length > 0 ||
+      coverage.capped.length > 0 ||
+      coverage.incomplete.length > 0 ||
+      emptied.length > 0 ||
+      unattributableStats.length > 0;
     for (const warning of warnings) console.error(`警告: ${escapeControlChars(warning)}`);
     if (!hits.length) {
       // 正文先说清范围（搜索只覆盖这一个目录），再说有没有别处线索——
       // 单打一句「无结果」会被当成「这台机器上没有」。
       // `--cwd` 本身不可用时连「这个目录」都不存在：改成说清这次搜索没覆盖到东西，
-      // 否则「本目录没有匹配」会被当成「那句话没聊过」（原因已在 warnings 里）
+      // 否则「本目录没有匹配」会被当成「那句话没聊过」（原因已在 warnings 里）。
+      // 有会话 / Agent 存储压根没进索引时同样不能说「本目录没有匹配」：那是「没搜全」，
+      // 不是「没聊过」。以前首句先下结论、notes 再撤回，读第一行的人已经得到了错误结论
       console.log(
         cwdIssue
           ? cwdUnusableConclusion('无结果', '本次搜索不能说明这个目录里有没有匹配')
-          : `无结果：本目录没有匹配（搜索按目录限定，只查了 ${escapeControlChars(cwd)}）`,
+          : coverageGap
+            ? `无结果：本次没有搜到匹配，但搜索覆盖不完整（只查了 ${escapeControlChars(cwd)}；有会话没能进入搜索索引，原因见上方警告）——这不代表这个目录里没聊过`
+            : `无结果：本目录没有匹配（搜索按目录限定，只查了 ${escapeControlChars(cwd)}）`,
       );
       for (const note of notes) console.log(note);
       return;
@@ -3486,7 +3505,16 @@ async function cmdSearch(cwd: string, json: boolean, query: string, resetIndex =
   } catch (error) {
     // 查询类命令同样会撞上坏库（`search_index` 缺列、`messages_fts` 缺表…）：
     // 裸 SQLite 原文既不说这是库的问题，也给不出重建的下一步
-    fail(json, describeCommandError(error));
+    const message = describeCommandError(error);
+    if (!resetInfo) fail(json, message);
+    // 索引已经清空、搜索才失败：两件事都要说。`--json` 也带 resetIndex，
+    // 否则调用方只拿到一个 error，没法知道索引已被清过（下次搜索要从零重建）
+    fail(
+      json,
+      `--reset-index 已执行（${resetInfo.rows} 段 / ${resetInfo.sessions} 个会话 / ${resetInfo.directories} 个目录已清空，链与切换记录未受影响），` +
+        `但随后的搜索失败：${message}`,
+      { resetIndex: { ...resetInfo } },
+    );
   }
 }
 
