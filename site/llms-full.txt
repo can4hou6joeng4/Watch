@@ -2,7 +2,7 @@
 
 > Canonical Site: https://relay.bobochang.cn/ (zh-CN) | https://relay.bobochang.cn/en/ (en)
 > Author: can4hou6joeng4 (https://bobochang.cn)
-> Generated: 2026-11-18. License: MIT
+> Generated: 2026-11-20. License: MIT
 
 ---
 
@@ -13,8 +13,8 @@ Watch (Chinese: 值更, also called AgentRelay) is a free, local-only CLI and ma
 ### Key Safety Constraints
 - 100% Local Execution: Watch has no cloud relay, server, or analytics. It reads and writes local disk stores directly.
 - Strict CWD Matching: Prevents code edits across different workspaces or Git worktrees.
-- Target Writer Guard: Direct writes to Codex inspect native per-thread writer locks (~/.codex/thread-writer-locks/<id>.lock via lsof) and pre/post content fingerprints.
-- OpenCode SQLite Isolation: Multi-table writes (sessions, messages, parts) execute in one SQLite transaction and roll back on failure; supports WATCH_OPENCODE_DB isolation.
+- Target Writer Guard: Direct writes to Codex compare pre/post content fingerprints on every platform. On macOS only, they also inspect native per-thread writer locks (~/.codex/thread-writer-locks/<id>.lock via lsof) and hold a cooperative lock during the write; Windows and Linux do not have this lock layer, and `watch capabilities` reports it per host platform.
+- OpenCode SQLite Isolation: Multi-table writes (the session, message and part tables; session_v2, session_message and session_part on 2.x layouts) execute in one SQLite transaction and roll back on failure; supports WATCH_OPENCODE_DB isolation.
 - Tool Call Degradation: Complex proprietary tool call events are downgraded to structured text representations in target agents.
 
 ---
@@ -60,13 +60,13 @@ Watch (Chinese: 值更, also called AgentRelay) is a free, local-only CLI and ma
 ### Guide: OpenCode, Claude & Codex Bidirectional Session Handoff Guide (OpenCode 与 Claude/Codex 双向会话接力与 SQLite 数据隔离指南)
 - URL (zh): https://relay.bobochang.cn/guides/opencode-handover-sqlite-isolation/
 - URL (en): https://relay.bobochang.cn/en/guides/opencode-handover-sqlite-isolation/
-- Direct Answer (en): OpenCode keeps sessions in ~/.local/share/opencode/opencode.db. WATCH_OPENCODE_DB points Watch at another file. Watch writes sessions, messages, and parts in one SQLite transaction and rolls back if it fails. Unsupported tool fields become text. Later replies depend on the model you configure.
-- 核心解答 (zh): OpenCode 的会话在本机 ~/.local/share/opencode/opencode.db，可用 WATCH_OPENCODE_DB 换库。Watch 用一次 SQLite 事务写入 sessions、messages、parts；事务失败会回滚。不支持的工具参数降级为文本，续写质量取决于你配置的模型。
+- Direct Answer (en): OpenCode keeps sessions in ~/.local/share/opencode/opencode.db. WATCH_OPENCODE_DB points Watch at another file. Watch writes the session, message, and part tables (2.x layouts use session_v2, session_message, session_part) in one SQLite transaction and rolls back if it fails. Unsupported tool fields become text. Later replies depend on the model you configure.
+- 核心解答 (zh): OpenCode 的会话在本机 ~/.local/share/opencode/opencode.db，可用 WATCH_OPENCODE_DB 换库。Watch 用一次 SQLite 事务写入 session、message、part 三张表（2.x 布局为 session_v2 / session_message / session_part）；事务失败会回滚。不支持的工具参数降级为文本，续写质量取决于你配置的模型。
 
 #### Procedure Steps:
 1. **Step 1: Identify source session ID and working directory**: Locate your active session ID. Claude Code stores files in ~/.claude/projects/; Codex in ~/.codex/sessions/; OpenCode indexes sessions via globally unique IDs. Verify that the working directory is an absolute path to maintain project boundary alignment.
 1. **Step 2: Preflight target database status (Check)**: Run --check to preview the destination and pending turns, then inspect writable, blocked and warnings. When pending turns exist, OpenCode preflight checks the storage layout and an existing target's revert state; 2.x layouts are read-only. It does not write the target session, test write permissions or acquire a SQLite write lock, and cannot guarantee that a later write will face no concurrent changes.
-1. **Step 3: Execute bidirectional handoff (Handoff)**: Select the source session in Watch Desktop and target OpenCode, or run the CLI open command. Watch extracts incremental turns, executes atomic SQLite transactions across sessions, messages, and parts, and issues the destination session ID.
+1. **Step 3: Execute bidirectional handoff (Handoff)**: Select the source session in Watch Desktop and target OpenCode, or run the CLI open command. Watch extracts incremental turns, executes atomic SQLite transactions across the session, message, and part tables, and issues the destination session ID.
 1. **Step 4: Resume session natively in OpenCode (Resume)**: After conversion, execute opencode -s <session-id> in the workspace directory or trigger the launch button in Watch Desktop. OpenCode loads the recorded conversation in that working directory.
 
 #### Frequently Asked Questions:

@@ -223,7 +223,7 @@ export const guides = [
         description: '详解如何在保留完整工作目录与排查足迹的前提下，将 Claude Code 或 Codex 会话双向转入 OpenCode 本地 SQLite 存储继续开发，并利用事务机制保障数据隔离。',
         h1: 'OpenCode 与 Claude/Codex 双向会话接力与 SQLite 数据隔离指南',
         summary: '当你需要从商业云端 Agent 切换到支持本地开源模型的 OpenCode（或从 OpenCode 导出至其他 Agent）时，本指南说明如何利用 Watch 实现双向会话接力，并借助 OpenCode 的 SQLite 事务机制保护数据不被污染。',
-        answer: 'OpenCode 的会话在本机 ~/.local/share/opencode/opencode.db，可用 WATCH_OPENCODE_DB 换库。Watch 用一次 SQLite 事务写入 sessions、messages、parts；事务失败会回滚。不支持的工具参数降级为文本，续写质量取决于你配置的模型。',
+        answer: 'OpenCode 的会话在本机 ~/.local/share/opencode/opencode.db，可用 WATCH_OPENCODE_DB 换库。Watch 用一次 SQLite 事务写入 session、message、part 三张表（2.x 布局为 session_v2 / session_message / session_part）；事务失败会回滚。不支持的工具参数降级为文本，续写质量取决于你配置的模型。',
         blocks: [
           {
             type: 'callout',
@@ -233,7 +233,7 @@ export const guides = [
           },
           {
             type: 'paragraph',
-            text: '与基于单一 JSONL 追加日志的工具不同，OpenCode 的会话由 sessions、messages 和 parts 等数据表构成。直接修改或手工插入易破坏外键约束与自增索引。Watch 通过内置的 OpenCode 适配器，将跨 Agent 的统一时间线（UnifiedTurn）映射为合法的 OpenCode SQLite 记录，并保持工作目录（cwd）与时间戳对齐。',
+            text: '与基于单一 JSONL 追加日志的工具不同，OpenCode 的会话由 session、message 和 part 等数据表构成（2.x 布局为 session_v2、session_message、session_part）。直接修改或手工插入易破坏外键约束与自增索引。Watch 通过内置的 OpenCode 适配器，将跨 Agent 的统一时间线（UnifiedTurn）映射为合法的 OpenCode SQLite 记录，并保持工作目录（cwd）与时间戳对齐。',
           },
           {
             type: 'steps',
@@ -248,7 +248,7 @@ export const guides = [
               },
               {
                 title: '步骤 3：执行双向流转写入（Handoff）',
-                body: '在 Watch 桌面端选择来源会话卡片并点击 OpenCode，或在终端执行 open 命令。Watch 会原子提取增量回合，开启 SQLite 事务批量写入 sessions、messages 和 parts 记录，并生成目标会话 ID。',
+                body: '在 Watch 桌面端选择来源会话卡片并点击 OpenCode，或在终端执行 open 命令。Watch 会原子提取增量回合，开启 SQLite 事务批量写入 session、message 和 part 记录，并生成目标会话 ID。',
               },
               {
                 title: '步骤 4：通过 OpenCode 原生命令恢复（Resume）',
@@ -265,7 +265,7 @@ export const guides = [
             type: 'callout',
             tone: 'info',
             title: 'OpenCode SQLite 表结构与数据隔离验证',
-            body: 'OpenCode 会话库（~/.local/share/opencode/opencode.db）采用三层核心表组织数据：\n• sessions: 存储会话 ID、标题、项目绝对路径（directory）与更新时间\n• messages: 记录所属 session_id、角色（user / assistant）与时间戳\n• parts: 存储具体消息文本、代码块与结构化数据\n通过环境变量 WATCH_OPENCODE_DB=/tmp/isolated.db 可切分测试库，验证写入完全在独立 SQLite 事务中完成，异常时原子回滚。',
+            body: 'OpenCode 会话库（~/.local/share/opencode/opencode.db）采用三层核心表组织数据：\n• session: 存储会话 ID、标题、项目绝对路径（directory）与更新时间\n• message: 记录所属 session_id、角色（user / assistant）与时间戳\n• part: 存储具体消息文本、代码块与结构化数据\n（2.x 布局对应 session_v2 / session_message / session_part）\n通过环境变量 WATCH_OPENCODE_DB=/tmp/isolated.db 可切分测试库，验证写入完全在独立 SQLite 事务中完成，异常时原子回滚。',
           },
           {
             type: 'callout',
@@ -317,7 +317,7 @@ export const guides = [
         description: 'How to hand off coding agent sessions bidirectionally between OpenCode (SQLite store), Claude Code, and Codex while preserving working directories and tool histories.',
         h1: 'OpenCode, Claude & Codex Bidirectional Session Handoff Guide',
         summary: 'When switching from commercial cloud agents to local open-source models in OpenCode (or handing off back to cloud agents), this guide explains how to use Watch for bidirectional handoff with SQLite transactional data isolation.',
-        answer: 'OpenCode keeps sessions in ~/.local/share/opencode/opencode.db. WATCH_OPENCODE_DB points Watch at another file. Watch writes sessions, messages, and parts in one SQLite transaction and rolls back if it fails. Unsupported tool fields become text. Later replies depend on the model you configure.',
+        answer: 'OpenCode keeps sessions in ~/.local/share/opencode/opencode.db. WATCH_OPENCODE_DB points Watch at another file. Watch writes the session, message, and part tables (2.x layouts use session_v2, session_message, session_part) in one SQLite transaction and rolls back if it fails. Unsupported tool fields become text. Later replies depend on the model you configure.',
         blocks: [
           {
             type: 'callout',
@@ -327,7 +327,7 @@ export const guides = [
           },
           {
             type: 'paragraph',
-            text: 'Unlike tools that rely strictly on append-only JSONL files, OpenCode organizes sessions across normalized relational tables including sessions, messages, and parts. Direct external tampering can corrupt foreign key constraints. Watch maps the UnifiedTurn abstraction cleanly into OpenCode\'s relational schema while preserving exact directory context (cwd) and timestamps.',
+            text: 'Unlike tools that rely strictly on append-only JSONL files, OpenCode organizes sessions across normalized relational tables: session, message, and part (session_v2, session_message, session_part on 2.x layouts). Direct external tampering can corrupt foreign key constraints. Watch maps the UnifiedTurn abstraction cleanly into OpenCode\'s relational schema while preserving exact directory context (cwd) and timestamps.',
           },
           {
             type: 'steps',
@@ -342,7 +342,7 @@ export const guides = [
               },
               {
                 title: 'Step 3: Execute bidirectional handoff (Handoff)',
-                body: 'Select the source session in Watch Desktop and target OpenCode, or run the CLI open command. Watch extracts incremental turns, executes atomic SQLite transactions across sessions, messages, and parts, and issues the destination session ID.',
+                body: 'Select the source session in Watch Desktop and target OpenCode, or run the CLI open command. Watch extracts incremental turns, executes atomic SQLite transactions across the session, message, and part tables, and issues the destination session ID.',
               },
               {
                 title: 'Step 4: Resume session natively in OpenCode (Resume)',
@@ -359,7 +359,7 @@ export const guides = [
             type: 'callout',
             tone: 'info',
             title: 'OpenCode Relational Schema & SQLite Transaction Isolation',
-            body: 'OpenCode session storage (~/.local/share/opencode/opencode.db) is structured across three core relational tables:\n• sessions: tracks session ID, title, absolute workspace directory, and timestamps\n• messages: maps session_id, role (user / assistant), and creation time\n• parts: stores text chunks, code blocks, and structured tool call representations\nSetting WATCH_OPENCODE_DB=/tmp/isolated.db routes writes to a separate SQLite database. Transfers execute inside an atomic SQLite transaction, rolling back completely on any interruption.',
+            body: 'OpenCode session storage (~/.local/share/opencode/opencode.db) is structured across three core relational tables:\n• session: tracks session ID, title, absolute workspace directory, and timestamps\n• message: maps session_id, role (user / assistant), and creation time\n• part (session_v2, session_message, session_part on 2.x layouts): stores text chunks, code blocks, and structured tool call representations\nSetting WATCH_OPENCODE_DB=/tmp/isolated.db routes writes to a separate SQLite database. Transfers execute inside an atomic SQLite transaction, rolling back completely on any interruption.',
           },
           {
             type: 'callout',

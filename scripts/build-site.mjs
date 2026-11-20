@@ -6,6 +6,7 @@ import { agents, content, defaultLocale, evidence, locales, maintainer, repo, sa
 import { alternatePagesFor, buildAllPageManifest, buildHomePageManifest, renderSitemap, siteBuildDate, validatePageManifest } from './lib/site-pages.mjs';
 import { guides as authoredGuides } from './lib/site-guides.mjs';
 import { loadLocaleDictionary, translateContent, translateGuideLocale } from './lib/apply-site-locale.mjs';
+import { collectEnglishStrings, localeGaps } from './lib/site-locales-status.mjs';
 import { verifyOgImages } from './lib/site-og.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -23,11 +24,25 @@ if (!decisionMatrix) throw new Error('[site-build] llms.txt 源缺少接力路�
 const localeDir = path.join(root, 'scripts/lib/site-locales');
 const authoredLocales = new Set(['zh', 'en']);
 const activeLocaleList = process.env.WATCH_ALL_LOCALES ? Object.keys(locales) : ['zh', 'en'];
+const english = collectEnglishStrings(content.en, authoredGuides);
+// 语言包缺键时 translateContent() 会在第一条就抛错，整轮构建连 zh / en 页面都出不来。
+// 这里先判定：齐全的语言参与构建，不齐全的跳过并逐条打印缺口数（构建日志里可见，不是静默丢弃）。
+const skippedLocales = [];
 const publishedLocales = Object.fromEntries(Object.entries(locales).filter(([locale]) => {
   if (!activeLocaleList.includes(locale)) return false;
   if (authoredLocales.has(locale)) return true;
-  return fs.existsSync(path.join(localeDir, `${locale}.json`));
+  const file = path.join(localeDir, `${locale}.json`);
+  if (!fs.existsSync(file)) return false;
+  const { missing } = localeGaps(loadLocaleDictionary(file), english);
+  if (missing.length) {
+    skippedLocales.push({ locale, missing: missing.length });
+    return false;
+  }
+  return true;
 }));
+for (const { locale, missing } of skippedLocales) {
+  console.warn(`[site-build] 跳过 ${locale}：语言包缺 ${missing} 条英文源串（node scripts/check-site-locales.mjs 列明细）`);
+}
 for (const locale of Object.keys(publishedLocales)) {
   if (authoredLocales.has(locale)) continue;
   const dictionary = loadLocaleDictionary(path.join(localeDir, `${locale}.json`));
@@ -406,8 +421,8 @@ function generateLlmsFull({ guides, siteUrl, maintainer, siteDate }) {
     '### Key Safety Constraints',
     '- 100% Local Execution: Watch has no cloud relay, server, or analytics. It reads and writes local disk stores directly.',
     '- Strict CWD Matching: Prevents code edits across different workspaces or Git worktrees.',
-    '- Target Writer Guard: Direct writes to Codex inspect native per-thread writer locks (~/.codex/thread-writer-locks/<id>.lock via lsof) and pre/post content fingerprints.',
-    '- OpenCode SQLite Isolation: Multi-table writes (sessions, messages, parts) execute in one SQLite transaction and roll back on failure; supports WATCH_OPENCODE_DB isolation.',
+    '- Target Writer Guard: Direct writes to Codex compare pre/post content fingerprints on every platform. On macOS only, they also inspect native per-thread writer locks (~/.codex/thread-writer-locks/<id>.lock via lsof) and hold a cooperative lock during the write; Windows and Linux do not have this lock layer, and `watch capabilities` reports it per host platform.',
+    '- OpenCode SQLite Isolation: Multi-table writes (the session, message and part tables; session_v2, session_message and session_part on 2.x layouts) execute in one SQLite transaction and roll back on failure; supports WATCH_OPENCODE_DB isolation.',
     '- Tool Call Degradation: Complex proprietary tool call events are downgraded to structured text representations in target agents.',
     '',
     '---',
