@@ -1058,13 +1058,21 @@ export async function chainUsage(
       // 文件可读 + 用量数据源无坏行 + 内容文件无坏行 + 适配器没有「曾有对话」的反证。
       // 空会话的旁路文件为空是正常形状（grok 新建的 `updates.jsonl` 就是 0 字节），
       // 所以这一档要**先于**旁路检查判定，否则会把正常的新会话报成「用量数据源内容已丢失」。
-      // 解析失败不改口径（仍按无 usage 数据算），不能把「读不出来」讲成「空会话」。
+      // 解析失败既不是「空会话」，也不是「这家原生没有 usage 字段」：只把 parsedZero 置 false，
+      // 流程会落到下面的 totalMissingUsage，报告说成「N 个无 usage 数据的会话」——把「内容读不出来」
+      // 讲成「本来就没有用量」，两者的下一步还相反（前者要修可读性，后者无事可做，第 315 轮审计）。
       let parsedZero = false;
       if (!badUsage) {
         try {
           parsedZero = (await adapter.parse(ref)).length === 0;
-        } catch {
-          parsedZero = false;
+        } catch (error) {
+          const msg =
+            `会话内容读取失败：${describeReadFailureOrSelf(error)}；` +
+            '无法确认它是不是空会话，也没有可用的用量数据';
+          warnings.push(`${adapter.id} ${msg}`);
+          byProvider.push({ provider: adapter.id, sessionId: ref.sessionId, usage: null, error: msg });
+          totalExcluded += 1;
+          continue;
         }
       }
       let contentBad: Awaited<ReturnType<typeof usageContentBadLinesDetail>> = null;
