@@ -31,7 +31,7 @@ import type { StoreFootprint } from './core/doctor.js';
 import { CLAUDE_PROJECT_SETTINGS_RELATIVE_PATHS, type ClaudeRetentionProbe } from './providers/claude/retention.js';
 import { cwdAliasHint, cwdProblem, describeCwdProblem, describeRecordedCwd, describeRepoBranchNote, describeWorktreeNote, describeWriteCwd, inspectCwd, inspectRepoBranch, inspectWorktree, sameDirectorySync, splitElsewhereByDirectory, type CwdInspection } from './core/cwd.js';
 import { escapeControlChars, hasControlChars } from './core/display.js';
-import { BOOLEAN_FLAGS, CHAIN_POSITIONAL, COMMAND_LIST, FLAGS_BY_COMMAND, POSITIONAL_BY_COMMAND, VALUE_FLAGS, closestCommand, closestFlag } from './core/cli-commands.js';
+import { BOOLEAN_FLAGS, CHAIN_POSITIONAL, COMMAND_LIST, FLAGS_BY_COMMAND, HELP_COMMAND_ALIASES, POSITIONAL_BY_COMMAND, VALUE_FLAGS, VERSION_COMMAND_ALIASES, closestCommand, closestFlag } from './core/cli-commands.js';
 import { commandControlWarnings } from './core/terminal-command.js';
 import { trimUserKey } from './core/cli-input.js';
 import { describeResumeTargetUnfinished } from './core/rich.js';
@@ -51,6 +51,11 @@ import { CAPABILITY_VERIFICATION_NOTE, describeCapabilities, formatCapabilities 
  * Rust 桥只能把整段用法当错误文本显示给桌面端。
  */
 const JSON_REQUESTED = process.argv.includes('--json');
+/**
+ * 用户是来要用法的，不是写错了参数：`--help` 出现在任意位置，或第一个参数是 `help` / `-h`；
+ * 命令之后的 `-h` 在参数解析时补记。只影响 `--json` 下那一句说明，用法文本与退出码不变。
+ */
+let helpRequested = process.argv.includes('--help') || HELP_COMMAND_ALIASES.includes(process.argv[2] ?? '');
 
 /**
  * `reason` 用来把「哪里不对」讲清楚：只打一整段用法时，用户得自己翻整页才知道
@@ -61,7 +66,8 @@ function usage(reason?: string): never {
   // 同属不可信字符串，进终端前转义；下面的 JSON 保留原值（JSON.stringify 自己会编码控制字符）
   if (reason) console.error(`[watch] ${escapeControlChars(reason)}`);
   console.error(`用法:
-  watch --version [--json]                          打印版本号（读 package.json；读不出来给 null）
+  watch --version [--json]                          打印版本号（读 package.json；读不出来给 null）；watch version / -v 同义
+  watch --help                                      打印这页用法；watch help / -h 同义
   watch status [--json] [--cwd <path>] [--chain <id|name>]
   watch switch <provider> [--json] [--cwd <path>] [--chain <id|name>]
   watch adopt <provider> [--json] [--cwd <path>] [--chain <id|name>] [--session <id>]
@@ -81,7 +87,7 @@ function usage(reason?: string): never {
   watch import-codex project-prepare|project-confirm|project-status <plan-id> [--project <project-id>] [--experimental] [--json]
   watch open <session-id> [--from <session-id>] [--provider <name>] [--to <provider>] [--check] [--json]  反查 cwd 并输出 cd + 打开命令；带 --from 先并入旧会话；带 --to 把该会话内容转入指定 provider 的新会话；带 --check 只做点击前预检（不写入）`);
   if (JSON_REQUESTED) {
-    const help = process.argv.includes('--help');
+    const help = helpRequested;
     console.log(
       JSON.stringify({
         ok: false,
@@ -489,6 +495,11 @@ function parseArgs(argv: string[]): {
       }
     }
     if (a === '--json') continue;
+    // `watch status -h`：以前被当成多余的位置参数。`search` 的查询词是自由文本，不拦
+    if (a === '-h' && positional[0] !== 'search') {
+      helpRequested = true;
+      usage();
+    }
     if (a === '--check') {
       check = true;
       continue;
@@ -3087,7 +3098,8 @@ async function main(): Promise<void> {
   // 三条位置给出同一个结论。以前它只会落进「未知参数: --version」——用户想确认装的是哪一版，
   // 而唯一带版本号的地方是 `watch doctor` 的「环境: watch x.y.z · node …」（还要能跑通诊断）。
   // 读不出版本时不编一个数：文本说「未知版本」，`--json` 给 `version: null`。
-  if (process.argv.slice(2).includes('--version')) {
+  const first = process.argv[2] ?? '';
+  if (process.argv.slice(2).includes('--version') || VERSION_COMMAND_ALIASES.includes(first)) {
     const version = readWatchVersion();
     if (process.argv.includes('--json')) {
       console.log(JSON.stringify({ ok: true, version }));
@@ -3096,7 +3108,8 @@ async function main(): Promise<void> {
     }
     return;
   }
-  if (process.argv[2] === 'import-codex') {
+  if (HELP_COMMAND_ALIASES.includes(first)) usage();
+  if (first === 'import-codex') {
     await runImportCodex(process.argv.slice(3));
     return;
   }

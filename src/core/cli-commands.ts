@@ -60,6 +60,14 @@ export const CHAIN_POSITIONAL: Record<string, number> = { list: 1, new: 2, renam
 /** `import-codex` 在全局 parseArgs 之前就分派了，不在上面两张表里，清单里单独补上 */
 export const EARLY_DISPATCH_COMMANDS: readonly string[] = ['import-codex'];
 
+/**
+ * 命令位置上的帮助 / 版本写法。`watch -h`、`watch help`、`watch -v`、`watch version` 是用户
+ * 拿到一个陌生 CLI 时最先敲的四样，以前全部落进「未知命令: -h；可用: …」。它们不是命令
+ * （不进 `COMMAND_NAMES`、不参与拼写建议），只在**第一个参数**上等同 `--help` / `--version`。
+ */
+export const HELP_COMMAND_ALIASES: readonly string[] = ['help', '-h'];
+export const VERSION_COMMAND_ALIASES: readonly string[] = ['version', '-v', '-V'];
+
 /** 顶层命令名（顺序即 flag 表的书写顺序，与用法文本的阅读顺序接近） */
 export const COMMAND_NAMES: readonly string[] = [...Object.keys(FLAGS_BY_COMMAND), ...EARLY_DISPATCH_COMMANDS];
 
