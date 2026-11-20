@@ -1218,6 +1218,12 @@ export type HandoffResult = {
    */
   chainTipState?: 'recorded' | 'empty' | 'unknown';
   /**
+   * 链绑定 / 切换记录没写进去（库只读、磁盘满、SQLITE_BUSY 等）：`warnings` 里已有一条
+   * 「链记录失败」。调用方不得再按「这次写了链记录」生成补充说明——`new` 的别名组警告
+   * 就是这种说明，链没写成时它说的每个字都与前一条警告相反。
+   */
+  chainRecordFailed?: boolean;
+  /**
    * alreadyAtTarget 时这条 resume 指向的会话文件现在读不出来（`chmod 000` 之类）。
    *
    * 文本模式据此把「直接打开即可」换成「直接打开会失败」——`warnings` 已经逐条说明原因，
@@ -2067,12 +2073,14 @@ export async function handoff(
         warnings.push(`重写目标会话失败，目标内容可能未更新: ${reason}`);
       }
     }
+    let chainRecordFailed = false;
     if (store && sourceTip) {
       try {
         const id = store.getOrCreateChainSession(cwd, opts?.chainId);
         store.recordSwitch(id, sourceTip.provider, sourceTip.ref, targetId, resumeRef);
       } catch (error) {
         console.error('[watch] 记录 switch_events 失败，交接仍完成:', error);
+        chainRecordFailed = true;
         warnings.push(`链记录失败: ${describeStoreErrorReason(error)}`);
       }
     }
@@ -2082,6 +2090,7 @@ export async function handoff(
       fromProvider: sourceTip?.provider ?? targetId,
       turnCount: 0,
       zeroIncrementReason: turns.length === 0 ? 'source-empty' : 'up-to-date',
+      ...(chainRecordFailed ? { chainRecordFailed: true } : {}),
       warnings,
       findings,
     };
@@ -2143,12 +2152,14 @@ export async function handoff(
     );
   }
 
+  let chainRecordFailed = false;
   if (store) {
     try {
       const id = store.getOrCreateChainSession(cwd, opts?.chainId);
       store.recordSwitch(id, sourceTip.provider, sourceTip.ref, targetId, newRef);
     } catch (error) {
       console.error('[watch] 记录 switch_events 失败，交接仍完成:', error);
+      chainRecordFailed = true;
       warnings.push(`链记录失败: ${describeStoreErrorReason(error)}`);
     }
   }
@@ -2159,6 +2170,7 @@ export async function handoff(
     fromProvider: sourceTip.provider,
     turnCount: outgoing.length,
     ...(notes.length ? { notes } : {}),
+    ...(chainRecordFailed ? { chainRecordFailed: true } : {}),
     warnings,
     findings,
   };
