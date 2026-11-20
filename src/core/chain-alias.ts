@@ -86,12 +86,20 @@ export async function aliasChainGroupWarning(
     rows = store.chainsElsewhere(cwd);
   } catch (error) {
     // 写路径不能沿用只读口径的静默：这条查询失败时「另一种写法下有没有链」无从得知，
-    // 而这正是这次写入最需要核对的事。链记录已经写进去了，只能把「没查成」讲清楚。
+    // 而这正是这次写入最需要核对的事。写入已经完成（链行或切换记录），只能把「没查成」讲清楚。
+    //
+    // 措辞不写「这次写了链记录」：调用点有两种（`chain new` 只建链行、`new` 建链行 + 切换记录，
+    // 后者还可能只写成了链行），「本次写入只落在当前写法下」对三种都成立。
+    // 核对命令 `watch chain list` 不会写链记录，但打开库时仍要读迁移 / WAL——库只读或损坏时
+    // 它同样会失败，所以只承诺「不会改动链记录」，并提醒用同一个 WATCH_DB。
+    // 例子只列真实判据（realpath）能识别的形态：软链与 /private、/var 前缀。名字大小写不在内——
+    // macOS 的 realpath 保留用户输入的大小写，仅大小写不同的写法会被归到「其它目录」。
     return (
       `无法确认 ${escapeControlChars(cwd)} 的其它写法下是否已有链（本地库查询失败：${describeStoreErrorReason(error)}）：` +
-      '这次写的链记录只在当前 --cwd 的写法下可见——同一个目录换成另一种写法（软链、/private 与 /var 前缀、名字大小写）' +
+      '本次写入只落在当前 --cwd 的写法下——同一个目录换成另一种写法（软链、/private 与 /var 前缀）' +
       '在本地库里是另一个目录，两组链互相看不到。先按上面的原因处理本地库，' +
-      '再用其它写法逐个执行只读的 watch chain list --cwd <写法> 核对（不会新建链，也不需要重跑写入命令）' +
+      '再用与刚才相同的 WATCH_DB / 环境，对其它写法逐个执行 watch chain list --cwd <写法> 核对' +
+      '（不会改动链记录，也不需要重跑写入命令）' +
       cwdControlCharsNote(cwd)
     );
   }
