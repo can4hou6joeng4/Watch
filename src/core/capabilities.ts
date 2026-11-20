@@ -25,7 +25,7 @@ export type ProviderCapability = {
   createEmptySession: boolean;
   /** 新建会话是否**必须**本机已安装并登录该 CLI（当前只有 Kimi） */
   requiresCliForNewSession: boolean;
-  /** 写入前有目标级检查（Codex 的 per-thread writer 锁） */
+  /** 实现了写入前预检；深度各家不同（Codex 的 per-thread writer 持有者探测只在 macOS 生效，其余平台只查配置可读性） */
   preflight: boolean;
   /** 写入侧能还原的附件：`none` = 一律只留占位文本（交接时据此披露原始数据丢失） */
   attachments: 'none' | 'images' | 'user-images' | 'all';
