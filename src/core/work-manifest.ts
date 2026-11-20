@@ -727,7 +727,12 @@ export function renderWorkManifest(
       lines.push(`> 磁盘对照：清单里的文件都在会话目录之外（${disk.outside} 个），本次没有核对。`);
     } else {
       const outside = disk.outside > 0 ? `；另有 ${disk.outside} 个在会话目录之外，没有核对` : '';
-      lines.push(`> 磁盘对照：生成这份文档时核对了 ${disk.checked} 个会话目录内的路径${outside}。`);
+      // 「核对了 N 个路径」容易被读成「内容也对得上」：这里只 stat 过路径，文件之后被改过、
+      // 被回退都看不出来，口径要跟数字写在同一行（第 326 轮）。
+      lines.push(
+        `> 磁盘对照：生成这份文档时核对了 ${disk.checked} 个会话目录内的路径${outside}。` +
+          '只核对路径还在不在，不核对内容：文件可能在会话之后被改过或回退。',
+      );
     }
   }
   lines.push('');
