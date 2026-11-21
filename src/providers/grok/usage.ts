@@ -236,6 +236,15 @@ export type GrokUpdateScan = {
   unknownUpdates: Map<string, number>;
   /** 压缩检查点文件的可读性与快照规模（第 257 轮，只读不移交）。 */
   checkpoints: GrokCheckpointScan;
+  /**
+   * 原生标记为失败的工具调用 ID（第 333 轮）：ACP `tool_call_update` 的 `status` 是结构化
+   * 枚举（`completed` / `failed`），失败不必从输出文字猜。ID 与 `chat_history.jsonl` 的
+   * `tool_result.tool_call_id` 对应，由 parse 侧按 ID 标记；对不上的是子代理、压缩前或
+   * 没写进对话记录的调用，parse 会披露个数，不按位置硬套。
+   */
+  failedToolCalls: Set<string>;
+  /** `status: failed` 但缺 `toolCallId` 的更新条数：永远无法对应到结果，单独披露。 */
+  failedToolCallsWithoutId: number;
 };
 
 export async function grokUpdateScan(updatesPath: string): Promise<GrokUpdateScan | null> {
@@ -247,6 +256,8 @@ export async function grokUpdateScan(updatesPath: string): Promise<GrokUpdateSca
   let imagesDropped = 0;
   const unknownUpdates = new Map<string, number>();
   const checkpoints = emptyCheckpointScan();
+  const failedToolCalls = new Set<string>();
+  let failedToolCallsWithoutId = 0;
   try {
     // 逐行流式读取：ACP `updates.jsonl` 连流式增量都逐条落盘，整份 `readFile` 在超过
     // V8 字符串上限（约 512 MB）时抛 `Invalid string length`——那会被讲成「读取失败」，
@@ -284,6 +295,16 @@ export async function grokUpdateScan(updatesPath: string): Promise<GrokUpdateSca
         checkpoints.last = result;
         continue;
       }
+      if (updateType === 'tool_call_update') {
+        // ACP 的工具调用状态（第 333 轮）：`status` 是原生枚举，`failed` 是明确的结构化
+        // 失败标记（本机 24 个 updates.jsonl 采样：completed 3391 / failed 70）。只收集，
+        // 不在这里标记——结果事件在 chat_history.jsonl 里，按 ID 对应由 parse 侧完成。
+        if (update.status === 'failed') {
+          if (typeof update.toolCallId === 'string' && update.toolCallId) failedToolCalls.add(update.toolCallId);
+          else failedToolCallsWithoutId += 1;
+        }
+        continue;
+      }
       if (updateType === 'retry_state') {
         // 独立 update 类型（不是 turn_completed 的字段）；`reason` 带完整上游 URL，
         // 只认 `error_type` 这个枚举（见 failure.ts）。
@@ -312,7 +333,7 @@ export async function grokUpdateScan(updatesPath: string): Promise<GrokUpdateSca
   }
   // 末尾没有 turn_completed 的重试单独计数，不归属给任何轮（第 256 轮）。
   finalizeGrokRetryAttribution(failures);
-  return { usages, compactions, badLines, failures, rewinds, imagesDropped, unknownUpdates, checkpoints };
+  return { usages, compactions, badLines, failures, rewinds, imagesDropped, unknownUpdates, checkpoints, failedToolCalls, failedToolCallsWithoutId };
 }
 
 function pick(usage: unknown): TokenUsage | null {

@@ -325,7 +325,7 @@ async function attachGrokSidecars(
   try {
     scan = await grokUpdateScan(join(dirname(chatPath), 'updates.jsonl'));
   } catch (error) {
-    disclose(`Grok 的 updates.jsonl 读取失败，无法确认上下文压缩记录与逐轮用量；本次仅保留 chat_history.jsonl 中可读的对话。${error instanceof Error ? error.message : String(error)}`);
+    disclose(`Grok 的 updates.jsonl 读取失败，无法确认上下文压缩记录、逐轮用量与工具失败状态；本次仅保留 chat_history.jsonl 中可读的对话。${error instanceof Error ? error.message : String(error)}`);
     return turns;
   }
   if (!scan) return turns;
@@ -345,6 +345,27 @@ async function attachGrokSidecars(
         `Grok 日志里有 ${scan.failures.turnCompletions} 条轮次结束记录、${scan.usages.length} 条带用量，` +
         `但只解析出 ${assistants.length} 个助手轮，数量对不上：逐轮用量无法对应，这次交接不携带逐轮用量` +
         `（会话合计用量由 watch usage / open 单独列出）；不按顺序硬套是为了避免把某一轮的用量挂到另一轮头上。`,
+      );
+    }
+  }
+  // 工具失败（第 333 轮）：`updates.jsonl` 的 `tool_call_update.status` 是原生结构化枚举。
+  // 只按 `toolCallId` 对应到 chat_history 里的结果事件，不按位置硬套——对不上的多半是子代理、
+  // 压缩前或没写进对话记录的调用，套错会把失败挂到别的调用上；但**不能不说**，失败计数
+  // 否则会悄悄偏少。
+  if (scan.failedToolCalls.size > 0 || scan.failedToolCallsWithoutId > 0) {
+    const unmatched = new Set(scan.failedToolCalls);
+    for (const turn of turns) {
+      for (const event of turn.events ?? []) {
+        if (event.kind !== 'tool_result' || !event.callId) continue;
+        if (unmatched.delete(event.callId)) event.failed = true;
+      }
+    }
+    const lost = unmatched.size + scan.failedToolCallsWithoutId;
+    if (lost > 0) {
+      disclose(
+        `Grok 的 updates.jsonl 有 ${lost} 个失败的工具调用在对话记录里找不到对应结果` +
+        `（可能是子代理、压缩前或没有写进 chat_history.jsonl 的调用），无法在交接里标记为失败；` +
+        `按调用 ID 对得上的失败结果已照常标记。`,
       );
     }
   }
