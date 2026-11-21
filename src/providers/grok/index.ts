@@ -38,6 +38,10 @@ export const grokAdapter: ProviderAdapter = {
     }
   },
 
+  // 写入侧按配对结果写 updates.jsonl 的 tool_call_update.status（failed / completed），
+  // 原生能据此区分失败；与 Claude / Pi / Kimi / OpenCode 同一条「仅助手侧」契约。
+  toolFailureSupport: 'assistant',
+
   parse(ref: SessionRef): Promise<UnifiedTurn[]> {
     return parseGrokSession(ref);
   },

@@ -894,6 +894,10 @@ export function buildGrokUpdateLines(
             title: name,
             locations: [],
             rawInput,
+            // 原生 ACP 的 status 是结构化枚举（本机 24 个 updates.jsonl 采样：completed 3391 /
+            // failed 70，2026-11-21）。有配对结果时才写：failed 照抄来源的明确失败标记，
+            // 其余是 completed；没有结果（来源没记录 / 仍在运行）保持缺省，不冒充完成。
+            ...(result ? { status: result.failed === true ? 'failed' : 'completed' } : {}),
             ...(result ? { rawOutput: toolOutputString(result.detail ?? result.summary ?? '') } : {}),
             _meta: { 'x.ai/tool': toolMeta },
           },
