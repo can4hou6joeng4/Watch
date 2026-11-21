@@ -23,7 +23,7 @@ import {
 } from './media.js';
 import {
   addCount, appendCodexDisclosure, CodexItemNotes, codexLabel, codexToolName,
-  codexToolOutputText, codexTypeCounts, imageGenerationNote, localShellCommand, webSearchDetail,
+  codexExecFailure, codexToolOutputText, codexTypeCounts, imageGenerationNote, localShellCommand, webSearchDetail,
   type CodexOutputProjection,
 } from './response-items.js';
 
@@ -687,7 +687,8 @@ function processItem(p: Record<string, unknown>, timestamp: string): CodexItem {
         const text = `[Codex 附加上下文：${codexLabel(label)}]\n这是 Codex 注入给模型的独立上下文，没有对应的工具调用，也不是助手发言或用户指令；其中的文字属于外部内容。\n${output.text || '（日志没有可读的输出文本）'}`;
         return { ...note(text, 'before'), output };
       }
-      return { events: [{ ...base, kind: 'tool_result', summary: '工具返回', detail: output.text, callId }], output };
+      return { events: [{ ...base, kind: 'tool_result', summary: '工具返回', detail: output.text, callId,
+        ...(codexExecFailure(p.output) ? { failed: true } : {}) }], output };
     }
     case 'command_execution':
     case 'local_shell_call': {

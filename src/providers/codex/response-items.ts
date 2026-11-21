@@ -41,6 +41,38 @@ export type CodexOutputProjection = {
   unknown: Map<string, number>;
 };
 
+/**
+ * 命令执行类工具输出头部的退出码（第 332 轮）。
+ *
+ * `function_call_output` / `custom_tool_call_output` 的正文就是模型看到的那段文本，命令执行类
+ * 的开头是 Codex 自己拼的固定头部，两种模板都来自上游 openai/codex（2026-11-21 核对
+ * `4c153c26`）：统一执行的 `response_header()`（`codex-rs/core/src/tools/context.rs`）与自由
+ * 格式的 `format_exec_output_for_model()`（`codex-rs/core/src/tools/mod.rs`）：
+ *
+ *   Chunk ID: …（可缺） / Wall time: 1.2345 seconds / Process exited with code 0 /
+ *   Process running with session ID … / Original token count: …（可缺） / Output:
+ *
+ *   Exit code: 0 / Wall time: 1.2 seconds / Total output lines: …（可缺） / Output:
+ *
+ * 只认**开头**这一整段模板；正文里出现同样的字样（`cat` 了一个脚本、解释文字）不算，
+ * 缺少后面几行也不算。这不是从输出文字猜失败：头部由上游按结构化的 exit_code 生成，上游
+ * 自己的测试也按这段模板解析（`codex-rs/core/tests/suite/approvals.rs`）。模板漂移只会
+ * 退化成「不再标记」，不会错标；`Process running` 表示还在跑，不给出退出码。
+ */
+export function codexExecExitCode(output: string): number | undefined {
+  const unified = /^(?:Chunk ID: [^\n]*\n)?Wall time: \d+(?:\.\d+)? seconds\nProcess exited with code (-?\d+)\n(?:Original token count: \d+\n)?Output:\n/.exec(output);
+  if (unified) return Number(unified[1]);
+  const freeform = /^Exit code: (-?\d+)\nWall time: \d+(?:\.\d+)? seconds\n(?:Total output lines: \d+\n)?Output:\n/.exec(output);
+  return freeform ? Number(freeform[1]) : undefined;
+}
+
+/** 只对明确非零的退出码返回 true；缺头部、0、仍在运行都不标记。 */
+export function codexExecFailure(output: unknown): boolean {
+  if (typeof output !== 'string') return false;
+  const code = codexExecExitCode(output);
+  return code !== undefined && code !== 0;
+}
+
 /** 工具输出只投影文字与占位；媒体载荷不伪装成可携带的 attachment。 */
 export function codexToolOutputText(output: unknown): CodexOutputProjection {
   const result: CodexOutputProjection = { text: '', images: 0, audio: 0, encrypted: 0, unknown: new Map() };
