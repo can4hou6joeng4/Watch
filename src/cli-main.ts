@@ -2080,9 +2080,9 @@ async function cmdPrompt(
   // 隐去凭据是对原文的改写：终端 / 脚本侧也要有一句人话，不能只剩 findings 里的一个代码。
   if (result.credentialsMasked) {
     warnings.push(
-      `文档里识别并隐去了 ${result.credentialsMasked.total} 个格式固定的密钥 / 令牌（${result.credentialsMasked.kinds
+      `文档里识别并隐去了 ${result.credentialsMasked.total} 个密钥 / 令牌（按固定格式或固定位置识别：${result.credentialsMasked.kinds
         .map((kind) => `${kind.label} ${kind.count}`)
-        .join('、')}），原文仍在源文件里；只认固定格式，单独出现的口令与其它形式的敏感内容不会被识别，转交前请自行检查`,
+        .join('、')}），原文仍在源文件里；只认固定格式与固定位置，单独出现的口令与其它形式的敏感内容不会被识别，转交前请自行检查`,
     );
   }
 

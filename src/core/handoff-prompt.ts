@@ -230,7 +230,7 @@ export type PromptStats = {
   failedAttemptsOmittedCalls: number;
   /** 有明确失败结果、但缺少工具名而无法归类的调用次数 */
   failedAttemptsUnclassified: number;
-  /** 识别并隐去的**不同**凭据个数（同一个值出现多处只算一个；只认固定格式） */
+  /** 识别并隐去的**不同**凭据个数（同一个值出现多处只算一个；只认固定格式与固定位置） */
   credentialsMasked: number;
 };
 
@@ -982,8 +982,8 @@ export function buildHandoffPrompt(
   if (masked.total > 0) {
     addFinding(findings, 'prompt_credentials_masked', 'degraded', masked.total);
     lines.push(
-      `- 凭据：识别并隐去了 ${masked.total} 个格式固定的密钥 / 令牌（${masked.kinds.map((kind) => `${kind.label} ${kind.count}`).join('、')}），` +
-        '在文档中以「[已隐去：种类]」标出，原文仍在源文件里；只认固定格式——单独出现的口令、内部地址与其它形式的敏感内容不会被识别，转交前请自行检查',
+      `- 凭据：识别并隐去了 ${masked.total} 个密钥 / 令牌（按固定格式或固定位置识别：${masked.kinds.map((kind) => `${kind.label} ${kind.count}`).join('、')}），` +
+        '在文档中以「[已隐去：种类]」标出，原文仍在源文件里；只认固定格式与固定位置——单独出现的口令、内部地址与其它形式的敏感内容不会被识别，转交前请自行检查',
     );
   }
   // 来源在渲染期间变化过：上面这几行（轮次 / 时间范围 / 用量）都是读取那一刻的数字，

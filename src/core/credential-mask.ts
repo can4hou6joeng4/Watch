@@ -7,9 +7,9 @@ import type { ProcessEvent } from './types.js';
  * 只要出现过一次 `cat .env` 或带 `Authorization` 头的 `curl`，密钥原文就会随工具入参 / 输出
  * 一起进文档。Watch 的定位是「不默认搬迁凭据」，这条路径不能例外。
  *
- * 只认**格式固定**的几种（厂商前缀 + 固定字符集与长度、PEM 私钥块、JWT 三段式），以及三种
- * **位置固定**的值（连接串 URL 里的口令、`X-Api-Key` 这类密钥头、`Authorization` 头的值）：
- * 宁可漏，不把普通标识符、
+ * 只认**格式固定**的几种（厂商前缀 + 固定字符集与长度、PEM 私钥块、JWT 三段式），以及四种
+ * **位置固定**的值（连接串 URL 里的口令、`X-Api-Key` 这类密钥头、`Cookie` / `Set-Cookie` 头的值、
+ * `Authorization` 头的值）：宁可漏，不把普通标识符、
  * 哈希或路径改掉。单独出现的口令、内部地址、没有固定前缀的密钥一律**不识别**——调用方
  * 必须把这条边界写进文档，不能让「已隐去 N 个」读起来像「文档里没有敏感内容」。
  *
@@ -99,8 +99,8 @@ const KINDS: readonly CredentialKind[] = [
   },
   // JWT 不设 `cut`：被截断的 JWT 没有完整签名段，剩下的头部 / 载荷不是可用的凭据。
   { label: 'JWT', pattern: /(?<![A-Za-z0-9_-])eyJ[A-Za-z0-9_-]{8,}\.eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}/g },
-  // 下面三种靠**位置**而不是前缀识别（第 331 / 334 轮）：值本身没有固定样子，但它出现的位置是固定的。
-  // 排在最后——带前缀的令牌已被上面换成占位符，这里不再碰（占位符以 `[` 开头，不在字符集里）。
+  // 下面四种靠**位置**而不是前缀识别（第 331 / 334 / 336 轮）：值本身没有固定样子，但它出现的位置是固定的。
+  // 排在最后——带前缀的令牌已被上面换成占位符，这里不再碰（占位符里的 `[` 不在字符集里）。
   // 只换掉值，scheme / 用户名 / 主机与 `Bearer` 字样保留：接手的人仍需要知道连的是哪里。
   {
     // `postgres://user:口令@host/db` 这类连接串。环境变量引用（`$PASS` / `${PASS}`）、
@@ -120,6 +120,18 @@ const KINDS: readonly CredentialKind[] = [
     cut: /(?<=(?:X-[A-Za-z0-9-]*Api-Key|api-key|X-Auth-Token)\\?["']?\s*[:=]\s*\\?["']?)(?=[A-Za-z0-9._~+/=-]*[0-9])[A-Za-z0-9._~+/=-]{8,}(?=…)/gi,
   },
   {
+    // `Cookie: session=…` / `Set-Cookie: sid=…; Path=/` 与 `curl --cookie "session=…"`（第 336 轮）：
+    // 网页登录态通常放在这里，值没有前缀，但头名 / 选项名与 `name=value` 的形状是固定的。
+    // 只认「`name=value`、等号后至少 8 位」的写法；`--cookie-jar`、`-b cookies.txt`、`Cookie: theme`
+    // 这类说明或占位原样保留。等号前是 cookie 名（不能含 `=`），等号后是整段值（属性也一并吞掉）。
+    // 值里排除引号（含反引号）、反斜杠、省略号、方括号、`$` 与模板括号：引号 / 换行是 JSON 与命令行
+    // 的边界，`…` 留给 cut 规则，`[` 保证已隐去的 `[已隐去：…]` 不会被整段再吞一遍，`$` / `{}` / `<>` 让 `$SESSION`、`{{cookie}}`、`<cookie>` 这类占位写法留在原处。
+    label: 'Cookie 头的值',
+    pattern:
+      /(?<=Cookie\\?["']?\s*[:=]\s*\\?["']?|--cookie\\?["']?\s*(?:=\s*|\s+)\\?["']?)[^\s="'`\\…\[\]{}$<>\r\n][^="'`\\…\[\]{}$<>\r\n]*=[^"'`\\…\[\]{}$<>\r\n]{8,}/gi,
+    cut: /(?<=Cookie\\?["']?\s*[:=]\s*\\?["']?|--cookie\\?["']?\s*(?:=\s*|\s+)\\?["']?)[^\s="'`\\…\[\]{}$<>\r\n][^="'`\\…\[\]{}$<>\r\n]*=[^"'`\\…\[\]{}$<>\r\n]{3,}(?=…)/gi,
+  },
+  {
     // `Authorization: Bearer <值>`（也认 JSON 里的 `"Authorization":"Bearer …"` 与转义引号）。
     // Bearer / Token 的值至少 20 位且含数字（`YOUR_API_KEY` 这类占位写法不动），
     // Basic 的值是 base64、至少 16 位。
@@ -133,7 +145,7 @@ const KINDS: readonly CredentialKind[] = [
 ];
 
 // 绝大多数字符串一个候选前缀都没有：先用一条廉价的正则挡掉，再逐种类扫描。
-const QUICK_CHECK = /sk-|gh[pousr]_|github_pat_|glpat-|AKIA|ASIA|AIza|xox[abeprs]-|_live_|npm_|hf_|eyJ|PRIVATE KEY-----|:\/\/[^\s/]*@|uthorization|api-key|auth-token/i;
+const QUICK_CHECK = /sk-|gh[pousr]_|github_pat_|glpat-|AKIA|ASIA|AIza|xox[abeprs]-|_live_|npm_|hf_|eyJ|PRIVATE KEY-----|:\/\/[^\s/]*@|uthorization|api-key|auth-token|cookie/i;
 
 /** 一次渲染内的收集器：按种类记下**不同的**凭据原文，用于去重计数。 */
 export type CredentialCollector = Map<string, Set<string>>;
