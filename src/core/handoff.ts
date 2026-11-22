@@ -1585,8 +1585,8 @@ export async function chainStatus(
         );
       } else {
         // 读得出来不等于有内容：0 轮（合法空会话 / 内容被清空只剩占位头）时下面那条
-        // `← 链尾` 的 resume 打开的是空会话，必须在概览里就说出。parse 失败不在这档——
-        // 读不出来上面刚说过，格式损坏由 open / switch 的预检披露，status 不重复猜
+        // `← 链尾` 的 resume 打开的是空会话，必须在概览里就说出。parse 失败走本函数末尾的
+        // catch：只说「未能核对」这个事实，具体原因留给 open / switch 的预检（第 364 轮）
         const tipAdapter = adapters.find((a) => a.id === last.toProvider);
         if (tipAdapter) {
           try {

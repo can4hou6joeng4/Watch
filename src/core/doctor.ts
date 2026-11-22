@@ -844,13 +844,19 @@ export async function doctorReport(cwd: string, deps: DoctorDeps): Promise<Docto
           } catch (error) {
             // parse 抛错说明内容整体读不出来（坏行由上面的 scanUnparsableJsonLines 单独说）：
             // 这一条链的链尾刚好没进内容对账，不能让 doctor 只字不提
-            const detail = isFileSystemErrorCode((error as NodeJS.ErrnoException).code)
+            const filesystemFailure = isFileSystemErrorCode((error as NodeJS.ErrnoException).code);
+            const detail = filesystemFailure
               ? describeSessionReadFailureReason(error)
               : error instanceof Error
                 ? error.message
                 : String(error);
+            // 与 v0.1.278 的 open 同一口径：非文件系统错误（格式 / 库结构 / 适配器异常）下
+            // 文件可能仍在，原生 resume 未必失败，不能断言「执行同样会失败」；doctor 能说的
+            // 是「Watch 未能核对」。文件读不出来时才说很可能同样失败（第 365 轮）。
             warnings.push(
-              `链「${escapeControlChars(chain.name)}」的链尾会话内容解析失败（${tip.provider} ${tip.sessionId}）：${detail}；resume 与下次切换都会失败——先确认该文件内容是否完整，或 watch switch ${tip.provider} 重新绑定`,
+              filesystemFailure
+                ? `链「${escapeControlChars(chain.name)}」的链尾会话内容解析失败（${tip.provider} ${tip.sessionId}）：${detail}；resume 与下次切换很可能同样失败——先修好这个文件（权限或内容），或 watch switch ${tip.provider} 重新绑定`
+                : `链「${escapeControlChars(chain.name)}」的链尾会话内容解析失败（${tip.provider} ${tip.sessionId}）：${detail}；Watch 未能核对它的轮数与收尾状态，resume 与下次切换未必失败——以原生客户端的显示为准；若内容确实不完整，先从备份恢复该文件，或 watch switch ${tip.provider} 重新绑定`,
             );
           }
         }
