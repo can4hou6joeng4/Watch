@@ -937,10 +937,9 @@ export function describeToolFailureLoss(
     }
   }
   if (lost === 0) return null;
-  const reason = target.toolFailureSupport === 'assistant'
-    ? `${escapeControlChars(target.displayName)} 只保留助手轮工具结果的原生失败状态`
-    : `${escapeControlChars(target.displayName)} 的写入侧不保留工具结果的原生失败状态`;
-  return `这次交接有 ${lost} 条工具结果的失败标记不会在目标中保留：${reason}；不能仅凭目标记录判断这些调用是否成功，需要时请核对来源会话`;
+  const name = escapeControlChars(target.displayName);
+  const scope = target.toolFailureSupport === 'assistant' ? `。${name} 只保留助手轮工具结果的原生失败状态` : '';
+  return `这次交接有 ${lost} 条工具结果的失败标记不会作为原生状态写入 ${name}${scope}。如果目标输出仍有退出码，可据此核对。也可查看来源会话确认结果`;
 }
 
 /** Bash 类工具入参里代表「执行时限」的键；Codex exec 没有对应字段，Claude Bash 的 `timeout` 是毫秒。 */
