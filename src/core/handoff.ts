@@ -7,7 +7,7 @@ import { dedupeCallEvents, describeAttachmentLoss, describeBashControlLoss, desc
 import { describeWriteFailureReason, type FileDigest } from './atomic.js';
 import { addFinding, type Finding } from './findings.js';
 import { escapeControlChars } from './display.js';
-import { describeBadLinesScanFailure, lineageFromHistory, scanUnparsableJsonLines, type LineageGraph } from './jsonl.js';
+import { describeBadLinesScanFailure, lineageFromHistory, scanUnparsableJsonLines, type BadLinesScan, type LineageGraph } from './jsonl.js';
 import { usageBadLinesDetail, usageContentBadLinesDetail, usageContentFileProblem, usageSidecarProblem } from './usage-integrity.js';
 import { cwdAliasHint, splitElsewhereByDirectory } from './cwd.js';
 import { compressedCopy, compressedRetryAdvice, describePathReadFailureReason, describeReadFailureOrSelf, emptySessionFileReasonFromStat, isEmptySessionFileReason, isMissingPathError, probeSessionReadable, sessionFilePresence } from './read-text.js';
@@ -1224,9 +1224,11 @@ export type ProviderTip = {
  * 空链与库故障时这句话更是编的（`alreadyAtTarget` 分支早就按 chainTipState 分了三档）。
  */
 /**
- * 「来源 0 轮」时下一步也分三种事实：链上已有链尾（同链 new 仍会撞这次空交接，只能另起一条）、
- * 链还是空的（直接 new 就是它的第一条绑定，另起一条纯属多余）、库不可用（链记录写不进去，
- * 只能说明后果）。以前三档都用「请先另起一条链」——空链上照着做的人会凭空多出一条链。
+ * 「来源 0 轮」时下一步按四种事实分档：链上已有链尾（同链 new 仍会撞这次空交接，只能另起一条）、
+ * 链还是空的（直接 new 就是它的第一条绑定，另起一条纯属多余）、库不可用（链记录写不进去）、
+ * 链历史读不出来（是否写进去无法确认）。以前前两种之外都用「请先另起一条链」——空链上照着
+ * 做的人会凭空多出一条链；后来库不可用与历史读失败又合成一档说「原因见上方警告」，
+ * 而走到这里的 throw 路径根本没有「上方警告」，历史读失败也不是库不可用（第 345 轮）。
  */
 function zeroTurnNextStep(args: {
   target: ProviderAdapter;
@@ -1237,8 +1239,11 @@ function zeroTurnNextStep(args: {
 }): string {
   const { target, targetId, store, history, historyFailed } = args;
   const adoptHint = `若 ${target.displayName} 侧已有会话，可用 watch adopt ${targetId} --session <会话 id> 接进来`;
-  if (!store || historyFailed) {
-    return `要在 ${target.displayName} 侧从零开新会话：watch new ${targetId}（本地库不可用时这次交接写不进链记录，原因见上方警告）；${adoptHint}`;
+  if (!store) {
+    return `要在 ${target.displayName} 侧从零开新会话：watch new ${targetId}（本地库不可用，这次交接写不进链记录）；${adoptHint}`;
+  }
+  if (historyFailed) {
+    return `要在 ${target.displayName} 侧从零开新会话：watch new ${targetId}（链历史读取失败，这次交接是否写进链记录无法确认）；${adoptHint}`;
   }
   if (!history.at(-1)?.toRef) {
     return `要在 ${target.displayName} 侧从零开新会话，直接 watch new ${targetId} 即可（新会话就是这条链的第一条绑定）；${adoptHint}`;
@@ -1905,14 +1910,16 @@ export async function handoff(
   }
 
   // 目标侧的坏行同样会让 diffTurns 把「已有但解析不出」的内容当缺失、重复追加一遍
+  let destBadScan: BadLinesScan = { count: 0 };
+  let destBadScanFailure: string | null = null;
   if (into) {
-    const destBadScan = await scanUnparsableJsonLines(into.filePath);
+    destBadScan = await scanUnparsableJsonLines(into.filePath);
     if (destBadScan.count > 0) {
       warnings.push(
         `目标会话 ${into.sessionId}（${target.displayName}）有 ${destBadScan.count} 行无法解析（截断或损坏）：增量判定可能偏多，可能重复追加既有内容`,
       );
     }
-    const destBadScanFailure = describeBadLinesScanFailure(
+    destBadScanFailure = describeBadLinesScanFailure(
       destBadScan,
       `目标会话 ${into.sessionId}（${target.displayName}）`,
       '增量判定是否偏多无法确认——先确认该文件可读再重试',
@@ -2058,12 +2065,21 @@ export async function handoff(
       // status / chain list 从 283 轮起都已经会说「0 字节，内容已丢失」——只有真正要 resume 的
       // 这条路径把「内容丢了」讲成「本来就没有」。
       const tipAfter = chainTipAfterNoWrite({ history, historyFailed, store, adapters });
+      // throw 之后 `warnings` 到不了调用方：这次运行里已经算出的坏行数 / 坏行扫不成
+      // 必须内联，否则「0 轮」就只剩「本来就没有内容」这一种解释——而这正是把
+      // 「读不出来」讲成「没有」。第 345 轮审计（0 字节那一档此前已单列）。
+      const zeroTurnFacts =
+        sourceBadScan.count > 0
+          ? `该文件里有 ${sourceBadScan.count} 行无法解析（截断或损坏），内容可能是被截断而不只是「本来就没有」`
+          : sourceBadScanFailure
+            ? `该文件的坏行无法统计，内容是否被截断无法确认`
+            : null;
       const lead = emptiedSourceFile
         ? `来源会话 ${sourceTip.ref.sessionId}（${source.displayName}）的${emptiedSourceFile}；` +
           `没有任何可交接的内容（0 轮），${tipAfter}。` +
           `如果这条会话本该有内容，先从备份恢复该文件（Watch 不会替你重建历史）再重试；`
         : `来源会话 ${sourceTip.ref.sessionId}（${source.displayName}）没有任何可交接的内容（0 轮）：` +
-          `${tipAfter}。` +
+          `${zeroTurnFacts ? `${zeroTurnFacts}。` : ''}${tipAfter}。` +
           `如果这条会话本该有内容，先在 ${source.displayName} 里打开它确认（可能已被清空），或从备份恢复该文件（Watch 不会替你重建历史）。`;
       throw new Error(
         lead +
@@ -2223,8 +2239,16 @@ export async function handoff(
   // 但「本该有更早历史」的人得知道这条会话现在只有这 N 轮。
   const notes: string[] = [];
   if (into && !vanished && destTurns.length === 0 && !emptiedTarget && outgoing.length > 0) {
+    // `parse` 跳过坏行：解析出 0 轮不等于文件里只有这次并入的内容。坏行在（或扫不成）时
+    // 断言「就是它的全部内容」正是把「读不出来」讲成「没有」（第 345 轮审计）。
+    const zeroDestRest =
+      destBadScan.count > 0
+        ? `文件里有 ${destBadScan.count} 行无法解析（截断或损坏），本次并入的 ${outgoing.length} 轮不能算作它的全部内容`
+        : destBadScanFailure
+          ? `坏行扫描未能完成，无法确认本次并入的 ${outgoing.length} 轮是否已包含它的全部内容`
+          : `本次并入的 ${outgoing.length} 轮就是它的全部内容`;
     notes.push(
-      `目标会话 ${into.sessionId}（${target.displayName}）解析出 0 轮（没有可复用的对话），本次并入的 ${outgoing.length} 轮就是它的全部内容` +
+      `目标会话 ${into.sessionId}（${target.displayName}）解析出 0 轮（没有可复用的对话）：${zeroDestRest}` +
         `——如果它本该有更早的历史，先从备份恢复该文件再重试（Watch 不会替你重建历史）`,
     );
   }
@@ -2252,7 +2276,10 @@ export async function handoff(
     } catch (error) {
       console.error('[watch] 记录 switch_events 失败，交接仍完成:', error);
       chainRecordState = 'failed';
-      warnings.push(`链记录失败: ${describeStoreErrorReason(error)}`);
+      // 建链与写记录是两次提交：空库上建出来的链已在库里，失败后 chain list 会凭空多
+      // 一条没有任何切换记录的「默认」。零增量分支从第 311 轮起就用这个函数，追加分支
+      // 漏掉了（第 345 轮审计）。
+      warnings.push(chainRecordFailureWarning(store, cwd, opts?.chainId, error));
     }
   }
 
