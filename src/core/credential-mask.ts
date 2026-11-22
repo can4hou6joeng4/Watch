@@ -24,6 +24,23 @@ import type { ProcessEvent } from './types.js';
  */
 type CredentialKind = { label: string; pattern: RegExp; cut?: RegExp };
 
+// Cookie 头与带引号的 --cookie 参数可包含空格和多个键值对。无引号的参数到下一个 shell 分隔符为止。
+const cookieHeader = /(?<=(?<![\w-])(?:Set-)?Cookie(?:\\?["'])?[ \t]*[:=][ \t]*(?:\\?["'])?)/;
+const quotedCookieOption = /(?<=(?<![\w-])--cookie(?:=|[ \t]+)\\?["'])/;
+const bareCookieOption = /(?<=(?<![\w-])--cookie(?:=|[ \t]+))/;
+const cookiePairName = /[^\s="'`\\…\[\]{}$<>;|&()]+=/;
+const cookieHeaderValue = /[^"'`\\…\[\]{}$<>\r\n]/;
+const bareCookieValue = /[^\s"'`\\…\[\]{}$<>;|&()]/;
+
+function cookieValuePattern(minLength: number, end: string): RegExp {
+  // 先跳过空白，避免在每个空白字符上重复执行后行断言。
+  return new RegExp(
+    `(?=\\S)(?:(?:${cookieHeader.source}|${quotedCookieOption.source})${cookiePairName.source}${cookieHeaderValue.source}{${minLength},}` +
+      `|${bareCookieOption.source}${cookiePairName.source}${bareCookieValue.source}{${minLength},})${end}`,
+    'gi',
+  );
+}
+
 // 顺序即优先级：PEM 块最先（块里可能含形似其它种类的片段），带厂商前缀的先于通用 `sk-`。
 // 左侧一律用否定后行断言卡住边界，避免从更长的标识符中间截出一段「密钥」。
 const KINDS: readonly CredentialKind[] = [
@@ -120,16 +137,11 @@ const KINDS: readonly CredentialKind[] = [
     cut: /(?<=(?:X-[A-Za-z0-9-]*Api-Key|api-key|X-Auth-Token)\\?["']?\s*[:=]\s*\\?["']?)(?=[A-Za-z0-9._~+/=-]*[0-9])[A-Za-z0-9._~+/=-]{8,}(?=…)/gi,
   },
   {
-    // `Cookie: session=…` / `Set-Cookie: sid=…; Path=/` 与 `curl --cookie "session=…"`（第 336 轮）：
-    // 网页登录态通常放在这里，值没有前缀，但头名 / 选项名与 `name=value` 的形状是固定的。
-    // 只认「`name=value`、等号后至少 8 位」的写法；`--cookie-jar`、`-b cookies.txt`、`Cookie: theme`
-    // 这类说明或占位原样保留。等号前是 cookie 名（不能含 `=`），等号后是整段值（属性也一并吞掉）。
-    // 值里排除引号（含反引号）、反斜杠、省略号、方括号、`$` 与模板括号：引号 / 换行是 JSON 与命令行
-    // 的边界，`…` 留给 cut 规则，`[` 保证已隐去的 `[已隐去：…]` 不会被整段再吞一遍，`$` / `{}` / `<>` 让 `$SESSION`、`{{cookie}}`、`<cookie>` 这类占位写法留在原处。
+    // 识别常见的 Cookie / Set-Cookie 头和 --cookie 参数。`name=value` 的等号后至少有 8 个字符。
+    // 引号和反斜杠标记文本边界，方括号、`$` 和模板括号保护已隐去的值及变量引用。
     label: 'Cookie 头的值',
-    pattern:
-      /(?<=Cookie\\?["']?\s*[:=]\s*\\?["']?|--cookie\\?["']?\s*(?:=\s*|\s+)\\?["']?)[^\s="'`\\…\[\]{}$<>\r\n][^="'`\\…\[\]{}$<>\r\n]*=[^"'`\\…\[\]{}$<>\r\n]{8,}/gi,
-    cut: /(?<=Cookie\\?["']?\s*[:=]\s*\\?["']?|--cookie\\?["']?\s*(?:=\s*|\s+)\\?["']?)[^\s="'`\\…\[\]{}$<>\r\n][^="'`\\…\[\]{}$<>\r\n]*=[^"'`\\…\[\]{}$<>\r\n]{3,}(?=…)/gi,
+    pattern: cookieValuePattern(8, ''),
+    cut: cookieValuePattern(3, '(?=…)'),
   },
   {
     // `Authorization: Bearer <值>`（也认 JSON 里的 `"Authorization":"Bearer …"` 与转义引号）。
