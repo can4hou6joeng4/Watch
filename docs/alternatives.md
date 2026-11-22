@@ -25,6 +25,8 @@ Watch 从本机原生会话记录和工作目录出发，由用户发起接力�
 
 [herdr-agent-handoff](https://github.com/sanirudh17/herdr-agent-handoff) 从 Herdr 的源窗格定位会话，在另一个 Agent 的新窗格交接。完整转录放不进提示词时，它提供来源路径、行范围和 SHA-256 供核对。Watch 的 `prompt` 交付 Markdown 摘要，并比较读取前后的文件大小和修改时间来提示来源有变化。
 
+[agentctl](https://github.com/leofmarciano/agentctl)（MIT）侧重在同一工作目录反复切回：其 README 描述每家工具各保留一个原生会话 ID，结束当前进程后再同步缺少的记录；转入 Codex 经 app-server API 写入历史，反向则在 Claude Code 的下一次用户提交时注入有限的历史上下文，两边不是相同的原生转录。接入前的 Claude 历史不会自动导入，直接从外部打开受管会话也不受其单写者锁保护。Watch 未运行该项目。
+
 [ccompactor](https://github.com/ccompactor/ccompactor) 从 Claude Code、Codex 和 Pi 的本机记录生成带事件引用的交接包。`verify` 检查交接包的结构，并对照源转录核验引用。Watch 的 `prompt` 提供可复制的 Markdown 摘要和裁剪披露。
 
 ## English
@@ -49,5 +51,7 @@ Choose by the handoff output and workflow you need. Third-party entries describe
 Watch starts from local native session records and the working directory. The user initiates each handoff. The launcher, chained handoff and official Codex import have separate entry points and write protections. Use `watch prompt` for a read-only Markdown summary when the target lacks an adapter. `status --json` traces lineage from recorded switches, with the same counts in desktop handoff history. The desktop recent list distinguishes scanning, read failures and an empty list. See the [architecture](ARCHITECTURE.md) for the protection each route provides.
 
 [herdr-agent-handoff](https://github.com/sanirudh17/herdr-agent-handoff) locates a session from its source pane and hands it off to a fresh agent pane in Herdr. If the full transcript exceeds the prompt budget, the plugin provides the source path, line bounds and SHA-256 for verification. Watch `prompt` produces a Markdown summary and compares file size and modification time before and after reading to flag source changes.
+
+[agentctl](https://github.com/leofmarciano/agentctl) (MIT) focuses on switching back and forth in the same working directory. Its README describes one native session ID per tool and syncing missing records after the current process exits. It sends history into Codex through the app-server API; on the return to Claude Code, a hook supplies bounded historical context on the next user prompt. The two transcripts are not identical. Claude history from before attachment is not imported automatically, and opening a managed session directly bypasses its single-writer lock. Watch has not run the project.
 
 [ccompactor](https://github.com/ccompactor/ccompactor) creates handoff packages with event references from local Claude Code, Codex, and Pi records. Its `verify` command checks package structure and checks quotes against the source transcript. Watch `prompt` provides a Markdown summary with disclosures about trimmed content.
