@@ -60,10 +60,12 @@ const site = path.join(root, 'site');
 const buildDate = siteBuildDate();
 const pageManifest = buildAllPageManifest({ siteUrl, locales: publishedLocales, published: '2026-09-12', modified: siteDate, guides });
 validatePageManifest({ pages: pageManifest, siteUrl, locales: publishedLocales, defaultLocale, buildDate });
-// llms.txt 的 Pages 是手写清单：第 7 篇指南建立后，站点 HTML 与生成的 llms-full.txt 都有它，
-// 手写的 llms.txt 却三处都没补（2026-11-23）。本地回归能发现，CI 的质量门禁只跑 site:build，
-// 所以把核对放进构建：按与 sitemap 同源的页面清单逐条要求 llms.txt 带出每个指南 URL。
-const missingGuideLinks = pageManifest.filter((page) => page.guideId && !llmsText.includes(`](${page.canonical})`));
+// 只检查手写的中英 Pages 目录：正文引用不能代替目录链接，可选翻译也不要求手工登记。
+const llmsPages = llmsText.match(/^## Pages\r?\n([\s\S]*?)^## /m)?.[1] ?? '';
+const llmsPageLinks = new Set(Array.from(llmsPages.matchAll(/^- \[[^\]\r\n]+\]\(([^)\r\n]+)\)/gm), ([, url]) => url));
+const missingGuideLinks = pageManifest.filter((page) =>
+  page.guideId && authoredLocales.has(page.locale) && !llmsPageLinks.has(page.canonical),
+);
 if (missingGuideLinks.length) {
   throw new Error(`[site-build] llms.txt 缺少指南链接：${missingGuideLinks.map((page) => page.canonical).join('、')}`);
 }
