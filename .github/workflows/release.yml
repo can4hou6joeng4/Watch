@@ -95,7 +95,10 @@ jobs:
           dmg=desktop/src-tauri/target/aarch64-apple-darwin/release/bundle/dmg/Watch_*.dmg
           mount=$(mktemp -d)
           hdiutil attach -readonly -nobrowse -noautoopen -mountpoint "$mount" $dmg
-          trap 'hdiutil detach "$mount"' EXIT
+          # 普通 detach 失败（卷忙）会把这个卷留在 /Volumes/Watch，下一次 dmg 打包
+          # 用同名卷 create 时会报 hdiutil: create failed - Resource busy（0.1.280 / 0.1.281 连续两次）。
+          # 这里先强制卸载；仍失败也不阻塞本步，由下面打包前的清理步骤兜底
+          trap 'hdiutil detach "$mount" -force || true' EXIT
           app=$(find "$mount" -maxdepth 1 -name '*.app' -type d | head -1)
           test -n "$app"
           node scripts/verify-bundle-runtime.mjs "$app/Contents/Resources/watch-core" "darwin/arm64"
@@ -110,6 +113,16 @@ jobs:
             npm install --no-save --force --ignore-scripts "@esbuild/darwin-x64@$version"
           fi
 
+      # tauri 的 dmg 卷名取 productName（Watch），arm64 与 x86_64 同名。上一轮若把 arm64 卷
+      # 留在 /Volumes/Watch，这一步 create 就会报 Resource busy——打包前显式清掉残留挂载。
+      - name: 清理残留的 Watch DMG 挂载
+        run: |
+          for vol in /Volumes/Watch*; do
+            [ -e "$vol" ] || continue
+            echo "detaching $vol"
+            hdiutil detach "$vol" -force || true
+          done
+
       - name: 打包（x86_64 交叉编译）
         uses: tauri-apps/tauri-action@v0
         with:
@@ -121,7 +134,7 @@ jobs:
           dmg=desktop/src-tauri/target/x86_64-apple-darwin/release/bundle/dmg/Watch_*.dmg
           mount=$(mktemp -d)
           hdiutil attach -readonly -nobrowse -noautoopen -mountpoint "$mount" $dmg
-          trap 'hdiutil detach "$mount"' EXIT
+          trap 'hdiutil detach "$mount" -force || true' EXIT
           app=$(find "$mount" -maxdepth 1 -name '*.app' -type d | head -1)
           test -n "$app"
           node scripts/verify-bundle-runtime.mjs "$app/Contents/Resources/watch-core" "darwin/x64"
