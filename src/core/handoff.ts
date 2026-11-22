@@ -782,9 +782,14 @@ export async function createChainSession(
           `链尾会话（${tipAdapter.displayName}）`,
           0,
         );
-      } catch {
+      } catch (error) {
+        // 前面几档刚确认过文件存在且打得开，这里的真实原因在 error 里；解析前一刻被压缩的
+        // 竞态下，正确的下一步是让原生重新展开，而「先确认这个会话文件可读」会引去查权限。
+        const copy = compressedCopy(await sessionFilePresence(tail.toRef.filePath));
         tipUnfinished = [
-          `但读不出它的内容，无法确认它是否停在做了一半的一轮上——先确认这个会话文件可读再 resume`,
+          `但读不出它的内容，无法确认它是否停在做了一半的一轮上：` +
+            `${copy?.note ?? describeReadFailureOrSelf(error)}；` +
+            (copy ? compressedRetryAdvice(copy, '再 resume') : '先确认这个会话文件可读再 resume'),
         ];
       }
     }
