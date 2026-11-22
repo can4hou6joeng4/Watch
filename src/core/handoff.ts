@@ -1085,8 +1085,13 @@ export async function chainUsage(
         try {
           parsedZero = (await adapter.parse(ref)).length === 0;
         } catch (error) {
+          // 同一函数上方的 usage 读取分支已经按压缩副本分档；这里 parse 再抛错时若沿用
+          // 「会话文件已不存在」，同一个文件在报告里会出现两种说法，还把「让原生展开」
+          // 引成「修可读性」（第 353 轮）。
+          const copy = compressedCopy(await sessionFilePresence(ref.filePath));
           const msg =
-            `会话内容读取失败：${describeReadFailureOrSelf(error)}；` +
+            `会话内容读取失败：${copy?.note ?? describeReadFailureOrSelf(error)}；` +
+            (copy ? `${compressedRetryAdvice(copy, '再跑一次 watch usage')}；` : '') +
             '无法确认它是不是空会话，也没有可用的用量数据';
           warnings.push(`${adapter.id} ${msg}`);
           byProvider.push({ provider: adapter.id, sessionId: ref.sessionId, usage: null, error: msg, contentUnreadable: true });
