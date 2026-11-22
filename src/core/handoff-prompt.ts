@@ -6,6 +6,7 @@ import { codeFence, inlineCode, singleLineText } from './markdown.js';
 import { CLAUDE_COMPACT_SUMMARY_PREFIX, findContextDisclosure, KIMI_COMPACTION_SUMMARY_PREFIX, OPENCODE_COMPACTION_SUMMARY_PREFIX, OPENCODE_UNFINISHED_TOOL_PREFIX, PI_COMPACTION_SUMMARY_PREFIX, WATCH_CONTEXT_DISCLOSURE_PREFIX } from './rich.js';
 import { isoFromEpochMs } from './time.js';
 import type { ProcessEvent, TokenUsage, UnifiedTurn } from './types.js';
+import { compressedCopy, compressedRetryAdvice, describeReadFailureOrSelf, sessionFilePresence } from './read-text.js';
 import {
   createCredentialCollector,
   CREDENTIAL_PLACEHOLDER_PREFIX,
@@ -35,6 +36,21 @@ export type PromptProfile = 'minimal' | 'standard' | 'verbose' | 'full';
 export const PROMPT_PROFILES: readonly PromptProfile[] = ['minimal', 'standard', 'verbose', 'full'];
 
 export const DEFAULT_PROMPT_PROFILE: PromptProfile = 'standard';
+
+/**
+ * `watch prompt` 在 `parse` 抛错时的说明（第 352 轮）。
+ *
+ * 挑选与解析之间隔着一次扫描：Codex 可能恰好在这段时间把闲置线程压成 `.jsonl.zst`，
+ * 原文件随之消失。只说「会话文件已不存在」会把人引去重新绑定或重建历史，而它其实还在、
+ * 只是本版不读压缩格式。判据与 `switch` / `new` 共用 `sessionFilePresence()`（只读 stat、
+ * 不解压），0 字节副本也不能承诺「重新展开」。调用方已写好「读取失败：」前缀，这里只补
+ * 原因与下一步；没有副本时保留真实错误。
+ */
+export async function describePromptSourceReadFailure(filePath: string, error: unknown): Promise<string> {
+  const copy = compressedCopy(await sessionFilePresence(filePath));
+  if (copy) return `${copy.note}；${compressedRetryAdvice(copy, '再跑一次 watch prompt')}`;
+  return `${describeReadFailureOrSelf(error)}；先确认这个会话文件可读再重试`;
+}
 
 export function parsePromptProfile(raw: string): PromptProfile | null {
   const v = raw.trim().toLowerCase();

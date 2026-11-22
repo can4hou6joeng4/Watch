@@ -12,6 +12,7 @@ import type { TokenUsage } from './core/types.js';
 import {
   buildHandoffPrompt,
   DEFAULT_PROMPT_PROFILE,
+  describePromptSourceReadFailure,
   parsePromptProfile,
   PROMPT_PROFILES,
 } from './core/handoff-prompt.js';
@@ -1891,7 +1892,7 @@ async function cmdPrompt(
   } catch (error) {
     // 读不出来就不能装作「这条会话是空的」：文档正文会因此变成「没有可展示的内容」，
     // 与「会话确实没聊过」长得一模一样。
-    fail(json, `会话 ${id} 读取失败：${describeReadFailureOrSelf(error)}；未生成任何内容`);
+    fail(json, `会话 ${id} 读取失败：${await describePromptSourceReadFailure(foundRef.filePath, error)}；未生成任何内容`);
   }
 
   // 0 轮有两种完全不同的原因，`probeSessionReadable()` 是判据的唯一入口（与 open / switch 共用）。
