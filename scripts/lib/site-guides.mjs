@@ -1158,7 +1158,7 @@ export const guides = [
               },
               {
                 title: '步骤 2：辨认完好副本与 0 字节副本',
-                body: '在 ~/.codex/sessions 下找到对应的 .jsonl.zst。文件有内容 = 完好副本，可能是可恢复的压缩历史；文件为 0 字节 = 内容已丢失，展开也拿不回来，只能从备份恢复。Watch 的警告与 --json 字段（compressed / compressedEmpty）与此同口径，不需要自己猜。',
+                body: '在 ~/.codex/sessions 下找到对应的 .jsonl.zst。文件有内容 = 完好副本，可能是可恢复的压缩历史；文件为 0 字节 = 内容已丢失，展开也拿不回来，只能从备份恢复。Watch 的警告与此同口径；watch doctor --json 的链尾状态还会单独给出 compressed / compressedEmpty，列表的 unattributable 只给文件数，两种状态不需要自己猜。',
               },
               {
                 title: '步骤 3：在 Codex 里继续该会话',
@@ -1253,7 +1253,7 @@ export const guides = [
               },
               {
                 title: 'Step 2: Tell intact copies from zero-byte copies',
-                body: 'Find the matching .jsonl.zst under ~/.codex/sessions. A file with content is an intact copy and may hold recoverable history; a zero-byte file has lost its content, and re-expansion cannot recover it. The Watch warning and its JSON fields use the same distinction, so you do not need to guess.',
+                body: 'Find the matching .jsonl.zst under ~/.codex/sessions. A file with content is an intact copy and may hold recoverable history; a zero-byte file has lost its content, and re-expansion cannot recover it. The Watch warning uses the same distinction; watch doctor --json also reports compressed and compressedEmpty per chain tip, while the list unattributable count is only a file count, so you do not need to guess the state.',
               },
               {
                 title: 'Step 3: Continue the session in Codex',
