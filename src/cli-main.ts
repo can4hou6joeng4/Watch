@@ -2810,9 +2810,16 @@ async function cmdChain(cwd: string, json: boolean, action?: string, a?: string,
           try {
             turns = (await tipAdapter.parse(last.toRef)).length;
           } catch {
-            // 与 status 的链尾判定同构：文件读不出来由上面的 presence 档说，内容解析失败
-            // 由 doctor 的「内容解析失败」与 open / switch 的报错负责——chain list 是查询
-            // 命令，不在这里叠加第二种说法，也不拿 0 冒充「解析失败」
+            // 与 status 的链尾判定同构：具体原因（库缺表、格式损坏、适配器异常）由
+            // doctor 与 open / switch 的报错给出，这里不重复；但链尾行不显示轮数只是
+            // 沉默——读者无法把它与「有内容但没统计」区分，而这条链尾正是下次切换的
+            // 对象。「未能核对」这个事实必须说（第 365 轮，与 status 第 364 轮同口径）。
+            if (c.status === 'active') {
+              warnings.push(
+                `链「${escapeControlChars(c.name)}」的链尾会话 ${last.toRef.provider} ${last.toRef.sessionId} 的内容解析失败，` +
+                  `Watch 未能核对它的轮数与收尾状态；打开或切换到它时会给出具体原因`,
+              );
+            }
           }
         }
         tips.set(c.id, {
