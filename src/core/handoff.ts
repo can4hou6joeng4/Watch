@@ -1729,16 +1729,33 @@ export async function handoff(
   // 建出来的合法空会话与「内容被清空、只剩占位头」都解析出 0 轮，而对着一份空日志说
   // 「直接打开即可」等于替它背书——用户打开进去什么也没有，却没有任何一句话解释。
   // 0 字节那一档不在这里说：`probeSessionReadable` 已由调用方报过「会话文件是空的」。
-  const warnResumeTarget = async (ref: SessionRef, displayName: string, merged: number): Promise<boolean> => {
+  const warnResumeTarget = async (
+    ref: SessionRef,
+    displayName: string,
+    merged: number,
+    readProblemReported = false,
+  ): Promise<boolean> => {
     let resumeTurns: UnifiedTurn[];
     try {
       resumeTurns = await target.parse(ref);
     } catch (error) {
       // 读不出来不能静默返回 false：这条会话正是用户要 resume 的那一条，而「没有未完成轮次」
-      // 与「读不出来所以没查」在 warnings 里不能长得一样
+      // 与「读不出来所以没查」在 warnings 里不能长得一样。
+      // 调用方（alreadyAtTarget 分支）刚推过的可读性警告已按文件形态给过原因与下一步：
+      // 再复述一次 errno 会在压缩副本这件事上给出相反的下一步（「先确认文件可读」vs
+      // 「让原生重新展开」），这里只补它没说的那一半——断点无法确认。
+      if (readProblemReported) {
+        warnings.push(
+          `目标会话 ${ref.sessionId}（${displayName}）读不出内容，无法确认它是否停在做了一半的一轮上` +
+            `（文件读不出来的原因见上一条警告）`,
+        );
+        return false;
+      }
+      const copy = compressedCopy(await sessionFilePresence(ref.filePath));
       warnings.push(
         `目标会话 ${ref.sessionId}（${displayName}）读不出内容，无法确认它是否停在做了一半的一轮上：` +
-          `${describeReadFailureOrSelf(error)}；先确认这个会话文件可读再 resume`,
+          `${copy?.note ?? describeReadFailureOrSelf(error)}；` +
+          (copy ? compressedRetryAdvice(copy, '再 resume') : '先确认这个会话文件可读再 resume'),
       );
       return false;
     }
@@ -1850,7 +1867,12 @@ export async function handoff(
       }
       // 这条链尾会话马上就要被 resume：可它自己停在做了一半的一轮上时，`open <同一个 id>`
       // 会说、`switch` 以前一句话都不提——而 resume 正是从 `switch` 这里复制的。
-      const resumeTargetEmpty = await warnResumeTarget(resumeRef, target.displayName, 0);
+      const resumeTargetEmpty = await warnResumeTarget(
+        resumeRef,
+        target.displayName,
+        0,
+        Boolean(resumeReadProblem),
+      );
       // 0 字节已由上面那条 resumeReadProblem 说清（文件是空的、内容已丢失），这里只补
       // 「文件可读却 0 轮」那一档：`watch new codex` / `watch new grok` 建出的合法空会话，
       // 或内容被清空只剩占位头。不补的话正文会说「直接打开即可」——打开进去什么也没有
