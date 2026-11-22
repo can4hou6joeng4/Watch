@@ -770,7 +770,7 @@ export const guides = [
   {
     id: 'empty-session-resume-check',
     published: '2026-11-17',
-    modified: '2026-11-18',
+    modified: '2026-11-23',
     status: 'published',
     locales: {
       zh: {
@@ -804,7 +804,7 @@ export const guides = [
               },
               {
                 title: '步骤 2：按警告分档读原因',
-                body: '同一份结果里，警告会区分：0 字节（「会话文件是空的」）、可读 0 轮（「解析出 0 轮（没有可继续的对话）」）、文件读不出来（权限或内容问题）、文件不存在（被删或被移走）。四档的下一步不同，不要只看到「空」就去换绑：文件不存在时先找文件，0 字节时先确认有没有备份。',
+                body: '同一份结果里，警告会区分：0 字节（「会话文件是空的」）、可读 0 轮（「解析出 0 轮（没有可继续的对话）」）、文件读不出来（权限或内容问题）、文件不存在（被删或被移走）、内容解析失败（文件读得出来，但会话格式损坏或 OpenCode 库缺正文表等；v0.1.279 起警告写「内容解析失败，Watch 未能核对它的轮数与收尾状态」）。五档的下一步不同，不要只看到「空」就去换绑：文件不存在时先找文件，0 字节时先确认有没有备份；解析失败这一档连「是不是空」都不知道，不能当空会话处理，先用 watch switch 或 watch open 打开一次，让预检给出具体原因。',
               },
               {
                 title: '步骤 3：确认是不是刚建出来的空会话',
@@ -894,8 +894,8 @@ export const guides = [
                 body: 'Run watch status. Since v0.1.90 the chain-tip row shows its turn count, for example a chain tip with 12 turns; a 0-turn parse says it parsed 0 turns and points at the warning above; an unreadable or missing file carries no count. In JSON the fields are chainTipTurns and chainTipEmpty, and chainTipTurns exists only when the parse succeeds. With several chains, the tip row in watch chain list carries the same count (v0.1.93); when in doubt, store.emptyTips in watch doctor lists tips that parse to 0 turns (v0.1.92). watch new --json also reports the actual parsed turn count (v0.1.94): claude and pi write a placeholder user message, so it shows 1 turn, while codex, grok and opencode show 0. Since v0.1.95, watch usage separates a 0-turn empty session from a session that has content but no recorded usage, so a freshly created chain is no longer reported as a statistics gap. Since v0.1.96, unparsable content lines and Codex compaction records are no longer misreported as empty sessions. Since v0.1.97, a deleted content file is disclosed even when sidecar usage is still available. Since v0.1.98, bad content lines are disclosed in warnings and fields instead of staying silent; since v0.1.99, a bad content line with existing turns is no longer described as a 0-turn parse; since v0.1.100, the text summary separates 0-turn sessions from sessions with usage, and a failed scan says the bad-line count is unknown; since v0.1.101, the 0-turn summary no longer adds a usage-counted clause, and the v0.1.98 note describes a disclosure gap rather than lost usage.',
               },
               {
-                title: 'Step 2: Read the four warning cases',
-                body: 'The same result separates zero bytes (the session file is empty), readable 0 turns (parsed 0 turns, nothing to continue), unreadable content (permissions or content), and a missing file (deleted or moved). Each case has a different next step; do not rebind just because you saw the word empty.',
+                title: 'Step 2: Read the five warning cases',
+                body: 'The same result separates zero bytes (the session file is empty), readable 0 turns (parsed 0 turns, nothing to continue), unreadable content (permissions or content), a missing file (deleted or moved), and a failed content parse (the file reads fine, but the session format is damaged or the OpenCode database is missing its message table; since v0.1.279 the warning says the content failed to parse and Watch could not verify the turn count or tail state). Each case has a different next step; do not rebind just because you saw the word empty. The last case does not even tell you whether the session is empty, so do not treat it as an empty session: run watch switch or watch open once and let the preflight report the specific reason.',
               },
               {
                 title: 'Step 3: Check whether it is a brand-new empty session',
