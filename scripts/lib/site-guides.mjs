@@ -1130,9 +1130,9 @@ export const guides = [
       zh: {
         slug: 'codex-compressed-rollout-recovery',
         title: 'Codex 会话只剩 .jsonl.zst：Watch 的读取边界与恢复路径 | Watch 指南',
-        description: 'Codex 会把本地线程压缩为同名 .jsonl.zst。Watch 只读未压缩的 .jsonl，因此这些会话不会出现在 sessions / recent / status 里，watch doctor 会把它们计入「读不出目录归属」。本指南说明原因、如何辨认完好副本与 0 字节副本、如何在 Codex 里重新展开，以及哪些操作不要做。',
+        description: 'Codex 会把本地线程压缩为同名 .jsonl.zst。Watch 只读未压缩的 .jsonl，因此这些会话不会出现在 sessions / recent / status 里，watch doctor 会把它们计入「读不出目录归属」。本指南说明原因、非空副本与 0 字节副本的区别，以及何时可以让 Codex 重新展开会话。',
         h1: 'Codex 会话只剩 .jsonl.zst：Watch 的读取边界与恢复路径',
-        summary: 'Watch 只读取 ~/.codex/sessions 下未压缩的 rollout .jsonl；文件被 Codex 压缩后原 .jsonl 不在、只剩同名 .jsonl.zst，这些会话无法被列出、解析或交接。watch doctor 与列表命令会披露数量，而不是假装它们不存在。恢复路径只有一条：在 Codex 里继续该会话，让原生重新展开为 .jsonl。',
+        summary: 'Watch 只读取 ~/.codex/sessions 下未压缩的 rollout .jsonl；文件被 Codex 压缩后原 .jsonl 不在、只剩同名 .jsonl.zst，这些会话无法被列出、解析或交接。watch doctor 与列表命令会披露数量，而不是假装它们不存在。若副本确实由 Codex 压缩且内容完好，可尝试在 Codex 里继续该会话并确认 .jsonl 是否重新出现。',
         answer: 'Codex 压缩本地线程后，原 rollout 只剩 .jsonl.zst；Watch 不读压缩格式，这些会话不会出现在任何列表里。用 watch doctor 看「读不出目录归属」的数量，并在 Codex 里继续该线程触发重新展开。副本是 0 字节时内容已丢失，只能从备份恢复；不要删除或改名 .zst 文件。',
         blocks: [
           {
@@ -1147,18 +1147,18 @@ export const guides = [
           },
           {
             type: 'paragraph',
-            text: '副本有两种状态，下一步相反。完好副本：.zst 有内容，若它确实是 Codex 的本地线程压缩，在 Codex 里继续该会话会重新展开为 .jsonl，之后 Watch 即可读取。0 字节副本：内容已经丢失，重新展开也拿不回对话，只能从备份恢复或当作新会话处理。Watch 只 stat 副本是否存在、是否 0 字节，不打开、不解压，因此披露里写的是「若是 Codex 的本地线程压缩且副本完好」。',
+            text: '副本有两种状态，下一步相反。非空副本：如果确实是 Codex 的本地线程压缩且副本完好，在 Codex 里继续该会话可能重新展开为 .jsonl，之后 Watch 才能读取。0 字节副本：内容已经丢失，重新展开也拿不回对话，只能从备份恢复或当作新会话处理。Watch 只 stat 副本是否存在、是否 0 字节，不打开、不解压，因此披露里写的是「若是 Codex 的本地线程压缩且副本完好」。',
           },
           {
             type: 'steps',
             items: [
               {
                 title: '步骤 1：确认数量与文件形态',
-                body: '执行 watch doctor --json：storage 里 codex 一行的 count 只统计可读会话，unattributable 给出压缩副本等读不出归属的文件数；文本模式会另起一行「另有 M 个文件读不出目录归属」。watch sessions --json 与 watch recent --json 带同名字段。警告里会按文件形态写明「只有 .jsonl.zst 压缩副本」或「0 字节的同名压缩副本」，两种情况下一步不同。',
+                body: '执行 watch doctor --json：storage 里 codex 一行的 count 只统计可读会话，unattributable 给出压缩副本等读不出归属的文件数；文本模式会在会话数旁显示「另有 M 个文件读不出目录归属」。watch sessions --json 与 watch recent --json 带同名字段。警告里会按文件形态写明「只有 .jsonl.zst 压缩副本」或「0 字节的同名压缩副本」，两种情况下一步不同。',
               },
               {
-                title: '步骤 2：辨认完好副本与 0 字节副本',
-                body: '在 ~/.codex/sessions 下找到对应的 .jsonl.zst。文件有内容 = 完好副本，可能是可恢复的压缩历史；文件为 0 字节 = 内容已丢失，展开也拿不回来，只能从备份恢复。Watch 的警告与此同口径；watch doctor --json 的链尾状态还会单独给出 compressed / compressedEmpty，列表的 unattributable 只给文件数，两种状态不需要自己猜。',
+                title: '步骤 2：区分非空副本与 0 字节副本',
+                body: '找到对应的 .jsonl.zst。非空只说明还有字节，不代表副本完好或可解压；0 字节则说明这份副本没有可恢复的内容，需另找备份。如果该会话是不可用的链尾，watch doctor --json 的 store.brokenTips[].compressedPath 给出副本路径，compressedEmpty 为 true 表示 0 字节。列表的 unattributable 只给文件数。',
               },
               {
                 title: '步骤 3：在 Codex 里继续该会话',
@@ -1166,7 +1166,7 @@ export const guides = [
               },
               {
                 title: '步骤 4：展开后再交接',
-                body: '拿到重新展开的会话 id 后，按常规路径交接：watch open <id> --to <provider> 或 watch switch <provider>。watch prompt 同样只读未压缩文件，不能绕过这一档；文档头部会说明来源不可用，不会输出半份文档。',
+                body: '拿到重新展开的会话 id 后，按常规路径交接：watch open <id> --to <provider> 或 watch switch <provider>。watch prompt 也不读压缩文件；显式指定该会话时会报错，不生成交接文档。',
               },
             ],
           },
@@ -1185,7 +1185,7 @@ export const guides = [
         faq: [
           {
             question: 'Watch 会把我的 Codex 会话压缩或删掉吗？',
-            answer: '不会。压缩是 Codex 自己的行为；Watch 对 ~/.codex/sessions 只读，列出、解析、交接都读未压缩的 .jsonl，也不改动 .zst 与目录结构。',
+            answer: '不会。压缩是 Codex 自己的行为；Watch 不读取、改写或删除 .zst；列出和解析会话时读的是未压缩的 .jsonl。以 Codex 为目标的写入式交接是另一回事，可能新建或更新目标端未压缩的会话文件。',
           },
           {
             question: '为什么 doctor 说「读不出目录归属」，而不是直接说文件被压缩了？',
@@ -1225,9 +1225,9 @@ export const guides = [
       en: {
         slug: 'codex-compressed-rollout-recovery',
         title: 'Codex Sessions Left as .jsonl.zst: Watch Read Boundaries and Recovery | Watch Guide',
-        description: 'Codex compresses local threads into a same-name .jsonl.zst. Watch only reads uncompressed .jsonl, so those sessions do not appear in sessions, recent or status, and watch doctor counts them as unattributable. This guide explains why, how to tell an intact copy from a zero-byte one, how to re-expand in Codex, and what not to do.',
+        description: 'Codex compresses local threads into a same-name .jsonl.zst. Watch only reads uncompressed .jsonl, so those sessions do not appear in sessions, recent or status, and watch doctor counts them as unattributable. This guide explains why, what a nonempty or zero-byte copy tells you, and when to try re-expanding it in Codex.',
         h1: 'Codex Sessions Left as .jsonl.zst: Watch Read Boundaries and Recovery',
-        summary: 'Watch reads uncompressed rollout .jsonl files under ~/.codex/sessions. After Codex compresses a local thread, the original .jsonl is gone and only a same-name .jsonl.zst remains; those sessions cannot be listed, parsed or handed off. watch doctor and the list commands disclose the count instead of pretending they do not exist. The only recovery path is to continue the session in Codex and let the native client re-expand it.',
+        summary: 'Watch reads uncompressed rollout .jsonl files under ~/.codex/sessions. After Codex compresses a local thread, the original .jsonl is gone and only a same-name .jsonl.zst remains; those sessions cannot be listed, parsed or handed off. watch doctor and the list commands disclose the count instead of pretending they do not exist. If Codex compressed the file and the copy is intact, try continuing the session in Codex and check whether the .jsonl reappears.',
         answer: 'After Codex compresses a local thread, the rollout remains only as a .jsonl.zst; Watch does not read the compressed format, so the session appears in no list. Use watch doctor to see the unattributable count and continue the thread in Codex to trigger re-expansion. A zero-byte copy has lost its content; restore from backup. Do not delete or rename the .zst file.',
         blocks: [
           {
@@ -1242,18 +1242,18 @@ export const guides = [
           },
           {
             type: 'paragraph',
-            text: 'A copy has two states with opposite next steps. An intact copy has content; if it really is Codex local thread compression, continuing that session in Codex re-expands it into .jsonl, and Watch can then read it. A zero-byte copy has lost its content; re-expansion cannot bring the conversation back, so restore from backup or treat it as a new session. Watch only stats whether a copy exists and whether it is zero bytes; it never opens or decompresses it, which is why the disclosure says it holds only if the copy is intact Codex compression.',
+            text: 'A copy has two states with opposite next steps. For a nonempty copy, continuing the session in Codex may re-expand it into .jsonl if Codex made the copy and it is intact. Watch can read the plain file after it reappears. A zero-byte copy has lost its content; re-expansion cannot bring the conversation back, so restore from backup or treat it as a new session. Watch only stats whether a copy exists and whether it is zero bytes; it never opens or decompresses it, which is why the disclosure says it holds only if the copy is intact Codex compression.',
           },
           {
             type: 'steps',
             items: [
               {
                 title: 'Step 1: Check the count and file shape',
-                body: 'Run watch doctor --json. For codex, count includes only readable sessions while unattributable counts files whose directory cannot be read, such as compressed copies. The text output adds a separate line with the unattributable total. watch sessions --json and watch recent --json carry the same field. The warning names the shape: a same-name .jsonl.zst compressed copy, or a zero-byte same-name copy. The two call for different next steps.',
+                body: 'Run watch doctor --json. For codex, count includes only readable sessions while unattributable counts files whose directory cannot be read, such as compressed copies. The text output shows the unattributable total next to the session count. watch sessions --json and watch recent --json carry the same field. The warning names the shape: a same-name .jsonl.zst compressed copy, or a zero-byte same-name copy. The two call for different next steps.',
               },
               {
-                title: 'Step 2: Tell intact copies from zero-byte copies',
-                body: 'Find the matching .jsonl.zst under ~/.codex/sessions. A file with content is an intact copy and may hold recoverable history; a zero-byte file has lost its content, and re-expansion cannot recover it. The Watch warning uses the same distinction; watch doctor --json also reports compressed and compressedEmpty per chain tip, while the list unattributable count is only a file count, so you do not need to guess the state.',
+                title: 'Step 2: Distinguish nonempty copies from zero-byte copies',
+                body: 'Find the matching .jsonl.zst. A nonempty file still has bytes, but that does not prove it is intact or can be decompressed. A zero-byte copy holds no recoverable content; look for a backup. If the session is an unusable chain tip, watch doctor --json shows the copy path in store.brokenTips[].compressedPath and sets compressedEmpty to true for a zero-byte copy. The list field unattributable only reports counts.',
               },
               {
                 title: 'Step 3: Continue the session in Codex',
@@ -1261,7 +1261,7 @@ export const guides = [
               },
               {
                 title: 'Step 4: Hand off after re-expansion',
-                body: 'Once you have the re-expanded session id, use the usual paths: watch open <id> --to <provider> or watch switch <provider>. watch prompt also reads only uncompressed files, so it is not a workaround; the document header says the source is unavailable instead of printing half a document.',
+                body: 'Once you have the re-expanded session id, use the usual paths: watch open <id> --to <provider> or watch switch <provider>. watch prompt does not read the compressed file either. If you specify that session, it reports an error and produces no handoff document.',
               },
             ],
           },
@@ -1280,7 +1280,7 @@ export const guides = [
         faq: [
           {
             question: 'Does Watch compress or delete my Codex sessions?',
-            answer: 'No. Compression is Codex behavior. Watch treats ~/.codex/sessions as read-only: listing, parsing and handoff read uncompressed .jsonl, and Watch never modifies .zst files or the directory layout.',
+            answer: 'No. Compression is Codex behavior. Watch does not read, rewrite, or delete .zst files; listing and parsing use uncompressed .jsonl. A write-enabled handoff into Codex is separate and may create or update an uncompressed target session file.',
           },
           {
             question: 'Why does doctor say the directory cannot be attributed instead of saying the file is compressed?',
