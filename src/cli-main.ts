@@ -870,13 +870,8 @@ async function cmdSwitch(cwd: string, targetId: string, json: boolean, chain?: s
       console.log(`resume: ${escapeControlChars(result.resumeCommand)}`);
       return;
     }
-    // 零增量不是「交接了 0 轮」：来源可能是 0 轮空会话，也可能目标已包含全部内容。
-    // 两种都只更新了链尾，结论必须与事实一致（旧的「已从 X 交接 → Y（0 轮）」两边都不像）。
-    //
-    // 链尾没更新时不能说「已切到 / 链尾已更新」：同一份输出里上面刚有一条「链记录失败」。
-    // 内容确实就位了（没写会话文件 / 没追加），所以只讲内容，链尾那截单独说。
-    // 判据是 `!== 'written'`：`not-attempted` 在零增量分支只出现在本地库不可用时——那时
-    // 链尾同样没更新，按成功措辞会与 stderr 的「本次切换未写入链记录」自相矛盾（第 311 轮）。
+    // 零增量时，来源 0 轮会跳过目标写入，已有配对会话仍可能被重写。
+    // 链记录写入与会话内容写入各有结果。只有前者确认写成后才能报告链尾已更新。
     const chainTailFailed = result.chainRecordState !== 'written';
     const tailFailure =
       result.chainRecordState === 'failed'
@@ -889,10 +884,13 @@ async function cmdSwitch(cwd: string, targetId: string, json: boolean, chain?: s
           : `已切到 ${targetId}（链尾已更新；来源会话没有可交接的内容，本次未写入会话文件）`,
       );
     } else if (result.turnCount === 0 && result.zeroIncrementReason === 'up-to-date') {
+      const contentResult = result.findings?.some(({ code }) => code === 'handoff.rewrite_only')
+        ? '本次重写了目标会话，未追加新轮次'
+        : '本次未追加新轮次';
       console.log(
         chainTailFailed
-          ? `内容已就位：目标会话已包含全部内容，本次未追加；但链尾未更新（${tailFailure}）`
-          : `已切到 ${targetId}（链尾已更新；目标会话已包含全部内容，本次未追加）`,
+          ? `${contentResult}；链尾未更新（${tailFailure}）`
+          : `已切到 ${targetId}（链尾已更新；${contentResult}）`,
       );
     } else {
       console.log(
