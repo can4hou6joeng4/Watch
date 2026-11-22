@@ -16,6 +16,7 @@ import { usageBadLinesReason, usageSidecarProblem } from './core/usage-integrity
 import { collectUnattributable, unattributablePickWarning } from './core/session-coverage.js';
 import {
   compressedCopy,
+  compressedRetryAdvice,
   describePathReadFailureReason,
   describeReadFailureOrSelf,
   describeSessionReadFailure,
@@ -344,6 +345,28 @@ function fileReadReason(error: unknown): string {
 }
 
 /**
+ * 会话解析失败后的「文件到底怎么了」：原 `.jsonl` 真的不在，还是只剩同名 `.jsonl.zst`。
+ *
+ * parse 抛 ENOENT 时，`describeReadFailureOrSelf()` 只会说「会话文件已不存在」——若它其实
+ * 是 Codex 压缩后的本地线程，这句话会把人引去重建会话或白换一次绑定（同一个状态在
+ * `switch` / `doctor` 从 275–284 轮起就会按 `compressedCopy()` 分档，`open` 一直没接）。
+ * 只 stat 一次；没找到副本时原样返回，不改变既有文案。`reason` 带「复查时发现」，
+ * 因为 parse 与 stat 之间有时间差（文件可能刚好被压缩或恢复）。
+ */
+async function describeParseFailure(
+  filePath: string,
+  error: unknown,
+): Promise<{ reason: string; next?: string; compressed?: 'intact' | 'empty' }> {
+  const copy = compressedCopy(await sessionFilePresence(filePath));
+  if (!copy) return { reason: describeReadFailureOrSelf(error) };
+  return {
+    reason: `${describeReadFailureOrSelf(error)}；复查时发现文件${copy.note}`,
+    next: compressedRetryAdvice(copy, '再重试'),
+    compressed: copy.kind,
+  };
+}
+
+/**
  * 解析出 0 轮时再探一次文件：0 字节是内容已丢失，与「这条会话本来就没有内容」是两回事。
  *
  * 只有 cwd 不来自文件内容的适配器会带着一条 0 字节的文件走到 `open` 的这几条分支上
@@ -569,9 +592,13 @@ export async function openSession(
         // 已经发生的降级（用量读取失败、坏行扫描失败等）不能因为这次读失败就丢掉：
         // 与写入失败的 catch 同一条规则——失败不代表降级事实没发生。`lookup` 里的
         // 映射诊断（坏库 / 映射路径读不出来）同样要跟着失败结果回去。
+        // 只剩压缩副本时说明「让原生重新展开」，不说成文件已丢失。
+        const detail = await describeParseFailure(source.found.ref.filePath, error);
         return {
           ok: false,
-          error: `来源会话 ${source.found.ref.sessionId}（${source.adapter.displayName}）读取失败：${describeReadFailureOrSelf(error)}；本次未写入任何内容`,
+          error:
+            `来源会话 ${source.found.ref.sessionId}（${source.adapter.displayName}）读取失败：${detail.reason}；本次未写入任何内容` +
+            (detail.next ? `——${detail.next}` : ''),
           ...(warnings.length || lookup.length ? { warnings: [...warnings, ...lookup] } : {}),
         };
       }
@@ -600,10 +627,14 @@ export async function openSession(
       try {
         dstTurns = await target.adapter.parse(target.found.ref);
       } catch (error) {
-        // 与来源侧同一规则：`lookup` 的映射诊断不能只在成功路径出现
+        // 与来源侧同一规则：`lookup` 的映射诊断不能只在成功路径出现；
+        // 目标只剩压缩副本时同样说明「让原生重新展开」而不是重建。
+        const detail = await describeParseFailure(target.found.ref.filePath, error);
         return {
           ok: false,
-          error: `目标会话 ${target.found.ref.sessionId}（${target.adapter.displayName}）读取失败：${describeReadFailureOrSelf(error)}；本次未写入任何内容`,
+          error:
+            `目标会话 ${target.found.ref.sessionId}（${target.adapter.displayName}）读取失败：${detail.reason}；本次未写入任何内容` +
+            (detail.next ? `——${detail.next}` : ''),
           ...(warnings.length || lookup.length ? { warnings: [...warnings, ...lookup] } : {}),
         };
       }
@@ -866,10 +897,15 @@ export async function openSession(
       // 摘要只是附加信息，不阻断打开。但文件读不出来（权限 / 路径）不是「内容解析不了」：
       // 下面那条 resume 命令要读的就是这个文件，照抄一执行就会失败——只说「摘要解析失败」
       // 会让人以为会话本身没事（第 345 轮审计）。
+      // 只剩压缩副本时把「执行会失败」换成副本事实：完好的 `.zst` 会被原生 resume 重新展开，
+      // 那条命令反而是修法（第 347 轮）。
       if (isFileSystemErrorCode((error as NodeJS.ErrnoException).code)) {
+        const detail = await describeParseFailure(target.found.ref.filePath, error);
         warnings.push(
-          `会话读取失败，未展示轮次与工具信息：${fileReadReason(error)}；` +
-            `下面这条 resume 命令要读的就是这个文件，执行同样会失败——先修好文件权限或路径再重试`,
+          `会话读取失败，未展示轮次与工具信息：${detail.reason}；` +
+            (detail.next
+              ? `下面这条 resume 命令要读的也是这个文件——${detail.next}`
+              : `下面这条 resume 命令要读的就是这个文件，执行同样会失败——先修好文件权限或路径再重试`),
         );
       } else {
         warnings.push(`会话摘要解析失败，未展示轮次与工具信息：${fileReadReason(error)}`);
@@ -960,6 +996,12 @@ export type OpenPlan = {
    * `describePlan()` 据此把「直接恢复原会话」改写成「执行会失败、先按原因处理」。
    */
   resumeUnreadable?: string;
+  /**
+   * 同家 resume 快路径读失败、且复查时只剩同名压缩副本时的副本形态（`compressedCopy()`）。
+   * 与普通读失败不同：完好副本可以靠原生 resume 重新展开，这条命令反而**可能成功**，
+   * 不能沿用 resumeUnreadable 的「执行会失败」。
+   */
+  resumeCompressed?: 'intact' | 'empty';
 };
 
 type PlannedOpen =
@@ -1115,6 +1157,7 @@ async function planOpenInProvider(
     // 就变成一句「来源即目标，直接恢复原会话」——用户从 `--check` 到执行都拿不到任何线索。
     // `diagnostics` 同时喂给预检与写入，所以 `--check` 也会提前说。
     let resumeUnreadable: string | null = null;
+    let resumeCompressed: 'intact' | 'empty' | null = null;
     try {
       const ownTurns = await source.adapter.parse(sourceRef);
       // 上下文完整性（被转入后台 / Pi context_edit / Codex compacted）是整份日志的差异，
@@ -1147,11 +1190,13 @@ async function planOpenInProvider(
     } catch (error) {
       // 解析不了不等于没问题：这次 resume 落在这条会话上，至少要说明「没能确认」。
       // 原因同时进计划：notes 的「直接恢复原会话」要按它改口，否则执行与 --check 都在
-      // 一条注定失败的 resume 命令上面写「正常恢复」。
-      const reason = describeReadFailureOrSelf(error);
-      resumeUnreadable = reason;
+      // 一次读不出内容的 resume 上面写「正常恢复」。只剩压缩副本时是例外——原生的
+      // resume 可能把它重新展开，`describePlan()` 按副本形态另说，不写「执行会失败」。
+      const detail = await describeParseFailure(sourceRef.filePath, error);
+      resumeUnreadable = detail.reason;
+      if (detail.compressed) resumeCompressed = detail.compressed;
       diagnostics?.push(
-        `目标会话 ${sourceRef.sessionId}（${target.displayName}）读取失败：${reason}；` +
+        `目标会话 ${sourceRef.sessionId}（${target.displayName}）读取失败：${detail.reason}；` +
           `无法确认它是否停在做了一半的一轮上（这次要 resume 的就是它）`,
       );
     }
@@ -1164,6 +1209,7 @@ async function planOpenInProvider(
         merged: 0,
         snapshot: null,
         ...(resumeUnreadable ? { resumeUnreadable } : {}),
+        ...(resumeCompressed ? { resumeCompressed } : {}),
       },
     };
   }
@@ -1172,10 +1218,14 @@ async function planOpenInProvider(
   try {
     turns = await source.adapter.parse(sourceRef);
   } catch (error) {
-    // 解析不了来源就没有可转入的内容；按错误返回，别让异常穿透到 openInProvider 的调用方
+    // 解析不了来源就没有可转入的内容；按错误返回，别让异常穿透到 openInProvider 的调用方。
+    // 「文件已不存在」与「只剩压缩副本」分开说：后者让原生重新展开就能重试，不是重建。
+    const detail = await describeParseFailure(sourceRef.filePath, error);
     return {
       ok: false,
-      error: `来源会话 ${escapeControlChars(sourceId)} 读取失败：${describeReadFailureOrSelf(error)}；本次未写入任何内容`,
+      error:
+        `来源会话 ${escapeControlChars(sourceId)} 读取失败：${detail.reason}；本次未写入任何内容` +
+        (detail.next ? `——${detail.next}` : ''),
     };
   }
   // 来源上下文的差异属于整份日志：复用目标时不能让 diffTurns 把披露一起裁掉。
@@ -1666,6 +1716,16 @@ function describePlan(target: ProviderAdapter, plan: OpenPlan): string {
   const turnText = plan.turns.length === 0 ? '无需并入' : `写入 ${plan.turns.length} 轮`;
   switch (plan.kind) {
     case 'resume':
+      // 只剩压缩副本时不能沿用下面的「执行会失败」：完好的 `.zst` 在原生端继续该会话
+      // 会重新展开为 `.jsonl`，这条 resume 命令反而可能是修法；0 字节副本则拿不回内容。
+      if (plan.resumeCompressed === 'intact') {
+        return '来源即目标；原会话文件已被压缩为 .jsonl.zst（本版不读压缩格式）——副本完好时，' +
+          '下面这条 resume 命令在原生端会把它重新展开，执行后 Watch 就能读到';
+      }
+      if (plan.resumeCompressed === 'empty') {
+        return '来源即目标；原会话文件只剩 0 字节的同名压缩副本（内容已丢失）——' +
+          '下面这条 resume 命令打开的会是空会话，先从备份恢复或重新开一次会话';
+      }
       // 目标会话读不出来时不能只说「直接恢复」：下面那条 resume 命令要读的就是这个文件，
       // 执行同样会失败。原因已在 diagnostics 里，这里给结论与下一步。
       return plan.resumeUnreadable
