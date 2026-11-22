@@ -72,6 +72,12 @@ function maskCookie(text: string, replace: (match: string) => string): string {
 // 左侧一律用否定后行断言卡住边界，避免从更长的标识符中间截出一段「密钥」。
 const KINDS: readonly CredentialKind[] = [
   {
+    // PGP armored 私钥块（第 340 轮）：与 PEM 一样是固定头尾的文本块。
+    // 只认完整块；摘要截断后只剩头行，没有可用的密钥正文。
+    label: 'PGP 私钥',
+    pattern: /-----BEGIN PGP PRIVATE KEY BLOCK-----[\s\S]{0,16384}?-----END PGP PRIVATE KEY BLOCK-----/g,
+  },
+  {
     label: 'PEM 私钥',
     // 有 END 行时整块替换（上限 8192 字符，避免把两处相隔很远的标记之间整段吞掉）；
     // 被截断、没有 END 时只吞后续的 base64 行，末尾紧跟 `…` 的半行也一并吞掉。
@@ -108,8 +114,9 @@ const KINDS: readonly CredentialKind[] = [
   },
   {
     label: 'GitLab 令牌',
-    pattern: /(?<![A-Za-z0-9_-])glpat-[A-Za-z0-9_-]{20,}/g,
-    cut: /(?<![A-Za-z0-9_-])glpat-[A-Za-z0-9_-]{8,}(?=…)/g,
+    // 第 340 轮补上 runner（`glrt-`）与 deploy（`gldt-`）令牌。
+    pattern: /(?<![A-Za-z0-9_-])gl(?:pat|rt|dt)-[A-Za-z0-9_-]{20,}/g,
+    cut: /(?<![A-Za-z0-9_-])gl(?:pat|rt|dt)-[A-Za-z0-9_-]{8,}(?=…)/g,
   },
   {
     label: 'AWS 访问密钥 ID',
@@ -123,13 +130,15 @@ const KINDS: readonly CredentialKind[] = [
   },
   {
     label: 'Slack 令牌',
-    pattern: /(?<![A-Za-z0-9])xox[abeprs]-[A-Za-z0-9-]{10,}/g,
-    cut: /(?<![A-Za-z0-9])xox[abeprs]-[A-Za-z0-9-]{8,}(?=…)/g,
+    // 第 340 轮补上浏览器会话（`xoxc-` / `xoxd-`）、刷新（`xoxe-`）与 app-level（`xapp-`）令牌。
+    pattern: /(?<![A-Za-z0-9])(?:xox[abcdeprs]-[A-Za-z0-9-]{10,}|xapp-[A-Za-z0-9-]{10,})/g,
+    cut: /(?<![A-Za-z0-9])(?:xox[abcdeprs]-[A-Za-z0-9-]{8,}|xapp-[A-Za-z0-9-]{8,})(?=…)/g,
   },
   {
     label: 'Stripe 密钥',
-    pattern: /(?<![A-Za-z0-9_])(?:sk|rk)_live_[A-Za-z0-9]{16,}/g,
-    cut: /(?<![A-Za-z0-9_])(?:sk|rk)_live_[A-Za-z0-9]{8,}(?=…)/g,
+    // 第 340 轮补上 webhook 签名密钥（`whsec_`）。
+    pattern: /(?<![A-Za-z0-9_])(?:(?:sk|rk)_live_|whsec_)[A-Za-z0-9]{16,}/g,
+    cut: /(?<![A-Za-z0-9_])(?:(?:sk|rk)_live_|whsec_)[A-Za-z0-9]{8,}(?=…)/g,
   },
   {
     label: 'npm 令牌',
@@ -148,20 +157,27 @@ const KINDS: readonly CredentialKind[] = [
   // 只换掉值，scheme / 用户名 / 主机与 `Bearer` 字样保留：接手的人仍需要知道连的是哪里。
   {
     // `postgres://user:口令@host/db` 这类连接串。环境变量引用（`$PASS` / `${PASS}`）、
-    // `{{模板}}` 与全星号的占位写法不是口令，原样保留。
+    // `{{模板}}`、`<模板>`、`[模板]` 与全星号的占位写法不是口令，原样保留。
+    // 第 340 轮起口令字符集不再排除 `[]{}<>`：客户端接受这些原始字符并自动 percent-encode，
+    // 按字符排除会让整条 URL 认不出来（是整段不掩，不是部分掩）。已隐去的占位符形如
+    // `[已隐去：…]@`，由专门的前瞻跳过，不会被二次计数。
+    // 上游摘要只有 79 码点 + `…`：`@` 被截掉时整条规则失配，`cut` 按剩余 ≥8 位兜底。
     label: 'URL 里的口令',
     pattern:
-      /(?<=[A-Za-z][A-Za-z0-9+.-]*:\/\/[^\s/:@"'`<>]*:)(?!\$\{?[A-Za-z_][A-Za-z0-9_]*\}?@)(?!\*+@)[^\s/@"'`<>{}[\]]+(?=@)/g,
+      /(?<=[A-Za-z][A-Za-z0-9+.-]*:\/\/[^\s/:@"'`<>{}[\]]*:)(?!\$\{?[A-Za-z_][A-Za-z0-9_]*\}?@)(?!\*+@)(?!\{\{)(?!<)(?!\[[^\]]*\]@)[^\s/@"'`]+(?=@)/g,
+    cut:
+      /(?<=[A-Za-z][A-Za-z0-9+.-]*:\/\/[^\s/:@"'`<>{}[\]]*:)(?!\$\{?[A-Za-z_][A-Za-z0-9_]*\}?(?:…|@))(?!\*+…)(?!\{\{)(?!<)(?!\[[^\]]*\](?:…|@))[^\s/@"'`]{8,}(?=…)/g,
   },
   {
     // `X-Api-Key` / `X-Goog-Api-Key` / `api-key` / `X-Auth-Token` 这类把密钥放进自定义头的写法
-    // （第 334 轮）：头名本身是固定的，值没有固定格式——与 Authorization 同一条位置判据
+    // （第 334 轮）；第 340 轮补上 Cloudflare Global API Key 的 `X-Auth-Key` 与 Vault 的
+    // `X-Vault-Token`。头名本身是固定的，值没有固定格式——与 Authorization 同一条位置判据
     // （至少 16 位、含数字，`YOUR_API_KEY` 这类占位写法不动）。排在后面前缀规则之后：
     // 带厂商前缀的密钥已被换掉，不会重复计数。
     label: 'API 密钥头的值',
     pattern:
-      /(?<=(?:X-[A-Za-z0-9-]*Api-Key|api-key|X-Auth-Token)\\?["']?\s*[:=]\s*\\?["']?)(?=[A-Za-z0-9._~+/=-]*[0-9])[A-Za-z0-9._~+/=-]{16,}/gi,
-    cut: /(?<=(?:X-[A-Za-z0-9-]*Api-Key|api-key|X-Auth-Token)\\?["']?\s*[:=]\s*\\?["']?)(?=[A-Za-z0-9._~+/=-]*[0-9])[A-Za-z0-9._~+/=-]{8,}(?=…)/gi,
+      /(?<=(?:X-[A-Za-z0-9-]*Api-Key|api-key|X-Auth-Token|X-Auth-Key|X-Vault-Token)\\?["']?\s*[:=]\s*\\?["']?)(?=[A-Za-z0-9._~+/=-]*[0-9])[A-Za-z0-9._~+/=-]{16,}/gi,
+    cut: /(?<=(?:X-[A-Za-z0-9-]*Api-Key|api-key|X-Auth-Token|X-Auth-Key|X-Vault-Token)\\?["']?\s*[:=]\s*\\?["']?)(?=[A-Za-z0-9._~+/=-]*[0-9])[A-Za-z0-9._~+/=-]{8,}(?=…)/gi,
   },
   {
     // 识别常见的 Cookie / Set-Cookie 头和 --cookie 参数。`name=value` 的等号后至少有 8 个字符。
@@ -183,7 +199,9 @@ const KINDS: readonly CredentialKind[] = [
 ];
 
 // 绝大多数字符串一个候选前缀都没有：先用一条廉价的正则挡掉，再逐种类扫描。
-const QUICK_CHECK = /sk-|gh[pousr]_|github_pat_|glpat-|AKIA|ASIA|AIza|xox[abeprs]-|_live_|npm_|hf_|eyJ|PRIVATE KEY-----|:\/\/[^\s/]*@|uthorization|api-key|auth-token|cookie/i;
+// 第 340 轮补上 glrt-/gldt-、xapp-、xoxc/xoxd/xoxe、whsec_、X-Auth-Key / X-Vault-Token、
+// PGP 头，以及被截断的连接串（只剩 `scheme://user:` 与 `…`，没有 `@`）。
+const QUICK_CHECK = /sk-|gh[pousr]_|github_pat_|gl(?:pat|rt|dt)-|AKIA|ASIA|AIza|xox[abcdeprs]-|xapp-|_live_|whsec_|npm_|hf_|eyJ|PRIVATE KEY-----|PGP PRIVATE KEY BLOCK|:\/\/[^\s/]*[:@]|uthorization|api-key|auth-key|auth-token|vault-token|cookie/i;
 
 /** 一次渲染内的收集器：按种类记下**不同的**凭据原文，用于去重计数。 */
 export type CredentialCollector = Map<string, Set<string>>;
