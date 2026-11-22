@@ -2402,7 +2402,7 @@ async function cmdDoctor(cwd: string, json: boolean, strict: boolean): Promise<v
           b.compressedPath
             ? b.compressedEmpty
               ? `  链「${escapeControlChars(b.chainName)}」: ${escapeControlChars(b.provider)}:${escapeControlChars(b.sessionId)} 链尾只剩 0 字节压缩副本（${escapeControlChars(b.compressedPath)}）；内容已丢失，重新展开也拿不回内容——从备份恢复；${rebindHint(b.provider)}`
-              : `  链「${escapeControlChars(b.chainName)}」: ${escapeControlChars(b.provider)}:${escapeControlChars(b.sessionId)} 链尾只剩压缩副本（${escapeControlChars(b.compressedPath)}）；本版不读压缩格式——先让它重新展开再重试（若是 Codex 压缩的，在 Codex 里继续该会话即可），或 ${rebindHint(b.provider)}`
+              : `  链「${escapeControlChars(b.chainName)}」: ${escapeControlChars(b.provider)}:${escapeControlChars(b.sessionId)} 链尾只剩压缩副本（${escapeControlChars(b.compressedPath)}）；本版不读压缩格式——先让它重新展开再重试（若是 Codex 压缩的，在 Codex 里继续该会话即可），或者${rebindHint(b.provider)}`
             : b.missing
             ? `  链「${escapeControlChars(b.chainName)}」: ${escapeControlChars(b.provider)}:${escapeControlChars(b.sessionId)} 链尾文件已不存在（${escapeControlChars(b.filePath)}），${rebindHint(b.provider)}`
             : b.unreadable
