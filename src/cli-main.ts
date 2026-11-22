@@ -900,7 +900,8 @@ async function cmdSwitch(cwd: string, targetId: string, json: boolean, chain?: s
           (chainTailFailed ? `；链尾未更新，${tailFailure}）` : '）'),
       );
     }
-    console.log(`新会话: ${escapeControlChars(result.newRef.sessionId)}`);
+    // newRef 也可能是复用的既有会话，不能在回切时标成「新会话」。
+    console.log(`目标会话: ${escapeControlChars(result.newRef.sessionId)}`);
     console.log(`文件:   ${escapeControlChars(result.newRef.filePath)}`);
     // 结果说明走 stdout（与 warnings 的降级原因分开）：目标原本是条空会话时，
     // 「这 N 轮就是它的全部内容」是事实，不是错误。
