@@ -29,6 +29,7 @@ Watch (Chinese: 值更, also called AgentRelay) is a free, local-only CLI and ma
 | Still limited after using the subscription's own reset | Claude Code | OpenAI Codex | Official Desktop Import | `npm run watch -- import-codex prepare <id> --cwd /absolute/project --desktop-project --experimental --json` | Watch does not inspect or consume quota resets; review the plan before explicit confirmation |
 | Resume past session in original agent | Any | Same Agent | Native Resume | `claude --resume <id>` / `codex resume <id>` / `opencode -s <id>` | Native CLI history lookup; no translation required |
 | Target CLI has no adapter or its native format changed | Any | Unsupported CLI | Read-only Prompt Handoff | `npm run watch -- prompt <id> --cwd /absolute/project --json` | Produces Markdown only; writes no target files and launches no CLI; trimmed turns and source state are disclosed in the document and findings |
+| Codex rollout only exists as .jsonl.zst (local thread compression) | Codex | Any (after re-expansion) | Native re-expand, then regular handoff | `npm run watch -- doctor --json` shows the unattributable count; continue the thread in Codex | Watch only stats the .zst and never reads, decompresses or renames it; an intact copy may re-expand when Codex resumes the thread; a zero-byte copy means the content is lost |
 
 ---
 
