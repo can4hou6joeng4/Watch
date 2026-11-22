@@ -567,11 +567,12 @@ export async function openSession(
         srcTurns = await source.adapter.parse(source.found.ref);
       } catch (error) {
         // 已经发生的降级（用量读取失败、坏行扫描失败等）不能因为这次读失败就丢掉：
-        // 与写入失败的 catch 同一条规则——失败不代表降级事实没发生
+        // 与写入失败的 catch 同一条规则——失败不代表降级事实没发生。`lookup` 里的
+        // 映射诊断（坏库 / 映射路径读不出来）同样要跟着失败结果回去。
         return {
           ok: false,
           error: `来源会话 ${source.found.ref.sessionId}（${source.adapter.displayName}）读取失败：${describeReadFailureOrSelf(error)}；本次未写入任何内容`,
-          ...(warnings.length ? { warnings } : {}),
+          ...(warnings.length || lookup.length ? { warnings: [...warnings, ...lookup] } : {}),
         };
       }
       // 整份来源的上下文差异不随增量裁剪；即使没有新轮次，也不能丢掉这条声明。
@@ -599,10 +600,11 @@ export async function openSession(
       try {
         dstTurns = await target.adapter.parse(target.found.ref);
       } catch (error) {
+        // 与来源侧同一规则：`lookup` 的映射诊断不能只在成功路径出现
         return {
           ok: false,
           error: `目标会话 ${target.found.ref.sessionId}（${target.adapter.displayName}）读取失败：${describeReadFailureOrSelf(error)}；本次未写入任何内容`,
-          ...(warnings.length ? { warnings } : {}),
+          ...(warnings.length || lookup.length ? { warnings: [...warnings, ...lookup] } : {}),
         };
       }
       // 目标自身的上下文差异（OpenCode 回退标记 / Pi context_edit / Codex compacted 等）不在
@@ -725,10 +727,17 @@ export async function openSession(
           );
           // 目标解析出 0 轮、文件却不是 0 字节：可能是刚建出来的空会话（并入即它的第一批内容），
           // 也可能是内容被清空只剩占位头的会话。无法区分，按事实说清「这是它的全部内容」，
-          // 让「本该有更早历史」的人知道该去恢复备份。
+          // 让「本该有更早历史」的人知道该去恢复备份。文件里有坏行（或坏行扫不成）时这句
+          // 断言不成立：坏行里的内容可能正是被截断的历史。
           if (!vanished && targetZeroByte === null && dstTurns.length === 0) {
+            const zeroDestRest =
+              dstBadScan.count > 0
+                ? `文件里有 ${dstBadScan.count} 行无法解析（截断或损坏），本次并入的 ${merged} 轮不能算作它的全部内容`
+                : dstBadScanFailure
+                  ? `坏行扫描未能完成，无法确认本次并入的 ${merged} 轮是否已包含它的全部内容`
+                  : `本次并入的 ${merged} 轮就是它的全部内容`;
             notes.push(
-              `目标会话 ${escapeControlChars(targetId)}（${target.adapter.displayName}）解析出 0 轮（没有可复用的对话），本次并入的 ${merged} 轮就是它的全部内容` +
+              `目标会话 ${escapeControlChars(targetId)}（${target.adapter.displayName}）解析出 0 轮（没有可复用的对话）：${zeroDestRest}` +
                 `——如果它本该有更早的历史，先从备份恢复该文件再重试（Watch 不会替你重建历史）`,
             );
           }
@@ -750,9 +759,10 @@ export async function openSession(
       const blocked = blockedFrom(error);
       const raw = error instanceof Error ? error.message : String(error);
       // 写入被阻断走结构化 blocked（文案已是中文）；其余多半是写盘失败，原文只有英文 errno。
-      // 已累积的 warnings（例如协作写锁目录故障）必须跟着失败结果一起返回：
-      // 写入失败不代表那条降级事实没发生，丢掉它会让用户以为这次本来是有锁保护的。
-      const carried = warnings.length ? { warnings } : {};
+      // 已累积的 warnings（例如协作写锁目录故障）与 lookup 里的映射诊断必须跟着失败结果
+      // 一起返回：写入失败不代表那条降级事实没发生，丢掉它会让用户以为这次本来是有锁保护的、
+      // 或以为映射库是好的。
+      const carried = warnings.length || lookup.length ? { warnings: [...warnings, ...lookup] } : {};
       return blocked
         ? { ok: false, error: raw, blocked, ...carried }
         : { ok: false, error: `并入新内容失败: ${describeWriteFailureReason(error) ?? raw}`, ...carried };
@@ -944,6 +954,12 @@ export type OpenPlan = {
   /** 解析时抓的目标指纹（TOCTOU 用）；new 时为 null */
   snapshot: FileDigest | null;
   note?: string;
+  /**
+   * 同家 resume 快路径的目标会话读不出来时的原因（`describeReadFailureOrSelf`）。
+   * 这条路径没有可写入的内容要拒绝，但下面那条 resume 命令要读的就是这个文件——
+   * `describePlan()` 据此把「直接恢复原会话」改写成「执行会失败、先按原因处理」。
+   */
+  resumeUnreadable?: string;
 };
 
 type PlannedOpen =
@@ -1098,6 +1114,7 @@ async function planOpenInProvider(
     // `open <id>` 单独打开时明明会说「有 N 次工具调用没有结果」，带上 `--to <同一个 provider>`
     // 就变成一句「来源即目标，直接恢复原会话」——用户从 `--check` 到执行都拿不到任何线索。
     // `diagnostics` 同时喂给预检与写入，所以 `--check` 也会提前说。
+    let resumeUnreadable: string | null = null;
     try {
       const ownTurns = await source.adapter.parse(sourceRef);
       // 上下文完整性（被转入后台 / Pi context_edit / Codex compacted）是整份日志的差异，
@@ -1128,13 +1145,27 @@ async function planOpenInProvider(
         diagnostics?.push(msg),
       );
     } catch (error) {
-      // 解析不了不等于没问题：这次 resume 落在这条会话上，至少要说明「没能确认」
+      // 解析不了不等于没问题：这次 resume 落在这条会话上，至少要说明「没能确认」。
+      // 原因同时进计划：notes 的「直接恢复原会话」要按它改口，否则执行与 --check 都在
+      // 一条注定失败的 resume 命令上面写「正常恢复」。
+      const reason = describeReadFailureOrSelf(error);
+      resumeUnreadable = reason;
       diagnostics?.push(
-        `目标会话 ${sourceRef.sessionId}（${target.displayName}）读取失败：${describeReadFailureOrSelf(error)}；` +
+        `目标会话 ${sourceRef.sessionId}（${target.displayName}）读取失败：${reason}；` +
           `无法确认它是否停在做了一半的一轮上（这次要 resume 的就是它）`,
       );
     }
-    return { ...base, plan: { kind: 'resume', targetRef: sourceRef, turns: [], merged: 0, snapshot: null } };
+    return {
+      ...base,
+      plan: {
+        kind: 'resume',
+        targetRef: sourceRef,
+        turns: [],
+        merged: 0,
+        snapshot: null,
+        ...(resumeUnreadable ? { resumeUnreadable } : {}),
+      },
+    };
   }
 
   let turns: UnifiedTurn[];
@@ -1200,6 +1231,10 @@ async function planOpenInProvider(
   // 决策 1：来源在链上 → 回链上另一侧配对会话并并入增量；
   // 但目标 provider 的链上「最新配对」不一定对应该输入（同链会分叉出多条线），
   // 必须先做内容校验：配对确实承接了来源主要内容（缺失<一半）才落回，否则退到内容匹配。
+  // 本地库读失败（锁 / I/O / 结构损坏）在这里**故意不 catch**：链配对是规划的一部分，
+  // 读不出来就 fail closed（命令级 catch 会经 describeStoreErrorReason 翻成中文 + ok:false），
+  // 不能退到内容匹配/新建——那可能在链上已有配对时多出一个重复会话。
+  // `tests/cli-partial-schema-crash.test.ts` 固定了这条契约（坏库下 open --to 必须失败）。
   const chainPaired = mapping ? findChainPaired(mapping, sourceProvider, sourceId, providerId, cwd) : null;
   if (chainPaired) {
     let pairTurns: UnifiedTurn[] | null = null;
@@ -1270,8 +1305,18 @@ async function planOpenInProvider(
         // 文件在、parse 也成功，却解析不出任何对话（只剩 rollout 头 / 内容被清空）：
         // 决策 1 的内容校验必然不通过，静默退到内容匹配或新建。链绑定仍指向这条空会话，
         // 下一次 switch 会再次撞上——与 0 字节副本同一类，不能当作「正常换用」。
+        // parse 跳过坏行不会报错：不扫一遍就会把「文件被截断」讲成「本来就没有对话」。
+        const pairBadScan = await scanUnparsableJsonLines(chainPaired.filePath);
+        const pairZeroFacts =
+          pairBadScan.count > 0
+            ? `文件里有 ${pairBadScan.count} 行无法解析（截断或损坏），内容可能是被截断而不只是「本来就没有对话」`
+            : describeBadLinesScanFailure(
+                  pairBadScan,
+                  `链上 ${target.displayName} 会话 ${chainPaired.sessionId}`,
+                  '内容是否被截断无法确认——先确认该文件可读再重试',
+                ) ?? '文件在，但没有可复用的对话';
         diagnostics?.push(
-          `链上 ${target.displayName} 会话 ${chainPaired.sessionId} 解析出 0 轮（文件在，但没有可复用的对话）；本次不沿用，改用内容匹配或新建——` +
+          `链上 ${target.displayName} 会话 ${chainPaired.sessionId} 解析出 0 轮（${pairZeroFacts}）；本次不沿用，改用内容匹配或新建——` +
             `链绑定仍指向它，本次改用内容匹配或新建不会改动链记录，之后的 switch 仍会落回这条会话；` +
             `可先在 ${target.displayName} 里继续它确认是否可用，或 watch adopt ${target.id} --session <另一个会话 id> 换绑，或用 watch chain new <新名字> 另起一条链`,
         );
@@ -1621,7 +1666,12 @@ function describePlan(target: ProviderAdapter, plan: OpenPlan): string {
   const turnText = plan.turns.length === 0 ? '无需并入' : `写入 ${plan.turns.length} 轮`;
   switch (plan.kind) {
     case 'resume':
-      return '来源即目标，直接恢复原会话';
+      // 目标会话读不出来时不能只说「直接恢复」：下面那条 resume 命令要读的就是这个文件，
+      // 执行同样会失败。原因已在 diagnostics 里，这里给结论与下一步。
+      return plan.resumeUnreadable
+        ? `来源即目标，直接恢复原会话——但这条会话现在读不出来（${plan.resumeUnreadable}）；` +
+            `下面这条 resume 命令执行会失败，先按原因处理后重试`
+        : '来源即目标，直接恢复原会话';
     case 'chain':
       return `将回到链上 ${target.displayName} 会话 ${plan.targetRef?.sessionId}（${turnText}）`;
     case 'reuse':
