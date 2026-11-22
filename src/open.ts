@@ -1442,9 +1442,14 @@ async function planOpenInProvider(
       // 不能悄悄退成新建（会多出一份重复会话），按错误返回让用户重试
       destinationTurns = await target.parse(reuse);
     } catch (error) {
+      // 扫描时刚 parse 成功、这里再读失败：原因同样要分档——原文件被删与被压缩
+      // 答案不同，后者让原生重新展开即可重试，不能说成「文件已不存在」引去重建。
+      const detail = await describeParseFailure(reuse.filePath, error);
       return {
         ok: false,
-        error: `目标会话 ${reuse.sessionId} 在写入前读取失败，本次未写入任何内容：${describeReadFailureOrSelf(error)}`,
+        error:
+          `目标会话 ${reuse.sessionId} 在写入前读取失败，本次未写入任何内容：${detail.reason}` +
+          (detail.next ? `——${detail.next}` : ''),
       };
     }
     await warnTargetBadLines(reuse, target, diagnostics);
