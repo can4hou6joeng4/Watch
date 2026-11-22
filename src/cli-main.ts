@@ -5,7 +5,7 @@ import { chainsElsewhereHint, chainsSameDirectoryHint, isStoreError, SEARCH_MAX_
 import type { Chain, SearchElsewhere } from './core/store.js';
 import { aliasChainGroupWarning, chainNamesOf, chainsElsewhereOf, newChainName, splitChainsElsewhere } from './core/chain-alias.js';
 import { describeFindings } from './core/findings.js';
-import { adoptIntoChain, blockedHint, chainStatus, chainUsage, collectTips, createChainSession, currentChainShiftNote, describeSourceChangedDuringPrompt, emptyChainBindHint, handoff, HandoffBlockedError, notCurrentChainWarning, pickLatestTip, rebindHint, snapshotSourceState, sourceChangeSince, storeUnavailableWarning } from './core/handoff.js';
+import { adoptedParseFailureWarning, adoptedSessionReadProblemWarning, adoptIntoChain, blockedHint, chainStatus, chainUsage, collectTips, createChainSession, currentChainShiftNote, describeSourceChangedDuringPrompt, emptyChainBindHint, handoff, HandoffBlockedError, notCurrentChainWarning, pickLatestTip, rebindHint, snapshotSourceState, sourceChangeSince, storeUnavailableWarning } from './core/handoff.js';
 import { reindexCwd, type SearchCoverage } from './core/search.js';
 import type { SessionRef } from './core/types.js';
 import type { TokenUsage } from './core/types.js';
@@ -1086,6 +1086,12 @@ async function cmdAdopt(
     // 0 字节与「读不出来」必须分档：空文件打得开、只是内容已经没了，resume 打开的是空会话，
     // 不是「一执行就会失败」。以前共用一个「读不出来 + 注定失败」的结论，把空文件讲成了权限问题。
     const emptyFileReason = readProblem && isEmptySessionFileReason(readProblem) ? readProblem : null;
+    // 探完再复查一次压缩副本：probe 对原路径缺失只会说「已不存在」，而只剩 .jsonl.zst 时
+    // 文件其实还在，下一步是让原生展开 / 从备份恢复，不是修权限（第 355 轮，与 switch 同口径）。
+    // 只在探出问题时 stat，健康会话的 adopt 不多一次 IO。
+    const readCompressed = readProblem && !emptyFileReason
+      ? compressedCopy(await sessionFilePresence(result.adoptedRef.filePath))
+      : null;
     if (emptyFileReason) {
       result.warnings.push(
         `会话 ${result.adoptedRef.sessionId}（${adoptedAdapter?.displayName ?? result.adoptedRef.provider}）的${emptyFileReason}；` +
@@ -1094,10 +1100,13 @@ async function cmdAdopt(
       );
     } else if (readProblem) {
       result.warnings.push(
-        `会话 ${result.adoptedRef.sessionId}（${adoptedAdapter?.displayName ?? result.adoptedRef.provider}）的会话文件现在读不出来：${readProblem}；` +
-          `${chainWriteNote}，本次没有改动会话文件——但 ${
-            resumeCommand ? `resume 命令（${resumeCommand}）` : '打开这条会话'
-          }一执行就会失败，先修好这个文件再打开，或用 watch adopt <provider> --session <会话 id> 换成另一条会话`,
+        adoptedSessionReadProblemWarning(
+          `会话 ${result.adoptedRef.sessionId}（${adoptedAdapter?.displayName ?? result.adoptedRef.provider}）`,
+          readProblem,
+          readCompressed,
+          chainWriteNote,
+          resumeCommand,
+        ),
       );
     }
     // 读得出来也不等于「收尾了」：这条会话可能停在做了一半的工具调用上，或最后一句是用户消息。
@@ -1137,10 +1146,15 @@ async function cmdAdopt(
           );
         }
       } catch (error) {
-        // 解析不了不等于没问题：至少要说成「没能确认」，不能沉默
+        // 解析不了不等于没问题：至少要说成「没能确认」，不能沉默。
+        // 探测与解析之间文件可能刚好被压缩（Codex 压缩闲置线程）：这时只报真实错误会
+        // 把下一步引成修权限，先复查一次压缩副本再拼文案（第 355 轮）。
         result.warnings.push(
-          `无法确认接进来的会话 ${result.adoptedRef.sessionId} 是否停在做了一半的一轮上：${describeReadFailureOrSelf(error)}；` +
-            `resume 之前先确认这个会话文件可读`,
+          adoptedParseFailureWarning(
+            result.adoptedRef.sessionId,
+            compressedCopy(await sessionFilePresence(result.adoptedRef.filePath)),
+            error,
+          ),
         );
       }
     }

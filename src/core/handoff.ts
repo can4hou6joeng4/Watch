@@ -10,7 +10,7 @@ import { escapeControlChars } from './display.js';
 import { describeBadLinesScanFailure, lineageFromHistory, scanUnparsableJsonLines, type BadLinesScan, type LineageGraph } from './jsonl.js';
 import { usageBadLinesDetail, usageContentBadLinesDetail, usageContentFileProblem, usageSidecarProblem } from './usage-integrity.js';
 import { cwdAliasHint, splitElsewhereByDirectory } from './cwd.js';
-import { compressedCopy, compressedRetryAdvice, describePathReadFailureReason, describeReadFailureOrSelf, emptySessionFileReasonFromStat, isEmptySessionFileReason, isMissingPathError, probeSessionReadable, sessionFilePresence } from './read-text.js';
+import { compressedCopy, compressedRetryAdvice, describePathReadFailureReason, describeReadFailureOrSelf, emptySessionFileReasonFromStat, isEmptySessionFileReason, isMissingPathError, probeSessionReadable, sessionFilePresence, type CompressedCopyNote } from './read-text.js';
 import { noSessionHint, unknownProviderMessage } from '../providers/registry.js';
 import { collectUnattributable, unattributableNoPickMessage, unattributablePickWarning } from './session-coverage.js';
 
@@ -137,6 +137,62 @@ export function adoptNoSessionMessage(
     : `要接入 ${providerId}，先在该家的原生 CLI 里开一次会话，再用 watch adopt ${providerId} --session <会话 id> 接入` +
       `（会话 id 可用 watch sessions 或原生 CLI 确认）；若它其实在别的目录，用 --cwd <那个目录> 重跑`;
   return `${providerId} 在这个目录还没有会话（只会接入 cwd 与 --cwd 一致的会话）；${elseWhere}${next}`;
+}
+
+/**
+ * adopt 接入后「会话文件读不出来 / 只剩压缩副本」这条警告（第 355 轮）。
+ *
+ * `probeSessionReadable()` 对原路径缺失只会说「会话文件已不存在」，而 adopt 此时已经把链
+ * 改绑、用户下一步就是复制它打印的 resume：只剩 `.jsonl.zst` 时文件其实还在（Codex 压缩
+ * 闲置线程），下一步是「让原生展开」而不是「修权限」，0 字节副本又是「从备份恢复」——
+ * 三档的下一步相反，不能共用一句。与 switch / status / chain list 同口径（第 275–284、349 轮）。
+ *
+ * 措辞交给调用点拼不行：这三档在 `--json` 的 `warnings` 与文本模式里各出现一次，两处必须
+ * 逐字相同；抽成纯函数是为了能按副本档位直接断言（race 场景没法从 CLI 端到端复现）。
+ */
+export function adoptedSessionReadProblemWarning(
+  subject: string,
+  readProblem: string,
+  copy: CompressedCopyNote | null,
+  chainWriteNote: string,
+  resumeCommand: string | undefined,
+): string {
+  // 占位符与同一命令里的空文件分支（cli-main.ts）保持一致：用户刚跑过 watch adopt <provider>，
+  // 这里再印一遍具体 provider 只是噪音。
+  const switchHint = `用 watch adopt <provider> --session <会话 id> 换成另一条会话`;
+  if (!copy) {
+    return (
+      `${subject}的会话文件现在读不出来：${readProblem}；${chainWriteNote}，本次没有改动会话文件——但 ` +
+      `${resumeCommand ? `resume 命令（${resumeCommand}）` : '打开这条会话'}一执行就会失败，先修好这个文件再打开，或${switchHint}`
+    );
+  }
+  // 不承诺 resume 一定失败：副本完好时原生客户端通常会重新展开（`copy.note` 已带这个前提），
+  // 展开成功恰恰是用户要的结果；只有 0 字节副本才是内容已丢、resume 打不开。
+  return (
+    `${subject}的文件${copy.note}；${chainWriteNote}，本次没有改动会话文件——` +
+    (copy.kind === 'empty'
+      ? `内容已丢失，下面那条 resume 打不开它；只能从备份恢复或重新开一次会话（那是另一条会话），或${switchHint}`
+      : `下面那条 resume 交给原生客户端执行，原生通常会把压缩线程重新展开，展开后 Watch 才能读到它——先不要删除或改名副本；` +
+        `如果它不是原生压缩（例如你自己归档的副本），resume 会失败，先恢复原文件，或${switchHint}`)
+  );
+}
+
+/**
+ * adopt 接入后解析抛错时那条警告（第 355 轮）。
+ *
+ * `probeSessionReadable()` 探过「读得出来」，但解析与探测之间文件可能刚好被压缩（Codex
+ * 压缩闲置线程）。只报真实错误会说成「文件不可读」，下一步被引成修权限；这里按压缩副本
+ * 分档，与 `chainUsage()` / `watch prompt` 的同名分支同一取舍（第 352–353 轮）。
+ */
+export function adoptedParseFailureWarning(
+  sessionId: string,
+  copy: CompressedCopyNote | null,
+  error: unknown,
+): string {
+  return (
+    `无法确认接进来的会话 ${sessionId} 是否停在做了一半的一轮上：${copy ? copy.note : describeReadFailureOrSelf(error)}；` +
+    (copy ? compressedRetryAdvice(copy, '再确认一次') : `resume 之前先确认这个会话文件可读`)
+  );
 }
 
 /** 别家在本目录确实有会话的 provider；列不出来的一律跳过（这条只是补充说明，不能盖掉主错误） */
