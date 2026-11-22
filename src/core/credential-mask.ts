@@ -22,10 +22,15 @@ import type { ProcessEvent } from './types.js';
  * 完整的令牌留在了文档里。只在紧跟 `…` 时才认，且要求前缀之后至少还有 8 个字符：
  * `ghp_xxxx…`、`sk-ant-…` 这类人手写的占位写法不动。
  */
-type CredentialKind = { label: string; pattern: RegExp; cut?: RegExp };
+type CredentialKind = { label: string } & (
+  | { pattern: RegExp; cut?: RegExp }
+  | { mask: (text: string, replace: (match: string) => string) => string }
+);
 
 // Cookie 头与带引号的 --cookie 参数可包含空格和多个键值对。无引号的参数到下一个 shell 分隔符为止。
-const cookieHeader = /(?<=(?<![\w-])(?:Set-)?Cookie(?:\\?["'])?[ \t]*[:=][ \t]*(?:\\?["'])?)/;
+const cookieHeaderSeparator = /(?:\\?["'])?[ \t]*[:=][ \t]*(?:\\?["'])?/;
+const cookieHeader = `(?<=(?<![\\w-])(?:Set-)?Cookie${cookieHeaderSeparator.source})`;
+const requestCookieHeader = `(?<=(?<![\\w-])Cookie${cookieHeaderSeparator.source})`;
 const quotedCookieOption = /(?<=(?<![\w-])--cookie(?:=|[ \t]+)\\?["'])/;
 const bareCookieOption = /(?<=(?<![\w-])--cookie(?:=|[ \t]+))/;
 const cookiePairName = /[^\s="'`\\…\[\]{}$<>;|&()]+=/;
@@ -35,10 +40,32 @@ const bareCookieValue = /[^\s"'`\\…\[\]{}$<>;|&()]/;
 function cookieValuePattern(minLength: number, end: string): RegExp {
   // 先跳过空白，避免在每个空白字符上重复执行后行断言。
   return new RegExp(
-    `(?=\\S)(?:(?:${cookieHeader.source}|${quotedCookieOption.source})${cookiePairName.source}${cookieHeaderValue.source}{${minLength},}` +
+    `(?=\\S)(?:(?:${cookieHeader}|${quotedCookieOption.source})${cookiePairName.source}${cookieHeaderValue.source}{${minLength},}` +
       `|${bareCookieOption.source}${cookiePairName.source}${bareCookieValue.source}{${minLength},})${end}`,
     'gi',
   );
+}
+
+const cookieValue = cookieValuePattern(8, '');
+const cutCookieValue = cookieValuePattern(3, '(?=…)');
+const cookieListValue = /[^"'`\\\r\n]+/;
+const cookieList = new RegExp(`(?=\\S)(?:${requestCookieHeader}|${quotedCookieOption.source})${cookieListValue.source}`, 'gi');
+const nextCookiePair = new RegExp(
+  `^([ \\t]*)(${cookiePairName.source}(?:${cookieHeaderValue.source}{8,}|${cookieHeaderValue.source}{3,}(?=…)))`,
+);
+
+function maskCookie(text: string, replace: (match: string) => string): string {
+  const out = text.replace(cookieValue, replace).replace(cutCookieValue, replace);
+  if (!out.includes(';')) return out;
+
+  // 变量引用或已隐去标记会截断整段匹配。仅请求头和带引号的选项才允许用分号继续找 Cookie。
+  return out.replace(cookieList, (list) => {
+    const pairs = list.split(';');
+    for (let i = 1; i < pairs.length; i++) {
+      pairs[i] = pairs[i].replace(nextCookiePair, (_, space: string, pair: string) => space + replace(pair));
+    }
+    return pairs.join(';');
+  });
 }
 
 // 顺序即优先级：PEM 块最先（块里可能含形似其它种类的片段），带厂商前缀的先于通用 `sk-`。
@@ -140,8 +167,7 @@ const KINDS: readonly CredentialKind[] = [
     // 识别常见的 Cookie / Set-Cookie 头和 --cookie 参数。`name=value` 的等号后至少有 8 个字符。
     // 引号和反斜杠标记文本边界，方括号、`$` 和模板括号保护已隐去的值及变量引用。
     label: 'Cookie 头的值',
-    pattern: cookieValuePattern(8, ''),
-    cut: cookieValuePattern(3, '(?=…)'),
+    mask: maskCookie,
   },
   {
     // `Authorization: Bearer <值>`（也认 JSON 里的 `"Authorization":"Bearer …"` 与转义引号）。
@@ -187,6 +213,10 @@ export function maskCredentials(text: string, collector: CredentialCollector): s
       seen.add(match);
       return `[已隐去：${kind.label}]`;
     };
+    if ('mask' in kind) {
+      out = kind.mask(out, replace);
+      continue;
+    }
     out = out.replace(kind.pattern, replace);
     // 截断的那一截排在整条之后：够长的已经被上一行换掉，这里只剩长度不够、紧跟 `…` 的。
     if (kind.cut) out = out.replace(kind.cut, replace);
