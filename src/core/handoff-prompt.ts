@@ -449,6 +449,69 @@ function keepCompactAnchor(
   return { kept: [anchor, ...picked.kept], omitted: Math.max(picked.omitted - 1, 0), anchorAdded: anchor };
 }
 
+/**
+ * 会话原文可能带着未闭合的代码围栏 / `<details>` / HTML 注释：它们会把其后 Watch 自己写的
+ * 固定小节（`## 继续工作`、注入防护行）吞进代码块或折叠区，目标助手根本看不到。
+ * 在正文末尾按**实际打开**的结构补上闭合；围栏与注释里的字面标签不算数（第 344 轮）。
+ */
+function closeOpenBlocks(body: string[]): string[] {
+  const out = [...body];
+  let fence: { char: string; len: number } | null = null;
+  let details = 0;
+  let commentOpen = false;
+  const countTags = (visible: string): void => {
+    details += (visible.match(/<details\b/gi) ?? []).length;
+    details -= (visible.match(/<\/details\s*>/gi) ?? []).length;
+  };
+  // body 的数组元素可以自带换行（一轮正文就是一个元素）：逐个按行扫描，否则围栏永远看不见
+  for (const line of body.flatMap((item) => item.split('\n'))) {
+    if (commentOpen) {
+      // 注释里的一切都是惰性文本：围栏不会在这里开启，标签也不生效
+      const close = line.indexOf('-->');
+      if (close < 0) continue;
+      commentOpen = false;
+      countTags(line.slice(close + 3));
+      continue;
+    }
+    const marker = /^ {0,3}(`{3,}|~{3,})(.*)$/.exec(line);
+    if (fence) {
+      // 关闭围栏：同字符、长度不短于开启、其后只有空白
+      if (marker && marker[1]![0] === fence.char && marker[1]!.length >= fence.len && marker[2]!.trim() === '') {
+        fence = null;
+      }
+      continue;
+    }
+    if (marker) {
+      fence = { char: marker[1]![0]!, len: marker[1]!.length };
+      continue;
+    }
+    // 行内的 HTML 注释段先剥离，剩下的可见文本才参与标签计数
+    let visible = '';
+    let i = 0;
+    while (i < line.length) {
+      const open = line.indexOf('<!--', i);
+      if (open < 0) {
+        visible += line.slice(i);
+        break;
+      }
+      visible += line.slice(i, open);
+      commentOpen = true;
+      const close = line.indexOf('-->', open + 4);
+      if (close < 0) break;
+      commentOpen = false;
+      i = close + 3;
+    }
+    countTags(visible);
+  }
+  if (fence) out.push(fence.char.repeat(fence.len), '');
+  if (details > 0) {
+    for (let i = 0; i < details; i++) out.push('</details>');
+    out.push('');
+  }
+  if (commentOpen) out.push('-->', '');
+  return out;
+}
+
 /** 单行摘要的硬上限：摘要本身就该短，超了只标省略，不追加「已截断」说明（占位符同样不切断） */
 function clipInline(text: string, limit: number): { text: string; truncated: boolean } {
   const chars = Array.from(text);
@@ -478,7 +541,12 @@ function withToolName(event: ProcessEvent, summary: string, stats: PromptStats):
 }
 
 /** 事件渲染成一行摘要：`- [工具] Bash: ls -la` */
-function renderEvent(event: ProcessEvent, detailLimit: number | null, stats: PromptStats): string {
+/** 隐去凭据前的详情码点长度：`renderEvent` 拿到的是已隐去的副本，原文长度只能由调用方先量。 */
+function detailCharLength(event: ProcessEvent): number | undefined {
+  return event.detail === undefined ? undefined : Array.from(event.detail).length;
+}
+
+function renderEvent(event: ProcessEvent, detailLimit: number | null, stats: PromptStats, originalDetailLength?: number): string {
   const kindLabel: Record<ProcessEvent['kind'], string> = {
     thinking: '思考',
     tool_call: '工具',
@@ -501,7 +569,8 @@ function renderEvent(event: ProcessEvent, detailLimit: number | null, stats: Pro
   const label = event.kind === 'tool_result' && event.failed === true ? '结果·失败' : kindLabel[event.kind];
   let line = `- [${label}] ${summarySanitized.text}`;
   if (event.detail && detailLimit !== 0) {
-    const clipped = clip(event.detail, detailLimit);
+    // 长度按隐去凭据**之前**的原文：详情已被 maskEventCredentials 改写，占位符比令牌短（第 343/344 轮）
+    const clipped = clip(event.detail, detailLimit, originalDetailLength);
     if (clipped.truncated) stats.truncatedTexts += 1;
     const detail = sanitizeBody(clipped.text);
     if (detail.escaped) stats.escapedBodies += 1;
@@ -669,6 +738,16 @@ export function buildHandoffPrompt(
   const { kept, omitted } = selection;
   stats.includedTurns = kept.length;
   stats.omittedTurns = omitted + compactOmitted;
+  // 「首条任务描述」是否真的在正文里：按实际保留的轮次判断，不看档位 / --last 的名字。
+  // 压缩摘要轮（可能是助手轮）不算任务描述：--since-compact 保留它是窗口起点，不是用户原话（第 344 轮）。
+  const taskTurn = turns.find((t, index) => t.role === 'user' && index !== compactAt);
+  const firstUserKept = taskTurn !== undefined && kept.includes(taskTurn);
+  const compactAnchorKept = compactAt >= 0 && kept.includes(turns[compactAt]!);
+  const taskNote = firstUserKept
+    ? '首条任务描述已保留'
+    : compactAnchorKept
+      ? '压缩摘要已作为窗口起点保留，原始任务描述未保留'
+      : '首条任务描述未保留';
   if (omitted > 0) addFinding(findings, 'prompt_turns_omitted', 'skipped', omitted);
   if (compactOmitted > 0) addFinding(findings, 'prompt_since_compact_applied', 'skipped', compactOmitted);
   if (options.sinceCompact && compactAt < 0) {
@@ -732,7 +811,9 @@ export function buildHandoffPrompt(
         body.push(`### ${roleLabel(turn.role)}`);
         body.push('');
       }
-      for (const event of compactEvents) body.push(renderEvent(maskEventCredentials(event, credentials), limits.textLimit, stats));
+      for (const event of compactEvents) {
+        body.push(renderEvent(maskEventCredentials(event, credentials), limits.textLimit, stats, detailCharLength(event)));
+      }
       body.push('');
       stats.includedEvents += compactEvents.length;
     }
@@ -753,7 +834,9 @@ export function buildHandoffPrompt(
       }
       body.push(`<details><summary>过程记录 ${shown.length}/${procEvents.length}</summary>`);
       body.push('');
-      for (const event of shown) body.push(renderEvent(maskEventCredentials(event, credentials), limits.detailLimit, stats));
+      for (const event of shown) {
+        body.push(renderEvent(maskEventCredentials(event, credentials), limits.detailLimit, stats, detailCharLength(event)));
+      }
       body.push('');
       body.push('</details>');
       body.push('');
@@ -974,8 +1057,12 @@ export function buildHandoffPrompt(
         options.lastUserTurns !== undefined
           ? `- 按 --last ${options.lastUserTurns} 保留了最近 ${windowUserTurns} 个用户轮${
               anchorUserTurns ? '，另补回压缩摘要（不属于 --last 窗口）' : ''
-            }，省略 ${stats.omittedTurns} 轮（**首条任务描述未保留**，需要背景请去掉 --last 重新生成）`
-          : `- 本档位保留了 ${stats.includedTurns} 轮，省略 ${stats.omittedTurns} 轮（原始任务描述已强制保留）`,
+            }，省略 ${stats.omittedTurns} 轮（${
+              firstUserKept ? taskNote : `**${taskNote}**，需要背景请去掉 --last 重新生成`
+            }）`
+          : `- 本档位保留了 ${stats.includedTurns} 轮，省略 ${stats.omittedTurns} 轮（${
+              firstUserKept ? '原始任务描述已强制保留' : taskNote
+            }）`,
       );
     }
   }
@@ -996,13 +1083,8 @@ export function buildHandoffPrompt(
   }
   // 具体数字必须写在文档里：这份 Markdown 一旦被复制走，stderr 上的 findings 就不再跟着它，
   // 目标助手与用户看到的只剩正文。只写「可能被裁剪」不足以让人判断还能不能接着干。
-  const omittedParts: string[] = [];
-  if (stats.omittedTurns > 0) omittedParts.push(`${stats.omittedTurns} 轮对话`);
-  if (stats.omittedEvents > 0) omittedParts.push(`${stats.omittedEvents} 条过程记录`);
-  if (stats.attachmentsOmitted > 0) omittedParts.push(`${stats.attachmentsOmitted} 个附件`);
-  if (stats.truncatedTexts > 0) omittedParts.push(`${stats.truncatedTexts} 处正文被截断`);
-  if (stats.escapedBodies > 0) omittedParts.push(`${stats.escapedBodies} 处控制字符已转义`);
-  if (omittedParts.length) lines.push(`- 本次省略：${omittedParts.join('、')}`);
+  // 位置先占住，内容等下面的 drift note 渲染完再算——它的转义计数同样属于这份 stats（第 344 轮）。
+  const omittedIndex = lines.length;
   // 隐去是对原文的改写，必须进正文与 findings；同时要把识别范围说死——「隐去了 N 个」不能
   // 读起来像「文档里没有敏感内容」。一个都没识别到时不写这一行：那不是结论，只是没认出来。
   const masked = credentialMaskReport(credentials);
@@ -1025,6 +1107,13 @@ export function buildHandoffPrompt(
     addFinding(findings, 'prompt_source_drift_unverifiable', 'degraded', 1);
     lines.push(`- 生成期间无法核对：${headerLine(meta.sourceDriftUnknownNote)}`);
   }
+  const omittedParts: string[] = [];
+  if (stats.omittedTurns > 0) omittedParts.push(`${stats.omittedTurns} 轮对话`);
+  if (stats.omittedEvents > 0) omittedParts.push(`${stats.omittedEvents} 条过程记录`);
+  if (stats.attachmentsOmitted > 0) omittedParts.push(`${stats.attachmentsOmitted} 个附件`);
+  if (stats.truncatedTexts > 0) omittedParts.push(`${stats.truncatedTexts} 处正文被截断`);
+  if (stats.escapedBodies > 0) omittedParts.push(`${stats.escapedBodies} 处控制字符已转义`);
+  if (omittedParts.length) lines.splice(omittedIndex, 0, `- 本次省略：${omittedParts.join('、')}`);
   lines.push('');
   // 改动概览放在「会话记录」之前：接手者先要知道动了哪些文件、跑过什么命令，
   // 再读对话。清单在头部之前就已渲染并统计（见 `renderedManifestLines`），这里只落位。
@@ -1038,7 +1127,7 @@ export function buildHandoffPrompt(
     lines.push(meta.emptySourceNote ?? '（这条会话没有可展示的正文：可能是 0 字节文件、内容已丢失，或所有轮次都被裁掉。）');
     lines.push('');
   } else {
-    lines.push(...body);
+    lines.push(...closeOpenBlocks(body));
   }
   lines.push('## 继续工作');
   lines.push('');
