@@ -218,6 +218,9 @@ export function createCredentialCollector(): CredentialCollector {
   return new Map();
 }
 
+/** 占位符前缀。截断侧要靠它认出「这里是一个 Watch 生成的占位符」，不能从中间切开。 */
+export const CREDENTIAL_PLACEHOLDER_PREFIX = '[已隐去：';
+
 /** 把一段文字里格式固定的凭据换成 `[已隐去：种类]`；没有命中时原样返回同一个字符串。 */
 export function maskCredentials(text: string, collector: CredentialCollector): string {
   if (!text || !QUICK_CHECK.test(text)) return text;
@@ -230,7 +233,7 @@ export function maskCredentials(text: string, collector: CredentialCollector): s
         collector.set(kind.label, seen);
       }
       seen.add(match);
-      return `[已隐去：${kind.label}]`;
+      return `${CREDENTIAL_PLACEHOLDER_PREFIX}${kind.label}]`;
     };
     if ('mask' in kind) {
       out = kind.mask(out, replace);

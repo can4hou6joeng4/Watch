@@ -8,6 +8,7 @@ import { isoFromEpochMs } from './time.js';
 import type { ProcessEvent, TokenUsage, UnifiedTurn } from './types.js';
 import {
   createCredentialCollector,
+  CREDENTIAL_PLACEHOLDER_PREFIX,
   credentialMaskReport,
   maskCredentials,
   maskEventCredentials,
@@ -278,12 +279,33 @@ function sanitizeBody(text: string): { text: string; escaped: boolean } {
   return { text: out, escaped };
 }
 
-/** 超长正文截断：按**码点**切，不把 emoji / 中文代理对劈成半个 */
-function clip(text: string, limit: number | null): { text: string; truncated: boolean } {
+/**
+ * 按码点切前 `limit` 个字符；截断点若落在 `[已隐去：…]` 占位符内部，退到占位符前。
+ * 半截占位符既不是原文也不是一句声明，读者没法解释 `[已隐去：Git` 这类残片（第 343 轮）。
+ */
+function sliceOutsidePlaceholder(chars: string[], limit: number): string {
+  const head = chars.slice(0, limit).join('');
+  const open = head.lastIndexOf('[');
+  if (open < 0) return head;
+  const tail = head.slice(open);
+  // 截断点可能连前缀都没切全（`[已隐`），所以按「已是占位符开头的真前缀」判断，
+  // 不能只找完整的 `[已隐去：`；已闭合的 `[...]` 是完整占位符，原样保留。
+  const partial = CREDENTIAL_PLACEHOLDER_PREFIX.startsWith(tail);
+  const unclosed = tail.startsWith(CREDENTIAL_PLACEHOLDER_PREFIX) && !tail.includes(']');
+  return partial || unclosed ? head.slice(0, open) : head;
+}
+
+/**
+ * 超长正文截断：按**码点**切，不把 emoji / 中文代理对劈成半个。
+ * `originalLength` 是隐去凭据**之前**的原文长度：读者手里的源文件是原文，「原 N 字符」
+ * 按隐去后的长度算会对不上（占位符通常比令牌短），第 343 轮。
+ */
+function clip(text: string, limit: number | null, originalLength?: number): { text: string; truncated: boolean } {
   if (limit === null) return { text, truncated: false };
   const chars = Array.from(text);
   if (chars.length <= limit) return { text, truncated: false };
-  return { text: `${chars.slice(0, limit).join('')}\n\n…（正文已截断，原 ${chars.length} 字符）`, truncated: true };
+  const shown = sliceOutsidePlaceholder(chars, limit);
+  return { text: `${shown}\n\n…（正文已截断，原 ${originalLength ?? chars.length} 字符）`, truncated: true };
 }
 
 function roleLabel(role: UnifiedTurn['role']): string {
@@ -427,11 +449,11 @@ function keepCompactAnchor(
   return { kept: [anchor, ...picked.kept], omitted: Math.max(picked.omitted - 1, 0), anchorAdded: anchor };
 }
 
-/** 单行摘要的硬上限：摘要本身就该短，超了只标省略，不追加「已截断」说明 */
+/** 单行摘要的硬上限：摘要本身就该短，超了只标省略，不追加「已截断」说明（占位符同样不切断） */
 function clipInline(text: string, limit: number): { text: string; truncated: boolean } {
   const chars = Array.from(text);
   if (chars.length <= limit) return { text, truncated: false };
-  return { text: `${chars.slice(0, limit).join('')}…`, truncated: true };
+  return { text: `${sliceOutsidePlaceholder(chars, limit)}…`, truncated: true };
 }
 
 /**
@@ -663,7 +685,9 @@ export function buildHandoffPrompt(
     }
     // 截断必须在转义之前（第 276 轮，与第 271 轮事件侧同一规则）：ESC 被展开成 6 个字符后
     // 再切会留下 `\u001` 半截序列，披露的「原 N 字符」也会变成转义后的长度。
-    const clipped = clip(maskCredentials(turn.text.trim(), credentials), limits.textLimit);
+    // 长度取隐去凭据**之前**的原文（第 343 轮）：占位符与令牌不等长，否则「原 N」对不上源文件。
+    const rawText = turn.text.trim();
+    const clipped = clip(maskCredentials(rawText, credentials), limits.textLimit, Array.from(rawText).length);
     if (clipped.truncated) stats.truncatedTexts += 1;
     const bodyText = sanitizeBody(clipped.text);
     if (bodyText.escaped) stats.escapedBodies += 1;
@@ -713,13 +737,11 @@ export function buildHandoffPrompt(
       stats.includedEvents += compactEvents.length;
     }
     if (limits.eventsPerTurn === 0) {
-      stats.omittedEvents += procEvents.length;
       if (procEvents.length) addFinding(findings, 'prompt_events_omitted', 'skipped', procEvents.length);
       continue;
     }
     const shown = limits.eventsPerTurn === null ? procEvents : procEvents.slice(0, limits.eventsPerTurn);
     if (shown.length < procEvents.length) {
-      stats.omittedEvents += procEvents.length - shown.length;
       addFinding(findings, 'prompt_events_omitted', 'skipped', procEvents.length - shown.length);
     }
     if (shown.length) {
@@ -739,6 +761,10 @@ export function buildHandoffPrompt(
     }
   }
 
+  // 事件统计必须守恒（第 343 轮）：被整轮省略的轮次里的事件、以及只在头部汇总的上下文披露
+  // 事件都不会出现在正文里。统一按「总数 − 进正文的」算省略，避免逐处增量漏加
+  // （此前只数保留轮里被档位丢掉的事件，`events = includedEvents + omittedEvents` 不成立）。
+  stats.omittedEvents = stats.events - stats.includedEvents;
   if (stats.omittedTurns > 0) addFinding(findings, 'prompt_turns_trimmed_to_profile', 'degraded', stats.omittedTurns);
   if (stats.truncatedTexts > 0) addFinding(findings, 'prompt_text_truncated', 'degraded', stats.truncatedTexts);
 
@@ -895,7 +921,9 @@ export function buildHandoffPrompt(
   const contextDisclosure = findContextDisclosure(turns);
   if (contextDisclosure) {
     addFinding(findings, 'prompt_context_disclosure', 'degraded', 1);
-    lines.push(`- 上下文完整性：${headerLine(contextDisclosure.summary)}`);
+    // 这一行来自 parse 写入的披露摘要（里面可能带未识别记录的类型名），与正文同一条规则：
+    // 先隐去凭据再转义。它不在事件正文里，别处的 maskEventCredentials 覆盖不到（第 343 轮）。
+    lines.push(`- 上下文完整性：${headerLine(maskCredentials(contextDisclosure.summary, credentials))}`);
   }
   const range = formatTimeRange(meta.startedAt, meta.updatedAt);
   if (range) {
@@ -983,7 +1011,7 @@ export function buildHandoffPrompt(
     addFinding(findings, 'prompt_credentials_masked', 'degraded', masked.total);
     lines.push(
       `- 凭据：识别并隐去了 ${masked.total} 个密钥 / 令牌（按固定格式或固定位置识别：${masked.kinds.map((kind) => `${kind.label} ${kind.count}`).join('、')}），` +
-        '在文档中以「[已隐去：种类]」标出，原文仍在源文件里；只认固定格式与固定位置——单独出现的口令、内部地址与其它形式的敏感内容不会被识别，转交前请自行检查',
+        '在正文里出现的地方以「[已隐去：种类]」标出（被截断或未展开的部分不会出现占位符），原文仍在源文件里；只认固定格式与固定位置——单独出现的口令、内部地址与其它形式的敏感内容不会被识别，转交前请自行检查',
     );
   }
   // 来源在渲染期间变化过：上面这几行（轮次 / 时间范围 / 用量）都是读取那一刻的数字，

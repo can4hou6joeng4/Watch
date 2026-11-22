@@ -16,7 +16,7 @@ import {
   PROMPT_PROFILES,
 } from './core/handoff-prompt.js';
 import { inspectManifestFilesOnDisk } from './core/manifest-disk.js';
-import { collectWorkManifest } from './core/work-manifest.js';
+import { collectWorkManifest, isEmptyWorkManifest } from './core/work-manifest.js';
 import { handleFatal } from './core/fatal.js';
 import { getAdapter, listAdapters, listProviders, noSessionHint, unknownProviderMessage } from './providers/registry.js';
 import { checkOpenInProvider, LOOKUP_NEXT_STEP, lookupMissHeadline, openInProvider, openSession, resolveById } from './open.js';
@@ -2082,7 +2082,7 @@ async function cmdPrompt(
     warnings.push(
       `文档里识别并隐去了 ${result.credentialsMasked.total} 个密钥 / 令牌（按固定格式或固定位置识别：${result.credentialsMasked.kinds
         .map((kind) => `${kind.label} ${kind.count}`)
-        .join('、')}），原文仍在源文件里；只认固定格式与固定位置，单独出现的口令与其它形式的敏感内容不会被识别，转交前请自行检查`,
+        .join('、')}），正文里出现的地方以「[已隐去：种类]」标出（被截断或未展开的部分不会出现占位符）；原文仍在源文件里，只认固定格式与固定位置，单独出现的口令与其它形式的敏感内容不会被识别，转交前请自行检查`,
     );
   }
 
@@ -2106,8 +2106,10 @@ async function cmdPrompt(
       ...(sourceWorktree ? { sourceWorktree } : {}),
       stats: result.stats,
       findings: result.findings,
-      // 脚本拿得到结构化的改动清单，不必去解析 Markdown 里的那一节
-      ...(result.manifest.files.length || result.manifest.commands.length || result.manifest.failedFileWrites ? {
+      // 脚本拿得到结构化的改动清单，不必去解析 Markdown 里的那一节。判定与正文同一把尺：
+      // 只有「读不出路径的写入」「被截断的清单」这类计数时也要出现，否则脚本分不清
+      // 「没有改动」与「改动读不全」（第 343 轮）。
+      ...(!isEmptyWorkManifest(result.manifest) ? {
         manifest: {
           files: result.manifest.files,
           commands: result.manifest.commands,
