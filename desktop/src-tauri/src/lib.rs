@@ -94,6 +94,46 @@ fn resolve_node() -> Result<PathBuf, String> {
     Err("找不到 node，请从终端启动 desktop:dev".into())
 }
 
+/// 与 `src/core/node-version.ts` 的 `MIN_NODE` / `nodeVersionProblem()` 保持一致：node:sqlite
+/// 在 22.13 才去掉实验标志。两份实现必须同改；Rust 侧只是把「node 太旧」提前变成可读错误，
+/// 真正的守卫仍在 `src/cli.ts`。
+const NODE_MIN: (u32, u32) = (22, 13);
+
+fn parse_node_version(text: &str) -> Option<(u32, u32, u32)> {
+    let trimmed = text.trim().trim_start_matches('v');
+    let mut parts = trimmed.split('.');
+    let major = parts.next()?.parse().ok()?;
+    let minor = parts.next()?.parse().ok()?;
+    let patch = parts.next().unwrap_or("0").parse().ok()?;
+    Some((major, minor, patch))
+}
+
+fn node_version_problem(current: (u32, u32, u32)) -> Option<String> {
+    let (major, minor) = NODE_MIN;
+    if current.0 > major || (current.0 == major && current.1 >= minor) {
+        return None;
+    }
+    Some(format!(
+        "需要 Node ≥ {major}.{minor}（当前 {}.{}.{}）：node:sqlite 在该版本才可用。请升级 Node 后重试。",
+        current.0, current.1, current.2
+    ))
+}
+
+/// 读不出版本号时不拦截——判断失败不应该把可用的 node 拦下（与 TS 侧同口径）。
+fn ensure_node_version(node: &Path) -> Result<(), String> {
+    let output = Command::new(node)
+        .arg("--version")
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .output()
+        .map_err(|e| format!("无法执行 {} --version: {e}", node.display()))?;
+    match parse_node_version(&String::from_utf8_lossy(&output.stdout)) {
+        Some(current) => node_version_problem(current).map_or(Ok(()), Err),
+        None => Ok(()),
+    }
+}
+
 /// GUI 进程不继承用户 shell 的 PATH（macOS launchd 环境只有 /usr/bin:/bin:…），
 /// 从 login shell 取一次真实 PATH（并补充加载 rc 文件）后缓存；失败返回 None 保持现状。
 /// 绝不传 -i（交互模式）：非交互探测子进程传 -i 会导致 zsh 初始化行编辑与作业控制，
@@ -157,6 +197,7 @@ fn run_cli_json(args: &[&str]) -> Result<Value, String> {
         return Err("仓库根缺少 node_modules，请先 npm install".into());
     }
     let node = resolve_node()?;
+    ensure_node_version(&node)?;
     let mut cmd = Command::new(&node);
     cmd.current_dir(&repo).arg(&tsx_entry).arg(&cli).args(args);
     if let Some(path) = shell_path() {
@@ -919,8 +960,8 @@ pub fn run() {
 mod tests {
     use super::{
         codex_confirm_args, codex_open_command, codex_prepare_args, codex_status_args,
-        codex_thread_url, is_plan_id, is_uuid, parse_cli_json, run_open_command, validate_terminal_text,
-        OpenPlatform,
+        codex_thread_url, is_plan_id, is_uuid, node_version_problem, parse_cli_json,
+        parse_node_version, run_open_command, validate_terminal_text, OpenPlatform,
     };
 
     #[test]
@@ -1024,6 +1065,25 @@ mod tests {
     fn missing_desktop_opener_is_a_visible_error() {
         let error = run_open_command("watch-command-that-does-not-exist", &[]).unwrap_err();
         assert!(error.contains("启动 Codex Desktop 失败"));
+    }
+
+    #[test]
+    fn parses_node_versions_and_rejects_garbage() {
+        assert_eq!(parse_node_version("v22.13.0\n"), Some((22, 13, 0)));
+        assert_eq!(parse_node_version("24.19.0"), Some((24, 19, 0)));
+        assert_eq!(parse_node_version("v20.11"), Some((20, 11, 0)));
+        assert_eq!(parse_node_version("not-a-version"), None);
+        assert_eq!(parse_node_version(""), None);
+    }
+
+    #[test]
+    fn node_version_gate_matches_cli_threshold() {
+        let old = node_version_problem((22, 12, 9)).unwrap();
+        assert!(old.contains("需要 Node ≥ 22.13（当前 22.12.9）"));
+        assert!(node_version_problem((18, 0, 0)).is_some());
+        assert!(node_version_problem((22, 13, 0)).is_none());
+        assert!(node_version_problem((22, 14, 2)).is_none());
+        assert!(node_version_problem((24, 0, 0)).is_none());
     }
 
     #[test]
