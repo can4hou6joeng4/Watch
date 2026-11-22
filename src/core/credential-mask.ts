@@ -171,13 +171,14 @@ const KINDS: readonly CredentialKind[] = [
   {
     // `X-Api-Key` / `X-Goog-Api-Key` / `api-key` / `X-Auth-Token` 这类把密钥放进自定义头的写法
     // （第 334 轮）；第 340 轮补上 Cloudflare Global API Key 的 `X-Auth-Key` 与 Vault 的
-    // `X-Vault-Token`。头名本身是固定的，值没有固定格式——与 Authorization 同一条位置判据
-    // （至少 16 位、含数字，`YOUR_API_KEY` 这类占位写法不动）。排在后面前缀规则之后：
+    // `X-Vault-Token`；第 341 轮补上配置里裸写的 `apikey:` / `apiKey:`（要求词边界，
+    // `myapikey:` 不认）。头名 / 键名本身是固定的，值没有固定格式——与 Authorization 同一条
+    // 位置判据（至少 16 位、含数字，`YOUR_API_KEY` 这类占位写法不动）。排在后面前缀规则之后：
     // 带厂商前缀的密钥已被换掉，不会重复计数。
     label: 'API 密钥头的值',
     pattern:
-      /(?<=(?:X-[A-Za-z0-9-]*Api-Key|api-key|X-Auth-Token|X-Auth-Key|X-Vault-Token)\\?["']?\s*[:=]\s*\\?["']?)(?=[A-Za-z0-9._~+/=-]*[0-9])[A-Za-z0-9._~+/=-]{16,}/gi,
-    cut: /(?<=(?:X-[A-Za-z0-9-]*Api-Key|api-key|X-Auth-Token|X-Auth-Key|X-Vault-Token)\\?["']?\s*[:=]\s*\\?["']?)(?=[A-Za-z0-9._~+/=-]*[0-9])[A-Za-z0-9._~+/=-]{8,}(?=…)/gi,
+      /(?<=(?:X-[A-Za-z0-9-]*Api-Key|api-key|X-Auth-Token|X-Auth-Key|X-Vault-Token)\\?["']?\s*[:=]\s*\\?["']?|(?<![\w-])apikey\\?["']?\s*[:=]\s*\\?["']?)(?=[A-Za-z0-9._~+/=-]*[0-9])[A-Za-z0-9._~+/=-]{16,}/gi,
+    cut: /(?<=(?:X-[A-Za-z0-9-]*Api-Key|api-key|X-Auth-Token|X-Auth-Key|X-Vault-Token)\\?["']?\s*[:=]\s*\\?["']?|(?<![\w-])apikey\\?["']?\s*[:=]\s*\\?["']?)(?=[A-Za-z0-9._~+/=-]*[0-9])[A-Za-z0-9._~+/=-]{8,}(?=…)/gi,
   },
   {
     // 识别常见的 Cookie / Set-Cookie 头和 --cookie 参数。`name=value` 的等号后至少有 8 个字符。
@@ -200,8 +201,8 @@ const KINDS: readonly CredentialKind[] = [
 
 // 绝大多数字符串一个候选前缀都没有：先用一条廉价的正则挡掉，再逐种类扫描。
 // 第 340 轮补上 glrt-/gldt-、xapp-、xoxc/xoxd/xoxe、whsec_、X-Auth-Key / X-Vault-Token、
-// PGP 头，以及被截断的连接串（只剩 `scheme://user:` 与 `…`，没有 `@`）。
-const QUICK_CHECK = /sk-|gh[pousr]_|github_pat_|gl(?:pat|rt|dt)-|AKIA|ASIA|AIza|xox[abcdeprs]-|xapp-|_live_|whsec_|npm_|hf_|eyJ|PRIVATE KEY-----|PGP PRIVATE KEY BLOCK|:\/\/[^\s/]*[:@]|uthorization|api-key|auth-key|auth-token|vault-token|cookie/i;
+// PGP 头，以及被截断的连接串（只剩 `scheme://user:` 与 `…`，没有 `@`）；第 341 轮补上裸 `apikey`。
+const QUICK_CHECK = /sk-|gh[pousr]_|github_pat_|gl(?:pat|rt|dt)-|AKIA|ASIA|AIza|xox[abcdeprs]-|xapp-|_live_|whsec_|npm_|hf_|eyJ|PRIVATE KEY-----|PGP PRIVATE KEY BLOCK|:\/\/[^\s/]*[:@]|uthorization|api-key|apikey|auth-key|auth-token|vault-token|cookie/i;
 
 /** 一次渲染内的收集器：按种类记下**不同的**凭据原文，用于去重计数。 */
 export type CredentialCollector = Map<string, Set<string>>;
