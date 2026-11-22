@@ -703,9 +703,15 @@ async function cmdStatus(cwd: string, json: boolean, chain?: string): Promise<vo
     // 具体原因已由警告给出（三档措辞不同），这里只指认链尾并给下一步。
     // 排在 `--cwd` 不可用之前：项目目录被删掉、链尾会话文件却还在 ~/.claude 下是最常见的一种，
     // 这时「链尾记录的是谁、该修哪个文件」比「--cwd 写错了」更对症（两句警告都会打出来）
+    // 结论也要按压缩副本分档：只剩 `.jsonl.zst` 时文件并没有丢，「恢复该文件」是错的方向，
+    // 正确下一步是让原生重新展开（0 字节副本才是从备份恢复）——上方警告已经说对，这里
+    // 跟着说错会让同一屏出现两种下一步（第 356 轮）。只在这一分支写错时才 stat 一次。
+    const tipCopy = compressedCopy(await sessionFilePresence(chainTip.ref.filePath));
+    const tipNext =
+      tipCopy === null ? '可先恢复该文件' : tipCopy.kind === 'empty' ? '只能从备份恢复该文件' : '先让它重新展开';
     console.log(
       `未发现可列出的原生会话；链尾记录的是 ${chainTip.provider} 会话 ${escapeControlChars(chainTip.ref.sessionId)}，` +
-        `其文件当前不可用（原因见上方警告）——可先恢复该文件，或 ${rebindHint(chainTip.provider)}`,
+        `其文件当前不可用（原因见上方警告）——${tipNext}；或者${rebindHint(chainTip.provider)}`,
     );
   } else if (!tips.length && cwdIssue) {
     // 路径本身不可用（不存在 / 不是目录 / 无权访问）：零结果与「这个目录里有没有会话」无关。
