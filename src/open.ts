@@ -908,7 +908,14 @@ export async function openSession(
               : `下面这条 resume 命令要读的就是这个文件，执行同样会失败——先修好文件权限或路径再重试`),
         );
       } else {
-        warnings.push(`会话摘要解析失败，未展示轮次与工具信息：${fileReadReason(error)}`);
+        // 非文件系统错误（格式 / 库结构 / 适配器异常）下文件可能仍在，resume 未必失败，
+        // 所以不能说「执行同样会失败」；但 Watch 同样没能核对内容——会话是否为空、
+        // 是否停在半截都无从得知。文本模式 stdout 只有 cd 与 resume 两行，
+        // 不在这句里说，读者只看正文就会以为内容已核对过（与 switch 第 362 轮同一口径）。
+        warnings.push(
+          `会话摘要解析失败，未展示轮次与工具信息：${fileReadReason(error)}；` +
+            '下面这条 resume 命令仍指向同一个会话，但 Watch 未能核对它的内容——打开后以原生客户端的显示为准',
+        );
       }
     }
   }
