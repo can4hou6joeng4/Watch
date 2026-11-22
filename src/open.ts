@@ -21,6 +21,7 @@ import {
   describeSessionReadFailure,
   describeSessionReadFailureReason,
   isEmptySessionFileReason,
+  isFileSystemErrorCode,
   probeSessionReadable,
   sessionFilePresence,
 } from './core/read-text.js';
@@ -852,10 +853,17 @@ export async function openSession(
         toolCount: allToolNames.length,
       };
     } catch (error) {
-      // 摘要只是附加信息，解析失败不阻断打开，但不能让用户以为这个会话没有内容
-      warnings.push(
-        `会话摘要解析失败，未展示轮次与工具信息：${fileReadReason(error)}`,
-      );
+      // 摘要只是附加信息，不阻断打开。但文件读不出来（权限 / 路径）不是「内容解析不了」：
+      // 下面那条 resume 命令要读的就是这个文件，照抄一执行就会失败——只说「摘要解析失败」
+      // 会让人以为会话本身没事（第 345 轮审计）。
+      if (isFileSystemErrorCode((error as NodeJS.ErrnoException).code)) {
+        warnings.push(
+          `会话读取失败，未展示轮次与工具信息：${fileReadReason(error)}；` +
+            `下面这条 resume 命令要读的就是这个文件，执行同样会失败——先修好文件权限或路径再重试`,
+        );
+      } else {
+        warnings.push(`会话摘要解析失败，未展示轮次与工具信息：${fileReadReason(error)}`);
+      }
     }
   }
 
