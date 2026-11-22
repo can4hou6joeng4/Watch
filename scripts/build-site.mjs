@@ -60,6 +60,13 @@ const site = path.join(root, 'site');
 const buildDate = siteBuildDate();
 const pageManifest = buildAllPageManifest({ siteUrl, locales: publishedLocales, published: '2026-09-12', modified: siteDate, guides });
 validatePageManifest({ pages: pageManifest, siteUrl, locales: publishedLocales, defaultLocale, buildDate });
+// llms.txt 的 Pages 是手写清单：第 7 篇指南建立后，站点 HTML 与生成的 llms-full.txt 都有它，
+// 手写的 llms.txt 却三处都没补（2026-11-23）。本地回归能发现，CI 的质量门禁只跑 site:build，
+// 所以把核对放进构建：按与 sitemap 同源的页面清单逐条要求 llms.txt 带出每个指南 URL。
+const missingGuideLinks = pageManifest.filter((page) => page.guideId && !llmsText.includes(`](${page.canonical})`));
+if (missingGuideLinks.length) {
+  throw new Error(`[site-build] llms.txt 缺少指南链接：${missingGuideLinks.map((page) => page.canonical).join('、')}`);
+}
 const esc = (text) => String(text).replace(/[&<>"']/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[char]));
 const icon = (name) => `<svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><use href="/icons.svg#${name}"></use></svg>`;
 const link = (url, label) => `<a href="${esc(url)}" target="_blank" rel="noopener noreferrer">${esc(label)}${icon('arrow-up-right')}</a>`;
