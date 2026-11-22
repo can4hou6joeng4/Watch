@@ -2,7 +2,7 @@
 
 > Canonical Site: https://relay.bobochang.cn/ (zh-CN) | https://relay.bobochang.cn/en/ (en)
 > Author: can4hou6joeng4 (https://bobochang.cn)
-> Generated: 2026-11-20. License: MIT
+> Generated: 2026-11-23. License: MIT
 
 ---
 
@@ -165,5 +165,31 @@ Watch (Chinese: 值更, also called AgentRelay) is a free, local-only CLI and ma
   A: With --last N, Watch starts at the Nth user turn from the end, so earlier turns, including the original task description, are omitted. Drop --last for full background, or use --since-compact with a larger profile; the body lists each trim that actually happened.
 - **Q: Can the target assistant continue exactly like a native session?**
   A: No. It receives a summary document without native resume and cannot see trimmed tool execution detail. Ask it in the first turn to restate the task goal and current branch, and only then assign edits.
+
+---
+
+### Guide: Codex Sessions Left as .jsonl.zst: Watch Read Boundaries and Recovery (Codex 会话只剩 .jsonl.zst：Watch 的读取边界与恢复路径)
+- URL (zh): https://relay.bobochang.cn/guides/codex-compressed-rollout-recovery/
+- URL (en): https://relay.bobochang.cn/en/guides/codex-compressed-rollout-recovery/
+- Direct Answer (en): After Codex compresses a local thread, the rollout remains only as a .jsonl.zst; Watch does not read the compressed format, so the session appears in no list. Use watch doctor to see the unattributable count and continue the thread in Codex to trigger re-expansion. A zero-byte copy has lost its content; restore from backup. Do not delete or rename the .zst file.
+- 核心解答 (zh): Codex 压缩本地线程后，原 rollout 只剩 .jsonl.zst；Watch 不读压缩格式，这些会话不会出现在任何列表里。用 watch doctor 看「读不出目录归属」的数量，并在 Codex 里继续该线程触发重新展开。副本是 0 字节时内容已丢失，只能从备份恢复；不要删除或改名 .zst 文件。
+
+#### Procedure Steps:
+1. **Step 1: Check the count and file shape**: Run watch doctor --json. For codex, count includes only readable sessions while unattributable counts files whose directory cannot be read, such as compressed copies. The text output adds a separate line with the unattributable total. watch sessions --json and watch recent --json carry the same field. The warning names the shape: a same-name .jsonl.zst compressed copy, or a zero-byte same-name copy. The two call for different next steps.
+1. **Step 2: Tell intact copies from zero-byte copies**: Find the matching .jsonl.zst under ~/.codex/sessions. A file with content is an intact copy and may hold recoverable history; a zero-byte file has lost its content, and re-expansion cannot recover it. The Watch warning and its JSON fields use the same distinction, so you do not need to guess.
+1. **Step 3: Continue the session in Codex**: Open or continue the thread in Codex. If the copy is intact Codex local thread compression, Codex re-expands it into .jsonl. Run watch sessions afterward and the session appears again; status, switch and open can read it too. Watch never triggers the re-expansion and never touches the .zst.
+1. **Step 4: Hand off after re-expansion**: Once you have the re-expanded session id, use the usual paths: watch open <id> --to <provider> or watch switch <provider>. watch prompt also reads only uncompressed files, so it is not a workaround; the document header says the source is unavailable instead of printing half a document.
+
+#### Frequently Asked Questions:
+- **Q: Does Watch compress or delete my Codex sessions?**
+  A: No. Compression is Codex behavior. Watch treats ~/.codex/sessions as read-only: listing, parsing and handoff read uncompressed .jsonl, and Watch never modifies .zst files or the directory layout.
+- **Q: Why does doctor say the directory cannot be attributed instead of saying the file is compressed?**
+  A: Because Watch only stats the compressed file and never opens it. It can confirm the original .jsonl is gone and a same-name .zst exists, and its warning names that compressed-copy case, but it cannot confirm the copy decodes or read the session_meta first line that holds attribution. The wording stays conditional so it does not vouch for an unverified fact.
+- **Q: Can I decompress the .zst back into a .jsonl myself?**
+  A: Not recommended. That is the native storage directory; Watch does not validate hand-made files, and Codex acceptance has no verification record. The safer path is continuing the session in Codex and letting the native client re-expand it.
+- **Q: What is the difference between a zero-byte copy and an intact copy?**
+  A: A zero-byte copy has lost its content; re-expansion cannot bring the conversation back, so restore from backup or treat it as a new session. An intact copy may be re-expanded when you continue the session in Codex, after which Watch can read it.
+- **Q: Can these compressed sessions still be handed off to another agent?**
+  A: Not directly. Re-expand in Codex first, then use watch open <id> --to <provider> or watch switch. Before handing off, still check the session id and working directory and read the warnings in the result.
 
 ---
