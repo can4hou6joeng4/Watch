@@ -1366,6 +1366,8 @@ export type HandoffResult = {
    * 但结论句本身也得改，否则用户复制的那条命令一执行就失败却找不到矛盾在哪。
    */
   resumeUnreadable?: boolean;
+  /** 文件探测通过，但 Watch 未能解析要恢复的会话内容。 */
+  resumeParseFailed?: boolean;
   /**
    * alreadyAtTarget 时这条 resume 指向的会话解析出 0 轮（文件可读、不是 0 字节）。
    *
@@ -1784,23 +1786,12 @@ export async function handoff(
     await assertTargetUnchanged(target, into, destDigest, '切换');
   };
 
-  // 「即将 resume 的那条会话」自己没收尾时，与 `open` 同一口径披露：用户复制的是结果里那条
-  // resume 命令，接手的就是这一轮断掉的会话。`switch` 是最常被用来拿 resume 命的入口，
-  // 以前只在**来源**侧说（来源说得再清楚，也说的是另一条会话）。
-  // 解析失败不在这里另报——读不出来已由 `probeSessionReadable` / 「目标会话无法沿用」说清，
-  // 再补一句只会把同一件事讲两遍。
-  //
-  // 返回「这条 resume 目标解析出 0 轮」（可读、不是 0 字节）。`alreadyAtTarget` 分支据此把
-  // 正文那句「直接打开即可」换成「直接打开的是空会话」：`watch new codex` / `watch new grok`
-  // 建出来的合法空会话与「内容被清空、只剩占位头」都解析出 0 轮，而对着一份空日志说
-  // 「直接打开即可」等于替它背书——用户打开进去什么也没有，却没有任何一句话解释。
-  // 0 字节那一档不在这里说：`probeSessionReadable` 已由调用方报过「会话文件是空的」。
-  const warnResumeTarget = async (
+  // 文件可打开后仍需解析正文，才能确认是空会话、存在对话，还是内容无法核对。
+  const checkResumeTarget = async (
     ref: SessionRef,
-    displayName: string,
-    merged: number,
-    readProblemReported = false,
-  ): Promise<boolean> => {
+    readProblemReported: boolean,
+  ): Promise<'parsed' | 'empty' | 'failed'> => {
+    const subject = `目标会话 ${ref.sessionId}（${target.displayName}）`;
     let resumeTurns: UnifiedTurn[];
     try {
       resumeTurns = await target.parse(ref);
@@ -1812,27 +1803,24 @@ export async function handoff(
       // 「让原生重新展开」），这里只补它没说的那一半——断点无法确认。
       if (readProblemReported) {
         warnings.push(
-          `目标会话 ${ref.sessionId}（${displayName}）读不出内容，无法确认它是否停在做了一半的一轮上` +
-            `（文件读不出来的原因见上一条警告）`,
+          `${subject} 读不出内容，无法确认它是否停在做了一半的一轮上（文件读不出来的原因见上一条警告）`,
         );
-        return false;
+        return 'failed';
       }
       const copy = compressedCopy(await sessionFilePresence(ref.filePath));
       warnings.push(
-        `目标会话 ${ref.sessionId}（${displayName}）读不出内容，无法确认它是否停在做了一半的一轮上：` +
+        `${subject} 读不出内容，无法确认它是否停在做了一半的一轮上：` +
           `${copy?.note ?? describeReadFailureOrSelf(error)}；` +
           (copy ? compressedRetryAdvice(copy, '再 resume') : '先确认这个会话文件可读再 resume'),
       );
-      return false;
+      return 'failed';
     }
-    warnings.push(
-      ...describeResumeTargetUnfinished(resumeTurns, `目标会话 ${ref.sessionId}（${displayName}）`, merged),
-    );
+    warnings.push(...describeResumeTargetUnfinished(resumeTurns, subject, 0));
     // 上下文完整性披露（转入后台 / context_edit / compacted）与 `open` 同一口径：
     // 用户复制的是这条 resume 命令，而这份日志的差异不会出现在链记录或 resume 命令里。
     const context = findContextDisclosure(resumeTurns);
     if (context) warnings.push(context.summary);
-    return resumeTurns.length === 0;
+    return resumeTurns.length === 0 ? 'empty' : 'parsed';
   };
 
   let chainBoundToTarget = false;
@@ -1931,19 +1919,10 @@ export async function handoff(
                 `，或 watch adopt ${targetId} --session <另一个会话 id> 换绑，或用 watch chain new <新名字> 另起一条链`,
         );
       }
-      // 这条链尾会话马上就要被 resume：可它自己停在做了一半的一轮上时，`open <同一个 id>`
-      // 会说、`switch` 以前一句话都不提——而 resume 正是从 `switch` 这里复制的。
-      const resumeTargetEmpty = await warnResumeTarget(
-        resumeRef,
-        target.displayName,
-        0,
-        Boolean(resumeReadProblem),
-      );
-      // 0 字节已由上面那条 resumeReadProblem 说清（文件是空的、内容已丢失），这里只补
-      // 「文件可读却 0 轮」那一档：`watch new codex` / `watch new grok` 建出的合法空会话，
-      // 或内容被清空只剩占位头。不补的话正文会说「直接打开即可」——打开进去什么也没有
-      // （与 `open` 纯打开 / `adopt` / `switch` 其它分支的 0 轮披露同一口径）。
-      const resumeTargetReadableEmpty = resumeTargetEmpty && !resumeReadProblem;
+      const resumeTargetStatus = await checkResumeTarget(resumeRef, Boolean(resumeReadProblem));
+      // 文件探测已披露 0 字节等读取故障。下面的两档只记录探测通过后的解析结果。
+      const resumeParseFailed = !resumeReadProblem && resumeTargetStatus === 'failed';
+      const resumeTargetReadableEmpty = !resumeReadProblem && resumeTargetStatus === 'empty';
       if (resumeTargetReadableEmpty) {
         // 与 status / chain list / doctor / new 同档：parse 跳过坏行，0 轮也可能是截断文件。
         const subject = `目标会话 ${resumeRef.sessionId}（${target.displayName}）`;
@@ -1973,6 +1952,7 @@ export async function handoff(
         // 这条分支从不写链记录：调用方不得据此说「这次写了链记录」（第 310 轮）
         chainRecordState: 'not-attempted',
         ...(resumeReadProblem ? { resumeUnreadable: true } : {}),
+        ...(resumeParseFailed ? { resumeParseFailed: true } : {}),
         ...(resumeTargetReadableEmpty ? { resumeTargetEmpty: true } : {}),
         warnings,
         findings,
