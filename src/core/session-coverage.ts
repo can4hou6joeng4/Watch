@@ -256,7 +256,7 @@ export type EmptiedSession = { provider: string; sessionId: string; filePath: st
 export function emptiedSessionsWarning(rows: readonly EmptiedSession[]): string {
   const samples = rows
     .slice(0, 3)
-    .map((r) => `${r.provider}:${r.sessionId}`)
+    .map((r) => `${r.provider}:${escapeControlChars(r.sessionId)}`)
     .join('、');
   const more = rows.length > 3 ? ` 等 ${rows.length} 条` : '';
   return (

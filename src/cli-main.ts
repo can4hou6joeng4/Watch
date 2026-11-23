@@ -332,7 +332,7 @@ function pushPreviewErrorWarning(
   const detail = (list: typeof hits): string =>
     list
       .slice(0, 3)
-      .map((s) => `${s.provider}:${s.sessionId}（${s.previewError}）`)
+      .map((s) => `${s.provider}:${escapeControlChars(s.sessionId)}（${s.previewError}）`)
       .join('、') + (list.length > 3 ? ' 等' : '');
   // 下一步按原因分档：0 字节是内容已经没了，改权限 / 换路径都救不回来；
   // 读不出来（权限、路径）才是「先修好再重试」。同一句混着说，两种人都会走错方向。
@@ -1100,14 +1100,14 @@ async function cmdAdopt(
       : null;
     if (emptyFileReason) {
       result.warnings.push(
-        `会话 ${result.adoptedRef.sessionId}（${adoptedAdapter?.displayName ?? result.adoptedRef.provider}）的${emptyFileReason}；` +
+        `会话 ${escapeControlChars(result.adoptedRef.sessionId)}（${adoptedAdapter?.displayName ?? result.adoptedRef.provider}）的${emptyFileReason}；` +
           `${chainWriteNote}，本次没有改动会话文件——resume 打开的是空会话，历史内容已经没有了；` +
           `如果它本该有内容，先从备份恢复这个文件（Watch 不会替你重建历史），或用 watch adopt <provider> --session <会话 id> 换成另一条会话`,
       );
     } else if (readProblem) {
       result.warnings.push(
         adoptedSessionReadProblemWarning(
-          `会话 ${result.adoptedRef.sessionId}（${adoptedAdapter?.displayName ?? result.adoptedRef.provider}）`,
+          `会话 ${escapeControlChars(result.adoptedRef.sessionId)}（${adoptedAdapter?.displayName ?? result.adoptedRef.provider}）`,
           readProblem,
           readCompressed,
           chainWriteNote,
@@ -1125,7 +1125,7 @@ async function cmdAdopt(
         const adoptedTurns = await adoptedAdapter.parse(result.adoptedRef);
         for (const warning of describeResumeTargetUnfinished(
           adoptedTurns,
-          `目标会话 ${result.adoptedRef.sessionId}（${adoptedAdapter.displayName}）`,
+          `目标会话 ${escapeControlChars(result.adoptedRef.sessionId)}（${adoptedAdapter.displayName}）`,
           0,
         )) {
           result.warnings.push(warning);
@@ -1134,7 +1134,7 @@ async function cmdAdopt(
         // 都长这样。adopt 不打印轮数，不说这一句时，resume 打开的是空会话这件事在输出里看不出来
         // （0 字节那一档已由上面的空文件警告说清，这里不重复）。
         if (adoptedTurns.length === 0) {
-          const subject = `会话 ${result.adoptedRef.sessionId}（${adoptedAdapter.displayName}）`;
+          const subject = `会话 ${escapeControlChars(result.adoptedRef.sessionId)}（${adoptedAdapter.displayName}）`;
           const badScan = await scanUnparsableJsonLines(result.adoptedRef.filePath);
           const badFailure = describeBadLinesScanFailure(
             badScan,
@@ -1284,7 +1284,7 @@ async function cmdOpen(
         process.exit(checked.ok && checked.writable !== false ? 0 : 1);
       }
       if (!checked.ok) fail(false, checked.error ?? '预检失败');
-      const target = checked.sessionId ? `${checked.sessionId}` : '（将新建会话）';
+      const target = checked.sessionId ? `${escapeControlChars(checked.sessionId)}` : '（将新建会话）';
       // notes[0] 是给人看的计划描述（复用链上会话 / 并入既有 / 新建）；直接打 kind 会把内部枚举露给用户
       console.log(`预检：${escapeControlChars(checked.notes?.[0] ?? checked.plan?.kind ?? '?')} · 目标 ${escapeControlChars(target)} · ${checked.writable ? '可写入' : '暂不可写'}`);
       // warnings 是降级原因（复用扫描失败、链上配对读不出等），只出现在 --json 里的话，
@@ -1611,7 +1611,7 @@ async function cmdRecent(cwd: string, json: boolean, limit: number = 8, cwdGiven
             // 路径还在，但被同名目录 / 设备文件占住：既不是「已删除」（原生扫描也列不出来），
             // 也不是能用的会话。静默跳过会让它从「近期」里凭空消失
             warnings.push(
-              `${loc.provider} 会话 ${loc.sessionId} 的映射记录指向的路径现在不是普通文件（被同名目录或设备文件占住了）：${escapeControlChars(loc.filePath)}；已跳过映射命中，先恢复该路径再重试`,
+              `${loc.provider} 会话 ${escapeControlChars(loc.sessionId)} 的映射记录指向的路径现在不是普通文件（被同名目录或设备文件占住了）：${escapeControlChars(loc.filePath)}；已跳过映射命中，先恢复该路径再重试`,
             );
             continue;
           }
@@ -1630,7 +1630,7 @@ async function cmdRecent(cwd: string, json: boolean, limit: number = 8, cwdGiven
           if (code !== 'ENOENT' && code !== 'ENOTDIR') {
             // 原因要翻成中文：`EACCES: permission denied, stat '…'` 这类原文看不出该修权限还是路径
             warnings.push(
-              `${loc.provider} 会话 ${loc.sessionId} 的映射记录无法确认文件状态（${escapeControlChars(loc.filePath)}）：${describeSessionReadFailureReason(error)}；已跳过映射命中，先确认该路径是否可读再重试`,
+              `${loc.provider} 会话 ${escapeControlChars(loc.sessionId)} 的映射记录无法确认文件状态（${escapeControlChars(loc.filePath)}）：${describeSessionReadFailureReason(error)}；已跳过映射命中，先确认该路径是否可读再重试`,
             );
           }
         }
@@ -1937,13 +1937,13 @@ async function cmdPrompt(
   const badSourceLines = badSourceScan.count;
   if (badSourceLines > 0) {
     warnings.push(
-      `来源会话 ${foundRef.sessionId} 有 ${badSourceLines} 行无法解析（截断或损坏），已跳过；文档正文可能缺少这些记录`,
+      `来源会话 ${escapeControlChars(foundRef.sessionId)} 有 ${badSourceLines} 行无法解析（截断或损坏），已跳过；文档正文可能缺少这些记录`,
     );
   }
   // 扫描没完成时「0 坏行」不是结论：正文同样要写明这次数不出来（文档脱离 Watch 后 stderr 不跟着走）
   const badSourceScanFailure = describeBadLinesScanFailure(
     badSourceScan,
-    `来源会话 ${foundRef.sessionId}`,
+    `来源会话 ${escapeControlChars(foundRef.sessionId)}`,
     '正文是否缺少记录无法确认——先确认该文件可读，需要完整内容请先恢复来源文件',
   );
   if (badSourceScanFailure) warnings.push(badSourceScanFailure);
@@ -1987,7 +1987,7 @@ async function cmdPrompt(
   const sourceDrift = await describeSourceChangedDuringPrompt(
     foundRef.filePath,
     sourceSnapshot,
-    `${foundRef.sessionId}（${adapter.displayName}）`,
+    `${escapeControlChars(foundRef.sessionId)}（${adapter.displayName}）`,
     sourceChange,
   );
   if (sourceDrift) warnings.push(sourceDrift);
@@ -2816,7 +2816,7 @@ async function cmdChain(cwd: string, json: boolean, action?: string, a?: string,
             // 对象。「未能核对」这个事实必须说（第 365 轮，与 status 第 364 轮同口径）。
             if (c.status === 'active') {
               warnings.push(
-                `链「${escapeControlChars(c.name)}」的链尾会话 ${last.toRef.provider} ${last.toRef.sessionId} 的内容解析失败，` +
+                `链「${escapeControlChars(c.name)}」的链尾会话 ${last.toRef.provider} ${escapeControlChars(last.toRef.sessionId)} 的内容解析失败，` +
                   `Watch 未能核对它的轮数与收尾状态；打开或切换到它时会给出具体原因`,
               );
             }
@@ -2835,24 +2835,24 @@ async function cmdChain(cwd: string, json: boolean, action?: string, a?: string,
         if (missing && c.status === 'active') {
           warnings.push(
             copy
-              ? `链「${escapeControlChars(c.name)}」的链尾会话文件${copy.note}（${last.toRef.provider}:${last.toRef.sessionId}）：下次切换会失败——${compressedRetryAdvice(copy, '再重试')}，或${rebindHint(last.toRef.provider)}`
-              : `链「${escapeControlChars(c.name)}」的链尾会话文件已不存在（${last.toRef.provider}:${last.toRef.sessionId}）：下次切换会失败，${rebindHint(last.toRef.provider)}`,
+              ? `链「${escapeControlChars(c.name)}」的链尾会话文件${copy.note}（${last.toRef.provider}:${escapeControlChars(last.toRef.sessionId)}）：下次切换会失败——${compressedRetryAdvice(copy, '再重试')}，或${rebindHint(last.toRef.provider)}`
+              : `链「${escapeControlChars(c.name)}」的链尾会话文件已不存在（${last.toRef.provider}:${escapeControlChars(last.toRef.sessionId)}）：下次切换会失败，${rebindHint(last.toRef.provider)}`,
           );
         } else if (readProblem && c.status === 'active') {
           // 读不出来 ≠ 文件没了：不标 missing，也不能当成「一切正常」而不出声
           warnings.push(
-            `链「${escapeControlChars(c.name)}」的链尾会话文件读不出来（${last.toRef.provider}:${last.toRef.sessionId}）：${readProblem}；` +
+            `链「${escapeControlChars(c.name)}」的链尾会话文件读不出来（${last.toRef.provider}:${escapeControlChars(last.toRef.sessionId)}）：${readProblem}；` +
               `resume 与下次切换会失败——先修好这个文件（权限或内容），或 watch adopt ${last.toRef.provider} --session <另一个会话 id> 换绑`,
           );
         } else if (tipError && c.status === 'active') {
           // 读不出来 ≠ 文件没了：不标 missing，也不能当成「一切正常」而不出声
           warnings.push(
-            `链「${escapeControlChars(c.name)}」的链尾会话文件无法确认是否还在（${last.toRef.provider}:${last.toRef.sessionId}）：${tipError}`,
+            `链「${escapeControlChars(c.name)}」的链尾会话文件无法确认是否还在（${last.toRef.provider}:${escapeControlChars(last.toRef.sessionId)}）：${tipError}`,
           );
         } else if (turns === 0 && c.status === 'active') {
           // 与 status 的 chainTipEmpty 同档：parse 跳过坏行，0 轮也可能来自截断 / 损坏，
           // 先把「坏行」与「合法空会话」分开，再决定要不要让人去原生客户端继续聊。
-          const subject = `链「${escapeControlChars(c.name)}」的链尾会话 ${last.toRef.provider} ${last.toRef.sessionId}`;
+          const subject = `链「${escapeControlChars(c.name)}」的链尾会话 ${last.toRef.provider} ${escapeControlChars(last.toRef.sessionId)}`;
           const badScan = await scanUnparsableJsonLines(last.toRef.filePath);
           const badFailure = describeBadLinesScanFailure(
             badScan,

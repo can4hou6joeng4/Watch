@@ -1270,7 +1270,7 @@ export class Store {
       const events = this.listSwitchEvents(row.id);
       const tipRef = events.length ? events[events.length - 1].toRef : null;
       tip = tipRef
-        ? `；它当前停在这条链尾的 ${tipRef.provider} 会话 ${tipRef.sessionId}`
+        ? `；它当前停在这条链尾的 ${tipRef.provider} 会话 ${escapeControlChars(tipRef.sessionId)}`
         : `；这条链上还没有绑定任何会话——${emptyChainBindHint()}`;
     } catch {
       // 链尾只是补充说明，读不出来不影响「这是链不是会话」这条结论

@@ -399,7 +399,7 @@ function idTypoHint(mapping: Store | null, raw: string): string | null {
   }
   if (!hits.length) return null;
   const list = hits
-    .map((h) => `${h.sessionId}（${h.provider}，${escapeControlChars(h.cwd)}）`)
+    .map((h) => `${escapeControlChars(h.sessionId)}（${h.provider}，${escapeControlChars(h.cwd)}）`)
     .join('；');
   return (
     `你给的更像前缀：本地映射里有 ${hits.length} 个会话 id 以它开头——${list}；` +
@@ -568,7 +568,7 @@ export async function openSession(
         const badUsage = await usageBadLinesReason(
           source.adapter,
           source.found.ref,
-          `来源会话 ${source.found.ref.sessionId}（${source.adapter.displayName}）`,
+          `来源会话 ${escapeControlChars(source.found.ref.sessionId)}（${source.adapter.displayName}）`,
         );
         if (badUsage) warnings.push(badUsage);
         // 用量来自旁路文件时，`usage === null` 还可能是「用量文件被截成 0 字节」：
@@ -576,7 +576,7 @@ export async function openSession(
         const sidecar = await usageSidecarProblem(
           source.adapter,
           source.found.ref,
-          `来源会话 ${source.found.ref.sessionId}（${source.adapter.displayName}）`,
+          `来源会话 ${escapeControlChars(source.found.ref.sessionId)}（${source.adapter.displayName}）`,
         );
         if (sidecar) warnings.push(sidecar);
       }
@@ -597,7 +597,7 @@ export async function openSession(
         return {
           ok: false,
           error:
-            `来源会话 ${source.found.ref.sessionId}（${source.adapter.displayName}）读取失败：${detail.reason}；本次未写入任何内容` +
+            `来源会话 ${escapeControlChars(source.found.ref.sessionId)}（${source.adapter.displayName}）读取失败：${detail.reason}；本次未写入任何内容` +
             (detail.next ? `——${detail.next}` : ''),
           ...(warnings.length || lookup.length ? { warnings: [...warnings, ...lookup] } : {}),
         };
@@ -608,13 +608,13 @@ export async function openSession(
       const srcBadScan = await scanUnparsableJsonLines(source.found.ref.filePath);
       if (srcBadScan.count > 0) {
         warnings.push(
-          `来源会话 ${source.found.ref.sessionId} 有 ${srcBadScan.count} 行无法解析（截断或损坏），已跳过；并入内容可能不完整`,
+          `来源会话 ${escapeControlChars(source.found.ref.sessionId)} 有 ${srcBadScan.count} 行无法解析（截断或损坏），已跳过；并入内容可能不完整`,
         );
       }
       // 辅助扫描读不出来不等于「没有坏行」：扫不成也要说，否则这句「内容完整」是猜的
       const srcBadScanFailure = describeBadLinesScanFailure(
         srcBadScan,
-        `来源会话 ${source.found.ref.sessionId}`,
+        `来源会话 ${escapeControlChars(source.found.ref.sessionId)}`,
         '并入内容是否完整无法确认——先确认该文件可读再重试',
       );
       if (srcBadScanFailure) warnings.push(srcBadScanFailure);
@@ -633,7 +633,7 @@ export async function openSession(
         return {
           ok: false,
           error:
-            `目标会话 ${target.found.ref.sessionId}（${target.adapter.displayName}）读取失败：${detail.reason}；本次未写入任何内容` +
+            `目标会话 ${escapeControlChars(target.found.ref.sessionId)}（${target.adapter.displayName}）读取失败：${detail.reason}；本次未写入任何内容` +
             (detail.next ? `——${detail.next}` : ''),
           ...(warnings.length || lookup.length ? { warnings: [...warnings, ...lookup] } : {}),
         };
@@ -658,19 +658,19 @@ export async function openSession(
         // 两条独立的「0 字节」警告会自相矛盾：一边说目标未被改动、没有可并入的内容，
         // 一边说「本次并入的只有来源的内容」——而来源同样是空的，实际什么都没写。
         warnings.push(
-          `来源会话 ${source.found.ref.sessionId}（${source.adapter.displayName}）与目标会话 ${escapeControlChars(targetId)}（${target.adapter.displayName}）` +
+          `来源会话 ${escapeControlChars(source.found.ref.sessionId)}（${source.adapter.displayName}）与目标会话 ${escapeControlChars(targetId)}（${target.adapter.displayName}）` +
             `的文件都是空的（内容已丢失）：这次没有任何可并入的内容，目标也不会被写入——两条会话的历史都需要从各自的备份恢复（Watch 不会替你们重建）`,
         );
       } else {
         if (sourceZeroByte) {
           warnings.push(
-            `来源会话 ${source.found.ref.sessionId}（${source.adapter.displayName}）的${sourceZeroByte}；` +
+            `来源会话 ${escapeControlChars(source.found.ref.sessionId)}（${source.adapter.displayName}）的${sourceZeroByte}；` +
               `这次没有任何可并入的内容，目标会话 ${escapeControlChars(targetId)} 未被改动——如果这条会话本该有内容，先从备份恢复该文件再重试（Watch 不会替你重建历史）`,
           );
         }
         if (sourceZeroTurns) {
           warnings.push(
-            `来源会话 ${source.found.ref.sessionId}（${source.adapter.displayName}）解析出 0 轮，没有可并入的内容；` +
+            `来源会话 ${escapeControlChars(source.found.ref.sessionId)}（${source.adapter.displayName}）解析出 0 轮，没有可并入的内容；` +
               `本次未写入任何内容，目标会话 ${escapeControlChars(targetId)}（${target.adapter.displayName}）未被改动——` +
               `如果这条会话本该有内容，先在 ${source.adapter.displayName} 里打开它确认（可能已被清空），或从备份恢复该文件（Watch 不会替你重建历史）；` +
               `如果只是挑错了会话，核对 --from 的会话 id 是否真的要并进来`,
@@ -687,18 +687,18 @@ export async function openSession(
       }
       warnUnfinishedTurns(
         srcTurns,
-        `来源会话 ${source.found.ref.sessionId}（${source.adapter.displayName}）`,
+        `来源会话 ${escapeControlChars(source.found.ref.sessionId)}（${source.adapter.displayName}）`,
         (msg) => warnings.push(msg),
       );
       const dstBadScan = await scanUnparsableJsonLines(target.found.ref.filePath);
       if (dstBadScan.count > 0) {
         warnings.push(
-          `目标会话 ${target.found.ref.sessionId} 有 ${dstBadScan.count} 行无法解析（截断或损坏）：增量判定可能偏多，可能重复追加既有内容`,
+          `目标会话 ${escapeControlChars(target.found.ref.sessionId)} 有 ${dstBadScan.count} 行无法解析（截断或损坏）：增量判定可能偏多，可能重复追加既有内容`,
         );
       }
       const dstBadScanFailure = describeBadLinesScanFailure(
         dstBadScan,
-        `目标会话 ${target.found.ref.sessionId}`,
+        `目标会话 ${escapeControlChars(target.found.ref.sessionId)}`,
         '增量判定是否偏多无法确认——先确认该文件可读再重试',
       );
       if (dstBadScanFailure) warnings.push(dstBadScanFailure);
@@ -804,7 +804,7 @@ export async function openSession(
       const drift = await describeSourceChangedDuringHandoff(
         source.found.ref.filePath,
         srcSnapshot,
-        `${source.found.ref.sessionId}（${source.adapter.displayName}）`,
+        `${escapeControlChars(source.found.ref.sessionId)}（${source.adapter.displayName}）`,
         '并入',
       );
       if (drift) warnings.push(drift);
@@ -826,13 +826,13 @@ export async function openSession(
       const badUsage = await usageBadLinesReason(
         target.adapter,
         target.found.ref,
-        `会话 ${target.found.ref.sessionId}（${target.adapter.displayName}）`,
+        `会话 ${escapeControlChars(target.found.ref.sessionId)}（${target.adapter.displayName}）`,
       );
       if (badUsage) warnings.push(badUsage);
       const sidecar = await usageSidecarProblem(
         target.adapter,
         target.found.ref,
-        `会话 ${target.found.ref.sessionId}（${target.adapter.displayName}）`,
+        `会话 ${escapeControlChars(target.found.ref.sessionId)}（${target.adapter.displayName}）`,
       );
       if (sidecar) warnings.push(sidecar);
     }
@@ -847,7 +847,7 @@ export async function openSession(
         const empty = await zeroByteSessionReason(target.found.ref);
         if (empty) {
           warnings.push(
-            `会话 ${target.found.ref.sessionId}（${target.adapter.displayName}）的${empty}；` +
+            `会话 ${escapeControlChars(target.found.ref.sessionId)}（${target.adapter.displayName}）的${empty}；` +
               `下面这条 resume 命令虽然能打开它，但历史内容已经没有了——如果它本该有内容，先从备份恢复这个文件（Watch 不会替你重建历史）`,
           );
         } else {
@@ -855,7 +855,7 @@ export async function openSession(
           // 以及末尾被截断的 JSONL（parse 跳过坏行）都长这样；显式扫一次坏行，按事实分档。
           const zeroScan = await scanUnparsableJsonLines(target.found.ref.filePath);
           warnings.push(
-            `会话 ${target.found.ref.sessionId}（${target.adapter.displayName}）解析出 0 轮（没有可继续的对话）：` +
+            `会话 ${escapeControlChars(target.found.ref.sessionId)}（${target.adapter.displayName}）解析出 0 轮（没有可继续的对话）：` +
               `${describeZeroTurnReason(zeroScan, '可能是刚建出来的空会话，也可能内容已被清空')}；` +
               `下面这条 resume 命令打开的是空会话——如果它本该有历史，先在 ${target.adapter.displayName} 里打开它确认，或从备份恢复该文件（Watch 不会替你重建历史）`,
           );
@@ -864,7 +864,7 @@ export async function openSession(
       // 即将 resume 的这个会话本身就停在做了一半的工具调用上：resume 后客户端多半也停在那里
       warnUnfinishedTurns(
         turns,
-        `会话 ${target.found.ref.sessionId}（${target.adapter.displayName}）`,
+        `会话 ${escapeControlChars(target.found.ref.sessionId)}（${target.adapter.displayName}）`,
         (msg) => warnings.push(msg),
       );
       const userTurns = turns.filter((t) => t.role === 'user' && t.text.trim());
@@ -1069,12 +1069,12 @@ async function warnTargetBadLines(
   const scan = await scanUnparsableJsonLines(ref.filePath);
   if (scan.count > 0) {
     diagnostics?.push(
-      `目标会话 ${ref.sessionId}（${target.displayName}）有 ${scan.count} 行无法解析（截断或损坏）：增量判定可能偏多，可能重复追加既有内容`,
+      `目标会话 ${escapeControlChars(ref.sessionId)}（${target.displayName}）有 ${scan.count} 行无法解析（截断或损坏）：增量判定可能偏多，可能重复追加既有内容`,
     );
   }
   const scanFailure = describeBadLinesScanFailure(
     scan,
-    `目标会话 ${ref.sessionId}（${target.displayName}）`,
+    `目标会话 ${escapeControlChars(ref.sessionId)}（${target.displayName}）`,
     '增量判定是否偏多无法确认——先确认该文件可读再重试',
   );
   if (scanFailure) diagnostics?.push(scanFailure);
@@ -1177,7 +1177,7 @@ async function planOpenInProvider(
         const empty = await zeroByteSessionReason(sourceRef);
         if (empty) {
           diagnostics?.push(
-            `目标会话 ${sourceRef.sessionId}（${target.displayName}）的${empty}；` +
+            `目标会话 ${escapeControlChars(sourceRef.sessionId)}（${target.displayName}）的${empty}；` +
               `这次要 resume 的就是它，历史内容已经没有了——如果它本该有内容，先从备份恢复这个文件再重试（Watch 不会替你重建历史）`,
           );
         } else {
@@ -1185,13 +1185,13 @@ async function planOpenInProvider(
           // 或末尾损坏；显式扫一次坏行后再分档。`--check` 也吃这份 diagnostics，预检会提前说。
           const ownZeroScan = await scanUnparsableJsonLines(sourceRef.filePath);
           diagnostics?.push(
-            `目标会话 ${sourceRef.sessionId}（${target.displayName}）解析出 0 轮（没有可继续的对话）：` +
+            `目标会话 ${escapeControlChars(sourceRef.sessionId)}（${target.displayName}）解析出 0 轮（没有可继续的对话）：` +
               `${describeZeroTurnReason(ownZeroScan, '可能是刚建出来的空会话，也可能内容已被清空')}；这次要 resume 的就是它——` +
               `如果它本该有历史，先在 ${target.displayName} 里打开它确认，或从备份恢复该文件（Watch 不会替你重建历史）`,
           );
         }
       }
-      warnResumeTargetUnfinished(ownTurns, `目标会话 ${sourceRef.sessionId}（${target.displayName}）`, 0, (msg) =>
+      warnResumeTargetUnfinished(ownTurns, `目标会话 ${escapeControlChars(sourceRef.sessionId)}（${target.displayName}）`, 0, (msg) =>
         diagnostics?.push(msg),
       );
     } catch (error) {
@@ -1203,7 +1203,7 @@ async function planOpenInProvider(
       resumeUnreadable = detail.reason;
       if (detail.compressed) resumeCompressed = detail.compressed;
       diagnostics?.push(
-        `目标会话 ${sourceRef.sessionId}（${target.displayName}）读取失败：${detail.reason}；` +
+        `目标会话 ${escapeControlChars(sourceRef.sessionId)}（${target.displayName}）读取失败：${detail.reason}；` +
           `无法确认它是否停在做了一半的一轮上（这次要 resume 的就是它）`,
       );
     }
@@ -1303,7 +1303,7 @@ async function planOpenInProvider(
     const pairedEmpty = await zeroByteSessionReason(chainPaired);
     if (pairedEmpty) {
       diagnostics?.push(
-        `链上 ${target.displayName} 会话 ${chainPaired.sessionId} 的${pairedEmpty}；这次不沿用这条空会话（改用内容匹配或新建），` +
+        `链上 ${target.displayName} 会话 ${escapeControlChars(chainPaired.sessionId)} 的${pairedEmpty}；这次不沿用这条空会话（改用内容匹配或新建），` +
           `但链绑定仍指向它——若它本该有内容，先从备份恢复该文件，否则之后的 switch 还会落回这条空会话；也可 watch adopt ${target.id} --session <另一个会话 id> 换绑，或用 watch chain new <新名字> 另起一条链`,
       );
     } else {
@@ -1323,7 +1323,7 @@ async function planOpenInProvider(
           : `；链绑定仍指向${copy ? '这条 0 字节副本' : '它'}——本次改用内容匹配或新建不会改动链记录，之后的 switch 仍会落回这条会话；` +
             `${copy ? '从备份恢复后再试' : '先按上面的原因处理后再试'}，或 watch adopt ${target.id} --session <另一个会话 id> 换绑，或用 watch chain new <新名字> 另起一条链`;
         diagnostics?.push(
-          `链上 ${target.displayName} 会话 ${chainPaired.sessionId} 本次不沿用：${
+          `链上 ${target.displayName} 会话 ${escapeControlChars(chainPaired.sessionId)} 本次不沿用：${
             copy?.note ?? describeSessionReadFailure(chainPaired.filePath, error)
           }（改用内容匹配或新建）${chainStillBound}`,
         );
@@ -1337,7 +1337,7 @@ async function planOpenInProvider(
         // 复用后 resume 的就是这条会话：它自己的断点要披露，与来源那一侧分开说
         warnResumeTargetUnfinished(
           pairTurns,
-          `目标会话 ${chainPaired.sessionId}（${target.displayName}）`,
+          `目标会话 ${escapeControlChars(chainPaired.sessionId)}（${target.displayName}）`,
           delta.length,
           (msg) => diagnostics?.push(msg),
         );
@@ -1353,8 +1353,8 @@ async function planOpenInProvider(
             snapshot: pairDigest,
             note:
               delta.length === 0
-                ? `回到链上 ${target.displayName} 会话 ${chainPaired.sessionId}，无需并入`
-                : `已把 ${source.adapter.displayName} 的新增 ${delta.length} 轮并入链上 ${target.displayName} 会话 ${chainPaired.sessionId}`,
+                ? `回到链上 ${target.displayName} 会话 ${escapeControlChars(chainPaired.sessionId)}，无需并入`
+                : `已把 ${source.adapter.displayName} 的新增 ${delta.length} 轮并入链上 ${target.displayName} 会话 ${escapeControlChars(chainPaired.sessionId)}`,
           },
         };
       }
@@ -1369,11 +1369,11 @@ async function planOpenInProvider(
             ? `文件里有 ${pairBadScan.count} 行无法解析（截断或损坏），内容可能是被截断而不只是「本来就没有对话」`
             : describeBadLinesScanFailure(
                   pairBadScan,
-                  `链上 ${target.displayName} 会话 ${chainPaired.sessionId}`,
+                  `链上 ${target.displayName} 会话 ${escapeControlChars(chainPaired.sessionId)}`,
                   '内容是否被截断无法确认——先确认该文件可读再重试',
                 ) ?? '文件在，但没有可复用的对话';
         diagnostics?.push(
-          `链上 ${target.displayName} 会话 ${chainPaired.sessionId} 解析出 0 轮（${pairZeroFacts}）；本次不沿用，改用内容匹配或新建——` +
+          `链上 ${target.displayName} 会话 ${escapeControlChars(chainPaired.sessionId)} 解析出 0 轮（${pairZeroFacts}）；本次不沿用，改用内容匹配或新建——` +
             `链绑定仍指向它，本次改用内容匹配或新建不会改动链记录，之后的 switch 仍会落回这条会话；` +
             `可先在 ${target.displayName} 里继续它确认是否可用，或 watch adopt ${target.id} --session <另一个会话 id> 换绑，或用 watch chain new <新名字> 另起一条链`,
         );
@@ -1406,7 +1406,7 @@ async function planOpenInProvider(
           // 只报「N 个解析失败」会被读成「候选都不匹配」，实际可能是权限问题
           const code = (error as NodeJS.ErrnoException).code;
           if (code !== 'ENOENT' && code !== 'ENOTDIR') {
-            unreadableCandidates.push(`${s.ref.sessionId}：${describeSessionReadFailure(s.ref.filePath, error)}`);
+            unreadableCandidates.push(`${escapeControlChars(s.ref.sessionId)}：${describeSessionReadFailure(s.ref.filePath, error)}`);
           }
           continue;
         }
@@ -1455,7 +1455,7 @@ async function planOpenInProvider(
       return {
         ok: false,
         error:
-          `目标会话 ${reuse.sessionId} 在写入前读取失败，本次未写入任何内容：${detail.reason}` +
+          `目标会话 ${escapeControlChars(reuse.sessionId)} 在写入前读取失败，本次未写入任何内容：${detail.reason}` +
           (detail.next ? `——${detail.next}` : ''),
       };
     }
@@ -1467,7 +1467,7 @@ async function planOpenInProvider(
     const reuseContext = findContextDisclosure(destinationTurns);
     if (reuseContext && !(diagnostics ?? []).includes(reuseContext.summary)) diagnostics?.push(reuseContext.summary);
     // 复用后 resume 的就是这条会话：它自己的断点要披露，与来源那一侧分开说
-    warnResumeTargetUnfinished(destinationTurns, `目标会话 ${reuse.sessionId}（${target.displayName}）`, delta.length, (msg) =>
+    warnResumeTargetUnfinished(destinationTurns, `目标会话 ${escapeControlChars(reuse.sessionId)}（${target.displayName}）`, delta.length, (msg) =>
       diagnostics?.push(msg),
     );
     return {
@@ -1480,8 +1480,8 @@ async function planOpenInProvider(
         snapshot,
         note:
           delta.length === 0
-            ? `已在 ${target.displayName} 找到包含全部内容的既有会话 ${reuse.sessionId}，直接打开，无需新建`
-            : `已把 ${source.adapter.displayName} 的新增 ${delta.length} 轮并入既有 ${target.displayName} 会话 ${reuse.sessionId}`,
+            ? `已在 ${target.displayName} 找到包含全部内容的既有会话 ${escapeControlChars(reuse.sessionId)}，直接打开，无需新建`
+            : `已把 ${source.adapter.displayName} 的新增 ${delta.length} 轮并入既有 ${target.displayName} 会话 ${escapeControlChars(reuse.sessionId)}`,
       },
     };
   }
@@ -1612,13 +1612,13 @@ export async function openInProvider(
         const badUsage = await usageBadLinesReason(
           source,
           sourceRef,
-          `来源会话 ${sourceRef.sessionId}（${source.displayName}）`,
+          `来源会话 ${escapeControlChars(sourceRef.sessionId)}（${source.displayName}）`,
         );
         if (badUsage) warnings.push(badUsage);
         const sidecar = await usageSidecarProblem(
           source,
           sourceRef,
-          `来源会话 ${sourceRef.sessionId}（${source.displayName}）`,
+          `来源会话 ${escapeControlChars(sourceRef.sessionId)}（${source.displayName}）`,
         );
         if (sidecar) warnings.push(sidecar);
       }
@@ -1655,7 +1655,7 @@ export async function openInProvider(
       const drift = await describeSourceChangedDuringHandoff(
         sourceRef.filePath,
         srcSnapshot,
-        `${sourceRef.sessionId}（${source?.displayName ?? sourceProvider}）`,
+        `${escapeControlChars(sourceRef.sessionId)}（${source?.displayName ?? sourceProvider}）`,
         '转入',
       );
       if (drift) warnings.push(drift);
@@ -1667,7 +1667,7 @@ export async function openInProvider(
         // 与 resolveById 的两处写回一致：不影响这次转入，但本地库从此记不住这条新会话，
         // 下次仍要全盘扫描。不披露就只剩「慢」这一个症状
         warnings.push(
-          `转入的 ${providerId} 会话 ${newRef.sessionId} 未记入本地映射（${describeStoreErrorReason(error)}）；不影响本次打开，但下次 open 仍需重新全盘扫描`,
+          `转入的 ${providerId} 会话 ${escapeControlChars(newRef.sessionId)} 未记入本地映射（${describeStoreErrorReason(error)}）；不影响本次打开，但下次 open 仍需重新全盘扫描`,
         );
       }
     }
@@ -1745,9 +1745,9 @@ function describePlan(target: ProviderAdapter, plan: OpenPlan): string {
             `下面这条 resume 命令执行会失败，先按原因处理后重试`
         : '来源即目标，直接恢复原会话';
     case 'chain':
-      return `将回到链上 ${target.displayName} 会话 ${plan.targetRef?.sessionId}（${turnText}）`;
+      return `将回到链上 ${target.displayName} 会话 ${escapeControlChars(String(plan.targetRef?.sessionId))}（${turnText}）`;
     case 'reuse':
-      return `将并入既有 ${target.displayName} 会话 ${plan.targetRef?.sessionId}（${turnText}）`;
+      return `将并入既有 ${target.displayName} 会话 ${escapeControlChars(String(plan.targetRef?.sessionId))}（${turnText}）`;
     default:
       return `将新建 ${target.displayName} 会话（${turnText}）`;
   }

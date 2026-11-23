@@ -241,7 +241,7 @@ export async function findLatestCodexRollout(
     return {
       ...found,
       warnings: [
-        `Codex 扫描有 ${incomplete} 个位置读不出来；本次自动挑的是在能读出的会话里按修改时间最新的会话 ${found.ref.sessionId}，` +
+        `Codex 扫描有 ${incomplete} 个位置读不出来；本次自动挑的是在能读出的会话里按修改时间最新的会话 ${escapeControlChars(found.ref.sessionId)}，` +
           `无法确认它是否为全部会话中最新的一条：${escapeControlChars(walkErrors[0] ?? unreadCwd[0])}；` +
           '先恢复这些位置的可访问性（权限、路径）后重试，或显式指定要使用的会话 id',
       ],
@@ -788,7 +788,7 @@ async function acquireCodexWriteLock(
     throw new PreflightBlockedError({
       code: 'codex_target_busy',
       sessionId: ref.sessionId,
-      message: `Codex 会话 ${ref.sessionId} 在写入前被其他 writer 抢先持有，已拒绝写入`,
+      message: `Codex 会话 ${escapeControlChars(ref.sessionId)} 在写入前被其他 writer 抢先持有，已拒绝写入`,
       hint: '稍后重试；本次未写入任何内容。',
     });
   }
@@ -875,7 +875,7 @@ export const codexAdapter: ProviderAdapter = {
       throw new PreflightBlockedError({
         code: 'codex_lock_unreadable',
         sessionId: ref.sessionId,
-        message: `无法读取 Codex 会话 ${ref.sessionId} 的 writer 锁状态（${escapeControlChars(lockPath)}），已保守拒绝写入`,
+        message: `无法读取 Codex 会话 ${escapeControlChars(ref.sessionId)} 的 writer 锁状态（${escapeControlChars(lockPath)}），已保守拒绝写入`,
         hint: '检查该路径的权限，或是否有同名文件占住了 thread-writer-locks 目录后重试；本次未写入任何内容。',
       });
     }
@@ -886,7 +886,7 @@ export const codexAdapter: ProviderAdapter = {
         code: 'codex_target_busy',
         sessionId: ref.sessionId,
         holders,
-        message: `Codex 会话 ${ref.sessionId} 正被其他 writer 持有（${who}），已拒绝写入以免并发损坏`,
+        message: `Codex 会话 ${escapeControlChars(ref.sessionId)} 正被其他 writer 持有（${who}），已拒绝写入以免并发损坏`,
         hint: '结束该 writer 进程后重试；本次未写入任何内容。',
       });
     }
@@ -899,7 +899,7 @@ export const codexAdapter: ProviderAdapter = {
       throw new PreflightBlockedError({
         code: 'codex_target_busy',
         sessionId: ref.sessionId,
-        message: `Codex 会话 ${ref.sessionId} 可能正被写入（无法探测 writer 锁，且 Desktop 正在运行），已保守拒绝`,
+        message: `Codex 会话 ${escapeControlChars(ref.sessionId)} 可能正被写入（无法探测 writer 锁，且 Desktop 正在运行），已保守拒绝`,
         hint: '退出 Codex/ChatGPT Desktop 后重试；本次未写入任何内容。',
       });
     }
@@ -907,7 +907,7 @@ export const codexAdapter: ProviderAdapter = {
       code: 'codex_desktop_unverifiable',
       sessionId: ref.sessionId,
       message:
-        `Codex 会话 ${ref.sessionId} 的 writer 锁无法探测（lsof 不可用），` +
+        `Codex 会话 ${escapeControlChars(ref.sessionId)} 的 writer 锁无法探测（lsof 不可用），` +
         'Desktop 进程状态也无法确认，已保守拒绝写入',
       hint: '检查 lsof 与 pgrep 是否可用（PATH、权限或安全软件拦截）后重试；本次未写入任何内容。',
     });
