@@ -23,7 +23,7 @@ body:
     id: scope
     attributes:
       label: 验证范围与限制
-      description: 哪些来源 / 目标、平台、CLI 版本已经验证；原生客户端验收是否做过
+      description: 哪些来源 / 目标、平台、CLI 版本已经验证；原生客户端验收是否做过；是否涉及写入路径（原子写、写前指纹、round-trip 自校验）
     validations:
       required: false
   - type: textarea
