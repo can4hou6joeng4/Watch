@@ -146,7 +146,7 @@ Use `--check` with `open ... --to <provider>` to preview the target and pending 
 
 `inspect` counts malformed lines in JSONL sessions. In `--json` output, `badLinesStatus: "complete"` means `badLines` is the count from a completed scan. With `"incomplete"`, the count is a confirmed lower bound and `warnings` explains why. SQLite and other sources outside the JSONL scan return `"not-applicable"` with `badLines: null`.
 
-In `inspect --json`, `session.storageScope` is `session-file` for an individual session file or `shared-database` for OpenCode. `sizeBytes` and `modifiedAt` describe the file at `filePath`. For OpenCode, `session.recordedUpdatedAt` gives the individual session's recorded update time, or `null` if the value is missing or invalid.
+In `inspect --json`, `session.storageScope` is `session-file` for an individual session file or `shared-database` for OpenCode. `sizeBytes` and `modifiedAt` describe the file at `filePath`. For OpenCode, `session.recordedUpdatedAt` gives the individual session's recorded update time, or `null` if the value is missing or invalid. Grok records carry no per-turn timestamps, so `structure.firstTimestamp` / `lastTimestamp` are inferred; in that case `--json` adds `timeRangeNote` describing where they come from, and the text output appends the same note to the time range.
 
 In the `status --json` lineage graph, match `nodes[].key` to `edges[].from` and `edges[].to`. Use the node's original `provider` and `sessionId` to display the session identity.
 
