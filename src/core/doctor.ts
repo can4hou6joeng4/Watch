@@ -170,6 +170,12 @@ export type DoctorReport = {
   store:
     | {
         available: true;
+        /**
+         * 这次诊断在库文件不存在时新建了它（含目录与迁移）。`openStore()` 会建库，
+         * 帮助行已如实说明；报告里再点一次，用户才知道眼前这个 0 条链的库是刚建出来的。
+         * 字段只在为 true 时出现（与其它「缺省即无此事」的字段一致）。
+         */
+        created?: boolean;
         chains: number;
         activeChains: number;
         /**
@@ -237,6 +243,11 @@ export type DoctorDeps = {
   adapters?: ProviderAdapter[];
   store: DoctorStore | null;
   storeError?: string;
+  /**
+   * 打开本地库之前它并不存在（由 CLI 判）：`openStore()` 会创建目录、建库并迁移。
+   * 只在库可用时置真——打开失败时说不清文件是怎么留下的。
+   */
+  storeCreated?: boolean;
   importJobs: ImportJobs | null;
   importJobsError?: string;
   /** 执行日志根目录（供报告标注路径）；不传则报告记为 null */
@@ -883,6 +894,7 @@ export async function doctorReport(cwd: string, deps: DoctorDeps): Promise<Docto
       if (!chains.length && deps.ephemeralNote) warnings.push(deps.ephemeralNote);
       store = {
         available: true,
+        ...(deps.storeCreated ? { created: true } : {}),
         chains: chains.length,
         activeChains: activeChains.length,
         chainsElsewhere,

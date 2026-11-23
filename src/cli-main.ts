@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { existsSync } from 'node:fs';
 import { stat } from 'node:fs/promises';
 import path from 'node:path';
 import { chainsElsewhereHint, chainsSameDirectoryHint, isStoreError, SEARCH_MAX_HITS, SEARCH_SCAN_LIMIT, searchElsewhereHint, searchSameDirectoryHint, Store, defaultDbPath, describeStoreErrorReason, describeStoreOpenFailure } from './core/store.js';
@@ -2298,6 +2299,10 @@ function describeClaudeProjectRetention(probes: ClaudeRetentionProbe[]): string 
 
 async function cmdDoctor(cwd: string, json: boolean, strict: boolean): Promise<void> {
   try {
+    // `openStore()` 会创建目录、建库并迁移；先记下库文件原来在不在，报告里点名「本次诊断新建」。
+    // `:memory:` 不落盘，不算新建。打开失败时说不清文件是怎么留下的，不置这一位。
+    const dbPath = process.env.WATCH_DB ?? defaultDbPath();
+    const storeFileExisted = dbPath === ':memory:' || existsSync(dbPath);
     const store = openStore();
     let importJobs: ImportJobs | null = null;
     let importsRoot: string | undefined;
@@ -2311,6 +2316,7 @@ async function cmdDoctor(cwd: string, json: boolean, strict: boolean): Promise<v
         : error instanceof Error ? error.message : String(error);
     }
     const report = await doctorReport(cwd, { store, storeError: lastStoreError ?? undefined, importJobs, importJobsError, importsRoot,
+      storeCreated: store !== null && !storeFileExisted,
       // 「本目录 0 条链」在 :memory: 下同样是一句结论：排障入口说不出库是临时的，
       // 用户得到的唯一解释就是「你从来没建过链」
       ...(ephemeralDb ? { ephemeralNote: ephemeralStoreWarning('本目录 0 条链来自这份临时库，它每条命令都是空的') } : {}),
@@ -2330,7 +2336,7 @@ async function cmdDoctor(cwd: string, json: boolean, strict: boolean): Promise<v
     const env = report.environment;
     console.log(`诊断 cwd: ${escapeControlChars(report.cwd)}`);
     console.log(`环境: watch ${env.watchVersion ?? '未知版本'} · node ${env.node} · ${env.platform}`);
-    console.log(`本地库文件: ${escapeControlChars(env.dbPath)}`);
+    console.log(`本地库文件: ${escapeControlChars(env.dbPath)}${report.store.available && report.store.created ? '（本次诊断新建）' : ''}`);
     console.log(`本地库体积: ${describeStoreFootprint(report.storeFootprint)}`);
     console.log(`导入日志目录: ${env.importsRoot ? escapeControlChars(env.importsRoot) : '（不可用）'}`);
     console.log('Agent 检测:');
