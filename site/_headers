@@ -62,3 +62,6 @@
 /de/*
   ! Content-Language
   Content-Language: de
+/pt-br/*
+  ! Content-Language
+  Content-Language: pt-BR
