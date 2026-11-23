@@ -4,5 +4,5 @@ contact_links:
     url: https://github.com/can4hou6joeng4/Watch/security/advisories/new
     about: 请私下报告漏洞，不要在公开 Issue 里贴未修复细节。
   - name: 使用咨询与讨论
-    url: https://github.com/can4hou6joeng4/Watch/discussions
-    about: 安装、配置与使用问题请先在这里讨论。
+    url: https://relay.bobochang.cn/#faq
+    about: 安装、配置与使用问题请先看官网的常见问题与实操指南；GitHub Issues 用于可复现的缺陷与功能请求。
