@@ -71,7 +71,7 @@ Watch 只做一件事：**把已保存的会话记录连同工作目录交到目
 
 ## 安装
 
-CLI 和桌面端运行时都需要 **Node ≥ 22.13**，以及实际使用的 Agent CLI。
+CLI 和桌面端运行时都需要 **Node ≥ 22.13**，以及实际使用的 Agent CLI。两份 `package.json` 也用 `engines.node` 声明这个下限，npm 安装时会提前提示版本不匹配；CLI 入口另有自己的版本守卫。
 
 按系统和处理器选择桌面安装包，下载见 [GitHub Releases](https://github.com/can4hou6joeng4/Watch/releases)。
 

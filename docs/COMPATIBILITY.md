@@ -481,3 +481,5 @@ Computer Use 原生管道未能启动，因此此记录依赖真实窗口中的�
 **`--since-compact` 的请求结果进入 `prompt --json`（2026-11-24，v0.1.343，隔离合成检查）**：顶层 `sinceCompact: true` 只说明「指定了」，找不到可用摘要时正文会写「未按 --since-compact 裁剪」，但脚本拿到的是同一个 `true`，摘要由 Claude Code / OpenCode / Pi / Kimi 中的哪家生成也只在 Markdown 措辞里。现在 `stats.sinceCompactResult` 取 `off` / `applied` / `unavailable`，`stats.compactSource` 取 `claude-code` / `opencode` / `pi` / `kimi`（仅 applied 时出现），两者与正文、findings 同一判据；四种来源与「没有摘要」「未指定」共 6 项合成用例，另在 CLI 用例中核对 Claude / OpenCode / Pi 的 JSON 输出。未运行原生客户端，不构成原生验收。
 
 **未回答尾轮的明确原因进入 `prompt --json`（2026-11-24，v0.1.344，隔离合成检查）**：`stats.unansweredTail` 只说明最后停在用户轮、没有助手回复，正文会按 `unansweredTailFailure()` 区分「来源日志明确标记为中止 / 失败」与「可能中断或还在生成」，但 `--json` 消费者仍要解析 Markdown。现在同一判据给出 `stats.unansweredTailReason`（`cancelled` / `error` / `unknown`，只在半轮时出现），不把无法确认说成失败。新增 4 项合成用例，并在既有 CLI 夹具里断言 Pi 无标记尾部为 `unknown`。未运行原生客户端，不构成原生验收。
+
+**安装期 Node 下限声明与 CLI 守卫同源（2026-11-24，v0.1.345，隔离合成检查）**：复核发现两份 `package.json` **早已**声明 `engines.node: ">=22.13.0"`，本地约定里「两份 package.json 都无 engines」的记录已过时；这次同步更正该记录，并新增断言核对两份声明与 `MIN_NODE`（22.13）一致，避免将来只改一处。npm 默认对不匹配只给 `EBADENGINE` 提示、不强制阻断，CLI 入口的守卫仍是运行时判据。未运行原生客户端，不构成原生验收。

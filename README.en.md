@@ -71,7 +71,7 @@ The images below were generated from synthetic sessions in an isolated environme
 
 ## Install
 
-The CLI and desktop app both require **Node ≥ 22.13** at runtime, plus whichever agent CLIs you use.
+The CLI and desktop app both require **Node ≥ 22.13** at runtime, plus whichever agent CLIs you use. Both `package.json` files declare the same floor in `engines.node`, so npm can warn about a mismatch at install time; the CLI entry point also has its own version guard.
 
 Download the desktop installer for your operating system and processor from [GitHub Releases](https://github.com/can4hou6joeng4/Watch/releases).
 

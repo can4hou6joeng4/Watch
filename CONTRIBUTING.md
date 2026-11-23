@@ -4,7 +4,7 @@
 
 ## 环境要求
 
-- **Node ≥ 22.13**。CLI 会在加载依赖 `node:sqlite` 的主模块前检查 Node 版本。使用 nvm 时，可在仓库根目录运行 `nvm install` 安装 `.nvmrc` 指定的 Node 22 系列，再运行 `node --version` 确认满足最低版本要求。
+- **Node ≥ 22.13**。CLI 会在加载依赖 `node:sqlite` 的主模块前检查 Node 版本。使用 nvm 时，可在仓库根目录运行 `nvm install` 安装 `.nvmrc` 指定的 Node 22 系列，再运行 `node --version` 确认满足最低版本要求。根与桌面端的 `package.json` 也用 `engines.node` 声明同一下限：npm 默认只提示版本不匹配（`EBADENGINE`），不强制阻断；CLI 入口的守卫仍是运行时判据，两处由本地测试核对一致。
 - 桌面端另需 Rust 工具链与 Tauri 的系统依赖。
 - 各 Agent CLI（Claude Code / Codex / OpenCode / Kimi / Pi / Grok）按需自行安装并认证；仓库不代管凭据。
 
