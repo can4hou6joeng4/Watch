@@ -36,7 +36,7 @@ import { escapeControlChars, hasControlChars } from './core/display.js';
 import { BOOLEAN_FLAGS, CHAIN_POSITIONAL, COMMAND_LIST, FLAGS_BY_COMMAND, HELP_COMMAND_ALIASES, POSITIONAL_BY_COMMAND, VALUE_FLAGS, VERSION_COMMAND_ALIASES, closestCommand, closestFlag, optionArgs } from './core/cli-commands.js';
 import { commandControlWarnings } from './core/terminal-command.js';
 import { trimUserKey } from './core/cli-input.js';
-import { describeResumeTargetUnfinished } from './core/rich.js';
+import { describeResumeTargetUnfinished, findContextDisclosure } from './core/rich.js';
 import { compressedCopy, compressedRetryAdvice, describePathReadFailureReason, describeReadFailureOrSelf, describeSessionReadFailureReason, isEmptySessionFileReason, probeSessionReadable, sessionFilePresence } from './core/read-text.js';
 import { describeWriteFailureReason } from './core/atomic.js';
 import { collectUnattributable, emptiedJson, emptiedSearchNote, emptiedSessionsWarning, unattributableEmptyNote, unattributableJson, unattributableNoPickMessage, unattributablePickWarning, unattributableSearchNote, unattributableWarning } from './core/session-coverage.js';
@@ -2382,6 +2382,9 @@ async function cmdInspect(json: boolean, sessionId: string | undefined, provider
   }
 
   const structure = summarizeSessionStructure(turns);
+  // 结构视图还要回答「Watch 自己发现了哪些缺口」：解析器把未识别记录、未配对结果、
+  // 压缩、失败等写成 Watch 自己的披露事件（只有计数，不含正文），这里原样列出。
+  const disclosures = findContextDisclosure(turns)?.summary.split(/\n(?=\[Watch 交接披露：)/) ?? [];
   const cwdNote = foundRef.cwd ? describeRecordedCwd(await inspectCwd(foundRef.cwd), foundRef.cwd) : null;
   if (cwdNote) warnings.push(cwdNote);
 
@@ -2399,6 +2402,7 @@ async function cmdInspect(json: boolean, sessionId: string | undefined, provider
           ...(cwdNote ? { cwdNote } : {}),
         },
         structure,
+        ...(disclosures.length ? { disclosures } : {}),
         badLines: badScan.count,
         usage: tokenUsage,
         ...(usageNote ? { usageNote } : {}),
@@ -2430,12 +2434,16 @@ async function cmdInspect(json: boolean, sessionId: string | undefined, provider
   );
   console.log(`附件: 图片 ${structure.attachments.images} · 文件 ${structure.attachments.files}`);
   if (structure.incompleteTurns) console.log(`未完成轮次: ${structure.incompleteTurns}（来源停在非终态的阶段回复）`);
+  if (disclosures.length) {
+    console.log(`上下文披露: ${disclosures.length} 条（Watch 记录的缺口与降级，不含正文）`);
+    for (const line of disclosures) console.log(`  - ${escapeControlChars(line)}`);
+  }
   console.log(`坏行: ${badScan.count}${badScan.error ? `（无法确认：${escapeControlChars(badScan.error)}）` : ''}`);
   if (tokenUsage) console.log(`用量: 输入 ${tokenUsage.inputTokens} · 输出 ${tokenUsage.outputTokens}`);
   else if (usageNote) console.log(`用量: 不可用（${usageNote}）`);
   else if (!adapter.sessionUsage) console.log('用量: 该 provider 不提供用量记录');
   else console.log('用量: 没有可读的用量记录');
-  console.log('（以上只有计数：不含对话正文、工具入参与附件数据。）');
+  console.log('（以上只有计数与 Watch 自己的披露，不含对话正文、工具入参与附件数据。）');
 }
 
 async function cmdDoctor(cwd: string, json: boolean, strict: boolean): Promise<void> {

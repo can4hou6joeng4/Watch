@@ -1,3 +1,4 @@
+import { WATCH_CONTEXT_DISCLOSURE_PREFIX } from './rich.js';
 import type { UnifiedTurn } from './types.js';
 
 /**
@@ -56,7 +57,9 @@ export function summarizeSessionStructure(turns: readonly UnifiedTurn[]): Sessio
     for (const event of turn.events ?? []) {
       switch (event.kind) {
         case 'text':
-          events.text += 1;
+          // Watch 自己的披露事件不计入来源的 text 事件：它们只描述缺口，由 inspect 的
+          // `disclosures` 单独列出（否则一条未识别记录会同时抬高「事件」并出现在披露里）。
+          if (!event.summary.startsWith(WATCH_CONTEXT_DISCLOSURE_PREFIX)) events.text += 1;
           break;
         case 'thinking':
           events.thinking += 1;
