@@ -1088,7 +1088,7 @@ export function describeUnansweredTail(
   const reason = confirmed
     ? `这一轮在来源日志里以${confirmed === 'cancelled' ? '中止' : '失败'}结束（不是仍在生成）`
     : '这一轮可能被中断或还在生成';
-  return `${label}最后停在用户消息上（「${preview}」），没有对应的助手回复：${reason}，${next}`;
+  return `${escapeControlChars(label)}最后停在用户消息上（「${escapeControlChars(preview)}」），没有对应的助手回复：${reason}，${next}`;
 }
 
 /**

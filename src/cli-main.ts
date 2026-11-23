@@ -125,7 +125,7 @@ function rejectArguments(json: boolean, message: string): never {
 
 function fail(json: boolean, message: string, extra?: Record<string, unknown>): never {
   if (json) console.log(JSON.stringify({ ok: false, error: message, ...extra }));
-  else console.error(message);
+  else console.error(escapeControlChars(message));
   process.exit(1);
 }
 
@@ -192,7 +192,7 @@ function failBlocked(error: HandoffBlockedError | PreflightBlockedError, json: b
     hint,
   };
   if (json) console.log(JSON.stringify(payload));
-  else console.error(`[blocked:${code}] ${error.message}\n${payload.hint}`);
+  else console.error(`[blocked:${code}] ${escapeControlChars(error.message)}\n${escapeControlChars(payload.hint)}`);
   process.exit(1);
 }
 
@@ -1298,7 +1298,7 @@ async function cmdOpen(
       // 文本模式的用户看不到「为什么是新建」
       for (const warning of checked.warnings ?? []) console.error(`提示: ${escapeControlChars(warning)}`);
       if (!checked.writable) {
-        for (const line of [checked.error, checked.blocked?.hint]) if (line) console.error(line);
+        for (const line of [checked.error, checked.blocked?.hint]) if (line) console.error(escapeControlChars(line));
         process.exit(1);
       }
       return;
@@ -1318,8 +1318,8 @@ async function cmdOpen(
       }
       if (!json && result.blocked) {
         // 与 failBlocked 同一格式：文本模式也要给 code 与下一步，不能只在 --json 里有
-        console.error(`[blocked:${result.blocked.code}] ${result.error ?? '未知错误'}`);
-        if (result.blocked.hint) console.error(result.blocked.hint);
+        console.error(`[blocked:${result.blocked.code}] ${escapeControlChars(result.error ?? '未知错误')}`);
+        if (result.blocked.hint) console.error(escapeControlChars(result.blocked.hint));
         process.exit(1);
       }
       fail(json, result.error ?? '未知错误', Object.keys(extra).length ? extra : undefined);
@@ -2476,7 +2476,7 @@ async function cmdInspect(json: boolean, sessionId: string | undefined, provider
   else if (badScan.error) console.log(`坏行: 扫描未完成（已确认 ${badScan.count} 行，原因见警告）`);
   else console.log(`坏行: ${badScan.count}`);
   if (tokenUsage) console.log(`用量: 输入 ${tokenUsage.inputTokens} · 输出 ${tokenUsage.outputTokens}`);
-  else if (usageNote) console.log(`用量: 不可用（${usageNote}）`);
+  else if (usageNote) console.log(`用量: 不可用（${escapeControlChars(usageNote)}）`);
   else if (!adapter.sessionUsage) console.log('用量: 该 provider 不提供用量记录');
   else console.log('用量: 没有可读的用量记录');
   console.log('（输出含会话标识、本机路径和工具名。公开前请核对这些字段。）');
@@ -3566,7 +3566,8 @@ async function cmdUsage(cwd: string, json: boolean, chain?: string): Promise<voi
       if (item.usageBadLinesScanError) {
         notes.push(`用量数据源坏行无法统计（${item.usageBadLinesScanError}），这个数是下界且程度未知`);
       }
-      const note = notes.length ? `（${notes.join('；')}）` : '';
+      // 坏行扫描错误与内容完整性说明可能带本机路径 / 原始 errno 文案， stdout 没有第二层转义。
+      const note = notes.length ? escapeControlChars(`（${notes.join('；')}）`) : '';
       console.log(
         // 打全 id：截成 8 位再省略号就复制不了，接不上 watch adopt --session / 原生 resume
         `  ${item.provider.padEnd(8)} ${escapeControlChars(item.sessionId)}  in=${u.inputTokens}  out=${u.outputTokens}${note}`,
