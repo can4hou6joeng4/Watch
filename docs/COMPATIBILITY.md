@@ -483,3 +483,5 @@ Computer Use 原生管道未能启动，因此此记录依赖真实窗口中的�
 **未回答尾轮的明确原因进入 `prompt --json`（2026-11-24，v0.1.344，隔离合成检查）**：`stats.unansweredTail` 只说明最后停在用户轮、没有助手回复，正文会按 `unansweredTailFailure()` 区分「来源日志明确标记为中止 / 失败」与「可能中断或还在生成」，但 `--json` 消费者仍要解析 Markdown。现在同一判据给出 `stats.unansweredTailReason`（`cancelled` / `error` / `unknown`，只在半轮时出现），不把无法确认说成失败。新增 4 项合成用例，并在既有 CLI 夹具里断言 Pi 无标记尾部为 `unknown`。未运行原生客户端，不构成原生验收。
 
 **安装期 Node 下限声明与 CLI 守卫同源（2026-11-24，v0.1.345，隔离合成检查）**：复核发现两份 `package.json` **早已**声明 `engines.node: ">=22.13.0"`，本地约定里「两份 package.json 都无 engines」的记录已过时；这次同步更正该记录，并新增断言核对两份声明与 `MIN_NODE`（22.13）一致，避免将来只改一处。npm 默认对不匹配只给 `EBADENGINE` 提示、不强制阻断，CLI 入口的守卫仍是运行时判据。未运行原生客户端，不构成原生验收。
+
+**链 id 的文本出口补齐控制字符转义（2026-11-24，v0.1.346，隔离合成检查）**：`chains.id === sessions.id`，同属不可信字符串；链名、会话 id 的文本输出早已过 `escapeControlChars()`，但 `status` 的「链: …」、`chain list`、`chain new` / `rename` / `use` 的括号里仍直接拼 id。当前实现生成的是 UUID，但库里的旧行或被改写的行仍可能带 ESC / 换行。现在这些文本出口统一转义，`--json` 保留原值。新增 1 项 CLI 合成断言（把链 id 改成含 ESC 与换行的字符串，检查三种文本输出只含字面转义、JSON 不变）。未运行原生客户端，不构成原生验收。
