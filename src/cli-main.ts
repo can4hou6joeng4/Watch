@@ -84,7 +84,7 @@ function usage(reason?: string): never {
                                                     摘要交接：把会话渲染成可粘贴给任意 Agent 的 Markdown（降级方案，不写任何文件）
                                                     省略会话 id 时自动挑本目录按修改时间最新的可读会话，并在文档头标明
   watch inspect <session-id> [--provider <name>] [--json]
-                                                    只读查看会话元数据与轮次、事件、附件、坏行及披露计数
+                                                    只读查看会话元数据、结构及 JSONL 坏行扫描结果
   watch doctor [--json] [--strict] [--cwd <path>]   环境诊断：Agent 检测、本地库、导入日志（不改动原生会话；本地库不存在时会创建 Watch 本地库）
   watch new <provider> [--json] [--cwd <path>] [--chain <id|name>]
   watch chain list|new <name>|rename <id|name> <new>|archive <id|name>|use <id|name> [--json] [--cwd]
@@ -2353,12 +2353,17 @@ async function cmdInspect(json: boolean, sessionId: string | undefined, provider
     );
   }
 
-  const badScan = await scanUnparsableJsonLines(foundRef.filePath);
-  if (badScan.count > 0) {
-    warnings.push(`来源会话 ${id} 有 ${badScan.count} 行无法解析（截断或损坏），结构计数不含这些记录`);
+  // OpenCode 的数据库可通过环境变量指定任意文件名，格式不能只靠后缀判断。
+  const badScan = adapter.id !== 'opencode' && foundRef.filePath.endsWith('.jsonl')
+    ? await scanUnparsableJsonLines(foundRef.filePath, { allowMissing: false })
+    : null;
+  if (badScan) {
+    if (badScan.count > 0) {
+      warnings.push(`来源会话 ${id} 有 ${badScan.count} 行无法解析（截断或损坏），结构计数不含这些记录`);
+    }
+    const failure = describeBadLinesScanFailure(badScan, `来源会话 ${id}`, '先确认该文件可读再重试');
+    if (failure) warnings.push(failure);
   }
-  const badScanFailure = describeBadLinesScanFailure(badScan, `来源会话 ${id}`, '坏行数无法确认——先确认该文件可读');
-  if (badScanFailure) warnings.push(badScanFailure);
 
   let tokenUsage: TokenUsage | null = null;
   let usageNote: string | undefined;
@@ -2396,7 +2401,8 @@ async function cmdInspect(json: boolean, sessionId: string | undefined, provider
           ...(cwdNote ? { cwdNote } : {}),
         },
         structure,
-        badLines: badScan.count,
+        badLines: badScan?.count ?? null,
+        badLinesStatus: badScan ? (badScan.error ? 'incomplete' : 'complete') : 'not-applicable',
         usage: tokenUsage,
         ...(usageNote ? { usageNote } : {}),
         ...(warnings.length ? { warnings } : {}),
@@ -2428,7 +2434,9 @@ async function cmdInspect(json: boolean, sessionId: string | undefined, provider
   console.log(`附件: 图片 ${structure.attachments.images} · 文件 ${structure.attachments.files}`);
   if (structure.incompleteTurns) console.log(`未完成轮次: ${structure.incompleteTurns}（来源停在非终态的阶段回复）`);
   if (structure.disclosureEvents) console.log(`上下文披露: ${structure.disclosureEvents} 条事件（仅计数）`);
-  console.log(`坏行: ${badScan.count}${badScan.error ? `（无法确认：${escapeControlChars(badScan.error)}）` : ''}`);
+  if (!badScan) console.log('坏行: 不适用（仅扫描 JSONL 会话）');
+  else if (badScan.error) console.log(`坏行: 扫描未完成（已确认 ${badScan.count} 行，原因见警告）`);
+  else console.log(`坏行: ${badScan.count}`);
   if (tokenUsage) console.log(`用量: 输入 ${tokenUsage.inputTokens} · 输出 ${tokenUsage.outputTokens}`);
   else if (usageNote) console.log(`用量: 不可用（${usageNote}）`);
   else if (!adapter.sessionUsage) console.log('用量: 该 provider 不提供用量记录');

@@ -50,13 +50,15 @@ export type BadLinesScan = {
  * 「没扫成」被讲成「没有坏行」，而 r84 的流式 parse 恰恰能正常读这种会话。现在与
  * `iterateFileLines()` 同一条流式路径，峰值内存降到一行。
  *
- * **读失败不抛、也不冒充 0**：文件不存在（`ENOENT` / `ENOTDIR`，grok 的 `updates.jsonl`
- * 缺失属正常事实）返回 0；其余读失败返回 `{ count, error }`，由调用方在 warnings /
- * findings 里披露「坏行无法统计」。这是辅助扫描，抛出去会把 `open` / `prompt` / `doctor` /
- * `search` 整条命令打挂，反而比缺一句披露更糟。只对 `*.jsonl` 有意义：kimi 是单文件 JSON、
- * opencode 是 SQLite，直接返回 0。
+ * **读失败返回 `{ count, error }`**，由调用方在 warnings / findings 里披露。
+ * 默认允许文件缺失（如 Grok 可选的 `updates.jsonl`），此时返回 0。
+ * 需要核对本应存在的文件时传 `allowMissing: false`，缺失也会报告原因。
+ * 此扫描只处理 `*.jsonl`，其他路径直接返回 0。
  */
-export async function scanUnparsableJsonLines(filePath: string): Promise<BadLinesScan> {
+export async function scanUnparsableJsonLines(
+  filePath: string,
+  { allowMissing = true }: { allowMissing?: boolean } = {},
+): Promise<BadLinesScan> {
   if (!filePath.endsWith('.jsonl')) return { count: 0 };
   let count = 0;
   try {
@@ -65,8 +67,7 @@ export async function scanUnparsableJsonLines(filePath: string): Promise<BadLine
     }
     return { count };
   } catch (error) {
-    // 缺失不是「坏行」，也不是故障：调用方自己的 stat / parse 分支负责说清文件去哪了
-    if (isMissingPathError(error)) return { count: 0 };
+    if (allowMissing && isMissingPathError(error)) return { count: 0 };
     // 带上路径：这些披露句只给会话 id，不给路径的话「哪个文件读不出来」要靠猜
     return {
       count,
