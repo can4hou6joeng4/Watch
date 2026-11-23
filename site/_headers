@@ -68,3 +68,6 @@
 /id/*
   ! Content-Language
   Content-Language: id
+/tr/*
+  ! Content-Language
+  Content-Language: tr
