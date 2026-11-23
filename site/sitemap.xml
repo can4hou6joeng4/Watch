@@ -5,11 +5,19 @@
     <lastmod>2026-11-23</lastmod>
   </url>
   <url>
+    <loc>https://relay.bobochang.cn/zh-tw/</loc>
+    <lastmod>2026-11-23</lastmod>
+  </url>
+  <url>
     <loc>https://relay.bobochang.cn/en/</loc>
     <lastmod>2026-11-23</lastmod>
   </url>
   <url>
     <loc>https://relay.bobochang.cn/guides/claude-code-limit-to-codex/</loc>
+    <lastmod>2026-10-14</lastmod>
+  </url>
+  <url>
+    <loc>https://relay.bobochang.cn/zh-tw/guides/claude-code-limit-to-codex/</loc>
     <lastmod>2026-10-14</lastmod>
   </url>
   <url>
@@ -21,11 +29,19 @@
     <lastmod>2026-10-14</lastmod>
   </url>
   <url>
+    <loc>https://relay.bobochang.cn/zh-tw/guides/opencode-handover-sqlite-isolation/</loc>
+    <lastmod>2026-10-14</lastmod>
+  </url>
+  <url>
     <loc>https://relay.bobochang.cn/en/guides/opencode-handover-sqlite-isolation/</loc>
     <lastmod>2026-10-14</lastmod>
   </url>
   <url>
     <loc>https://relay.bobochang.cn/guides/context-limit-vs-usage-limit-handoff/</loc>
+    <lastmod>2026-10-14</lastmod>
+  </url>
+  <url>
+    <loc>https://relay.bobochang.cn/zh-tw/guides/context-limit-vs-usage-limit-handoff/</loc>
     <lastmod>2026-10-14</lastmod>
   </url>
   <url>
@@ -37,11 +53,19 @@
     <lastmod>2026-10-14</lastmod>
   </url>
   <url>
+    <loc>https://relay.bobochang.cn/zh-tw/guides/opus-5-5-five-hour-limit/</loc>
+    <lastmod>2026-10-14</lastmod>
+  </url>
+  <url>
     <loc>https://relay.bobochang.cn/en/guides/opus-5-5-five-hour-limit/</loc>
     <lastmod>2026-10-14</lastmod>
   </url>
   <url>
     <loc>https://relay.bobochang.cn/guides/empty-session-resume-check/</loc>
+    <lastmod>2026-11-23</lastmod>
+  </url>
+  <url>
+    <loc>https://relay.bobochang.cn/zh-tw/guides/empty-session-resume-check/</loc>
     <lastmod>2026-11-23</lastmod>
   </url>
   <url>
@@ -53,11 +77,19 @@
     <lastmod>2026-11-18</lastmod>
   </url>
   <url>
+    <loc>https://relay.bobochang.cn/zh-tw/guides/prompt-handoff-without-adapter/</loc>
+    <lastmod>2026-11-18</lastmod>
+  </url>
+  <url>
     <loc>https://relay.bobochang.cn/en/guides/prompt-handoff-without-adapter/</loc>
     <lastmod>2026-11-18</lastmod>
   </url>
   <url>
     <loc>https://relay.bobochang.cn/guides/codex-compressed-rollout-recovery/</loc>
+    <lastmod>2026-11-23</lastmod>
+  </url>
+  <url>
+    <loc>https://relay.bobochang.cn/zh-tw/guides/codex-compressed-rollout-recovery/</loc>
     <lastmod>2026-11-23</lastmod>
   </url>
   <url>

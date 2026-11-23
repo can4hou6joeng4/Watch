@@ -44,6 +44,9 @@
   ! Cache-Control
   Cache-Control: public, max-age=86400, stale-while-revalidate=604800
 
+/zh-tw/*
+  ! Content-Language
+  Content-Language: zh-TW
 /en/*
   ! Content-Language
   Content-Language: en
