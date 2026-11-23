@@ -20,11 +20,11 @@ export const locales = {
 };
 export const defaultLocale = 'en';
 /**
- * 默认发布的语言：手写稿 zh / en，加上已补齐的语言包（zh-tw、ja、ko、de、fr 与 pt-br 于 2026-11-23 先后补齐）。
+ * 默认发布的语言：手写稿 zh / en，加上已补齐的语言包（zh-tw、ja、ko、de、fr、pt-br 与 id 于 2026-11-23 先后补齐）。
  * 新语言包补齐后加到这里：build-site.mjs 用它决定构建范围与「默认语言缺键必须失败」的守卫，
  * 站点测试也从这里取，避免构建与测试各写一份清单、加一门语言要改三处。
  */
-export const defaultLocaleList = ['zh', 'en', 'zh-tw', 'ja', 'ko', 'de', 'fr', 'pt-br'];
+export const defaultLocaleList = ['zh', 'en', 'zh-tw', 'ja', 'ko', 'de', 'fr', 'pt-br', 'id'];
 export const siteVerification = { 'baidu-site-verification': 'codeva-W4z09gkNmy' };
 export const agents = [
   { id: 'claude', label: 'Claude Code' }, { id: 'codex', label: 'OpenAI Codex' },
