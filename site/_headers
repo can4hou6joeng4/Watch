@@ -65,3 +65,6 @@
 /pt-br/*
   ! Content-Language
   Content-Language: pt-BR
+/id/*
+  ! Content-Language
+  Content-Language: id
