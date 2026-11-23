@@ -81,7 +81,7 @@ function usage(reason?: string): never {
   watch prompt [<session-id>] [--provider <name>] [--profile minimal|standard|verbose|full] [--last <n>] [--since-compact] [--json]
                                                     摘要交接：把会话渲染成可粘贴给任意 Agent 的 Markdown（降级方案，不写任何文件）
                                                     省略会话 id 时自动挑本目录按修改时间最新的可读会话，并在文档头标明
-  watch doctor [--json] [--strict] [--cwd <path>]   只读环境诊断：Agent 检测、本地库、导入日志（不写盘）
+  watch doctor [--json] [--strict] [--cwd <path>]   环境诊断：Agent 检测、本地库、导入日志（不改动原生会话；本地库不存在时会创建 Watch 本地库）
   watch new <provider> [--json] [--cwd <path>] [--chain <id|name>]
   watch chain list|new <name>|rename <id|name> <new>|archive <id|name>|use <id|name> [--json] [--cwd]
   watch search <query> [--json] [--cwd <path>] [--reset-index]   查询词以 - 开头时写成 watch search -- <query>
