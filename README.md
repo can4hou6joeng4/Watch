@@ -146,7 +146,7 @@ import-codex  prepare|confirm|status|project-prepare|project-confirm|project-sta
 
 `inspect` 只对 JSONL 会话统计坏行。`--json` 中，`badLinesStatus` 为 `complete` 时，`badLines` 是完整扫描的计数。`incomplete` 表示扫描未完成，计数是已确认的下界，原因见 `warnings`。SQLite 等不适用的来源返回 `not-applicable`，`badLines` 为 `null`。
 
-`inspect --json` 的 `session.storageScope` 为 `session-file`（单会话文件）或 `shared-database`（OpenCode 共享数据库）。`sizeBytes` 和 `modifiedAt` 描述 `filePath` 指向的文件。OpenCode 单条会话的更新时间另见 `session.recordedUpdatedAt`，值缺失或不可用时为 `null`。Grok 的记录没有逐轮时间戳，`structure.firstTimestamp` / `lastTimestamp` 是推定值，此时 `--json` 另带 `timeRangeNote` 说明来源，文本输出在时间范围后括注。`structure.timestampedTurns` 是计入时间范围的轮数；部分轮次缺时间戳时，`--json` 另有 `timestampNote` 写明覆盖比例，文本输出同样括注。
+`inspect --json` 的 `session.storageScope` 为 `session-file`（单会话文件）或 `shared-database`（OpenCode 共享数据库）。`sizeBytes` 和 `modifiedAt` 描述 `filePath` 指向的文件。OpenCode 单条会话的更新时间另见 `session.recordedUpdatedAt`，值缺失或不可用时为 `null`。Grok 的记录没有逐轮时间戳，`structure.firstTimestamp` / `lastTimestamp` 是推定值，此时 `--json` 另带 `timeRangeNote` 说明来源，文本输出在时间范围后括注。`structure.timestampedTurns` 是计入时间范围的轮数；部分轮次缺时间戳时，`--json` 另有 `timestampNote` 写明覆盖比例，文本输出同样括注。`structure.events.danglingToolCalls` 统计按 callId 找不到对应结果的工具调用；可能仍在运行或已中断，不等于数据丢失，输出只给计数，不给 callId 或工具入参。
 
 读取 `status --json` 的血缘图时，用 `nodes[].key` 匹配 `edges[].from` 和 `edges[].to`。展示会话身份时用节点里的原始 `provider` 和 `sessionId`。
 
