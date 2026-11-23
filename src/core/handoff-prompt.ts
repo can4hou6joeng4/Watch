@@ -210,6 +210,13 @@ export type PromptSessionMeta = {
    */
   sourceWorktreeNote?: string;
   /**
+   * 链接工作树探测失败（`inspectWorktree()` 的 `unknown`）。
+   *
+   * 正文已有「无法确认」一行；这里给 `--json` 与 finding 一个独立结论，避免
+   * `sourceWorktree` 缺省被脚本读成「不是链接工作树」。原因原样保留，正文另行转义。
+   */
+  sourceWorktreeUnknown?: string;
+  /**
    * 来源工作目录当前的 git 分支（普通仓库根；`inspectRepoBranch()` 的结论）。
    *
    * 与 `sourceWorktreeNote` 互补：链接工作树的分支写在那一行里，这里覆盖普通仓库根。
@@ -1050,6 +1057,8 @@ export function buildHandoffPrompt(
     lines.push(`- 工作目录状态：${headerLine(meta.sourceCwdNote)}`);
   }
   // 这不是降级，是目录的**类型**：不说的话读者从路径上看不出它是独立工作树。
+  // 探测失败单独记 finding：缺省的 sourceWorktree 既可能是「不是工作树」，也可能是「没确认」。
+  if (meta.sourceWorktreeUnknown) addFinding(findings, 'prompt_source_worktree_unreadable', 'degraded', 1);
   if (meta.sourceWorktreeNote) {
     lines.push(`- 工作目录类型：${headerLine(meta.sourceWorktreeNote)}`);
   }

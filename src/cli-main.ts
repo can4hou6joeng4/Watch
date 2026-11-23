@@ -2009,6 +2009,8 @@ async function cmdPrompt(
   // 链接工作树和目录状态是两件事：目录还在，但它是 `git worktree add` 建出来的独立工作树时，
   // 文档读者从路径上看不出来，可能回主工作树改同一份文件——必须写进正文（PLAN §5）。
   let sourceWorktreeNote: string | undefined;
+  // 探测失败的结构化结论：缺省的 sourceWorktree 不能同时表示「不是工作树」与「没确认」。
+  let sourceWorktreeUnknown: string | undefined;
   // 结构化 worktree 字段同样给脚本用；主工作树或分支读不出来时保留 null，不编造。
   let sourceWorktree: { mainWorktree: string | null; branch: string | null } | undefined;
   // 链接工作树的分支已在「工作目录类型」一行里；普通仓库根再补一行当前分支，
@@ -2035,6 +2037,7 @@ async function cmdPrompt(
       const worktreeNote = describeWorktreeNote(worktreeProbe);
       if (worktreeNote) {
         sourceWorktreeNote = worktreeNote;
+        if (worktreeProbe.state === 'unknown') sourceWorktreeUnknown = worktreeProbe.reason;
         if (worktreeProbe.state === 'worktree') {
           sourceWorktree = { mainWorktree: worktreeProbe.mainWorktree, branch: worktreeProbe.branch };
         }
@@ -2099,6 +2102,7 @@ async function cmdPrompt(
       ...(sourceDrift && sourceChange.kind === 'unverifiable' ? { sourceDriftUnknownNote: sourceDrift } : {}),
       ...(sourceCwdNote ? { sourceCwdNote } : {}),
       ...(sourceWorktreeNote ? { sourceWorktreeNote } : {}),
+      ...(sourceWorktreeUnknown ? { sourceWorktreeUnknown } : {}),
       ...(sourceBranchNote ? { sourceBranchNote } : {}),
       ...(sourceBranchUnreadable ? { sourceBranchUnreadable: true } : {}),
     },
@@ -2136,6 +2140,7 @@ async function cmdPrompt(
       ...(sourceChange.kind === 'unverifiable' ? { sourceDriftUnknown: sourceChange.reason } : {}),
       ...(sourceBranch ? { sourceBranch } : {}),
       ...(sourceWorktree ? { sourceWorktree } : {}),
+      ...(sourceWorktreeUnknown ? { sourceWorktreeUnknown } : {}),
       stats: result.stats,
       findings: result.findings,
       // 脚本拿得到结构化的改动清单，不必去解析 Markdown 里的那一节。判定与正文同一把尺：
