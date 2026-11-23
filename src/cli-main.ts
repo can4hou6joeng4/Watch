@@ -692,7 +692,7 @@ async function cmdStatus(cwd: string, json: boolean, chain?: string): Promise<vo
   const { tips, chainTip, chainTipUnusable, chainTipEmpty, chainTipTurns, unreadable, history, historyFailed, lineage, chain: current, warnings } = result;
   for (const warning of warnings) console.error(`警告: ${escapeControlChars(warning)}`);
   // 链名是用户输入、库里可能留着写入守卫上线前的坏名字：进终端前转义，别把 ESC / 换行打出去
-  if (current) console.log(`链: ${escapeControlChars(current.name)}${current.status === 'archived' ? ' [归档]' : ''}  (${current.id})`);
+  if (current) console.log(`链: ${escapeControlChars(current.name)}${current.status === 'archived' ? ' [归档]' : ''}  (${escapeControlChars(current.id)})`);
   // 同一目录可能有多条链：只显示当前这条会让文本用户以为没有别的（--json 的 chains 一直是全量）
   const otherChains = result.chains.filter((c) => c.id !== current?.id);
   if (otherChains.length) {
@@ -3116,7 +3116,7 @@ async function cmdChain(cwd: string, json: boolean, action?: string, a?: string,
                         : ''
             }`
           : '';
-        console.log(`  ${escapeControlChars(c.name)}${mark}${here}  ${c.id}  lastUsed=${fmtTime(c.lastUsedAt)}${tipText}`);
+        console.log(`  ${escapeControlChars(c.name)}${mark}${here}  ${escapeControlChars(c.id)}  lastUsed=${fmtTime(c.lastUsedAt)}${tipText}`);
       }
       return;
     }
@@ -3162,7 +3162,7 @@ async function cmdChain(cwd: string, json: boolean, action?: string, a?: string,
         if (chainCwdIssue) console.error(`警告: ${chainCwdIssue}`);
         if (aliasIssue) console.error(`警告: ${aliasIssue}`);
         if (ephemeralNote) console.error(`警告: ${ephemeralNote}`);
-        console.log(`已创建链: ${escapeControlChars(chain.name)}  (${chain.id})`);
+        console.log(`已创建链: ${escapeControlChars(chain.name)}  (${escapeControlChars(chain.id)})`);
         // 与 `chain rename` / `chain archive` 的提示同一位置：跟在结果下一行，不是降级警告
         if (switchNote) console.log(`  ${switchNote}`);
       }
@@ -3183,7 +3183,7 @@ async function cmdChain(cwd: string, json: boolean, action?: string, a?: string,
           `链「${shown}」本来就叫这个名字，本次没有做任何改动` +
           (wasArchived ? `；它是归档状态，可用 watch chain use ${shown} 恢复成当前链` : '');
         if (json) console.log(JSON.stringify({ ok: true, unchanged: true, chain: found, warnings: [note] }));
-        else console.log(`未改动: ${shown}  (${found.id})——${note}`);
+        else console.log(`未改动: ${shown}  (${escapeControlChars(found.id)})——${note}`);
         return;
       }
       const chain = store.renameChain(found.id, b);
@@ -3200,7 +3200,7 @@ async function cmdChain(cwd: string, json: boolean, action?: string, a?: string,
         );
       } else {
         if (ephemeralWrite) console.error(`警告: ${ephemeralWrite}`);
-        console.log(`已重命名: ${escapeControlChars(chain.name)}  (${chain.id})`);
+        console.log(`已重命名: ${escapeControlChars(chain.name)}  (${escapeControlChars(chain.id)})`);
         if (renameHint) console.log(`  ${renameHint}`);
       }
       return;
@@ -3275,7 +3275,7 @@ async function cmdChain(cwd: string, json: boolean, action?: string, a?: string,
           );
         } else {
           if (ephemeralWrite) console.error(`警告: ${ephemeralWrite}`);
-          console.log(`已恢复并设为当前链: ${escapeControlChars(restored.name)}  (${restored.id})`);
+          console.log(`已恢复并设为当前链: ${escapeControlChars(restored.name)}  (${escapeControlChars(restored.id)})`);
         }
         return;
       }
@@ -3305,7 +3305,7 @@ async function cmdChain(cwd: string, json: boolean, action?: string, a?: string,
         );
       } else {
         if (ephemeralWrite) console.error(`警告: ${ephemeralWrite}`);
-        console.log(`当前链: ${escapeControlChars(touched.name)}  (${touched.id})`);
+        console.log(`当前链: ${escapeControlChars(touched.name)}  (${escapeControlChars(touched.id)})`);
         if (note) console.log(`  ${note}`);
       }
       return;
@@ -3474,7 +3474,7 @@ async function cmdUsage(cwd: string, json: boolean, chain?: string): Promise<voi
       return;
     }
     if (result.chain) {
-      console.log(`链: ${escapeControlChars(result.chain.name)}  (${result.chain.id})`);
+      console.log(`链: ${escapeControlChars(result.chain.name)}  (${escapeControlChars(result.chain.id)})`);
     } else if (chain) {
       // 本地库不可用时 chainUsage 返回 chain:null——这时连「这条链是否存在」都没查成。
       // 单独印一行「链: keep」与 --json 的 chain:null 矛盾，用户会当成「链在、只是没有用量」
