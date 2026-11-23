@@ -25,3 +25,12 @@ export function isoFromEpochMs(value: unknown): string {
   const date = new Date(value);
   return Number.isNaN(date.getTime()) ? '' : date.toISOString();
 }
+
+/**
+ * 写入目标会话时披露来源时间戳的来路。`timingNote` 是适配器对 `UnifiedTurn.timestamp` 的来源说明
+ * （见 `ProviderAdapter.timingNote`）；这类值会按原值写进目标记录，调用方不能说成逐轮的真实时间。
+ * 只在真的写了 `turnCount` 轮时调用：`--check`、零增量与 resume 快路径没有写入，不需要这句。
+ */
+export function describeInferredTimeWrite(timingNote: string, turnCount: number): string {
+  return `来源的逐轮时间是推定值：${timingNote}；本次按原值写入目标会话的 ${turnCount} 轮。`;
+}

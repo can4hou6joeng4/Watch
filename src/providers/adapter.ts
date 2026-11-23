@@ -283,7 +283,8 @@ export interface ProviderAdapter {
   /**
    * 可选：这家原生记录里的逐轮时间戳**不是真实时间**时，用一句中文说清它是怎么来的。
    *
-   * `watch prompt` 会在「时间范围」那一行把它当括注印出来。没有这一项的适配器表示
+   * `watch prompt` 会在「时间范围」那一行把它当括注印出来；`switch` / `open --from` /
+   * `open --to` 在真的写入这类轮次后，也会把同一来路写进结果说明。没有这一项的适配器表示
    * `UnifiedTurn.timestamp` 来自记录本身，调用方照旧只说明两端各取什么。
    */
   readonly timingNote?: string;

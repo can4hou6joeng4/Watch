@@ -12,6 +12,7 @@ import { cliDetectFailedBlock, cliMissingBlock, PreflightBlockedError, SessionLo
 import type { SessionLookupFailureKind } from './providers/adapter.js';
 import { getAdapter, listAdapters, unknownProviderMessage } from './providers/registry.js';
 import { describeBadLinesScanFailure, describeZeroTurnReason, scanUnparsableJsonLines } from './core/jsonl.js';
+import { describeInferredTimeWrite } from './core/time.js';
 import { usageBadLinesReason, usageSidecarProblem } from './core/usage-integrity.js';
 import { collectUnattributable, unattributablePickWarning } from './core/session-coverage.js';
 import {
@@ -756,6 +757,9 @@ export async function openSession(
             `已把 ${escapeControlChars(from)} 的 ${merged} 轮新内容${vanished ? '写入' : '并入'} ` +
               `${target.adapter.displayName} ${vanished ? '新会话' : '会话'} ${escapeControlChars(newRef.sessionId)}`,
           );
+          if (source.adapter.timingNote) {
+            notes.push(describeInferredTimeWrite(source.adapter.timingNote, merged));
+          }
           // 目标解析出 0 轮、文件却不是 0 字节：可能是刚建出来的空会话（并入即它的第一批内容），
           // 也可能是内容被清空只剩占位头的会话。无法区分，按事实说清「这是它的全部内容」，
           // 让「本该有更早历史」的人知道该去恢复备份。文件里有坏行（或坏行扫不成）时这句
@@ -1643,6 +1647,9 @@ export async function openInProvider(
     }
     const failureLoss = describeToolFailureLoss(plan.turns, target);
     if (failureLoss) warnings.push(failureLoss);
+    if (plan.turns.length > 0 && source?.timingNote) {
+      notes.push(describeInferredTimeWrite(source.timingNote, plan.turns.length));
+    }
     const vanished = plan.targetRef ? describeVanishedTarget(plan.targetRef, newRef, target.displayName) : null;
     if (vanished) {
       warnings.push(vanished);

@@ -6,6 +6,7 @@ import type { Chain, ChainsElsewhere, Store, SwitchRecord } from './store.js';
 import { dedupeCallEvents, describeAttachmentLoss, describeBashControlLoss, describeTextEventLoss, describeToolFailureLoss, describeDanglingToolCalls, describeUnansweredTail, describeResumeTargetUnfinished, findContextDisclosure, mergeTurns, shouldReplacePairedSession, turnIdentityKey } from './rich.js';
 import { describeWriteFailureReason, type FileDigest } from './atomic.js';
 import { addFinding, type Finding } from './findings.js';
+import { describeInferredTimeWrite } from './time.js';
 import { escapeControlChars } from './display.js';
 import { describeBadLinesScanFailure, lineageFromHistory, scanUnparsableJsonLines, type BadLinesScan, type LineageGraph } from './jsonl.js';
 import { usageBadLinesDetail, usageContentBadLinesDetail, usageContentFileProblem, usageSidecarProblem } from './usage-integrity.js';
@@ -2314,6 +2315,10 @@ export async function handoff(
   // 不是 warning）：首条链「new 一个空会话再切过去」是正常路径，不该每次都冒降级警告；
   // 但「本该有更早历史」的人得知道这条会话现在只有这 N 轮。
   const notes: string[] = [];
+  if (source.timingNote && outgoing.length > 0) {
+    // 推定时间按原值写进目标记录：结果说明里不说来路，读者会把目标里的时间戳当真实发生时间。
+    notes.push(describeInferredTimeWrite(source.timingNote, outgoing.length));
+  }
   if (into && !vanished && destTurns.length === 0 && !emptiedTarget && outgoing.length > 0) {
     // `parse` 跳过坏行：解析出 0 轮不等于文件里只有这次并入的内容。坏行在（或扫不成）时
     // 断言「就是它的全部内容」正是把「读不出来」讲成「没有」（第 345 轮审计）。
