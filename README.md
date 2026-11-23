@@ -138,7 +138,7 @@ capabilities                                                各 Agent 的读写�
 doctor   [--cwd <path>] [--strict]                          环境诊断（Agent 检测 / Claude 保留期 / 本地库 / 本地库体积与索引规模 / 导入日志）；不改动原生会话，本地库不存在时会创建 Watch 本地库；发现硬失败时退出码 1，--strict 让警告也算失败
 open     <session-id> [--from <id>] [--provider <name>] [--to <provider>] [--check]
 prompt   [<session-id>] [--provider <name>] [--profile minimal|standard|verbose|full] [--last <n>] [--since-compact]   摘要交接：把会话渲染成可粘贴的 Markdown（降级方案，不写任何文件）
-inspect  <session-id> [--provider <name>]                   只读结构视图：轮次、事件、工具名、附件、坏行与 Watch 披露；不含对话正文，可安全分享
+inspect  <session-id> [--provider <name>] [--json]         只读查看会话元数据与轮次、事件、附件、坏行及披露计数
 import-codex  prepare|confirm|status|project-prepare|project-confirm|project-status
 ```
 

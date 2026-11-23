@@ -138,7 +138,7 @@ capabilities                                                 read/write capabili
 doctor   [--cwd <path>] [--strict]                           environment diagnostics (agents / Claude retention / local store / store footprint and index size / import log); native sessions are left untouched and a missing local Watch store is created; exits 1 on hard failures, --strict also fails on warnings
 open     <session-id> [--from <id>] [--provider <name>] [--to <provider>] [--check]
 prompt   [<session-id>] [--provider <name>] [--profile minimal|standard|verbose|full] [--last <n>] [--since-compact]   summary handoff: render the session as paste-ready Markdown (degraded path, writes nothing)
-inspect  <session-id> [--provider <name>]   read-only structure view: turns, events, tool names, attachments, bad lines and Watch disclosures; no conversation text, safe to share
+inspect  <session-id> [--provider <name>] [--json]   read-only session metadata and counts for turns, events, attachments, malformed lines and disclosures
 import-codex  prepare|confirm|status|project-prepare|project-confirm|project-status
 ```
 
