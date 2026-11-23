@@ -3,7 +3,7 @@ import { addFinding } from './findings.js';
 import type { ManifestDiskReport } from './manifest-disk.js';
 import { summarizeManifestDisk } from './manifest-disk.js';
 import { codeFence, inlineCode, singleLineText } from './markdown.js';
-import { CLAUDE_COMPACT_SUMMARY_PREFIX, findContextDisclosure, KIMI_COMPACTION_SUMMARY_PREFIX, OPENCODE_COMPACTION_SUMMARY_PREFIX, OPENCODE_UNFINISHED_TOOL_PREFIX, PI_COMPACTION_SUMMARY_PREFIX, WATCH_CONTEXT_DISCLOSURE_PREFIX } from './rich.js';
+import { CLAUDE_COMPACT_SUMMARY_PREFIX, danglingToolCalls, findContextDisclosure, KIMI_COMPACTION_SUMMARY_PREFIX, OPENCODE_COMPACTION_SUMMARY_PREFIX, OPENCODE_UNFINISHED_TOOL_PREFIX, PI_COMPACTION_SUMMARY_PREFIX, WATCH_CONTEXT_DISCLOSURE_PREFIX } from './rich.js';
 import { isoFromEpochMs } from './time.js';
 import type { ProcessEvent, TokenUsage, UnifiedTurn } from './types.js';
 import { compressedCopy, compressedRetryAdvice, describeReadFailureOrSelf, sessionFilePresence } from './read-text.js';
@@ -250,6 +250,11 @@ export type PromptStats = {
   failedAttemptsOmittedCalls: number;
   /** 有明确失败结果、但缺少工具名而无法归类的调用次数 */
   failedAttemptsUnclassified: number;
+  /**
+   * 按 callId 找不到结果的工具调用次数（整条会话，不受档位 / `--last` 裁剪影响）。
+   * 可能在等待用户审批、仍在运行或已中断；不是明确失败，不计入 `failedAttemptCalls`。
+   */
+  danglingToolCalls: number;
   /** 识别并隐去的**不同**凭据个数（同一个值出现多处只算一个；只认固定格式与固定位置） */
   credentialsMasked: number;
 };
@@ -730,6 +735,7 @@ export function buildHandoffPrompt(
     failedAttemptsOmitted: 0,
     failedAttemptsOmittedCalls: 0,
     failedAttemptsUnclassified: 0,
+    danglingToolCalls: 0,
     credentialsMasked: 0,
   };
   // 凭据隐去（第 329 轮）：这份文档就是用来复制给另一个助手的，会话里出现过的密钥不能跟着走。
@@ -1032,6 +1038,17 @@ export function buildHandoffPrompt(
     // 先隐去凭据再转义。它不在事件正文里，别处的 maskEventCredentials 覆盖不到（第 343 轮）。
     lines.push(`- 上下文完整性：${headerLine(maskCredentials(contextDisclosure.summary, credentials))}`);
   }
+  // 有调用、没有结果的工具调用：默认档位不展开过程记录，读者自己数不出来；「失败与中断」只统计
+  // 明确失败，也不含它们。和上一行一样在裁剪之前按整条会话统计——接手者最需要知道的正是
+  // 「最后那一步到底做没做」。只给计数：callId、入参与结果正文都不进这一行（第 416 轮）。
+  stats.danglingToolCalls = danglingToolCalls(turns).length;
+  if (stats.danglingToolCalls > 0) {
+    addFinding(findings, 'prompt_dangling_tool_calls', 'degraded', stats.danglingToolCalls);
+    lines.push(
+      `- 未闭合的工具调用：${stats.danglingToolCalls} 次调用在来源记录里没有结果（按 callId 配对，覆盖整条会话）：` +
+        '可能在等待用户审批、仍在运行或已中断，不是明确失败，不在「失败与中断」统计；它们是否已经执行、有没有留下改动，无法从记录确认',
+    );
+  }
   // 时间戳覆盖：起点可能不是第一条记录（首轮没有时间戳时取后面第一条有的），部分轮次缺
   // 时间戳时范围也只代表有时间戳的那几轮。两件事都写进括注，不让「时间范围」被读成覆盖全程。
   const stampedIndexes = turns.flatMap((turn, index) => (Number.isFinite(Date.parse(turn.timestamp)) ? [index] : []));
@@ -1193,6 +1210,14 @@ export function buildHandoffPrompt(
     lines.push(
       '「改动概览」记的是会话里写过什么，不是这些文件现在的内容：动手前先看它们当前的样子' +
         '（工作目录是 git 仓库时先看 `git status` 与 `git diff`），已经落盘的改动不要重做，对不上的地方先向用户确认。',
+    );
+  }
+  // 没有结果的调用两头都不能假设：既不能当它做完了，也不能当它没做（重做一条已经执行的
+  // 迁移 / 部署命令比漏做更糟）。这句话放在「继续工作」里，因为目标助手照着做的是这一段。
+  if (stats.danglingToolCalls > 0) {
+    lines.push(
+      `来源记录里有 ${stats.danglingToolCalls} 次工具调用没有结果（见元信息）：不要假设它们已经完成，也不要直接重做；` +
+        '先核对工作目录的当前状态，确认不了的向用户确认。',
     );
   }
   // 占位符不是会话原文：目标助手可能把它当成真实的值去用，或者试着「补全」。

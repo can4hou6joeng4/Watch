@@ -2188,6 +2188,13 @@ async function cmdPrompt(
         `${result.manifest.failedAttemptsTruncated ? '（有截断，见该节）' : ''}；这些失败不计入成功改动清单`,
     );
   }
+  // 与正文头部「未闭合的工具调用」同一个数：只给计数，不打印 callId。
+  if (result.stats.danglingToolCalls > 0) {
+    console.error(
+      `说明: 来源记录里有 ${result.stats.danglingToolCalls} 次工具调用没有结果（可能在等待用户审批、仍在运行或已中断）；` +
+        '正文元信息与「继续工作」已写明，接手前先核对这些调用是否已经执行',
+    );
+  }
   if (result.stats.omittedTurns > 0 || result.stats.omittedEvents > 0) {
     console.error(
       `提示: 当前档位（${result.profile}）省略了 ${result.stats.omittedTurns} 轮 / ${result.stats.omittedEvents} 条过程记录；` +
