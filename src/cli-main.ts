@@ -2444,7 +2444,7 @@ async function cmdInspect(json: boolean, sessionId: string | undefined, provider
     return;
   }
 
-  for (const warning of warnings) console.error(`警告: ${warning}`);
+  for (const warning of warnings) console.error(`警告: ${escapeControlChars(warning)}`);
   const fileLine = sizeBytes === null ? escapeControlChars(foundRef.filePath) : `${escapeControlChars(foundRef.filePath)}（${formatBytes(sizeBytes)}${modifiedAt ? `，修改于 ${modifiedAt}` : ''}）`;
   console.log(`会话: ${id}（${adapter.id}）`);
   console.log(`${sharedDatabase ? '共享数据库文件' : '文件'}: ${fileLine}`);

@@ -817,8 +817,10 @@ export function describeDanglingToolCalls(
 ): string | null {
   const dangling = danglingToolCalls(turns);
   if (dangling.length === 0) return null;
-  const shown = dangling.slice(0, 3).join(', ');
-  return `${label}有 ${dangling.length} 次工具调用没有结果（callId: ${shown}${dangling.length > 3 ? ' 等' : ''}），可能在等待用户审批、仍在运行或已中断：${next}`;
+  // callId 来自会话文件，和会话 id / 路径一样是不可信字符串：警告会被桌面端与终端展示，
+  // 先转义再拼，避免 ESC / 换行把一条披露折成多条或改写终端（第 418 轮）。
+  const shown = dangling.slice(0, 3).map((id) => escapeControlChars(id)).join(', ');
+  return `${escapeControlChars(label)}有 ${dangling.length} 次工具调用没有结果（callId: ${shown}${dangling.length > 3 ? ' 等' : ''}），可能在等待用户审批、仍在运行或已中断：${next}`;
 }
 
 /**
