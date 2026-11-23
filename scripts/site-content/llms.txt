@@ -25,6 +25,7 @@ The current website uses a dark Signal Ledger-style presentation and a synthetic
 - [Homepage (ja)](https://relay.bobochang.cn/ja/): Japanese mirror; its guides index links every guide under /ja/guides/
 - [Homepage (ko)](https://relay.bobochang.cn/ko/): Korean mirror; its guides index links every guide under /ko/guides/
 - [Homepage (de)](https://relay.bobochang.cn/de/): German mirror; its guides index links every guide under /de/guides/
+- [Homepage (fr)](https://relay.bobochang.cn/fr/): French mirror; its guides index links every guide under /fr/guides/
 - [Guide: Claude Code Limit to Codex (zh-CN)](https://relay.bobochang.cn/guides/claude-code-limit-to-codex/): step-by-step handoff when hitting usage limits
 - [Guide: Claude Code Limit to Codex (en)](https://relay.bobochang.cn/en/guides/claude-code-limit-to-codex/): English step-by-step handoff guide
 - [Guide: OpenCode & SQLite Handoff (zh-CN)](https://relay.bobochang.cn/guides/opencode-handover-sqlite-isolation/): bidirectional handoff with SQLite transactional isolation
