@@ -50,3 +50,6 @@
 /en/*
   ! Content-Language
   Content-Language: en
+/ja/*
+  ! Content-Language
+  Content-Language: ja

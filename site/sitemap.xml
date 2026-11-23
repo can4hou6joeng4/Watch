@@ -13,6 +13,10 @@
     <lastmod>2026-11-23</lastmod>
   </url>
   <url>
+    <loc>https://relay.bobochang.cn/ja/</loc>
+    <lastmod>2026-11-23</lastmod>
+  </url>
+  <url>
     <loc>https://relay.bobochang.cn/guides/claude-code-limit-to-codex/</loc>
     <lastmod>2026-10-14</lastmod>
   </url>
@@ -22,6 +26,10 @@
   </url>
   <url>
     <loc>https://relay.bobochang.cn/en/guides/claude-code-limit-to-codex/</loc>
+    <lastmod>2026-10-14</lastmod>
+  </url>
+  <url>
+    <loc>https://relay.bobochang.cn/ja/guides/claude-code-limit-to-codex/</loc>
     <lastmod>2026-10-14</lastmod>
   </url>
   <url>
@@ -37,6 +45,10 @@
     <lastmod>2026-10-14</lastmod>
   </url>
   <url>
+    <loc>https://relay.bobochang.cn/ja/guides/opencode-handover-sqlite-isolation/</loc>
+    <lastmod>2026-10-14</lastmod>
+  </url>
+  <url>
     <loc>https://relay.bobochang.cn/guides/context-limit-vs-usage-limit-handoff/</loc>
     <lastmod>2026-10-14</lastmod>
   </url>
@@ -46,6 +58,10 @@
   </url>
   <url>
     <loc>https://relay.bobochang.cn/en/guides/context-limit-vs-usage-limit-handoff/</loc>
+    <lastmod>2026-10-14</lastmod>
+  </url>
+  <url>
+    <loc>https://relay.bobochang.cn/ja/guides/context-limit-vs-usage-limit-handoff/</loc>
     <lastmod>2026-10-14</lastmod>
   </url>
   <url>
@@ -61,6 +77,10 @@
     <lastmod>2026-10-14</lastmod>
   </url>
   <url>
+    <loc>https://relay.bobochang.cn/ja/guides/opus-5-5-five-hour-limit/</loc>
+    <lastmod>2026-10-14</lastmod>
+  </url>
+  <url>
     <loc>https://relay.bobochang.cn/guides/empty-session-resume-check/</loc>
     <lastmod>2026-11-23</lastmod>
   </url>
@@ -70,6 +90,10 @@
   </url>
   <url>
     <loc>https://relay.bobochang.cn/en/guides/empty-session-resume-check/</loc>
+    <lastmod>2026-11-23</lastmod>
+  </url>
+  <url>
+    <loc>https://relay.bobochang.cn/ja/guides/empty-session-resume-check/</loc>
     <lastmod>2026-11-23</lastmod>
   </url>
   <url>
@@ -85,6 +109,10 @@
     <lastmod>2026-11-18</lastmod>
   </url>
   <url>
+    <loc>https://relay.bobochang.cn/ja/guides/prompt-handoff-without-adapter/</loc>
+    <lastmod>2026-11-18</lastmod>
+  </url>
+  <url>
     <loc>https://relay.bobochang.cn/guides/codex-compressed-rollout-recovery/</loc>
     <lastmod>2026-11-23</lastmod>
   </url>
@@ -94,6 +122,10 @@
   </url>
   <url>
     <loc>https://relay.bobochang.cn/en/guides/codex-compressed-rollout-recovery/</loc>
+    <lastmod>2026-11-23</lastmod>
+  </url>
+  <url>
+    <loc>https://relay.bobochang.cn/ja/guides/codex-compressed-rollout-recovery/</loc>
     <lastmod>2026-11-23</lastmod>
   </url>
 </urlset>
