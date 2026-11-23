@@ -818,7 +818,7 @@ export function describeDanglingToolCalls(
   const dangling = danglingToolCalls(turns);
   if (dangling.length === 0) return null;
   const shown = dangling.slice(0, 3).join(', ');
-  return `${label}有 ${dangling.length} 次工具调用没有结果（callId: ${shown}${dangling.length > 3 ? ' 等' : ''}），可能在中断或仍在运行：${next}`;
+  return `${label}有 ${dangling.length} 次工具调用没有结果（callId: ${shown}${dangling.length > 3 ? ' 等' : ''}），可能在等待用户审批、仍在运行或已中断：${next}`;
 }
 
 /**

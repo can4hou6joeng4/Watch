@@ -21,7 +21,7 @@ export type SessionStructure = {
     toolResults: number;
     /** 明确失败的 tool_result（不代表没有副作用） */
     failedToolResults: number;
-    /** tool_call 按 callId 找不到对应 tool_result 的次数；可能中断或仍在运行，不等于数据丢失 */
+    /** tool_call 按 callId 找不到对应 tool_result 的次数；可能在等待审批、仍在运行或已中断，不等于数据丢失 */
     danglingToolCalls: number;
     /** tool_result 按 callId 找不到对应 tool_call 的次数；常见于压缩后的残留，不代表会话不可用 */
     orphanToolResults: number;
