@@ -33,6 +33,19 @@ export function escapeControlChars(text: string): string {
 }
 
 /**
+ * 外部 CLI 的 stdout / stderr（或 spawn 错误消息）拼进**终端错误文案**前的唯一出口：
+ * 先按码点截断（代理对不被切开），再转义控制字符（ESC / OSC 52 不会进终端）。
+ *
+ * 外部 CLI 的输出同样是不可信字符串：包装脚本、彩色进度条、损坏输出都可能带 ESC，
+ * 而错误文案没有第二个显示层能拦。OSC 52 这类序列还能改写剪贴板，不只是显示乱码。
+ * 只用于错误 / 警告文案——进程事件的 `summary` / `detail` 走另有的正文清洗（`sanitizeBody()`），
+ * `--json` 结构化字段保留原值。
+ */
+export function cliOutputPreview(text: string, limit: number): string {
+  return escapeControlChars(clipCodePoints(text, limit).text);
+}
+
+/**
  * 按**码点**截断到 `limit` 个字符，不附加省略号；被截断时 `truncated` 为 true。
  *
  * `String.prototype.slice()` 按 UTF-16 码元切，emoji 这类代理对会被切成孤立的一半，

@@ -9,7 +9,7 @@ import type { FileDigest } from '../../core/atomic.js';
 import { describeEmptySessionFile, describePathReadFailureReason, isMissingPathError, iterateFileLines, readTextHeadDetail } from '../../core/read-text.js';
 import type { TextHeadDetail } from '../../core/read-text.js';
 import { asJsonObject, parseJsonObject } from '../../core/jsonl.js';
-import { clipCodePoints, escapeControlChars } from '../../core/display.js';
+import { cliOutputPreview, clipCodePoints, escapeControlChars } from '../../core/display.js';
 import { SessionLookupFailureError } from '../adapter.js';
 import { directoryWriteChecks } from '../directory-preflight.js';
 import type { ProviderAdapter } from '../adapter.js';
@@ -352,16 +352,16 @@ async function runClaude(
   } catch (error) {
     const stderr =
       typeof error === 'object' && error !== null && 'stderr' in error
-        ? clipCodePoints(String((error as { stderr: unknown }).stderr), 500).text
+        ? cliOutputPreview(String((error as { stderr: unknown }).stderr), 500)
         : String(error);
     throw new Error(`claude CLI 调用失败: ${stderr}`);
   }
   const result = claudeResultFromStream(stdout);
   if (!result) {
-    throw new Error(`claude 输出缺少 result 事件: ${clipCodePoints(stdout, 500).text}`);
+    throw new Error(`claude 输出缺少 result 事件: ${cliOutputPreview(stdout, 500)}`);
   }
   if (result.is_error === true || typeof result.result !== 'string') {
-    throw new Error(`claude 会话出错: ${clipCodePoints(stdout, 500).text}`);
+    throw new Error(`claude 会话出错: ${cliOutputPreview(stdout, 500)}`);
   }
   return result;
 }
@@ -419,7 +419,7 @@ export const claudeAdapter: ProviderAdapter = {
     const result = await runClaude([text], cwd, onEvent);
     const sessionId = result.session_id;
     if (typeof sessionId !== 'string' || !sessionId) {
-      throw new Error(`claude 输出缺少 session_id: ${clipCodePoints(JSON.stringify(result), 500).text}`);
+      throw new Error(`claude 输出缺少 session_id: ${cliOutputPreview(JSON.stringify(result), 500)}`);
     }
     const ref: SessionRef = {
       provider: 'claude',

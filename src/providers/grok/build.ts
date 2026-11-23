@@ -623,7 +623,7 @@ export async function findGrokSessionById(
         try {
           cwd = await readGrokGroupCwdFile(path.join(root, d.name));
         } catch (error) {
-          why = `分组里的 .cwd 不可用（${(error as Error).message}）`;
+          why = `分组里的 .cwd 不可用（${escapeControlChars((error as Error).message)}）`;
         }
         if (cwd === null) {
           // 同名会话可能也在后面的分组里（复制 / 恢复 / 手工搬动）：这里只记下，扫完再决定。

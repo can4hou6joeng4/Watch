@@ -297,7 +297,7 @@ export class OfficialCodexImport {
       version = await this.deps.version();
     } catch (error) {
       const reason = error instanceof Error ? error.message : String(error);
-      throw new Error(`${reason}；这条导入路径要先核对 Codex 版本，先确认 PATH 上的 codex 能正常执行 codex --version（没装就先安装）再重新预览——本次未写入任何内容`);
+      throw new Error(`${escapeControlChars(reason)}；这条导入路径要先核对 Codex 版本，先确认 PATH 上的 codex 能正常执行 codex --version（没装就先安装）再重新预览——本次未写入任何内容`);
     }
     if (version !== SUPPORTED_VERSION) {
       throw new Error(

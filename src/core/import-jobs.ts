@@ -199,8 +199,8 @@ export class ImportJobs {
   async routePlan<T extends ImportJobPlan>(id: string, route: string, schema = 1): Promise<T> {
     const file = path.join(this.dir(id), 'plan.json');
     const raw = await this.readText(file);
-    if (raw === null) throw new Error(`找不到 ${route} 计划 ${id}：${escapeControlChars(file)} 不存在`);
-    const plan = this.parseJson<T>(raw, file, `导入计划 ${id} 的 plan.json `, '可删除该日志目录后重新 prepare（会得到新的计划 id）');
+    if (raw === null) throw new Error(`找不到 ${route} 计划 ${escapeControlChars(id)}：${escapeControlChars(file)} 不存在`);
+    const plan = this.parseJson<T>(raw, file, `导入计划 ${escapeControlChars(id)} 的 plan.json `, '可删除该日志目录后重新 prepare（会得到新的计划 id）');
     if (importPlanId(plan) !== id || plan.schema !== schema || plan.route !== route) {
       throw new Error('导入计划与确认的路径不匹配');
     }
@@ -223,10 +223,10 @@ export class ImportJobs {
   ): Promise<T> {
     const file = path.join(this.dir(id), 'plan.json');
     const raw = await this.readText(file);
-    if (raw === null) throw new Error(`找不到${label} ${id}：${escapeControlChars(file)} 不存在${idSource}`);
-    const plan = this.parseJson<T>(raw, file, `${label} ${id} 的 plan.json `, hint);
+    if (raw === null) throw new Error(`找不到${label} ${escapeControlChars(id)}：${escapeControlChars(file)} 不存在${idSource}`);
+    const plan = this.parseJson<T>(raw, file, `${label} ${escapeControlChars(id)} 的 plan.json `, hint);
     if (importPlanId(plan) !== id) {
-      throw new Error(`${label}与确认的 id 不匹配（plan.json 被改动，或与其他计划混在了一起）：${id}；${hint}`);
+      throw new Error(`${label}与确认的 id 不匹配（plan.json 被改动，或与其他计划混在了一起）：${escapeControlChars(id)}；${hint}`);
     }
     return plan;
   }
@@ -239,7 +239,7 @@ export class ImportJobs {
     const file = path.join(this.dir(id), 'outcome.json');
     const raw = await this.readText(file);
     // 还没有结果时返回 null 是正常状态；文件存在但读不出来才是异常
-    return raw === null ? null : this.parseJson<T>(raw, file, `导入执行结果 ${id} 的 outcome.json `, '结果以同目录的 started.json 与目标锁为准，不要重复导入，也不要删除日志');
+    return raw === null ? null : this.parseJson<T>(raw, file, `导入执行结果 ${escapeControlChars(id)} 的 outcome.json `, '结果以同目录的 started.json 与目标锁为准，不要重复导入，也不要删除日志');
   }
 
   async projectPlan(id: string): Promise<ProjectBindingPlan> {
@@ -255,7 +255,7 @@ export class ImportJobs {
       // 不是删日志。`status` 吃这份计划、`project-status` 吃官方导入计划也是同一档。
       const found = typeof plan.route === 'string' ? plan.route : '（没有 route 字段）';
       throw new Error(
-        `${label} ${id} 的 route 是 ${found}，不是 codex-project-association：这份日志不是项目关联计划（可能拿错了计划 id 或子命令）；` +
+        `${label} ${escapeControlChars(id)} 的 route 是 ${escapeControlChars(String(found))}，不是 codex-project-association：这份日志不是项目关联计划（可能拿错了计划 id 或子命令）；` +
           '若它是官方导入计划，请改用 watch import-codex status ' + id,
       );
     }
@@ -269,7 +269,7 @@ export class ImportJobs {
   async projectOutcome(id: string): Promise<ProjectBindingOutcome | null> {
     const file = path.join(this.dir(id), 'outcome.json');
     const raw = await this.readText(file);
-    return raw === null ? null : this.parseJson<ProjectBindingOutcome>(raw, file, `项目关联结果 ${id} 的 outcome.json `, '结果以同目录的 started.json 与目标锁为准，不要重复导入，也不要删除日志');
+    return raw === null ? null : this.parseJson<ProjectBindingOutcome>(raw, file, `项目关联结果 ${escapeControlChars(id)} 的 outcome.json `, '结果以同目录的 started.json 与目标锁为准，不要重复导入，也不要删除日志');
   }
 
   async plan(id: string): Promise<ImportPlan> {
@@ -285,7 +285,7 @@ export class ImportJobs {
       // 与 projectPlan() 同一档：route 不同是「拿错了计划」，文件完好，下一步是换子命令而不是删日志
       const found = typeof plan.route === 'string' ? plan.route : '（没有 route 字段）';
       throw new Error(
-        `${label} ${id} 的 route 是 ${found}，不是 claude-code-to-codex-official：这份日志不是官方导入计划（可能拿错了计划 id 或子命令）；` +
+        `${label} ${escapeControlChars(id)} 的 route 是 ${escapeControlChars(String(found))}，不是 claude-code-to-codex-official：这份日志不是官方导入计划（可能拿错了计划 id 或子命令）；` +
           '若它是项目关联计划，请改用 watch import-codex project-status ' + id,
       );
     }
@@ -439,6 +439,6 @@ export class ImportJobs {
     const file = path.join(this.dir(id), 'outcome.json');
     // 没有 outcome.json 是「还没跑完」的正常状态，不能当成日志损坏
     const raw = await this.readText(file);
-    return raw === null ? null : this.parseJson<ImportOutcome>(raw, file, `导入执行结果 ${id} 的 outcome.json `, '结果以同目录的 started.json 与目标锁为准，不要重复导入，也不要删除日志');
+    return raw === null ? null : this.parseJson<ImportOutcome>(raw, file, `导入执行结果 ${escapeControlChars(id)} 的 outcome.json `, '结果以同目录的 started.json 与目标锁为准，不要重复导入，也不要删除日志');
   }
 }

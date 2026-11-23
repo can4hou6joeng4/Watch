@@ -1,7 +1,7 @@
 import { execFile } from 'node:child_process';
 import { quoteCommandArg } from '../../core/shell-quote.js';
 import { describeDetectFailure, isCommandMissing, resolveCli } from '../../core/platform.js';
-import { clipCodePoints, escapeControlChars } from '../../core/display.js';
+import { cliOutputPreview, clipCodePoints, escapeControlChars } from '../../core/display.js';
 import { createReadStream } from 'node:fs';
 import { lstat, mkdtemp, open, readdir, readFile, rm, stat } from 'node:fs/promises';
 import { homedir, tmpdir } from 'node:os';
@@ -643,7 +643,7 @@ async function runCodex(args: string[], cwd: string, onEvent?: (e: ProcessEvent)
         : '';
     const detail = stderr.trim() || eventErrorSummary(stdoutErr) || String(error);
     await rm(outDir, { recursive: true, force: true });
-    throw new Error(`codex CLI 调用失败: ${clipCodePoints(detail, 500).text}`);
+    throw new Error(`codex CLI 调用失败: ${cliOutputPreview(detail, 500)}`);
   }
   let replyText = '';
   try {
@@ -656,7 +656,7 @@ async function runCodex(args: string[], cwd: string, onEvent?: (e: ProcessEvent)
     replyText = lastAgentMessageFromEvents(stdout);
   }
   if (!replyText) {
-    throw new Error(`codex 输出中找不到最终回复: ${clipCodePoints(stdout, 500).text}`);
+    throw new Error(`codex 输出中找不到最终回复: ${cliOutputPreview(stdout, 500)}`);
   }
   return { stdout, replyText };
 }
@@ -780,7 +780,7 @@ async function acquireCodexWriteLock(
     if (error instanceof WriterLockDirError) {
       return {
         warning:
-          `${error.message}；这次没有取得协作写锁，并发写入保护不生效（不会因此单独中止本次操作）——` +
+          `${escapeControlChars(error.message)}；这次没有取得协作写锁，并发写入保护不生效（不会因此单独中止本次操作）——` +
           '若 Codex 正在写同一会话，仍可能互相覆盖；修好锁路径后重试可恢复保护',
       };
     }
@@ -928,7 +928,7 @@ export const codexAdapter: ProviderAdapter = {
     const { stdout, replyText } = await runCodex(['resume', ref.sessionId, text], cwd, onEvent);
     const sessionId = threadIdFromEvents(stdout);
     if (!sessionId) {
-      throw new Error(`codex 输出缺少 thread.started: ${clipCodePoints(stdout, 500).text}`);
+      throw new Error(`codex 输出缺少 thread.started: ${cliOutputPreview(stdout, 500)}`);
     }
     return { ref, turn: replyTurn(replyText) };
   },

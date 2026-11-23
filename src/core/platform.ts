@@ -6,6 +6,7 @@ import { platform } from 'node:os';
 import { execFileSync } from 'node:child_process';
 import { statSync } from 'node:fs';
 import { delimiter, isAbsolute, join, resolve } from 'node:path';
+import { cliOutputPreview, escapeControlChars } from './display.js';
 
 export const IS_WIN = platform() === 'win32';
 
@@ -50,14 +51,14 @@ export function describeSpawnFailure(error: unknown): string | null {
   const cmd = syscall.slice('spawn'.length).trim() || err.path || '目标命令';
   switch (err.code) {
     case 'ENOENT':
-      return `无法启动 ${cmd}：命令不存在（确认它已安装，且在 PATH 中）`;
+      return `无法启动 ${escapeControlChars(cmd)}：命令不存在（确认它已安装，且在 PATH 中）`;
     case 'EACCES':
     case 'EPERM':
-      return `无法启动 ${cmd}：没有执行权限（检查该文件的权限，不是缺少安装）`;
+      return `无法启动 ${escapeControlChars(cmd)}：没有执行权限（检查该文件的权限，不是缺少安装）`;
     case 'ENOEXEC':
-      return `无法启动 ${cmd}：文件存在但不是可执行格式（脚本缺少 shebang 或解释器，不是缺少安装）`;
+      return `无法启动 ${escapeControlChars(cmd)}：文件存在但不是可执行格式（脚本缺少 shebang 或解释器，不是缺少安装）`;
     default:
-      return `无法启动 ${cmd}（${err.code ?? '未知错误'}）`;
+      return `无法启动 ${escapeControlChars(cmd)}（${err.code ?? '未知错误'}）`;
   }
 }
 
@@ -124,7 +125,7 @@ export function isCommandMissing(error: unknown): boolean {
 export function describeBrokenCommandStart(cmd: string): string | null {
   const found = findExecutableOnPath(cmd);
   if (!found) return null;
-  return `${cmd} 已安装（${found}），但一启动就失败：命令文件在，它的 shebang 解释器（如 #!/usr/bin/env node 指向的程序）却不存在——修好这个文件或重新安装该 CLI，不是缺安装`;
+  return `${escapeControlChars(cmd)} 已安装（${escapeControlChars(found)}），但一启动就失败：命令文件在，它的 shebang 解释器（如 #!/usr/bin/env node 指向的程序）却不存在——修好这个文件或重新安装该 CLI，不是缺安装`;
 }
 
 /** `detect()` 抛错时的中文原因：措辞要让人分清「没装」与「装了但坏了」 */
@@ -149,10 +150,10 @@ export function describeDetectFailure(name: string, error: unknown): string {
       .map((l) => l.trim())
       .filter(Boolean)
       .pop();
-    return `${name} --version 退出码 ${err.code}${tail ? `（CLI 输出：${tail}）` : ''}——CLI 已安装但启动失败，检查配置或登录状态，不是没装`;
+    return `${name} --version 退出码 ${err.code}${tail ? `（CLI 输出：${cliOutputPreview(tail, 200)}）` : ''}——CLI 已安装但启动失败，检查配置或登录状态，不是没装`;
   }
   const message = error instanceof Error ? error.message : String(error);
-  return `${name} --version 执行失败：${message}`;
+  return `${name} --version 执行失败：${cliOutputPreview(message, 200)}`;
 }
 
 /**

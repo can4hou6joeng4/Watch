@@ -1,6 +1,6 @@
 import { execFile } from 'node:child_process';
 import { describeBrokenCommandStart, resolveCli } from '../../core/platform.js';
-import { clipCodePoints, escapeControlChars } from '../../core/display.js';
+import { cliOutputPreview, clipCodePoints, escapeControlChars } from '../../core/display.js';
 import { assertDataDirectory, providerDirectoryFromEnv } from '../../core/provider-directory.js';
 import type { Dirent } from 'node:fs';
 import { readFile, readdir, stat } from 'node:fs/promises';
@@ -532,13 +532,13 @@ async function createRealKimiSession(cwd: string): Promise<{ sessionId: string; 
       throw new PreflightBlockedError(cliMissingBlock('kimi', 'Kimi'));
     }
     const pick = (v: unknown): string => (typeof v === 'string' ? v.trim() : '');
-    const detail = clipCodePoints(pick(err.stderr) || pick(err.stdout) || err.message || String(error), 500).text;
+    const detail = cliOutputPreview(pick(err.stderr) || pick(err.stdout) || err.message || String(error), 500);
     throw new Error(`kimi 新建会话失败: ${detail}`);
   }
 
   const sessionId = extractSessionIdFromStream(stdout);
   if (!sessionId) {
-    throw new Error(`kimi 输出缺少 session.resume_hint: ${clipCodePoints(stdout, 500).text}`);
+    throw new Error(`kimi 输出缺少 session.resume_hint: ${cliOutputPreview(stdout, 500)}`);
   }
 
   const { wirePath: filePath } = await resolveCreatedKimiWire(sessionId, cwd);
