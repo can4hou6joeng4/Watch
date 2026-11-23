@@ -148,6 +148,7 @@ import-codex  prepare|confirm|status|project-prepare|project-confirm|project-sta
 
 `inspect --json` 的 `session.storageScope` 为 `session-file`（单会话文件）或 `shared-database`（OpenCode 共享数据库）。`sizeBytes` 和 `modifiedAt` 描述 `filePath` 指向的文件。OpenCode 单条会话的更新时间另见 `session.recordedUpdatedAt`，值缺失或不可用时为 `null`。Grok 的记录没有逐轮时间戳，`structure.firstTimestamp` / `lastTimestamp` 是推定值，此时 `--json` 另带 `timeRangeNote` 说明来源，文本输出在时间范围后括注。`structure.timestampedTurns` 是计入时间范围的轮数；部分轮次缺时间戳时，`--json` 另有 `timestampNote` 写明覆盖比例，文本输出同样括注。`structure.events.danglingToolCalls` 统计按 callId 找不到对应结果的工具调用；可能在等待用户审批、仍在运行或已中断，不等于数据丢失，输出只给计数，不给 callId 或工具入参。`structure.events.orphanToolResults` 统计按 callId 找不到对应调用的工具结果（常见于上下文压缩后的残留）；部分来源会把这类结果转成上下文披露而不是孤立结果事件，此时看 `disclosureEvents` 与相关 `warnings`。
 `prompt` 交接文档还会在元信息与「继续工作」里披露未闭合的工具调用（整条会话计数，不受档位 / `--last` 裁剪）：可能在等待用户审批、仍在运行或已中断，不是明确失败，不能当成已完成，也不应不核对就重做；`--json` 的 `stats.danglingToolCalls` 与 `findings` 里 `prompt_dangling_tool_calls` 同源。只给计数，不带 callId、入参或结果正文。
+`prompt` 还会披露「最后一条用户消息没有助手回复」的半轮（Ctrl-C、用量耗尽、进程中断或文件截断都可能）；明确标成失败 / 中止的来源会照实写，`--json` 同步给出 `stats.unansweredTail` 与 `prompt_unanswered_tail` finding。判据只在尾部用户轮有实际正文时生效，占位空轮不算。
 
 读取 `status --json` 的血缘图时，用 `nodes[].key` 匹配 `edges[].from` 和 `edges[].to`。展示会话身份时用节点里的原始 `provider` 和 `sessionId`。
 
