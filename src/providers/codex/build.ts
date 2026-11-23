@@ -285,15 +285,15 @@ export function validateRolloutFilename(filePath: string): void {
   const stem = path.basename(filePath, '.jsonl');
   const rest = stem.startsWith('rollout-') ? stem.slice('rollout-'.length) : null;
   if (rest === null || rest.length < 37) {
-    throw new Error(`rollout 文件名缺少前缀或过短: ${stem}`);
+    throw new Error(`rollout 文件名缺少前缀或过短: ${escapeControlChars(stem)}`);
   }
   const uuidPart = rest.slice(rest.length - 37);
   if (!uuidPart.startsWith('-')) {
-    throw new Error(`rollout 文件名 UUID 段格式异常: ${stem}`);
+    throw new Error(`rollout 文件名 UUID 段格式异常: ${escapeControlChars(stem)}`);
   }
   const uuid = uuidPart.slice(1);
   if (uuid.length !== 36 || (uuid.match(/-/g) ?? []).length !== 4) {
-    throw new Error(`rollout 文件名 UUID 段不合法: ${stem}`);
+    throw new Error(`rollout 文件名 UUID 段不合法: ${escapeControlChars(stem)}`);
   }
 }
 

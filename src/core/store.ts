@@ -1473,7 +1473,8 @@ export class Store {
 
   private mustChain(id: string): Chain {
     const row = this.db.prepare('SELECT * FROM chains WHERE id=?').get(id) as ChainRow | undefined;
-    if (!row) throw new Error(`找不到链: ${id}`);
+    // 与 `missingChainMessage()` 同一约定：id 来自 `--chain` / 位置参数，进终端前 trim 后转义
+    if (!row) throw new Error(`找不到链: ${escapeControlChars(id.trim())}`);
     return rowToChain(row);
   }
 

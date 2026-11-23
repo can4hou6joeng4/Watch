@@ -86,15 +86,17 @@ function validateImportArgs(args: string[]): void {
       const value = inline ?? args[i + 1];
       if (inline === undefined) {
         // 下一个 token 仍是 flag：说明取值漏了，别把它吞成值
-        if (value === undefined) throw new Error(`${flag} 缺少取值；可用: ${IMPORT_USAGE_HINT}`);
-        if (value.startsWith('-')) throw new Error(`${flag} 缺少取值（后面跟着 ${value}）；可用: ${IMPORT_USAGE_HINT}`);
+        if (value === undefined) throw new Error(`${escapeControlChars(flag)} 缺少取值；可用: ${IMPORT_USAGE_HINT}`);
+        if (value.startsWith('-')) {
+          throw new Error(`${escapeControlChars(flag)} 缺少取值（后面跟着 ${escapeControlChars(value)}）；可用: ${IMPORT_USAGE_HINT}`);
+        }
         i += 1;
       }
       // 同时说出两个值：只说「不能给两次」的话，用户还得回头翻命令才知道自己写了哪两处
       const first = seenValues.get(name);
       if (first !== undefined) {
         throw new Error(
-          `${flag} 给了两次（第一次: ${first}，第二次: ${value}）；同一个参数只给一次——` +
+          `${escapeControlChars(flag)} 给了两次（第一次: ${escapeControlChars(first)}，第二次: ${escapeControlChars(value!)}）；同一个参数只给一次——` +
             `只认后一个、前一个会被静默丢掉，去掉多余的那个后重试；可用: ${IMPORT_USAGE_HINT}`,
         );
       }
@@ -103,11 +105,11 @@ function validateImportArgs(args: string[]): void {
     }
     if (IMPORT_BOOLEAN_FLAGS.has(name) && flag.startsWith('--')) {
       if (inline === undefined) continue;
-      throw new Error(`${flag} 不接受取值，写成 ${flag} 即可；可用: ${IMPORT_USAGE_HINT}`);
+      throw new Error(`${escapeControlChars(flag)} 不接受取值，写成 ${escapeControlChars(flag)} 即可；可用: ${IMPORT_USAGE_HINT}`);
     }
     // 与主 CLI 同一条规则：只在唯一的近邻（或唯一前缀，如 `--desktop`）上给建议，否则只列可用项
     const near = closestFlag(arg, [...IMPORT_BOOLEAN_FLAGS, ...IMPORT_VALUE_FLAGS]);
-    throw new Error(`未知参数: ${arg}${near ? `；最接近的是 ${near}` : ''}；可用: ${IMPORT_USAGE_HINT}`);
+    throw new Error(`未知参数: ${escapeControlChars(arg)}${near ? `；最接近的是 ${near}` : ''}；可用: ${IMPORT_USAGE_HINT}`);
   }
 }
 
@@ -155,7 +157,7 @@ export async function runImportCodex(args: string[]): Promise<void> {
     if (action && !(IMPORT_ACTIONS as readonly string[]).includes(action)) {
       const near = closestCommand(action, IMPORT_ACTIONS);
       throw new Error(
-        `未知的 import-codex 子命令: ${action}${near ? `；最接近的是 ${near}` : ''}；可用: ${IMPORT_ACTIONS.join(' / ')}（详见 docs/import-codex.md）`,
+        `未知的 import-codex 子命令: ${escapeControlChars(action)}${near ? `；最接近的是 ${near}` : ''}；可用: ${IMPORT_ACTIONS.join(' / ')}（详见 docs/import-codex.md）`,
       );
     }
     if (!action) {
@@ -168,7 +170,7 @@ export async function runImportCodex(args: string[]): Promise<void> {
     }
     if (positionals.length > 2) {
       throw new Error(
-        `import-codex ${action} 只需要一个位置参数，多给了 ${positionals.length - 2} 个: ${positionals.slice(2).join(' ')}；可用: ${IMPORT_USAGE_HINT}`,
+        `import-codex ${action} 只需要一个位置参数，多给了 ${positionals.length - 2} 个: ${escapeControlChars(positionals.slice(2).join(' '))}；可用: ${IMPORT_USAGE_HINT}`,
       );
     }
     // 写操作同时缺多个参数时只报一个，会让人改两轮才走到终点：一次说全，

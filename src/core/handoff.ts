@@ -534,6 +534,7 @@ export async function adoptIntoChain(
   if (store && chainId) {
     const archived = store.archivedChainName(cwd, chainId);
     if (archived) {
+      // archivedChainName() 已经转义过链名（见其注释），这里不再二次转义
       throw new Error(`链已归档: ${archived}；可 watch chain use ${archived} 恢复，或省略 --chain 用当前链`);
     }
   }
@@ -2003,7 +2004,7 @@ export async function handoff(
   }
 
   const source = resolve(sourceTip.provider);
-  if (!source) throw new Error(`链尾 provider 未注册: ${sourceTip.provider}`);
+  if (!source) throw new Error(`链尾 provider 未注册: ${escapeControlChars(sourceTip.provider)}`);
 
   // 来源侧没有守卫（目标侧才是 TOCTOU 保护的对象）：快照取在 parse 之前，
   // 写完之后再比一次，期间被追加的那一段要披露，不能被讲成「整条会话都交接了」

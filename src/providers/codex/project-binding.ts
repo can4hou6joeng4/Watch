@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import path from 'node:path';
 import { ImportJobs, type ProjectBindingOutcome, type ProjectBindingPlan } from '../../core/import-jobs.js';
+import { cliOutputPreview } from '../../core/display.js';
 import type { SessionRef } from '../../core/types.js';
 import { asRecord, type ImportRpc, type RpcProfile } from './app-server.js';
 import { acquireImportTarget, assertImportTarget, assertNativeSqliteHome, assertTargetFile, IMPORT_TARGET_LOCK, inspectImportTarget, type ImportTarget } from './import-target.js';
@@ -69,11 +70,13 @@ export class CodexProjectBinding {
     // 三个原因以前合成一句「Codex 数据目录或 CLI 版本与那次完成的导入不一致」：修法完全不同
     // （换版本 / 换回当时那次导入的版本 / 换回当时的 CODEX_HOME），用户无从判断该动哪一个。
     if (version !== 'codex-cli 0.153.4') {
-      throw new Error(`后置项目关联只支持 codex-cli 0.153.4，本机检测到 ${version || '（空输出）'}；本次未写入任何内容`);
+      // version 来自外部 `codex --version` 的输出，不可信：进错误文案前截断并转义
+      const shown = version ? cliOutputPreview(version, 200) : '（空输出）';
+      throw new Error(`后置项目关联只支持 codex-cli 0.153.4，本机检测到 ${shown}；本次未写入任何内容`);
     }
     if (version !== importedPlan.cliVersion) {
       throw new Error(
-        `本机 Codex CLI 版本与那次完成的导入不一致：导入时是 ${importedPlan.cliVersion}，现在是 ${version}；` +
+        `本机 Codex CLI 版本与那次完成的导入不一致：导入时是 ${cliOutputPreview(importedPlan.cliVersion, 200)}，现在是 ${cliOutputPreview(version, 200)}；` +
           '先换回该版本的 codex 再重试（本次未写入任何内容）',
       );
     }
