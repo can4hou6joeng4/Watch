@@ -46,6 +46,7 @@ import { usageBadLinesDetail, usageSidecarProblem } from './core/usage-integrity
 import { describeBadLinesScanFailure, scanUnparsableJsonLines } from './core/jsonl.js';
 import { readWatchVersion } from './core/watch-version.js';
 import { CAPABILITY_VERIFICATION_NOTE, describeCapabilities, formatCapabilities } from './core/capabilities.js';
+import { summarizeSessionStructure } from './core/inspect.js';
 
 /**
  * 参数还没解析完就要报用法错误（缺值 / 越界 / 未知 flag）：此时 `--json` 已经能从 argv 看出来。
@@ -82,6 +83,8 @@ function usage(reason?: string): never {
   watch prompt [<session-id>] [--provider <name>] [--profile minimal|standard|verbose|full] [--last <n>] [--since-compact] [--json]
                                                     摘要交接：把会话渲染成可粘贴给任意 Agent 的 Markdown（降级方案，不写任何文件）
                                                     省略会话 id 时自动挑本目录按修改时间最新的可读会话，并在文档头标明
+  watch inspect <session-id> [--provider <name>] [--json]
+                                                    只读结构视图：轮次、事件、工具名、附件与坏行计数；不含对话正文，可安全分享
   watch doctor [--json] [--strict] [--cwd <path>]   环境诊断：Agent 检测、本地库、导入日志（不改动原生会话；本地库不存在时会创建 Watch 本地库）
   watch new <provider> [--json] [--cwd <path>] [--chain <id|name>]
   watch chain list|new <name>|rename <id|name> <new>|archive <id|name>|use <id|name> [--json] [--cwd]
@@ -2297,6 +2300,144 @@ function describeClaudeProjectRetention(probes: ClaudeRetentionProbe[]): string 
   return `${found.join('；')}（${scope}）`;
 }
 
+/**
+ * `watch inspect <id>`：会话结构视图（第 403 轮）。
+ *
+ * 与 `prompt` 共用反查与解析，但产物只有计数：轮次、事件、工具名、附件、坏行与用量。它回答的是
+ * 「Watch 到底从这条会话读到了什么、少了什么」，正文与入参不出现，所以可以贴进 issue 而不泄露对话。
+ * 只读：不建库（`resolveById` 传 null）、不写会话文件、不启动 CLI。
+ */
+async function cmdInspect(json: boolean, sessionId: string | undefined, provider: string | undefined): Promise<void> {
+  if (!sessionId) usage('inspect 需要会话 id；先用 watch sessions / watch recent 找到它，例：watch inspect <session-id>');
+  if (provider && !getAdapter(provider)) fail(json, unknownProviderMessage(provider));
+
+  const diagnostics: string[] = [];
+  const misses: LookupMiss[] = [];
+  const resolved = await resolveById(sessionId, provider, null, listAdapters(), diagnostics, misses);
+  if (!resolved) {
+    const headline = lookupMissHeadline('会话', sessionId, misses, provider);
+    fail(
+      json,
+      headline ??
+        `未找到会话: ${escapeControlChars(sessionId)}${provider ? `（provider=${provider}）` : ''}。` +
+          `请确认 id 正确且对应 CLI 已安装登录。${LOOKUP_NEXT_STEP}`,
+    );
+  }
+  const adapter = resolved.adapter;
+  const foundRef = resolved.found.ref;
+  const warnings = [...diagnostics];
+  const id = escapeControlChars(foundRef.sessionId);
+
+  // 文件大小 / 修改时间是「这份记录在盘上是什么」的一半；读不出来时不能省略，也不能编一个数。
+  let sizeBytes: number | null = null;
+  let modifiedAt: string | null = null;
+  try {
+    const probe = await stat(foundRef.filePath);
+    sizeBytes = probe.size;
+    modifiedAt = probe.mtime.toISOString();
+  } catch (error) {
+    warnings.push(`会话文件大小与修改时间读取失败（${describeReadFailureOrSelf(error)}）；下面的文件行不完整`);
+  }
+
+  let turns;
+  try {
+    turns = await adapter.parse(foundRef);
+  } catch (error) {
+    fail(json, `会话 ${id} 读取失败：${await describePromptSourceReadFailure(foundRef.filePath, error)}；未生成任何内容`);
+  }
+
+  if (turns.length === 0) {
+    // 0 轮也有两种来路（与 prompt / open 同一判据）：0 字节要恢复来源，可读 0 轮要查格式是否被识别。
+    const emptyReason = await probeSessionReadable(foundRef.filePath);
+    warnings.push(
+      emptyReason
+        ? `会话 ${id} 没有可展示的内容：${emptyReason}`
+        : `来源文件可读，但解析出 0 轮内容（可能只有系统事件 / 元数据，或这一家的记录格式还没被识别）`,
+    );
+  }
+
+  const badScan = await scanUnparsableJsonLines(foundRef.filePath);
+  if (badScan.count > 0) {
+    warnings.push(`来源会话 ${id} 有 ${badScan.count} 行无法解析（截断或损坏），结构计数不含这些记录`);
+  }
+  const badScanFailure = describeBadLinesScanFailure(badScan, `来源会话 ${id}`, '坏行数无法确认——先确认该文件可读');
+  if (badScanFailure) warnings.push(badScanFailure);
+
+  let tokenUsage: TokenUsage | null = null;
+  let usageNote: string | undefined;
+  if (adapter.sessionUsage) {
+    try {
+      tokenUsage = await adapter.sessionUsage(foundRef);
+    } catch (error) {
+      usageNote = `用量读取失败（${describeReadFailureOrSelf(error)}）；这不代表来源会话没有用量`;
+      warnings.push(usageNote);
+    }
+    if (tokenUsage === null && !usageNote) {
+      const sidecar = await usageSidecarProblem(adapter, foundRef, '来源会话');
+      if (sidecar) {
+        usageNote = sidecar;
+        warnings.push(sidecar);
+      }
+    }
+  }
+
+  const structure = summarizeSessionStructure(turns);
+  const cwdNote = foundRef.cwd ? describeRecordedCwd(await inspectCwd(foundRef.cwd), foundRef.cwd) : null;
+  if (cwdNote) warnings.push(cwdNote);
+
+  if (json) {
+    console.log(
+      JSON.stringify({
+        ok: true,
+        session: {
+          id: foundRef.sessionId,
+          provider: adapter.id,
+          filePath: foundRef.filePath,
+          sizeBytes,
+          modifiedAt,
+          recordedCwd: foundRef.cwd || null,
+          ...(cwdNote ? { cwdNote } : {}),
+        },
+        structure,
+        badLines: badScan.count,
+        usage: tokenUsage,
+        ...(usageNote ? { usageNote } : {}),
+        ...(warnings.length ? { warnings } : {}),
+      }),
+    );
+    return;
+  }
+
+  for (const warning of warnings) console.error(`警告: ${warning}`);
+  const fileLine = sizeBytes === null ? escapeControlChars(foundRef.filePath) : `${escapeControlChars(foundRef.filePath)}（${formatBytes(sizeBytes)}${modifiedAt ? `，修改于 ${modifiedAt}` : ''}）`;
+  console.log(`会话: ${id}（${adapter.id}）`);
+  console.log(`文件: ${fileLine}`);
+  if (foundRef.cwd) console.log(`记录的工作目录: ${escapeControlChars(foundRef.cwd)}`);
+  console.log(`轮次: ${structure.turns}（user ${structure.userTurns} · assistant ${structure.assistantTurns}）`);
+  console.log(
+    structure.firstTimestamp && structure.lastTimestamp
+      ? `时间范围: ${structure.firstTimestamp} → ${structure.lastTimestamp}`
+      : '时间范围: 没有可用的时间戳',
+  );
+  const failureNote = structure.events.failedToolResults ? `（失败 ${structure.events.failedToolResults}）` : '';
+  console.log(
+    `事件: text ${structure.events.text} · thinking ${structure.events.thinking} · tool_call ${structure.events.toolCalls} · tool_result ${structure.events.toolResults}${failureNote}`,
+  );
+  console.log(
+    structure.tools.length
+      ? `工具: ${structure.tools.map((tool) => `${escapeControlChars(tool.name)}×${tool.count}`).join(' · ')}`
+      : '工具: 没有工具调用',
+  );
+  console.log(`附件: 图片 ${structure.attachments.images} · 文件 ${structure.attachments.files}`);
+  if (structure.incompleteTurns) console.log(`未完成轮次: ${structure.incompleteTurns}（来源停在非终态的阶段回复）`);
+  console.log(`坏行: ${badScan.count}${badScan.error ? `（无法确认：${escapeControlChars(badScan.error)}）` : ''}`);
+  if (tokenUsage) console.log(`用量: 输入 ${tokenUsage.inputTokens} · 输出 ${tokenUsage.outputTokens}`);
+  else if (usageNote) console.log(`用量: 不可用（${usageNote}）`);
+  else if (!adapter.sessionUsage) console.log('用量: 该 provider 不提供用量记录');
+  else console.log('用量: 没有可读的用量记录');
+  console.log('（以上只有计数：不含对话正文、工具入参与附件数据。）');
+}
+
 async function cmdDoctor(cwd: string, json: boolean, strict: boolean): Promise<void> {
   try {
     // `openStore()` 会创建目录、建库并迁移；先记下库文件原来在不在，报告里点名「本次诊断新建」。
@@ -3215,6 +3356,10 @@ async function main(): Promise<void> {
     // 会话 id 可省略：只输入 `watch prompt` 时按本目录最新可读会话自动挑选（与 catchup 的
     // 「不指定就用最近一条」对齐）。自动挑选是替用户做选择，所以文档头会写明这一点。
     await cmdPrompt(cwd, json, target, provider, profile, last, sinceCompact);
+    return;
+  }
+  if (cmd === 'inspect') {
+    await cmdInspect(json, target, provider);
     return;
   }
   if (cmd === 'doctor') {

@@ -22,6 +22,7 @@ export const FLAGS_BY_COMMAND: Record<string, string[]> = {
   providers: [],
   capabilities: [],
   prompt: ['provider', 'profile', 'last', 'since-compact'],
+  inspect: ['provider'],
   doctor: ['strict'],
   new: ['chain'],
   chain: [],
@@ -49,6 +50,7 @@ export const POSITIONAL_BY_COMMAND: Record<string, { max: number; hint: string }
   usage: { max: 0, hint: '无位置参数' },
   open: { max: 1, hint: '<session-id>' },
   prompt: { max: 1, hint: '[<session-id>]（省略时自动挑本目录最新的可读会话）' },
+  inspect: { max: 1, hint: '<session-id>' },
 };
 
 /** 位置参数刻意不设上限的命令：`search` 的查询词可以是多个词 */
