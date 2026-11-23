@@ -88,7 +88,7 @@ function usage(reason?: string): never {
   watch usage [--json] [--cwd <path>] [--chain <id|name>]
   watch import-codex prepare|confirm|status <id> [--cwd <path>] [--desktop-project] [--experimental] [--json]
   watch import-codex project-prepare|project-confirm|project-status <plan-id> [--project <project-id>] [--experimental] [--json]
-  watch open <session-id> [--from <session-id>] [--provider <name>] [--to <provider>] [--check] [--json]  反查 cwd 并输出 cd + 打开命令；带 --from 先并入旧会话；带 --to 把该会话内容转入指定 provider 的新会话；带 --check 只做点击前预检（不写入）`);
+  watch open <session-id> [--from <session-id>] [--provider <name>] [--to <provider>] [--check] [--json]  反查 cwd 并输出 cd + 打开命令；带 --from 先并入旧会话；带 --to 转入指定 provider；带 --check 预检目标（不改动原生会话，可能更新 Watch 本地会话映射库）`);
   if (JSON_REQUESTED) {
     const help = helpRequested;
     console.log(

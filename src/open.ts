@@ -1754,7 +1754,7 @@ function describePlan(target: ProviderAdapter, plan: OpenPlan): string {
 }
 
 /**
- * 点击前预检（只读）：解析转入会落到哪种目标，并用目标级保护探测是否可写；不写入任何内容。
+ * 解析目标并运行写入预检。原生会话保持原样；反查可能创建 Watch 本地库或更新会话映射。
  * `writable:false` + `blocked` 表示现在点「转入」会被拒绝。
  */
 export async function checkOpenInProvider(
