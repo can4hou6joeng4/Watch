@@ -120,7 +120,10 @@ export type PromptSessionMeta = {
   /** 源会话文件的绝对路径：文档脱离 Watch 之后，读者要核对原文只能靠它 */
   sourcePath?: string;
   cwd: string;
-  /** 源会话首条记录的时间（毫秒）；缺省时头部不写时间范围 */
+  /**
+   * 源会话首条**有时间戳**的记录的时间（毫秒）。它不是第一条记录、或部分轮次缺时间戳时，
+   * 头部括注与 `timestampNote` 会说明；与 `updatedAt` 都缺省时头部不写时间范围。
+   */
   startedAt?: number;
   /**
    * 源会话文件里有多少行无法解析（截断 / 损坏）。各家 `parse` 对坏行一律跳过继续，
@@ -267,6 +270,11 @@ export type HandoffPrompt = {
   manifestDisk?: ReturnType<typeof summarizeManifestDisk>;
   /** 被隐去的凭据按种类的计数；一个都没识别到时不出现（不等于文档里没有敏感内容） */
   credentialsMasked?: CredentialMaskReport;
+  /**
+   * 头部写了时间范围、而部分或全部轮次没有可解析的时间戳时的覆盖说明（如 `2/3 轮有时间戳`）。
+   * 与正文括注同一句；每一轮都有时间戳、或头部没有时间范围这一行时不出现。
+   */
+  timestampNote?: string;
 };
 
 /**
@@ -362,14 +370,14 @@ type TimeRange = {
  * 终点会明显晚于最后一条记录（2026-11-10 dogfood：会话最后一条记录 06:00:05，范围终点是
  * 06:07:51 的文件 mtime）。两端都是真实时间戳也不改变这一点，所以照实说来源。
  */
-function formatTimeRange(startedAt?: number, updatedAt?: number): TimeRange | null {
+function formatTimeRange(startedAt?: number, updatedAt?: number, startLabel = '首条记录'): TimeRange | null {
   const start = isoFromEpochMs(startedAt);
   const end = isoFromEpochMs(updatedAt);
   const startInvalid = startedAt !== undefined && start === '';
   const endInvalid = updatedAt !== undefined && end === '';
   const invalidValues = (startInvalid ? 1 : 0) + (endInvalid ? 1 : 0);
   const invalidNote = [
-    ...(startInvalid ? ['首条记录的时间数值无效或越界，已忽略'] : []),
+    ...(startInvalid ? [`${startLabel}的时间数值无效或越界，已忽略`] : []),
     ...(endInvalid ? ['来源更新时间的数值无效或越界，已忽略'] : []),
   ].join('；');
   if (!start && !end) {
@@ -381,21 +389,21 @@ function formatTimeRange(startedAt?: number, updatedAt?: number): TimeRange | nu
       return {
         text: `起点 ${start}、终点 ${end}`,
         inconsistent: true,
-        note: '两个来源互相矛盾：首条记录的时间戳晚于来源更新时间，不把它当作连续区间',
+        note: `两个来源互相矛盾：${startLabel}的时间戳晚于来源更新时间，不把它当作连续区间`,
       };
     }
     // 两端相同时**只说事实**：「短会话或精度只到秒」是猜的——两端也可能都取自同一个兜底锚点
     // （grok 无 summary.json 时起点与终点都是文件 mtime），那时这句话会替一个不存在的理由背书。
-    if (start === end) return { text: start, note: '只取到同一个时间点：首条记录与来源更新时间相同' };
+    if (start === end) return { text: start, note: `只取到同一个时间点：${startLabel}与来源更新时间相同` };
     return {
       text: `${start} → ${end}`,
-      note: '起点取首条记录的时间戳，终点取来源的更新时间，可能是文件修改时间而不是最后一条记录',
+      note: `起点取${startLabel}的时间戳，终点取来源的更新时间，可能是文件修改时间而不是最后一条记录`,
     };
   }
   if (start) {
     return {
       text: start,
-      note: `只读到首条记录的时间戳${invalidValues ? `；${invalidNote}` : ''}`,
+      note: `只读到${startLabel}的时间戳${invalidValues ? `；${invalidNote}` : ''}`,
       ...(invalidValues ? { invalidValues } : {}),
     };
   }
@@ -1024,8 +1032,21 @@ export function buildHandoffPrompt(
     // 先隐去凭据再转义。它不在事件正文里，别处的 maskEventCredentials 覆盖不到（第 343 轮）。
     lines.push(`- 上下文完整性：${headerLine(maskCredentials(contextDisclosure.summary, credentials))}`);
   }
-  const range = formatTimeRange(meta.startedAt, meta.updatedAt);
+  // 时间戳覆盖：起点可能不是第一条记录（首轮没有时间戳时取后面第一条有的），部分轮次缺
+  // 时间戳时范围也只代表有时间戳的那几轮。两件事都写进括注，不让「时间范围」被读成覆盖全程。
+  const stampedIndexes = turns.flatMap((turn, index) => (Number.isFinite(Date.parse(turn.timestamp)) ? [index] : []));
+  const range = formatTimeRange(
+    meta.startedAt,
+    meta.updatedAt,
+    meta.startedAt !== undefined && (stampedIndexes[0] ?? 0) > 0 ? '首条有时间戳的记录' : '首条记录',
+  );
+  const timestampNote = range && stampedIndexes.length < turns.length
+    ? `${stampedIndexes.length}/${turns.length} 轮有时间戳`
+    : undefined;
   if (range) {
+    if (timestampNote) {
+      addFinding(findings, 'prompt_turns_without_timestamp', 'degraded', turns.length - stampedIndexes.length);
+    }
     if (range.inconsistent) addFinding(findings, 'prompt_time_range_inconsistent', 'degraded', 1);
     if (range.invalidValues) addFinding(findings, 'prompt_time_range_invalid_timestamp', 'degraded', range.invalidValues);
     // 推定时间优先：`timeRangeNote` 自带完整来路，默认那句括注只解释「哪一端取什么」，
@@ -1038,7 +1059,8 @@ export function buildHandoffPrompt(
       }
       return metaNote ?? range.note;
     })();
-    lines.push(`- 时间范围：${range.text}${rangeNote ? `（${rangeNote}）` : ''}`);
+    const rangeNotes = [rangeNote, timestampNote].filter(Boolean);
+    lines.push(`- 时间范围：${range.text}${rangeNotes.length ? `（${rangeNotes.join('；')}）` : ''}`);
   }
   lines.push(`- 轮次：${stats.turns} 轮（用户 ${stats.userTurns} / 助手 ${stats.assistantTurns}）`);
   const usageBadLines = meta.usageBadLines ?? 0;
@@ -1192,5 +1214,6 @@ export function buildHandoffPrompt(
     // 没核对过就不出现：`files[].disk` 缺省时，读者只能靠这个字段分辨「都还在」与「没查」。
     ...(options.manifestDisk ? { manifestDisk: summarizeManifestDisk(options.manifestDisk) } : {}),
     ...(masked.total > 0 ? { credentialsMasked: masked } : {}),
+    ...(timestampNote ? { timestampNote } : {}),
   };
 }

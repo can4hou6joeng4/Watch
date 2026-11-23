@@ -2075,8 +2075,9 @@ async function cmdPrompt(
       sessionId: foundRef.sessionId,
       sourcePath: foundRef.filePath,
       cwd: foundRef.cwd,
-      // 首条记录的时间当起点：文档里要给出时间范围，但只在真读到时间戳时写
-      startedAt: toMillis(turns[0]?.timestamp),
+      // 首条有时间戳的记录当起点：首轮缺时间戳时不能把「后面有时间」讲成「没读到时间戳」。
+      // 起点不是第一条、或部分轮次缺时间戳时，`buildHandoffPrompt()` 会在括注与 findings 里说明。
+      startedAt: turns.map((turn) => toMillis(turn.timestamp)).find((ms) => ms !== undefined),
       updatedAt,
       // 逐轮时间戳是推定值时要说清来路：grok 的行内没有时间，读到的那个数字是锚点
       ...(adapter.timingNote ? { timeRangeNote: adapter.timingNote } : {}),
@@ -2125,6 +2126,9 @@ async function cmdPrompt(
       // 脚本要能区分「按 id 查到的」与「替你猜的」：两者的可信度不一样
       ...(autoPicked ? { autoPicked: true } : {}),
       markdown: result.markdown,
+      // 与头部「时间范围」括注同源：脚本不必解析 Markdown 才知道时间是推定值、或只覆盖部分轮次
+      ...(adapter.timingNote ? { timeRangeNote: adapter.timingNote } : {}),
+      ...(result.timestampNote ? { timestampNote: result.timestampNote } : {}),
       ...(sourceChange.kind === 'changed' ? { sourceDrift: { from: sourceChange.from, to: sourceChange.to, growth: sourceChange.growth } } : {}),
       // 「量不出来」单独给结构化字段：脚本不能把缺字段当成「没变化」
       ...(sourceChange.kind === 'unverifiable' ? { sourceDriftUnknown: sourceChange.reason } : {}),
