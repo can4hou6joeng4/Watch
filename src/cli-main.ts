@@ -2195,6 +2195,9 @@ async function cmdPrompt(
         '正文元信息与「继续工作」已写明，接手前先核对这些调用是否已经执行',
     );
   }
+  if (result.stats.unansweredTail) {
+    console.error('说明: 来源会话最后停在用户消息上，没有对应的助手回复；正文已写明，接手前先确认这一步要不要继续');
+  }
   if (result.stats.omittedTurns > 0 || result.stats.omittedEvents > 0) {
     console.error(
       `提示: 当前档位（${result.profile}）省略了 ${result.stats.omittedTurns} 轮 / ${result.stats.omittedEvents} 条过程记录；` +

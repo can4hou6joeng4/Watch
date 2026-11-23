@@ -3,7 +3,7 @@ import { addFinding } from './findings.js';
 import type { ManifestDiskReport } from './manifest-disk.js';
 import { summarizeManifestDisk } from './manifest-disk.js';
 import { codeFence, inlineCode, singleLineText } from './markdown.js';
-import { CLAUDE_COMPACT_SUMMARY_PREFIX, danglingToolCalls, findContextDisclosure, KIMI_COMPACTION_SUMMARY_PREFIX, OPENCODE_COMPACTION_SUMMARY_PREFIX, OPENCODE_UNFINISHED_TOOL_PREFIX, PI_COMPACTION_SUMMARY_PREFIX, WATCH_CONTEXT_DISCLOSURE_PREFIX } from './rich.js';
+import { CLAUDE_COMPACT_SUMMARY_PREFIX, danglingToolCalls, findContextDisclosure, unansweredTailFailure, unansweredUserTail, KIMI_COMPACTION_SUMMARY_PREFIX, OPENCODE_COMPACTION_SUMMARY_PREFIX, OPENCODE_UNFINISHED_TOOL_PREFIX, PI_COMPACTION_SUMMARY_PREFIX, WATCH_CONTEXT_DISCLOSURE_PREFIX } from './rich.js';
 import { isoFromEpochMs } from './time.js';
 import type { ProcessEvent, TokenUsage, UnifiedTurn } from './types.js';
 import { compressedCopy, compressedRetryAdvice, describeReadFailureOrSelf, sessionFilePresence } from './read-text.js';
@@ -255,6 +255,8 @@ export type PromptStats = {
    * 可能在等待用户审批、仍在运行或已中断；不是明确失败，不计入 `failedAttemptCalls`。
    */
   danglingToolCalls: number;
+  /** 来源最后停在「用户说了、没有助手回复」的半轮上（Ctrl-C、用量耗尽、进程被杀或文件截断都可能） */
+  unansweredTail: boolean;
   /** 识别并隐去的**不同**凭据个数（同一个值出现多处只算一个；只认固定格式与固定位置） */
   credentialsMasked: number;
 };
@@ -736,6 +738,7 @@ export function buildHandoffPrompt(
     failedAttemptsOmittedCalls: 0,
     failedAttemptsUnclassified: 0,
     danglingToolCalls: 0,
+    unansweredTail: false,
     credentialsMasked: 0,
   };
   // 凭据隐去（第 329 轮）：这份文档就是用来复制给另一个助手的，会话里出现过的密钥不能跟着走。
@@ -1049,6 +1052,23 @@ export function buildHandoffPrompt(
         '可能在等待用户审批、仍在运行或已中断，不是明确失败，不在「失败与中断」统计；它们是否已经执行、有没有留下改动，无法从记录确认',
     );
   }
+  // 另一种中断形状：最后一条是有正文的用户轮，却没有助手回复。`open` / `switch` 会放进
+  // warnings，但这份文档会被复制走；正文里只多一句悬空的问题，读者无从判断它是不是半轮。
+  // 判据与 `describeUnansweredTail()` 共用，只在有真实正文时报告，占位轮不算（第 417 轮）。
+  stats.unansweredTail = unansweredUserTail(turns) !== null;
+  if (stats.unansweredTail) {
+    const confirmed = unansweredTailFailure(turns);
+    const reason = confirmed === 'cancelled'
+      ? '来源日志明确标记为中止'
+      : confirmed === 'error'
+        ? '来源日志明确标记为失败'
+        : '可能被中断或还在生成';
+    addFinding(findings, 'prompt_unanswered_tail', 'degraded', 1);
+    lines.push(
+      `- 来源会话最后停在用户消息上：没有对应的助手回复，${reason}；` +
+        '接手前先向用户确认这一步要不要继续，不要把它当成已经完成的一步',
+    );
+  }
   // 时间戳覆盖：起点可能不是第一条记录（首轮没有时间戳时取后面第一条有的），部分轮次缺
   // 时间戳时范围也只代表有时间戳的那几轮。两件事都写进括注，不让「时间范围」被读成覆盖全程。
   const stampedIndexes = turns.flatMap((turn, index) => (Number.isFinite(Date.parse(turn.timestamp)) ? [index] : []));
@@ -1219,6 +1239,9 @@ export function buildHandoffPrompt(
       `来源记录里有 ${stats.danglingToolCalls} 次工具调用没有结果（见元信息）：不要假设它们已经完成，也不要直接重做；` +
         '先核对工作目录的当前状态，确认不了的向用户确认。',
     );
+  }
+  if (stats.unansweredTail) {
+    lines.push('来源会话最后一条用户消息没有助手回复（见元信息）：先向用户确认这条消息要不要接手，不要代替来源助手假定它已经回答过。');
   }
   // 占位符不是会话原文：目标助手可能把它当成真实的值去用，或者试着「补全」。
   if (masked.total > 0) {

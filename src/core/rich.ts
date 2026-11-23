@@ -1060,6 +1060,15 @@ export function unansweredUserTail(turns: UnifiedTurn[]): UnifiedTurn | null {
   return last;
 }
 
+/**
+ * 悬空尾轮是否由来源日志明确标成失败 / 中止。供交接文档与 `describeUnansweredTail()` 共用，
+ * 避免两处各自翻 `tailFailure` 时对同一个标记给出相反结论。
+ */
+export function unansweredTailFailure(turns: UnifiedTurn[]): 'error' | 'cancelled' | null {
+  const confirmed = unansweredUserTail(turns)?.events?.find((e) => e.kind === 'text' && e.tailFailure)?.tailFailure;
+  return confirmed ?? null;
+}
+
 /** 与 `describeDanglingToolCalls` 同一套披露口径（含可替换的结尾那句），未闭合时返回 null。 */
 export function describeUnansweredTail(
   turns: UnifiedTurn[],
@@ -1073,7 +1082,7 @@ export function describeUnansweredTail(
   const preview = clippedTail.truncated ? `${clippedTail.text}…` : full;
   // 来源日志已经写明失败 / 中止时，不能再说「可能还在生成」——两句话并列会自相矛盾。
   // 标记由解析器的失败披露事件携带（`ProcessEvent.tailFailure`），只改这一句，不压掉警告。
-  const confirmed = (tail.events ?? []).find((e) => e.kind === 'text' && e.tailFailure)?.tailFailure;
+  const confirmed = unansweredTailFailure(turns);
   const reason = confirmed
     ? `这一轮在来源日志里以${confirmed === 'cancelled' ? '中止' : '失败'}结束（不是仍在生成）`
     : '这一轮可能被中断或还在生成';
