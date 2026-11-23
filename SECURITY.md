@@ -6,6 +6,8 @@ Watch 在本地读写 Claude Code、Codex、Kimi、OpenCode、Pi 和 Grok 的会
 
 请通过 GitHub 私有漏洞报告（仓库 Security 标签页的 “Report a vulnerability”）提交；若该入口不可用，请通过仓库所有者在 GitHub 上的联系方式私下报告。公开 Issue 请不要写复现所需凭据、真实会话内容或尚未修复的利用细节。报告请尽量包含受影响版本、平台、复现步骤、影响范围和你建议的修复方向。
 
+参与者之间的行为问题不属于安全漏洞，请按[贡献者行为准则](CODE_OF_CONDUCT.md)的报告渠道处理。
+
 ## 请勿提交到仓库
 
 - 真实聊天记录、会话 ID、工作目录路径、工具输出或会话数据库。
