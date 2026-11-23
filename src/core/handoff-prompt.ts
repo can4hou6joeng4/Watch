@@ -3,7 +3,7 @@ import { addFinding } from './findings.js';
 import type { ManifestDiskReport } from './manifest-disk.js';
 import { summarizeManifestDisk } from './manifest-disk.js';
 import { codeFence, inlineCode, singleLineText } from './markdown.js';
-import { CLAUDE_COMPACT_SUMMARY_PREFIX, danglingToolCalls, findContextDisclosure, unansweredTailFailure, unansweredUserTail, KIMI_COMPACTION_SUMMARY_PREFIX, OPENCODE_COMPACTION_SUMMARY_PREFIX, OPENCODE_UNFINISHED_TOOL_PREFIX, PI_COMPACTION_SUMMARY_PREFIX, WATCH_CONTEXT_DISCLOSURE_PREFIX } from './rich.js';
+import { CLAUDE_COMPACT_SUMMARY_PREFIX, danglingToolCalls, findContextDisclosure, orphanToolResults, unansweredTailFailure, unansweredUserTail, KIMI_COMPACTION_SUMMARY_PREFIX, OPENCODE_COMPACTION_SUMMARY_PREFIX, OPENCODE_UNFINISHED_TOOL_PREFIX, PI_COMPACTION_SUMMARY_PREFIX, WATCH_CONTEXT_DISCLOSURE_PREFIX } from './rich.js';
 import { isoFromEpochMs } from './time.js';
 import type { ProcessEvent, TokenUsage, UnifiedTurn } from './types.js';
 import { compressedCopy, compressedRetryAdvice, describeReadFailureOrSelf, sessionFilePresence } from './read-text.js';
@@ -255,6 +255,11 @@ export type PromptStats = {
    * 可能在等待用户审批、仍在运行或已中断；不是明确失败，不计入 `failedAttemptCalls`。
    */
   danglingToolCalls: number;
+  /**
+   * 按 callId 找不到调用的工具结果条数（整条会话，不受档位 / `--last` 裁剪影响）。
+   * 常见于上下文压缩后的残留或记录从中间截断；不代表失败，也不能用来重建原有操作顺序。
+   */
+  orphanToolResults: number;
   /** 来源最后停在「用户说了、没有助手回复」的半轮上（Ctrl-C、用量耗尽、进程被杀或文件截断都可能） */
   unansweredTail: boolean;
   /** 识别并隐去的**不同**凭据个数（同一个值出现多处只算一个；只认固定格式与固定位置） */
@@ -738,6 +743,7 @@ export function buildHandoffPrompt(
     failedAttemptsOmittedCalls: 0,
     failedAttemptsUnclassified: 0,
     danglingToolCalls: 0,
+    orphanToolResults: 0,
     unansweredTail: false,
     credentialsMasked: 0,
   };
@@ -1052,6 +1058,16 @@ export function buildHandoffPrompt(
         '可能在等待用户审批、仍在运行或已中断，不是明确失败，不在「失败与中断」统计；它们是否已经执行、有没有留下改动，无法从记录确认',
     );
   }
+  // 反方向的配对缺口：有结果、没有调用。常见于上下文压缩后残留或记录从中间截断，不代表失败；
+  // 但它说明这份记录不足以重建原有步骤，接手者不能把结果里的输出当成完整会话的结论（第 425 轮）。
+  stats.orphanToolResults = orphanToolResults(turns).length;
+  if (stats.orphanToolResults > 0) {
+    addFinding(findings, 'prompt_orphan_tool_results', 'degraded', stats.orphanToolResults);
+    lines.push(
+      `- 找不到调用的工具结果：${stats.orphanToolResults} 条结果在来源记录里找不到对应的调用（按 callId 配对，覆盖整条会话）：` +
+        '可能来自上下文压缩或记录截断，不代表失败；不能据此重建原有操作顺序，也不能把结果里的输出当成完整会话的结论',
+    );
+  }
   // 另一种中断形状：最后一条是有正文的用户轮，却没有助手回复。`open` / `switch` 会放进
   // warnings，但这份文档会被复制走；正文里只多一句悬空的问题，读者无从判断它是不是半轮。
   // 判据与 `describeUnansweredTail()` 共用，只在有真实正文时报告，占位轮不算（第 417 轮）。
@@ -1242,6 +1258,12 @@ export function buildHandoffPrompt(
   }
   if (stats.unansweredTail) {
     lines.push('来源会话最后一条用户消息没有助手回复（见元信息）：它可能就是本次要接手的任务，按用户当前指示继续；如果来源可能已经执行过，先核对工作目录再动手。');
+  }
+  if (stats.orphanToolResults > 0) {
+    lines.push(
+      `来源记录里有 ${stats.orphanToolResults} 条工具结果找不到调用（见元信息）：记录可能被压缩或截断；` +
+        '不要凭这些结果推断之前的步骤，先看工作目录与实际改动再继续。',
+    );
   }
   // 占位符不是会话原文：目标助手可能把它当成真实的值去用，或者试着「补全」。
   if (masked.total > 0) {
