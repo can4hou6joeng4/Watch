@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createRequire } from 'node:module';
-import { agents, content, defaultLocale, evidence, locales, maintainer, repo, samples, siteDate, siteUrl, siteVerification } from './lib/site-content.mjs';
+import { agents, content, defaultLocale, defaultLocaleList, evidence, locales, maintainer, repo, samples, siteDate, siteUrl, siteVerification } from './lib/site-content.mjs';
 import { alternatePagesFor, buildAllPageManifest, buildHomePageManifest, renderSitemap, siteBuildDate, validatePageManifest } from './lib/site-pages.mjs';
 import { guides as authoredGuides } from './lib/site-guides.mjs';
 import { chromeText, loadLocaleDictionary, translateContent, translateGuideLocale } from './lib/apply-site-locale.mjs';
@@ -23,9 +23,7 @@ const decisionMatrix = llmsText.match(/## Intent-to-Route Decision Matrix\n([\s\
 if (!decisionMatrix) throw new Error('[site-build] llms.txt 源缺少接力路径决策表');
 const localeDir = path.join(root, 'scripts/lib/site-locales');
 const authoredLocales = new Set(['zh', 'en']);
-// 默认构建手写稿加上已补齐的语言包（zh-tw 于 2026-11-23 补齐，v0.1.308 起默认发布）；
-// 其余语言包补齐后同样在这里登记，WATCH_ALL_LOCALES=1 才会把已登记的全都纳入判定。
-const defaultLocaleList = ['zh', 'en', 'zh-tw'];
+// 默认发布的语言清单来自 site-content.mjs（测试共用同一份）；WATCH_ALL_LOCALES=1 才会把已登记的全都纳入判定。
 const activeLocaleList = process.env.WATCH_ALL_LOCALES ? Object.keys(locales) : defaultLocaleList;
 // 默认发布的翻译语言缺键时必须让构建失败：跳过只会让线上悄悄少掉一门语言，
 // 而站点产物、sitemap 照常生成，发布流程不会有人察觉。WATCH_ALL_LOCALES=1 只用于预览，仍按跳过处理。

@@ -19,6 +19,12 @@ export const locales = {
   tr: { path: '/tr/', hreflang: 'tr', ogLocale: 'tr_TR', ogImage: '/og-en.png', label: 'Türkçe' },
 };
 export const defaultLocale = 'en';
+/**
+ * 默认发布的语言：手写稿 zh / en，加上已补齐的语言包（zh-tw、ja 先后于 2026-11-23 补齐）。
+ * 新语言包补齐后加到这里：build-site.mjs 用它决定构建范围与「默认语言缺键必须失败」的守卫，
+ * 站点测试也从这里取，避免构建与测试各写一份清单、加一门语言要改三处。
+ */
+export const defaultLocaleList = ['zh', 'en', 'zh-tw', 'ja'];
 export const siteVerification = { 'baidu-site-verification': 'codeva-W4z09gkNmy' };
 export const agents = [
   { id: 'claude', label: 'Claude Code' }, { id: 'codex', label: 'OpenAI Codex' },
