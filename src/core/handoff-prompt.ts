@@ -226,6 +226,13 @@ export type PromptStats = {
   userTurns: number;
   assistantTurns: number;
   includedTurns: number;
+  /** 正文实际保留的真实用户轮数（不含 `--since-compact` 的摘要锚点） */
+  includedUserTurns: number;
+  /**
+   * 首条任务描述在正文中的状态：kept / omitted / summarized（摘要锚点保留但原话被裁）/ absent（来源本来就没有用户轮）。
+   * 与正文「首条任务描述…」同一判据，脚本不必解析 Markdown。
+   */
+  taskDescription: 'kept' | 'omitted' | 'summarized' | 'absent';
   omittedTurns: number;
   events: number;
   includedEvents: number;
@@ -728,6 +735,8 @@ export function buildHandoffPrompt(
     userTurns: turns.filter((t) => t.role === 'user').length,
     assistantTurns: turns.filter((t) => t.role === 'assistant').length,
     includedTurns: 0,
+    includedUserTurns: 0,
+    taskDescription: 'absent',
     omittedTurns: 0,
     events: turns.reduce((n, t) => n + (t.events?.length ?? 0), 0),
     includedEvents: 0,
@@ -777,16 +786,28 @@ export function buildHandoffPrompt(
   const { kept, omitted } = selection;
   stats.includedTurns = kept.length;
   stats.omittedTurns = omitted + compactOmitted;
+  // 真实用户轮数：`--since-compact` 的摘要锚点可能是 user 轮，但它是生成内容，不算用户原话。
+  stats.includedUserTurns = kept.filter((turn) => turn.role === 'user' && turn !== (compactAt >= 0 ? turns[compactAt] : undefined)).length;
   // 「首条任务描述」是否真的在正文里：按实际保留的轮次判断，不看档位 / --last 的名字。
   // 压缩摘要轮（可能是助手轮）不算任务描述：--since-compact 保留它是窗口起点，不是用户原话（第 344 轮）。
   const taskTurn = turns.find((t, index) => t.role === 'user' && index !== compactAt);
   const firstUserKept = taskTurn !== undefined && kept.includes(taskTurn);
   const compactAnchorKept = compactAt >= 0 && kept.includes(turns[compactAt]!);
-  const taskNote = firstUserKept
+  // 来源没有用户轮时不能说「未保留」：那会把「本来没有」讲成「被裁掉」，与零轮 / 空来源的诚实披露冲突。
+  stats.taskDescription = stats.userTurns === 0
+    ? 'absent'
+    : firstUserKept
+      ? 'kept'
+      : compactAnchorKept
+        ? 'summarized'
+        : 'omitted';
+  const taskNote = stats.taskDescription === 'kept'
     ? '首条任务描述已保留'
-    : compactAnchorKept
+    : stats.taskDescription === 'summarized'
       ? '压缩摘要已作为窗口起点保留，原始任务描述未保留'
-      : '首条任务描述未保留';
+      : stats.taskDescription === 'absent'
+        ? '来源没有用户轮，没有可保留的任务描述'
+        : '首条任务描述未保留';
   if (omitted > 0) addFinding(findings, 'prompt_turns_omitted', 'skipped', omitted);
   if (compactOmitted > 0) addFinding(findings, 'prompt_since_compact_applied', 'skipped', compactOmitted);
   if (options.sinceCompact && compactAt < 0) {
@@ -1132,12 +1153,12 @@ export function buildHandoffPrompt(
   const lastHint = options.lastUserTurns !== undefined ? `，最近 ${options.lastUserTurns} 个用户轮（--last）` : '';
   lines.push(`- 档位：${profile}（正文 ${limits.textLimit === null ? '不截断' : `每条 ≤ ${limits.textLimit} 字符`}，过程记录 ${limits.eventsPerTurn === null ? '全部展开' : limits.eventsPerTurn === 0 ? '不展开' : `每轮 ≤ ${limits.eventsPerTurn} 条`}${lastHint}${fullHint}）`);
   if (stats.omittedTurns > 0) {
-    const keptUserTurns = kept.filter((t) => t.role === 'user').length;
-    // 补回的压缩摘要（`--since-compact` 的窗口起点）不属于 `--last` 窗口；它是 user 轮时
-    // 不能算进「保留了最近 N 个用户轮」——否则同一份文档里 `--last 1` 会写成「保留了最近
-    // 2 个用户轮」（第 281 轮）。单独说明它为什么在正文里。
     const anchorUserTurns = selection.anchorAdded?.role === 'user' ? 1 : 0;
-    const windowUserTurns = keptUserTurns - anchorUserTurns;
+    // `stats.includedUserTurns` 已经扣掉压缩摘要锚点，直接用它，避免两处口径漂移。
+    const windowUserTurns = stats.includedUserTurns;
+    const taskSuffix = firstUserKept || stats.taskDescription === 'absent'
+      ? taskNote
+      : `**${taskNote}**，需要背景请去掉 --last 重新生成`;
     if (compactOmitted > 0) {
       lines.push(
         `- 按 --since-compact 从最近一次压缩摘要开始，省略其之前的 ${compactOmitted} 轮（摘要由 ${compactSource} 生成，不是用户原话）` +
@@ -1148,9 +1169,7 @@ export function buildHandoffPrompt(
         options.lastUserTurns !== undefined
           ? `- 按 --last ${options.lastUserTurns} 保留了最近 ${windowUserTurns} 个用户轮${
               anchorUserTurns ? '，另补回压缩摘要（不属于 --last 窗口）' : ''
-            }，省略 ${stats.omittedTurns} 轮（${
-              firstUserKept ? taskNote : `**${taskNote}**，需要背景请去掉 --last 重新生成`
-            }）`
+            }，省略 ${stats.omittedTurns} 轮（${taskSuffix}）`
           : `- 本档位保留了 ${stats.includedTurns} 轮，省略 ${stats.omittedTurns} 轮（${
               firstUserKept ? '原始任务描述已强制保留' : taskNote
             }）`,
