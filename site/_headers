@@ -53,3 +53,6 @@
 /ja/*
   ! Content-Language
   Content-Language: ja
+/ko/*
+  ! Content-Language
+  Content-Language: ko
