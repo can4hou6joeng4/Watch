@@ -240,6 +240,13 @@ export type PromptStats = {
    * 与正文「首条任务描述…」同一判据，脚本不必解析 Markdown。
    */
   taskDescription: 'kept' | 'omitted' | 'summarized' | 'absent';
+  /**
+   * `--since-compact` 的实际结果：off（未指定）/ applied（找到摘要并作为窗口起点）/ unavailable（指定了但没有可用摘要）。
+   * 顶层 `sinceCompact: true` 只说明「指定了」，不能区分找不到摘要时根本没有裁剪。
+   */
+  sinceCompactResult: 'off' | 'applied' | 'unavailable';
+  /** applied 时摘要由哪家生成（与正文同源）；off / unavailable 时缺省。 */
+  compactSource?: 'claude-code' | 'opencode' | 'pi' | 'kimi';
   omittedTurns: number;
   events: number;
   includedEvents: number;
@@ -744,6 +751,7 @@ export function buildHandoffPrompt(
     includedTurns: 0,
     includedUserTurns: 0,
     taskDescription: 'absent',
+    sinceCompactResult: 'off',
     omittedTurns: 0,
     events: turns.reduce((n, t) => n + (t.events?.length ?? 0), 0),
     includedEvents: 0,
@@ -781,6 +789,12 @@ export function buildHandoffPrompt(
         : compact?.source === 'kimi'
           ? 'Kimi'
           : 'Claude Code';
+  // 正文之外的结构化结论：顶层 sinceCompact 只记「有没有请求」，找不到摘要时也没有裁剪；
+  // 这里把「没请求 / 找到 / 没找到」分开，脚本不必解析 Markdown 的措辞。
+  if (options.sinceCompact) {
+    stats.sinceCompactResult = compact ? 'applied' : 'unavailable';
+    if (compact) stats.compactSource = compact.source === 'claude' ? 'claude-code' : compact.source;
+  }
   const compactOmitted = compactAt > 0 ? compactAt : 0;
   const scoped = compactAt >= 0 ? turns.slice(compactAt) : turns;
 
