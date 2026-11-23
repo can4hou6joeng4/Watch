@@ -226,8 +226,18 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          # 各平台 artifact 目录深度不一,用 find 递归收集,避免 glob 深度不够漏包
-          mapfile -t files < <(find dist -type f \( -name "*.dmg" -o -name "*.exe" -o -name "*.deb" \))
-          [ ${#files[@]} -gt 0 ] || { echo "没有安装包可上传"; find dist -type f; exit 1; }
+          version=${GITHUB_REF_NAME#v}
+          expected=(
+            "Watch_${version}_aarch64.dmg"
+            "Watch_${version}_x64.dmg"
+            "Watch_${version}_x64-setup.exe"
+            "Watch_${version}_amd64.deb"
+          )
+          # 递归收集非空安装包。比较完整文件名可发现缺包、重复包和版本不符的包。
+          mapfile -t files < <(find dist -type f -size +0c \( -name "*.dmg" -o -name "*.exe" -o -name "*.deb" \))
+          if ! diff -u <(printf '%s\n' "${expected[@]}" | sort) <(printf '%s\n' "${files[@]##*/}" | sort); then
+            echo "::error::安装包与 v${version} 的发布清单不一致"
+            exit 1
+          fi
           gh release create "$GITHUB_REF_NAME" --title "Watch $GITHUB_REF_NAME" --generate-notes "${files[@]}" \
             || gh release upload "$GITHUB_REF_NAME" "${files[@]}" --clobber
