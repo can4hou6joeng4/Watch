@@ -6,7 +6,7 @@ import { agents, content, defaultLocale, defaultLocaleList, evidence, locales, m
 import { alternatePagesFor, buildAllPageManifest, buildHomePageManifest, renderSitemap, siteBuildDate, validatePageManifest } from './lib/site-pages.mjs';
 import { guides as authoredGuides } from './lib/site-guides.mjs';
 import { chromeText, loadLocaleDictionary, translateContent, translateGuideLocale } from './lib/apply-site-locale.mjs';
-import { collectEnglishStrings, localeGaps } from './lib/site-locales-status.mjs';
+import { collectEnglishStrings, localeGaps, localeTokenIssues } from './lib/site-locales-status.mjs';
 import { verifyOgImages } from './lib/site-og.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -38,7 +38,8 @@ const publishedLocales = Object.fromEntries(Object.entries(locales).filter(([loc
   if (authoredLocales.has(locale)) return true;
   const file = path.join(localeDir, `${locale}.json`);
   if (!fs.existsSync(file)) return false;
-  const { missing } = localeGaps(loadLocaleDictionary(file), english);
+  const dictionary = loadLocaleDictionary(file);
+  const { missing } = localeGaps(dictionary, english);
   if (missing.length) {
     if (strictLocales.has(locale)) {
       throw new Error(
@@ -47,6 +48,18 @@ const publishedLocales = Object.fromEntries(Object.entries(locales).filter(([loc
     }
     skippedLocales.push({ locale, missing: missing.length });
     return false;
+  }
+  // 记号差异不拦非默认语言（缺几个参数不代表整页不能用），但默认语言必须修好再发：
+  // 读者照着译文抄 `--json-findings` 这类被拼坏的参数，会得到不存在的选项。
+  const tokenIssues = localeTokenIssues(dictionary);
+  if (tokenIssues.length) {
+    const sample = tokenIssues.slice(0, 3).map((issue) => `${issue.kind === 'missing' ? '缺少' : '多出'} ${issue.token}`).join('；');
+    if (strictLocales.has(locale)) {
+      throw new Error(
+        `[site-build] 默认发布语言 ${locale} 的语言包记号不一致（${sample}）：CLI 参数与环境变量名要原样保留，改好译文再构建（npm run site:locales 列明细）`,
+      );
+    }
+    console.warn(`[site-build] 语言包 ${locale} 记号不一致（${sample}）：页面照常构建，请修正译文`);
   }
   return true;
 }));

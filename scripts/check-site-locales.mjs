@@ -14,7 +14,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { content, defaultLocaleList, locales } from './lib/site-content.mjs';
 import { guides } from './lib/site-guides.mjs';
-import { collectEnglishStrings, localeGaps } from './lib/site-locales-status.mjs';
+import { collectEnglishStrings, localeGaps, localeTokenIssues } from './lib/site-locales-status.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const localeDir = path.join(root, 'scripts/lib/site-locales');
@@ -24,16 +24,20 @@ const english = collectEnglishStrings(content.en, guides);
 const files = fs.readdirSync(localeDir).filter((name) => name.endsWith('.json')).sort();
 const present = new Set(files.map((name) => name.slice(0, -'.json'.length)));
 let incomplete = 0;
+let tokenProblem = 0;
 for (const file of files) {
   const locale = file.slice(0, -'.json'.length);
   const dictionary = JSON.parse(fs.readFileSync(path.join(localeDir, file), 'utf8'));
   const { missing, orphans, byGuide } = localeGaps(dictionary, english);
-  const status = missing.length ? 'INCOMPLETE' : 'ok';
+  const tokenIssues = localeTokenIssues(dictionary);
+  if (tokenIssues.length) tokenProblem += 1;
+  const status = missing.length || tokenIssues.length ? 'INCOMPLETE' : 'ok';
   if (missing.length) incomplete += 1;
-  console.log(`${locale}: ${status} 源串 ${english.strings.size} · 缺 ${missing.length} · 孤儿键 ${orphans.length}`);
+  console.log(`${locale}: ${status} 源串 ${english.strings.size} · 缺 ${missing.length} · 孤儿键 ${orphans.length} · 记号 ${tokenIssues.length}`);
   for (const [owner, count] of byGuide) console.log(`  缺 ${count} 条 ← ${owner}`);
   for (const text of missing.slice(0, sampleLimit)) console.log(`  · ${JSON.stringify(text.slice(0, 90))}`);
   for (const key of orphans.slice(0, sampleLimit)) console.log(`  ! 孤儿 ${JSON.stringify(key.slice(0, 90))}`);
+  for (const issue of tokenIssues.slice(0, sampleLimit)) console.log(`  ⚠ 记号${issue.kind === 'missing' ? '消失' : '多出'} ${JSON.stringify(issue.token)} ← ${JSON.stringify(issue.source.slice(0, 90))}`);
 }
 
 // 手写稿（zh / en）没有 JSON 语言包：它们的内容直接写在 site-content.mjs 与 site-guides.mjs 里。
@@ -59,7 +63,10 @@ if (dormant.length) {
 }
 
 if (incomplete) {
-  console.log(`\n${incomplete} 处不齐全：WATCH_ALL_LOCALES=1 的构建会跳过它们并打印同样的缺口数。`);
-  process.exit(1);
+  console.log(`\n${incomplete} 个语言包缺键：WATCH_ALL_LOCALES=1 的构建会跳过它们并打印同样的缺口数；默认清单里的语言缺键会让 site:build 直接失败。`);
 }
+if (tokenProblem) {
+  console.log(`\n${tokenProblem} 个语言包有记号差异：默认清单里的语言会让 site:build 直接失败，其余语言只在构建日志里警告。`);
+}
+if (incomplete || tokenProblem) process.exit(1);
 console.log(`\n全部 ${files.length} 个语言包与英文源一致。`);
