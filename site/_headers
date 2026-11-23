@@ -56,6 +56,9 @@
 /ko/*
   ! Content-Language
   Content-Language: ko
+/fr/*
+  ! Content-Language
+  Content-Language: fr
 /de/*
   ! Content-Language
   Content-Language: de
