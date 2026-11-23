@@ -12,7 +12,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { content } from './lib/site-content.mjs';
+import { content, defaultLocaleList, locales } from './lib/site-content.mjs';
 import { guides } from './lib/site-guides.mjs';
 import { collectEnglishStrings, localeGaps } from './lib/site-locales-status.mjs';
 
@@ -22,6 +22,7 @@ const sampleLimit = Number(process.env.LOCALE_SAMPLE_LIMIT ?? 5);
 const english = collectEnglishStrings(content.en, guides);
 
 const files = fs.readdirSync(localeDir).filter((name) => name.endsWith('.json')).sort();
+const present = new Set(files.map((name) => name.slice(0, -'.json'.length)));
 let incomplete = 0;
 for (const file of files) {
   const locale = file.slice(0, -'.json'.length);
@@ -35,8 +36,30 @@ for (const file of files) {
   for (const key of orphans.slice(0, sampleLimit)) console.log(`  ! 孤儿 ${JSON.stringify(key.slice(0, 90))}`);
 }
 
+// 手写稿（zh / en）没有 JSON 语言包：它们的内容直接写在 site-content.mjs 与 site-guides.mjs 里。
+const handWritten = new Set(['zh', 'en']);
+const missingPacks = defaultLocaleList.filter((locale) => !handWritten.has(locale) && !present.has(locale));
+if (missingPacks.length) {
+  incomplete += missingPacks.length;
+  console.log(`\n默认发布清单里的 ${missingPacks.join('、')} 没有语言包：构建会因默认语言缺键直接失败，请先补齐或暂时移出 defaultLocaleList。`);
+}
+
+// 已登记到 locales 但既没有语言包、也不在默认清单里的语言：构建时整轮跳过，这里明确列出来，
+// 避免「注册表里有、站点上没有」这种状态只存在于构建日志里。
+const registeredOnly = Object.keys(locales).filter(
+  (locale) => !handWritten.has(locale) && !defaultLocaleList.includes(locale) && !present.has(locale)
+);
+if (registeredOnly.length) {
+  console.log(`\n已登记但未发布：${registeredOnly.join('、')}（无语言包，构建时跳过；补齐后可加入 defaultLocaleList）。`);
+}
+
+const dormant = [...present].filter((locale) => !defaultLocaleList.includes(locale));
+if (dormant.length) {
+  console.log(`\n有语言包但未加入默认清单：${dormant.join('、')}（默认构建不包含，WATCH_ALL_LOCALES=1 时才纳入判定）。`);
+}
+
 if (incomplete) {
-  console.log(`\n${incomplete} / ${files.length} 个语言包不齐全：WATCH_ALL_LOCALES=1 的构建会跳过它们并打印同样的缺口数。`);
+  console.log(`\n${incomplete} 处不齐全：WATCH_ALL_LOCALES=1 的构建会跳过它们并打印同样的缺口数。`);
   process.exit(1);
 }
 console.log(`\n全部 ${files.length} 个语言包与英文源一致。`);
