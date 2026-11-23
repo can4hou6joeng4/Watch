@@ -1,8 +1,8 @@
 # Watch · 系统架构与安全边界
 
-> 更新：2026-11-18。区分现有实现、安全缺口与拟议扩展；产品范围以 [PLAN.md](PLAN.md) 为准。
+> 更新：2026-11-23（复核三条入口、写回防护函数与 CI 结构）。区分现有实现、安全缺口与拟议扩展；产品范围以 [PLAN.md](PLAN.md) 为准。
 
-业务逻辑在 TypeScript，Rust 只负责 CLI 桥接和原生系统操作。桌面路径为 `src/open.ts`，链式命令路径为 `src/core/handoff.ts`，两者共用适配器但安全覆盖不等价。
+业务逻辑在 TypeScript，Rust 只负责 CLI 桥接和原生系统操作。桌面路径为 `src/open.ts`，链式命令路径为 `src/core/handoff.ts`，官方导入路径为 `src/import-codex.ts`；三条路径互不调用，前两条共用适配器但安全覆盖不等价。
 
 ---
 
@@ -27,7 +27,7 @@
 │                 核心引擎 (TypeScript)                       │
 │  ├── 统一时间线抽象 (UnifiedTurn, ProcessEvent)              │
 │  ├── 增量抽取与对齐 (diffTurns, dedupeCallEvents)            │
-│  ├── 写入防护 (writeFileAtomic, verifyWrittenTurns)          │
+│  ├── 写入防护 (writeFileAtomic / appendFileAtomic)           │
 │  └── 适配器 (Claude Code, Codex, Kimi, OpenCode, Pi, Grok) │
 └──────────────────────────────┬──────────────────────────────┘
                                │ 本地文件系统 / 原生数据库
@@ -196,6 +196,6 @@ Antigravity 2.0 → CLI 同样不是普通恢复参数。`agy --conversation <id
 
 自动测试使用临时 provider 根、HOME/USERPROFILE、独立 `WATCH_DB`/`WATCH_OPENCODE_DB` 和模拟启动器，覆盖两条接力入口。原生 GUI 验证需要确认隔离方式与授权；不能假设临时 HOME 隔离了用户桌面应用。
 
-发布工作流的 `quality` job 已内联在 `.github/workflows/release.yml`：根类型检查、前端构建，以及安装 Tauri 系统依赖后在 Linux 运行 Rust 桥接单测。**仓库不分发测试套件**：`tests/` 与本地测试运行器均已加入 `.gitignore`，根 `package.json` 不再提供 `test` 脚本，CI 也不跑回归测试；测试仅在开发者本地工作区存在。P3 新增目标指纹变化后的零写入/链尾不推进、`verifyWrittenTurns` 重复 user 后缀匹配，以及 OpenCode 锁文件的 `dev`、`ino`、`birthtimeNs`、`size` 替换校验；Rust job 会先安装根 Node 依赖，以满足 Tauri resources 检查。P3 记录的本地 Node 226 项 / Rust 7 项通过属当时本地证据；提交 `adce6a7` 对应的 GitHub Actions run `34374022914` 属当时含测试步骤的远程证据。单一 CI 宿主编译、跨平台类型检查和打包成功均不替代原生会话恢复验收。
+`quality` 检查面内联在 `.github/workflows/release.yml`，`.github/workflows/ci.yml` 在 Pull Request 与 push main 时复用同一套步骤：根类型检查、前端构建与站点构建（含分享图校验），以及安装 Tauri 系统依赖后在 Linux 运行 Rust 桥接单测。**仓库不分发测试套件**：`tests/` 与本地测试运行器均已加入 `.gitignore`，根 `package.json` 不再提供 `test` 脚本，CI 也不跑回归测试；测试仅在开发者本地工作区存在。P3 新增目标指纹变化后的零写入/链尾不推进、`verifyWrittenTurns` 重复 user 后缀匹配，以及 OpenCode 锁文件的 `dev`、`ino`、`birthtimeNs`、`size` 替换校验；Rust job 会先安装根 Node 依赖，以满足 Tauri resources 检查。P3 记录的本地 Node 226 项 / Rust 7 项通过属当时本地证据；提交 `adce6a7` 对应的 GitHub Actions run `34374022914` 属当时含测试步骤的远程证据。单一 CI 宿主编译、跨平台类型检查和打包成功均不替代原生会话恢复验收。
 
 `scripts/validate-codex-native.mjs` 是手动原生验收工具，不属于自动单测：创建临时 HOME、关闭认证存储的 keychain 路径与分析反馈、仅连接不可用的本机模型地址，不发送 turn 或批准工具。官方导入须显式传 `--official-import` 或 `--watch-importer`（二者互斥、择一即可；后者会真实 spawn 产品 CLI 的 prepare → confirm → status），且只选择合成样本的 `SESSIONS` 项。结果见兼容性矩阵，不能由脚本退出 0 推导 GUI 或模型继续已验证。
