@@ -25,10 +25,15 @@ const localeDir = path.join(root, 'scripts/lib/site-locales');
 const authoredLocales = new Set(['zh', 'en']);
 // 默认构建手写稿加上已补齐的语言包（zh-tw 于 2026-11-23 补齐，v0.1.308 起默认发布）；
 // 其余语言包补齐后同样在这里登记，WATCH_ALL_LOCALES=1 才会把已登记的全都纳入判定。
-const activeLocaleList = process.env.WATCH_ALL_LOCALES ? Object.keys(locales) : ['zh', 'en', 'zh-tw'];
+const defaultLocaleList = ['zh', 'en', 'zh-tw'];
+const activeLocaleList = process.env.WATCH_ALL_LOCALES ? Object.keys(locales) : defaultLocaleList;
+// 默认发布的翻译语言缺键时必须让构建失败：跳过只会让线上悄悄少掉一门语言，
+// 而站点产物、sitemap 照常生成，发布流程不会有人察觉。WATCH_ALL_LOCALES=1 只用于预览，仍按跳过处理。
+const strictLocales = new Set(process.env.WATCH_ALL_LOCALES ? [] : defaultLocaleList.filter((locale) => !authoredLocales.has(locale)));
 const english = collectEnglishStrings(content.en, authoredGuides);
 // 语言包缺键时 translateContent() 会在第一条就抛错，整轮构建连 zh / en 页面都出不来。
-// 这里先判定：齐全的语言参与构建，不齐全的跳过并逐条打印缺口数（构建日志里可见，不是静默丢弃）。
+// 这里先判定：齐全的语言参与构建；默认发布的翻译语言缺键直接报错（见 strictLocales），
+// 其余不齐全的跳过并逐条打印缺口数（构建日志里可见，不是静默丢弃）。
 const skippedLocales = [];
 const publishedLocales = Object.fromEntries(Object.entries(locales).filter(([locale]) => {
   if (!activeLocaleList.includes(locale)) return false;
@@ -37,6 +42,11 @@ const publishedLocales = Object.fromEntries(Object.entries(locales).filter(([loc
   if (!fs.existsSync(file)) return false;
   const { missing } = localeGaps(loadLocaleDictionary(file), english);
   if (missing.length) {
+    if (strictLocales.has(locale)) {
+      throw new Error(
+        `[site-build] 默认发布语言 ${locale} 的语言包缺 ${missing.length} 条英文源串：补齐译文后再构建（npm run site:locales 列明细）；只想预览可加 WATCH_ALL_LOCALES=1，它会跳过不齐全的语言`,
+      );
+    }
     skippedLocales.push({ locale, missing: missing.length });
     return false;
   }
