@@ -1,6 +1,6 @@
 {
   "name": "watch",
-  "version": "0.1.287",
+  "version": "0.1.288",
   "private": true,
   "license": "MIT",
   "type": "module",
@@ -35,5 +35,16 @@
   },
   "dependencies": {
     "smol-toml": "1.9.1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/can4hou6joeng4/Watch.git"
+  },
+  "homepage": "https://relay.bobochang.cn",
+  "bugs": {
+    "url": "https://github.com/can4hou6joeng4/Watch/issues"
+  },
+  "engines": {
+    "node": ">=22.13.0"
   }
 }
