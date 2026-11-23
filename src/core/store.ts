@@ -936,7 +936,7 @@ export class Store {
         provider: r.provider,
         cwd: r.cwd,
         filePath: r.file_path,
-        snippet: `会话 ${r.session_id}`,
+        snippet: `会话 ${escapeControlChars(r.session_id)}`,
       })),
     };
   }
@@ -1040,7 +1040,7 @@ export class Store {
       const row = this.db.prepare('SELECT next_seq FROM sessions WHERE id=?').get(sessionId) as
         | { next_seq: number }
         | undefined;
-      if (!row) throw new Error(`session 不存在: ${sessionId}`);
+      if (!row) throw new Error(`session 不存在: ${escapeControlChars(sessionId)}`);
       let seq = row.next_seq;
       const insTurn = this.db.prepare(
         'INSERT INTO turns (id, session_id, seq, role, text, provider, ts) VALUES (?,?,?,?,?,?,?)',

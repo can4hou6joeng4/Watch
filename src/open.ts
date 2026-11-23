@@ -253,7 +253,7 @@ export async function resolveById(
           // 不影响本次反查，但本地库从此一直记得「很久没见」：只要写不进去就一直命中映射、
           // 也不会有任何提示。库坏了要让人知道，别等用户自己感觉到「越用越慢」
           noteMapping(
-            `${a.id} 会话 ${sessionId} 的映射刷新失败（${describeStoreErrorReason(error)}）；本次仍从映射命中，但本地库里的时间戳没更新`,
+            `${a.id} 会话 ${escapeControlChars(sessionId)} 的映射刷新失败（${describeStoreErrorReason(error)}）；本次仍从映射命中，但本地库里的时间戳没更新`,
           );
         }
         return {
@@ -285,7 +285,7 @@ export async function resolveById(
           } catch (error) {
             // 同上：写不进去不影响这次打开，但下次仍要重新全盘扫描。不披露就只剩「慢」这一个症状
             noteMapping(
-              `${a.id} 会话 ${sessionId} 的映射写入失败（${describeStoreErrorReason(error)}）；本次反查结果未记入本地库，下次 open 仍需重新全盘扫描`,
+              `${a.id} 会话 ${escapeControlChars(sessionId)} 的映射写入失败（${describeStoreErrorReason(error)}）；本次反查结果未记入本地库，下次 open 仍需重新全盘扫描`,
             );
           }
         }

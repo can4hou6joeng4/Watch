@@ -216,13 +216,13 @@ export async function findClaudeSessionById(
   if (notRegularFile.length) {
     throw new SessionLookupFailureError(
       'found-unreadable',
-      `会话 ${sessionId} 的路径现在不是普通文件（被同名目录或设备文件占住了）：${notRegularFile[0]}；无法把它当作会话读取，请先恢复该路径再重试`,
+      `会话 ${escapeControlChars(sessionId)} 的路径现在不是普通文件（被同名目录或设备文件占住了）：${notRegularFile[0]}；无法把它当作会话读取，请先恢复该路径再重试`,
     );
   }
   if (foundButUnreadable.length) {
     throw new SessionLookupFailureError(
       'found-unreadable',
-      `找到会话文件 ${foundButUnreadable[0]}，但读不出它的工作目录，无法确认会话 ${sessionId}`,
+      `找到会话文件 ${foundButUnreadable[0]}，但读不出它的工作目录，无法确认会话 ${escapeControlChars(sessionId)}`,
     );
   }
   if (unreadable.length) {

@@ -190,7 +190,7 @@ export function adoptedParseFailureWarning(
   error: unknown,
 ): string {
   return (
-    `无法确认接进来的会话 ${sessionId} 是否停在做了一半的一轮上：${copy ? copy.note : describeReadFailureOrSelf(error)}；` +
+    `无法确认接进来的会话 ${escapeControlChars(sessionId)} 是否停在做了一半的一轮上：${copy ? copy.note : describeReadFailureOrSelf(error)}；` +
     (copy ? compressedRetryAdvice(copy, '再确认一次') : `resume 之前先确认这个会话文件可读`)
   );
 }
