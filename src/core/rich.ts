@@ -774,7 +774,7 @@ export function dedupeCallEvents(turns: UnifiedTurn[]): UnifiedTurn[] {
  * 内容照常可读，`diffTurns` 只比解析结果、round-trip 只比「写进去的内容」，两处都看不出
  * 那一轮是做了一半的。交接前必须主动披露，否则接手的一侧会以为任务停在这里就完了。
  */
-export function danglingToolCalls(turns: UnifiedTurn[]): string[] {
+export function danglingToolCalls(turns: readonly UnifiedTurn[]): string[] {
   const called = new Set<string>();
   const finished = new Set<string>();
   for (const t of turns) {

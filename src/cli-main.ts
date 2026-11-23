@@ -2444,9 +2444,12 @@ async function cmdInspect(json: boolean, sessionId: string | undefined, provider
       ? `时间范围: ${structure.firstTimestamp} → ${structure.lastTimestamp}${rangeNotes.length ? `（${rangeNotes.join('；')}）` : ''}`
       : `时间范围: 没有可用的时间戳${timestampNote ? `（${timestampNote}）` : ''}`,
   );
-  const failureNote = structure.events.failedToolResults ? `（失败 ${structure.events.failedToolResults}）` : '';
+  const toolResultNotes = [
+    structure.events.failedToolResults ? `失败 ${structure.events.failedToolResults}` : null,
+    structure.events.danglingToolCalls ? `未闭合 ${structure.events.danglingToolCalls}` : null,
+  ].filter(Boolean);
   console.log(
-    `事件: text ${structure.events.text} · thinking ${structure.events.thinking} · tool_call ${structure.events.toolCalls} · tool_result ${structure.events.toolResults}${failureNote}`,
+    `事件: text ${structure.events.text} · thinking ${structure.events.thinking} · tool_call ${structure.events.toolCalls} · tool_result ${structure.events.toolResults}${toolResultNotes.length ? `（${toolResultNotes.join('；')}）` : ''}`,
   );
   console.log(
     structure.tools.length
