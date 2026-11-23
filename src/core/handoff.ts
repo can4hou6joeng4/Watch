@@ -2221,7 +2221,9 @@ export async function handoff(
     // 仍应把链尾更新为目标 provider，否则桌面端状态会停留在旧 provider。
     // 此外，旧版本写出的 Kimi wire.jsonl 可能存在 stepUuid 不匹配等格式
     // 损坏，导致 Kimi 无法识别历史；对已有目标 session 强制 rewrite 可修复。
+    const notes: string[] = [];
     if (into) {
+      let rewroteTarget = false;
       try {
         // 来源 0 轮时没有可对账的内容：不重写目标。以前 `guardedWrite(空 turns, {replace:true})`
         // 恰好是空操作，这条契约（「空来源不改动目标」）由既有回归锁住；换用 mergeTurns 后
@@ -2232,6 +2234,7 @@ export async function handoff(
           // 覆盖会把它们静默删掉，而结果只有 `turnCount: 0`。mergeTurns 保留目标独有轮次、
           // 并在来源过程事件更全时取来源那份——与非零增量的 replace 分支是同一份载荷。
           await guardedWrite(dedupeCallEvents(mergeTurns(turns, destTurns)), { replace: true });
+          rewroteTarget = true;
           addFinding(findings, 'handoff.rewrite_only', 'synthesized', 1);
         }
       } catch (error) {
@@ -2239,6 +2242,11 @@ export async function handoff(
         console.error('[watch] 重写目标 session 失败，仍尝试 resume:', error);
         const reason = describeWriteFailureReason(error) ?? (error instanceof Error ? error.message : String(error));
         warnings.push(`重写目标会话失败，目标内容可能未更新: ${reason}`);
+      }
+      // 零增量不等于零写入：rewrite_only 会整份重写目标，来源的推定时间按原值留在那里。
+      // 这里按来源轮数披露，不用 mergeTurns 后的总数（目标独有轮次的时间来自目标自己）。
+      if (rewroteTarget && source.timingNote && turns.length > 0) {
+        notes.push(describeInferredTimeWrite(source.timingNote, turns.length));
       }
     }
     let chainRecordState: 'written' | 'failed' | 'not-attempted' = 'not-attempted';
@@ -2274,6 +2282,7 @@ export async function handoff(
       fromProvider: sourceTip?.provider ?? targetId,
       turnCount: 0,
       zeroIncrementReason: turns.length === 0 ? 'source-empty' : 'up-to-date',
+      ...(notes.length ? { notes } : {}),
       chainRecordState,
       warnings,
       findings,
@@ -2315,9 +2324,12 @@ export async function handoff(
   // 不是 warning）：首条链「new 一个空会话再切过去」是正常路径，不该每次都冒降级警告；
   // 但「本该有更早历史」的人得知道这条会话现在只有这 N 轮。
   const notes: string[] = [];
-  if (source.timingNote && outgoing.length > 0) {
+  // replace 分支的 outgoing 是 mergeTurns 的整份载荷，目标独有轮次的时间来自目标自己，
+  // 不能算成「来源按原值写入」；只有来源轮数才带 source.timingNote。
+  const inferredTimeTurnCount = replace ? turns.length : outgoing.length;
+  if (source.timingNote && inferredTimeTurnCount > 0) {
     // 推定时间按原值写进目标记录：结果说明里不说来路，读者会把目标里的时间戳当真实发生时间。
-    notes.push(describeInferredTimeWrite(source.timingNote, outgoing.length));
+    notes.push(describeInferredTimeWrite(source.timingNote, inferredTimeTurnCount));
   }
   if (into && !vanished && destTurns.length === 0 && !emptiedTarget && outgoing.length > 0) {
     // `parse` 跳过坏行：解析出 0 轮不等于文件里只有这次并入的内容。坏行在（或扫不成）时

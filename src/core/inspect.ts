@@ -1,4 +1,4 @@
-import { danglingToolCalls, WATCH_CONTEXT_DISCLOSURE_PREFIX } from './rich.js';
+import { danglingToolCalls, orphanToolResults, WATCH_CONTEXT_DISCLOSURE_PREFIX } from './rich.js';
 import type { UnifiedTurn } from './types.js';
 
 /** 统计适配器解析出的轮次、过程事件与附件，不输出事件正文。 */
@@ -23,6 +23,8 @@ export type SessionStructure = {
     failedToolResults: number;
     /** tool_call 按 callId 找不到对应 tool_result 的次数；可能中断或仍在运行，不等于数据丢失 */
     danglingToolCalls: number;
+    /** tool_result 按 callId 找不到对应 tool_call 的次数；常见于压缩后的残留，不代表会话不可用 */
+    orphanToolResults: number;
   };
   /** 解析结果中带交接披露标记的事件数。披露详情可能含源记录中的命令样本。 */
   disclosureEvents: number;
@@ -34,7 +36,7 @@ export type SessionStructure = {
 };
 
 export function summarizeSessionStructure(turns: readonly UnifiedTurn[]): SessionStructure {
-  const events = { text: 0, thinking: 0, toolCalls: 0, toolResults: 0, failedToolResults: 0, danglingToolCalls: 0 };
+  const events = { text: 0, thinking: 0, toolCalls: 0, toolResults: 0, failedToolResults: 0, danglingToolCalls: 0, orphanToolResults: 0 };
   const attachments = { images: 0, files: 0 };
   const tools = new Map<string, number>();
   let userTurns = 0;
@@ -83,6 +85,7 @@ export function summarizeSessionStructure(turns: readonly UnifiedTurn[]): Sessio
     }
   }
   events.danglingToolCalls = danglingToolCalls(turns).length;
+  events.orphanToolResults = orphanToolResults(turns).length;
   return {
     turns: turns.length,
     userTurns,

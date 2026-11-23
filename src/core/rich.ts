@@ -787,6 +787,20 @@ export function danglingToolCalls(turns: readonly UnifiedTurn[]): string[] {
   return [...called].filter((id) => !finished.has(id));
 }
 
+/** 按 callId 找得到结果、却找不到调用的条目；常见于压缩后残留，不代表会话不可用。 */
+export function orphanToolResults(turns: readonly UnifiedTurn[]): string[] {
+  const called = new Set<string>();
+  const finished = new Set<string>();
+  for (const t of turns) {
+    for (const e of t.events ?? []) {
+      if (!e.callId) continue;
+      if (e.kind === 'tool_call') called.add(e.callId);
+      else if (e.kind === 'tool_result') finished.add(e.callId);
+    }
+  }
+  return [...finished].filter((id) => !called.has(id));
+}
+
 /**
  * 交接前的披露文案（`open` 与 `switch` 共用一份措辞）：没有未完成的调用时返回 null。
  * `label` 由调用方给（「来源会话 <id>（<provider>）」/「会话 <id>（<provider>）」），

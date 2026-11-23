@@ -1292,6 +1292,8 @@ async function cmdOpen(
       const target = checked.sessionId ? `${escapeControlChars(checked.sessionId)}` : '（将新建会话）';
       // notes[0] 是给人看的计划描述（复用链上会话 / 并入既有 / 新建）；直接打 kind 会把内部枚举露给用户
       console.log(`预检：${escapeControlChars(checked.notes?.[0] ?? checked.plan?.kind ?? '?')} · 目标 ${escapeControlChars(target)} · ${checked.writable ? '可写入' : '暂不可写'}`);
+      // 其余 notes 也是给人看的预检说明；只打 notes[0] 会让文本模式漏掉 JSON 里已有的信息。
+      for (const note of checked.notes?.slice(1) ?? []) console.log(`说明: ${escapeControlChars(note)}`);
       // warnings 是降级原因（复用扫描失败、链上配对读不出等），只出现在 --json 里的话，
       // 文本模式的用户看不到「为什么是新建」
       for (const warning of checked.warnings ?? []) console.error(`提示: ${escapeControlChars(warning)}`);
@@ -2447,6 +2449,7 @@ async function cmdInspect(json: boolean, sessionId: string | undefined, provider
   const toolResultNotes = [
     structure.events.failedToolResults ? `失败 ${structure.events.failedToolResults}` : null,
     structure.events.danglingToolCalls ? `未闭合 ${structure.events.danglingToolCalls}` : null,
+    structure.events.orphanToolResults ? `孤立结果 ${structure.events.orphanToolResults}` : null,
   ].filter(Boolean);
   console.log(
     `事件: text ${structure.events.text} · thinking ${structure.events.thinking} · tool_call ${structure.events.toolCalls} · tool_result ${structure.events.toolResults}${toolResultNotes.length ? `（${toolResultNotes.join('；')}）` : ''}`,
