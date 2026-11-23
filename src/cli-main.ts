@@ -33,6 +33,7 @@ import type { StoreFootprint } from './core/doctor.js';
 import { CLAUDE_PROJECT_SETTINGS_RELATIVE_PATHS, type ClaudeRetentionProbe } from './providers/claude/retention.js';
 import { cwdAliasHint, cwdProblem, describeCwdProblem, describeRecordedCwd, describeRepoBranchNote, describeWorktreeNote, describeWriteCwd, inspectCwd, inspectRepoBranch, inspectWorktree, sameDirectorySync, splitElsewhereByDirectory, type CwdInspection } from './core/cwd.js';
 import { escapeControlChars, hasControlChars } from './core/display.js';
+import { isoFromEpochMs } from './core/time.js';
 import { BOOLEAN_FLAGS, CHAIN_POSITIONAL, COMMAND_LIST, FLAGS_BY_COMMAND, HELP_COMMAND_ALIASES, POSITIONAL_BY_COMMAND, VALUE_FLAGS, VERSION_COMMAND_ALIASES, closestCommand, closestFlag, optionArgs } from './core/cli-commands.js';
 import { commandControlWarnings } from './core/terminal-command.js';
 import { trimUserKey } from './core/cli-input.js';
@@ -2324,8 +2325,13 @@ async function cmdInspect(json: boolean, sessionId: string | undefined, provider
   const foundRef = resolved.found.ref;
   const warnings = [...diagnostics];
   const id = escapeControlChars(foundRef.sessionId);
+  const sharedDatabase = adapter.id === 'opencode';
+  const recordedUpdatedAt = sharedDatabase ? isoFromEpochMs(resolved.found.updatedAt) || null : null;
+  if (sharedDatabase && recordedUpdatedAt === null) {
+    warnings.push(`会话 ${id} 的 OpenCode 更新时间缺失或无效`);
+  }
 
-  // 文件大小 / 修改时间是「这份记录在盘上是什么」的一半；读不出来时不能省略，也不能编一个数。
+  // 文件状态描述存储容器。OpenCode 的会话更新时间来自数据库里的会话记录。
   let sizeBytes: number | null = null;
   let modifiedAt: string | null = null;
   try {
@@ -2333,7 +2339,8 @@ async function cmdInspect(json: boolean, sessionId: string | undefined, provider
     sizeBytes = probe.size;
     modifiedAt = probe.mtime.toISOString();
   } catch (error) {
-    warnings.push(`会话文件大小与修改时间读取失败（${describeReadFailureOrSelf(error)}）；下面的文件行不完整`);
+    const storage = sharedDatabase ? '共享数据库文件' : '会话文件';
+    warnings.push(`${storage}的大小与修改时间读取失败（${describeReadFailureOrSelf(error)}）`);
   }
 
   let turns;
@@ -2354,7 +2361,7 @@ async function cmdInspect(json: boolean, sessionId: string | undefined, provider
   }
 
   // OpenCode 的数据库可通过环境变量指定任意文件名，格式不能只靠后缀判断。
-  const badScan = adapter.id !== 'opencode' && foundRef.filePath.endsWith('.jsonl')
+  const badScan = !sharedDatabase && foundRef.filePath.endsWith('.jsonl')
     ? await scanUnparsableJsonLines(foundRef.filePath, { allowMissing: false })
     : null;
   if (badScan) {
@@ -2397,6 +2404,8 @@ async function cmdInspect(json: boolean, sessionId: string | undefined, provider
           filePath: foundRef.filePath,
           sizeBytes,
           modifiedAt,
+          storageScope: sharedDatabase ? 'shared-database' : 'session-file',
+          ...(sharedDatabase ? { recordedUpdatedAt } : {}),
           recordedCwd: foundRef.cwd || null,
           ...(cwdNote ? { cwdNote } : {}),
         },
@@ -2414,7 +2423,8 @@ async function cmdInspect(json: boolean, sessionId: string | undefined, provider
   for (const warning of warnings) console.error(`警告: ${warning}`);
   const fileLine = sizeBytes === null ? escapeControlChars(foundRef.filePath) : `${escapeControlChars(foundRef.filePath)}（${formatBytes(sizeBytes)}${modifiedAt ? `，修改于 ${modifiedAt}` : ''}）`;
   console.log(`会话: ${id}（${adapter.id}）`);
-  console.log(`文件: ${fileLine}`);
+  console.log(`${sharedDatabase ? '共享数据库文件' : '文件'}: ${fileLine}`);
+  if (sharedDatabase) console.log(`会话更新时间: ${recordedUpdatedAt ?? '不可用'}`);
   if (foundRef.cwd) console.log(`记录的工作目录: ${escapeControlChars(foundRef.cwd)}`);
   console.log(`轮次: ${structure.turns}（user ${structure.userTurns} · assistant ${structure.assistantTurns}）`);
   console.log(
