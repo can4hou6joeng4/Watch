@@ -2391,6 +2391,8 @@ async function cmdInspect(json: boolean, sessionId: string | undefined, provider
   }
 
   const structure = summarizeSessionStructure(turns);
+  // 逐轮时间由适配器推定时（如 Grok），时间范围必须带来源说明，与 prompt 的 timeRangeNote 同源。
+  const timeRangeNote = adapter.timingNote && structure.firstTimestamp ? adapter.timingNote : undefined;
   const cwdNote = foundRef.cwd ? describeRecordedCwd(await inspectCwd(foundRef.cwd), foundRef.cwd) : null;
   if (cwdNote) warnings.push(cwdNote);
 
@@ -2410,6 +2412,7 @@ async function cmdInspect(json: boolean, sessionId: string | undefined, provider
           ...(cwdNote ? { cwdNote } : {}),
         },
         structure,
+        ...(timeRangeNote ? { timeRangeNote } : {}),
         badLines: badScan?.count ?? null,
         badLinesStatus: badScan ? (badScan.error ? 'incomplete' : 'complete') : 'not-applicable',
         usage: tokenUsage,
@@ -2429,7 +2432,7 @@ async function cmdInspect(json: boolean, sessionId: string | undefined, provider
   console.log(`轮次: ${structure.turns}（user ${structure.userTurns} · assistant ${structure.assistantTurns}）`);
   console.log(
     structure.firstTimestamp && structure.lastTimestamp
-      ? `时间范围: ${structure.firstTimestamp} → ${structure.lastTimestamp}`
+      ? `时间范围: ${structure.firstTimestamp} → ${structure.lastTimestamp}${timeRangeNote ? `（${timeRangeNote}）` : ''}`
       : '时间范围: 没有可用的时间戳',
   );
   const failureNote = structure.events.failedToolResults ? `（失败 ${structure.events.failedToolResults}）` : '';
