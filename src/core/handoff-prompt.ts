@@ -283,6 +283,11 @@ export type PromptStats = {
   orphanToolResults: number;
   /** 来源最后停在「用户说了、没有助手回复」的半轮上（Ctrl-C、用量耗尽、进程被杀或文件截断都可能） */
   unansweredTail: boolean;
+  /**
+   * 半轮的原因：cancelled / error 为来源日志明确标记，unknown 为无法确认（可能中断，也可能还在生成）。
+   * 只在 unansweredTail 时出现；与正文「来源日志明确标记为…」同一判据。
+   */
+  unansweredTailReason?: 'cancelled' | 'error' | 'unknown';
   /** 识别并隐去的**不同**凭据个数（同一个值出现多处只算一个；只认固定格式与固定位置） */
   credentialsMasked: number;
 };
@@ -1118,6 +1123,7 @@ export function buildHandoffPrompt(
   stats.unansweredTail = unansweredUserTail(turns) !== null;
   if (stats.unansweredTail) {
     const confirmed = unansweredTailFailure(turns);
+    stats.unansweredTailReason = confirmed ?? 'unknown';
     const reason = confirmed === 'cancelled'
       ? '来源日志明确标记为中止'
       : confirmed === 'error'
