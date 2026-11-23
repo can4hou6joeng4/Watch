@@ -1066,7 +1066,7 @@ export function buildHandoffPrompt(
     addFinding(findings, 'prompt_unanswered_tail', 'degraded', 1);
     lines.push(
       `- 来源会话最后停在用户消息上：没有对应的助手回复，${reason}；` +
-        '这条消息应当就是本次要继续的任务，但来源是否已经动手无法确认，先核对改动概览与未闭合调用再继续',
+        '这条消息应当就是本次要继续的任务，但来源是否已经动手尚未核实，先核对改动概览与未闭合调用再继续',
     );
   }
   // 时间戳覆盖：起点可能不是第一条记录（首轮没有时间戳时取后面第一条有的），部分轮次缺
