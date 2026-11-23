@@ -71,11 +71,18 @@ Watch 只做一件事：**把已保存的会话记录连同工作目录交到目
 
 ## 安装
 
-需要可运行 `node:sqlite` 与 tsx 的 Node（**≥ 22.13**），以及实际使用的 Agent CLI。桌面端另需 Rust / Tauri 环境。
+CLI 和桌面端运行时都需要 **Node ≥ 22.13**，以及实际使用的 Agent CLI。
 
-**桌面端安装包**：从 [Releases](https://github.com/can4hou6joeng4/Watch/releases) 取当前平台的安装包。安装包在用户机器上依赖外部 Node。
+按系统和处理器选择桌面安装包，下载见 [GitHub Releases](https://github.com/can4hou6joeng4/Watch/releases)。
 
-**从源码运行**
+| 平台 | 安装包 |
+| --- | --- |
+| macOS Apple 芯片 | `*_aarch64.dmg` |
+| macOS Intel | `*_x64.dmg` |
+| Windows x64 | `*_x64-setup.exe` |
+| Debian / Ubuntu amd64 | `*_amd64.deb` |
+
+**从源码运行**。本地运行或打包桌面端时，需要 Rust 和当前平台的 Tauri 构建依赖。
 
 ```bash
 npm install                                  # 仓库根

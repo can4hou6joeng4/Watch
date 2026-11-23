@@ -71,11 +71,18 @@ The images below were generated from synthetic sessions in an isolated environme
 
 ## Install
 
-Requires a Node that can run `node:sqlite` and tsx (**≥ 22.13**), plus whichever agent CLIs you actually use. The desktop app additionally needs a Rust / Tauri toolchain.
+The CLI and desktop app both require **Node ≥ 22.13** at runtime, plus whichever agent CLIs you use.
 
-**Desktop installers**: take the current platform's package from [Releases](https://github.com/can4hou6joeng4/Watch/releases). The packaged app still relies on an external Node on the user's machine.
+Download the desktop installer for your operating system and processor from [GitHub Releases](https://github.com/can4hou6joeng4/Watch/releases).
 
-**From source**
+| Platform | Installer |
+| --- | --- |
+| macOS Apple silicon | `*_aarch64.dmg` |
+| macOS Intel | `*_x64.dmg` |
+| Windows x64 | `*_x64-setup.exe` |
+| Debian / Ubuntu amd64 | `*_amd64.deb` |
+
+**From source.** To run or package the desktop app from source, install Rust and the Tauri build dependencies for your platform.
 
 ```bash
 npm install                                  # repository root
