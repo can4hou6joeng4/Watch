@@ -1,16 +1,7 @@
 import { WATCH_CONTEXT_DISCLOSURE_PREFIX } from './rich.js';
 import type { UnifiedTurn } from './types.js';
 
-/**
- * 会话结构视图（第 403 轮）：只统计形状，不复制正文。
- *
- * `watch prompt` 的产物带着对话原文，用户想把「这条会话 Watch 到底读到了什么」贴进 issue 时
- * 没法直接用它；`watch inspect` 用同一份解析结果只回答计数问题：多少轮、有哪些事件、附件几张、
- * 哪些工具被调用、坏行几条、用量多少。正文、工具入参 / 输出、附件数据一律不出现——这是它可以
- * 被安全分享的原因，也是它与 `prompt` / `sessions` 的分工。
- *
- * 纯函数：输入是适配器 `parse` 的结果，不读盘、不联网。
- */
+/** 统计适配器解析出的轮次、过程事件与附件，不输出事件正文。 */
 
 export type SessionStructure = {
   /** 消息轮数（user + assistant） */
@@ -29,6 +20,8 @@ export type SessionStructure = {
     /** 明确失败的 tool_result（不代表没有副作用） */
     failedToolResults: number;
   };
+  /** 解析结果中带交接披露标记的事件数。披露详情可能含源记录中的命令样本。 */
+  disclosureEvents: number;
   attachments: { images: number; files: number };
   /** 来源明确停在非终态的阶段回复 */
   incompleteTurns: number;
@@ -43,6 +36,7 @@ export function summarizeSessionStructure(turns: readonly UnifiedTurn[]): Sessio
   let userTurns = 0;
   let assistantTurns = 0;
   let incompleteTurns = 0;
+  let disclosureEvents = 0;
   let first = Number.POSITIVE_INFINITY;
   let last = Number.NEGATIVE_INFINITY;
   for (const turn of turns) {
@@ -57,9 +51,8 @@ export function summarizeSessionStructure(turns: readonly UnifiedTurn[]): Sessio
     for (const event of turn.events ?? []) {
       switch (event.kind) {
         case 'text':
-          // Watch 自己的披露事件不计入来源的 text 事件：它们只描述缺口，由 inspect 的
-          // `disclosures` 单独列出（否则一条未识别记录会同时抬高「事件」并出现在披露里）。
-          if (!event.summary.startsWith(WATCH_CONTEXT_DISCLOSURE_PREFIX)) events.text += 1;
+          if (event.summary.startsWith(WATCH_CONTEXT_DISCLOSURE_PREFIX)) disclosureEvents += 1;
+          else events.text += 1;
           break;
         case 'thinking':
           events.thinking += 1;
@@ -90,6 +83,7 @@ export function summarizeSessionStructure(turns: readonly UnifiedTurn[]): Sessio
     firstTimestamp: Number.isFinite(first) ? new Date(first).toISOString() : null,
     lastTimestamp: Number.isFinite(last) ? new Date(last).toISOString() : null,
     events,
+    disclosureEvents,
     attachments,
     incompleteTurns,
     tools: [...tools.entries()]
