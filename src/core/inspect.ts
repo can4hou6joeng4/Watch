@@ -11,6 +11,8 @@ export type SessionStructure = {
   /** 可用时间戳的范围；没有任何可解析时间戳时为 null */
   firstTimestamp: string | null;
   lastTimestamp: string | null;
+  /** 计入范围的轮数；时间戳缺失或不可解析的轮次不计入 */
+  timestampedTurns: number;
   events: {
     /** 中间说明（commentary） */
     text: number;
@@ -39,6 +41,7 @@ export function summarizeSessionStructure(turns: readonly UnifiedTurn[]): Sessio
   let disclosureEvents = 0;
   let first = Number.POSITIVE_INFINITY;
   let last = Number.NEGATIVE_INFINITY;
+  let timestampedTurns = 0;
   for (const turn of turns) {
     if (turn.role === 'user') userTurns += 1;
     else assistantTurns += 1;
@@ -47,6 +50,7 @@ export function summarizeSessionStructure(turns: readonly UnifiedTurn[]): Sessio
     if (Number.isFinite(stamp)) {
       first = Math.min(first, stamp);
       last = Math.max(last, stamp);
+      timestampedTurns += 1;
     }
     for (const event of turn.events ?? []) {
       switch (event.kind) {
@@ -82,6 +86,7 @@ export function summarizeSessionStructure(turns: readonly UnifiedTurn[]): Sessio
     assistantTurns,
     firstTimestamp: Number.isFinite(first) ? new Date(first).toISOString() : null,
     lastTimestamp: Number.isFinite(last) ? new Date(last).toISOString() : null,
+    timestampedTurns,
     events,
     disclosureEvents,
     attachments,
