@@ -144,6 +144,8 @@ import-codex  prepare|confirm|status|project-prepare|project-confirm|project-sta
 
 将 `--check` 与 `open ... --to <provider>` 一起使用，可预览目标和待写入的轮数，并检查当前能否转入。预检不会改动原生会话，但可能创建 Watch 本地数据库，或新增、刷新其中的会话位置记录。
 
+`inspect` 只对 JSONL 会话统计坏行。`--json` 中，`badLinesStatus` 为 `complete` 时，`badLines` 是完整扫描的计数。`incomplete` 表示扫描未完成，计数是已确认的下界，原因见 `warnings`。SQLite 等不适用的来源返回 `not-applicable`，`badLines` 为 `null`。
+
 读取 `status --json` 的血缘图时，用 `nodes[].key` 匹配 `edges[].from` 和 `edges[].to`。展示会话身份时用节点里的原始 `provider` 和 `sessionId`。
 
 `doctor --json` 的 `claudeRetention` 报告 Claude Code 用户设置中的保留期，`claudeProjectRetention` 报告项目设置里读到的值：当前目录下的 `.claude/settings.local.json` 与 `.claude/settings.json`，以及在普通 Git 仓库子目录运行时仓库根目录的 `.claude/settings.local.json`（`scope` 为 `repository-local`）。设置路径异常、文件不可读或超过 1 MiB 时，返回 `unknown` 并给出原因。`cleanupPeriodDays` 允许写在任意设置文件里，项目设置可以覆盖用户设置；工作树 / 子模块（`.git` 是文件）、仓库根就是家目录或目录所有权不符时跳过仓库根这一份（工作树的估算因此可能偏保守），`--settings` 与管理设置不在范围内，实际清理期限取决于 Claude Code 加载的全部设置。`doctor` 判断链尾风险时按已探测文件的优先级取会被读取的那一份，而不是取所有文件里的最短值：仓库根的 local 覆盖启动目录的 local，项目 local 覆盖 shared，项目设置再覆盖用户设置；被覆盖的短值不报警，高层设置读不出来时也不拿低层值猜测。若这份保留期显式低于官方默认，而链尾的 Claude Code 会话文件比该天数更旧，`doctor` 会把这条链标成清理风险（按文件最后修改时间估算，不宣称一定会被删除）。`store.created` 为 `true` 表示这次诊断新建了本地库（库文件原本不存在），文本模式的「本地库文件」行同样注明；库已存在时该字段不出现。
