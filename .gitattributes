@@ -1,0 +1,16 @@
+# 换行符统一为 LF：仓库内文件按 LF 存储，Windows 检出也写 LF（Node / TypeScript 工具链不依赖 CRLF）
+* text=auto eol=lf
+
+# 图片与安装包按二进制处理，不做文本规范化与 diff
+*.png binary
+*.webp binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.icns binary
+*.dmg binary
+*.deb binary
+*.exe binary
+*.woff binary
+*.woff2 binary
