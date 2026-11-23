@@ -4,7 +4,7 @@
 
 ## 中文
 
-按交接产物和使用场景选择工具。第三方条目依据项目公开说明，Watch 的支持范围以[兼容性记录](COMPATIBILITY.md)为准。
+按交接产物和使用场景选择工具。本表最后复核：2026-11-23；第三方条目依据项目公开说明，能力可能随对方版本变化，Watch 的支持范围以[兼容性记录](COMPATIBILITY.md)为准。
 
 | 需要什么 | 可参考的项目 |
 | --- | --- |
@@ -31,7 +31,7 @@ Watch 从本机原生会话记录和工作目录出发，由用户发起接力�
 
 ## English
 
-Choose by the handoff output and workflow you need. Third-party entries describe what each project documents publicly. See the [compatibility records](COMPATIBILITY.md) for Watch's validated scope.
+Choose by the handoff output and workflow you need. This table was last reviewed on 2026-11-23; third-party entries describe what each project documents publicly and may change with their releases. See the [compatibility records](COMPATIBILITY.md) for Watch's validated scope.
 
 | What you need | Projects to look at |
 | --- | --- |
