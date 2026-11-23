@@ -134,7 +134,7 @@ prompt   [<session-id>] [--provider <name>] [--profile minimal|standard|verbose|
 import-codex  prepare|confirm|status|project-prepare|project-confirm|project-status
 ```
 
-`--check` is only used with `open ... --to <provider>`: a read-only precheck of whether the target is writable. Nothing is written.
+Use `--check` with `open ... --to <provider>` to preview the target and pending turn count and check whether the transfer can proceed. The preflight leaves native sessions intact but may create Watch’s local database or add or refresh a session location record.
 
 In the `status --json` lineage graph, match `nodes[].key` to `edges[].from` and `edges[].to`. Use the node's original `provider` and `sessionId` to display the session identity.
 

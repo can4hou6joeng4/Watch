@@ -134,7 +134,7 @@ prompt   [<session-id>] [--provider <name>] [--profile minimal|standard|verbose|
 import-codex  prepare|confirm|status|project-prepare|project-confirm|project-status
 ```
 
-`--check` 只与 `open ... --to <provider>` 同用：只读预检目标会话是否可写，不写入任何内容。
+将 `--check` 与 `open ... --to <provider>` 一起使用，可预览目标和待写入的轮数，并检查当前能否转入。预检不会改动原生会话，但可能创建 Watch 本地数据库，或新增、刷新其中的会话位置记录。
 
 读取 `status --json` 的血缘图时，用 `nodes[].key` 匹配 `edges[].from` 和 `edges[].to`。展示会话身份时用节点里的原始 `provider` 和 `sessionId`。
 
