@@ -641,8 +641,10 @@ function parseArgs(argv: string[]): {
 
 async function cmdStatus(cwd: string, json: boolean, chain?: string): Promise<void> {
   const store = openStore();
-  // 路径写错时各 provider 会安静返回空列表，先把原因放进同一条 warnings 通道
-  const cwdIssue = await cwdProblem(cwd);
+  // 路径写错时各 provider 会安静返回空列表，先把原因放进同一条 warnings 通道。
+  // 探测结果留到 JSON 出口（`cwdState`）：只给 warnings 时脚本得解析中文才知道 cwd 不可用
+  const cwdProbe = await inspectCwd(cwd);
+  const cwdIssue = describeCwdProblem(cwdProbe, cwd);
   let result;
   try {
     result = await chainStatus(cwd, listAdapters(), store, chain, lastStoreError ?? undefined);
@@ -687,6 +689,9 @@ async function cmdStatus(cwd: string, json: boolean, chain?: string): Promise<vo
       historyAvailable: Boolean(store) && !result.historyFailed,
       ...(elsewhereJson.length ? { chainsElsewhere: elsewhereJson } : {}),
       ...(unattributableStats.length ? { unattributable: unattributableJson(unattributableStats) } : {}),
+      // 与 `prompt --json` 的 `sourceCwd` 同一组取值：健康目录不出现，脚本据此把
+      // 「本目录没有链 / 没有历史」与「这个 --cwd 根本不可用」分开
+      ...(cwdProbe.state !== 'ok' ? { cwdState: cwdProbe } : {}),
     }));
     return;
   }
@@ -1338,7 +1343,9 @@ async function cmdSessions(cwd: string, json: boolean, chain?: string): Promise<
   const adapters = listAdapters();
   const store = openStore();
   const warnings: string[] = [];
-  const cwdIssue = await cwdProblem(cwd);
+  // 与 status / recent / usage / search 同一口径：探测留到 JSON 出口，文本仍走 warnings
+  const cwdProbe = await inspectCwd(cwd);
+  const cwdIssue = describeCwdProblem(cwdProbe, cwd);
   if (cwdIssue) warnings.push(cwdIssue);
   // --chain 才按链过滤；不带 flag 时列出该目录全部原生会话（README 的语义）
   // 存 ref（不只 sessionId）：会话没被列出来时还要 stat 它的文件，判断是「太老没进列表」还是「文件已经没了」
@@ -1532,6 +1539,9 @@ async function cmdSessions(cwd: string, json: boolean, chain?: string): Promise<
       console.log(JSON.stringify({
         ok: true,
         cwd,
+        // `providers: []` 分不清「这个目录没有会话」与「--cwd 不可用」：后者时所有 provider
+        // 都按字符串精确匹配、必然为空。与 status / recent / usage / search 同一字段
+        ...(cwdProbe.state !== 'ok' ? { cwdState: cwdProbe } : {}),
         providers: result,
         ...(unavailable.length ? { unavailable } : {}),
         ...(unattributableStats.length ? { unattributable: unattributableJson(unattributableStats) } : {}),
@@ -1587,7 +1597,9 @@ async function cmdRecent(cwd: string, json: boolean, limit: number = 8, cwdGiven
   const merged = new Map<string, RecentItem>();
   const unavailable: string[] = [];
   const warnings: string[] = [];
-  const cwdIssue = await cwdProblem(cwd);
+  // 与 status / sessions / usage / search 同一口径：探测留到 JSON 出口，文本仍走 warnings
+  const cwdProbe = await inspectCwd(cwd);
+  const cwdIssue = describeCwdProblem(cwdProbe, cwd);
   if (cwdIssue) warnings.push(cwdIssue);
 
   if (!store) {
@@ -1712,6 +1724,8 @@ async function cmdRecent(cwd: string, json: boolean, limit: number = 8, cwdGiven
       sessions: final,
       ...(truncated ? { truncated: true, total: results.length } : {}),
       ...(cappedProviders.length ? { capped: cappedProviders } : {}),
+      // 空列表 + ok:true 分不清「近期没聊过」与「--cwd 不可用」；与 status / sessions / usage / search 同字段
+      ...(cwdProbe.state !== 'ok' ? { cwdState: cwdProbe } : {}),
       ...(unavailable.length ? { unavailable } : {}),
       ...(unattributableStats.length ? { unattributable: unattributableJson(unattributableStats) } : {}),
       ...(warnings.length ? { warnings } : {}),
@@ -3493,8 +3507,10 @@ async function main(): Promise<void> {
 
 async function cmdUsage(cwd: string, json: boolean, chain?: string): Promise<void> {
   const store = openStore();
-  // 链名与目录都是精确匹配：目录写错时 `--chain` 同样查不到，失败时也要带出路径原因
-  const cwdIssue = await cwdProblem(cwd);
+  // 链名与目录都是精确匹配：目录写错时 `--chain` 同样查不到，失败时也要带出路径原因。
+  // 探测留到 JSON 出口：`byProvider: []` + `total: 0` 分不清「没绑定」与「--cwd 不可用」
+  const cwdProbe = await inspectCwd(cwd);
+  const cwdIssue = describeCwdProblem(cwdProbe, cwd);
   try {
     const result = await chainUsage(cwd, listAdapters(), store, chain, lastStoreError ?? undefined);
     if (cwdIssue) result.warnings.push(cwdIssue);
@@ -3509,7 +3525,9 @@ async function cmdUsage(cwd: string, json: boolean, chain?: string): Promise<voi
       ];
     }
     if (json) {
-      console.log(JSON.stringify({ ok: true, ...result }));
+      // 空报告（byProvider: []）在 --cwd 不可用时也是必然结果：与 status / sessions / recent / search
+      // 同一字段，脚本不必解析中文警告
+      console.log(JSON.stringify({ ok: true, ...result, ...(cwdProbe.state !== 'ok' ? { cwdState: cwdProbe } : {}) }));
       return;
     }
     if (result.chain) {
@@ -3671,7 +3689,9 @@ async function cmdSearch(cwd: string, json: boolean, query: string, resetIndex =
         );
       }
     }
-    const cwdIssue = await cwdProblem(cwd);
+    // 探测留到 JSON 出口：零命中 + ok:true 分不清「没聊过」与「--cwd 不可用」
+    const cwdProbe = await inspectCwd(cwd);
+    const cwdIssue = describeCwdProblem(cwdProbe, cwd);
     if (cwdIssue) warnings.push(cwdIssue);
     // `:memory:` 时索引只活在本次进程内：每次 search 都得从头全量建一遍，
     // 命令结束后也没有任何东西留下来。不说的话只会表现为「搜什么都慢、而且只有本次能搜到」
@@ -3773,6 +3793,8 @@ async function cmdSearch(cwd: string, json: boolean, query: string, resetIndex =
         ok: true,
         query,
         cwd,
+        // 零命中 + ok:true 分不清「这个目录没有匹配」与「--cwd 不可用」：与 status / sessions / recent / usage 同字段
+        ...(cwdProbe.state !== 'ok' ? { cwdState: cwdProbe } : {}),
         hits,
         ...(Object.keys(coverageJson).length ? { coverage: coverageJson } : {}),
         ...(truncated ? { truncated: true } : {}),
