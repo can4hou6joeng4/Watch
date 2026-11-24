@@ -139,7 +139,7 @@ doctor   [--cwd <path>] [--strict]                          环境诊断（Agent
 open     <session-id> [--from <id>] [--provider <name>] [--to <provider>] [--check]
 prompt   [<session-id>] [--provider <name>] [--profile minimal|standard|verbose|full] [--last <n>] [--since-compact]   摘要交接：把会话渲染成可粘贴的 Markdown（降级方案，不写任何文件）
 inspect  <session-id> [--provider <name>] [--json]         只读查看会话元数据与轮次、事件、附件、坏行及披露计数
-import-codex  prepare|confirm|status|project-prepare|project-confirm|project-status
+import-codex  prepare|confirm|status|list|project-prepare|project-confirm|project-status
 ```
 
 将 `--check` 与 `open ... --to <provider>` 一起使用，可预览目标和待写入的轮数，并检查当前能否转入。预检不会改动原生会话，但可能创建 Watch 本地数据库，或新增、刷新其中的会话位置记录。
@@ -174,10 +174,13 @@ YOLO 默认关闭。开启会在支持的 CLI 命令中加入免确认参数，�
 只有明确确认后才提交，导入成功后再单独打开目标线程。要进入桌面项目，必须先在 Codex Desktop 添加并保留该目录，再在准备阶段使用 `--desktop-project`。
 
 ```bash
+npm run watch -- import-codex list --json
 npm run watch -- import-codex prepare <claude-id> --cwd /absolute/project --desktop-project --experimental --json
 npm run watch -- import-codex confirm <plan-id> --experimental --json
 npm run watch -- import-codex status <plan-id> --json
 ```
+
+`list` 只读列出执行日志里的计划与状态（不连 Codex、不写文件）；忘了计划 id 时先用它。
 
 旧 `project-prepare` / `project-confirm` / `project-status` 仍可查看或更新 app-server 的后端 `projectId`，但不能解除 Desktop 已持久化的 `projectless` 排除，因此不是项目列表修复方案。不要通过反复移除项目或重复导入来刷新——这会改变项目 ID，并可能让对象继续处于排除状态。
 

@@ -139,7 +139,7 @@ doctor   [--cwd <path>] [--strict]                           environment diagnos
 open     <session-id> [--from <id>] [--provider <name>] [--to <provider>] [--check]
 prompt   [<session-id>] [--provider <name>] [--profile minimal|standard|verbose|full] [--last <n>] [--since-compact]   summary handoff: render the session as paste-ready Markdown (degraded path, writes nothing)
 inspect  <session-id> [--provider <name>] [--json]   read-only session metadata and counts for turns, events, attachments, malformed lines and disclosures
-import-codex  prepare|confirm|status|project-prepare|project-confirm|project-status
+import-codex  prepare|confirm|status|list|project-prepare|project-confirm|project-status
 ```
 
 Use `--check` with `open ... --to <provider>` to preview the target and pending turn count and check whether the transfer can proceed. The preflight leaves native sessions intact but may create Watch’s local database or add or refresh a session location record.
@@ -176,10 +176,13 @@ YOLO is off by default. Enabling it adds no-confirmation flags to the CLI comman
 Nothing is submitted until you explicitly confirm, and the target thread is opened separately after a successful import. To land in a desktop project, the folder must already be added and kept in Codex Desktop, then `--desktop-project` is used at the prepare stage.
 
 ```bash
+npm run watch -- import-codex list --json
 npm run watch -- import-codex prepare <claude-id> --cwd /absolute/project --desktop-project --experimental --json
 npm run watch -- import-codex confirm <plan-id> --experimental --json
 npm run watch -- import-codex status <plan-id> --json
 ```
+
+`list` read-only lists the plans and statuses in the execution journal (no Codex connection, no file writes); use it first if you no longer know the plan id.
 
 The legacy `project-prepare` / `project-confirm` / `project-status` commands can still inspect or update the app-server `projectId`, but they cannot clear a persisted Desktop `projectless` exclusion and are not a project-list repair. Do not repeatedly remove the project or reimport the same session as a refresh mechanism — that changes the project ID and can leave the target excluded.
 
