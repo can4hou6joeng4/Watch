@@ -2478,7 +2478,10 @@ async function cmdInspect(json: boolean, sessionId: string | undefined, provider
     ? `${structure.timestampedTurns}/${structure.turns} 轮有时间戳`
     : undefined;
   const rangeNotes = [timeRangeNote, timestampNote].filter(Boolean);
-  const cwdNote = foundRef.cwd ? describeRecordedCwd(await inspectCwd(foundRef.cwd), foundRef.cwd) : null;
+  // 会话记录里的工作目录（不是本次进程的 cwd）：文本有 cwdNote，脚本需要的结构化版本
+  // 用 `recordedCwdState` 单独命名——`inspect` 不接受 `--cwd`，叫 cwdState 会被读成本次参数
+  const recordedCwdProbe = foundRef.cwd ? await inspectCwd(foundRef.cwd) : null;
+  const cwdNote = foundRef.cwd && recordedCwdProbe ? describeRecordedCwd(recordedCwdProbe, foundRef.cwd) : null;
   if (cwdNote) warnings.push(cwdNote);
 
   if (json) {
@@ -2494,6 +2497,7 @@ async function cmdInspect(json: boolean, sessionId: string | undefined, provider
           storageScope: sharedDatabase ? 'shared-database' : 'session-file',
           ...(sharedDatabase ? { recordedUpdatedAt } : {}),
           recordedCwd: foundRef.cwd || null,
+          ...(recordedCwdProbe && recordedCwdProbe.state !== 'ok' ? { recordedCwdState: recordedCwdProbe } : {}),
           ...(cwdNote ? { cwdNote } : {}),
         },
         structure,
