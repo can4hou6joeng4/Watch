@@ -120,8 +120,34 @@ export type OpenSessionResult = {
    * new = 新建。`turnCount` 是计划写入的轮数。执行结果里它说的是**规划时的落点**：
    * 目标在写入前被移走而改为新建时另有 `targetRecreated`，kind 不改写成 new。
    */
-  plan?: { kind: 'resume' | 'chain' | 'reuse' | 'new'; turnCount: number };
+  plan?: PublicOpenPlan;
 };
+
+/**
+ * 复用扫描没查全的原因（只在 `plan.kind === 'new'` 时有意义）：
+ * list-failed = 目标会话列表读取失败；candidates-unreadable = 有候选会话解析失败、没参与匹配；
+ * capped = 会话数达到列表上限，只在最近 N 个里找；unattributable = 有不属于任何目录的会话文件被跳过。
+ */
+export type ReuseScanGap = 'list-failed' | 'candidates-unreadable' | 'capped' | 'unattributable';
+
+export type PublicOpenPlan = {
+  kind: 'resume' | 'chain' | 'reuse' | 'new';
+  turnCount: number;
+  /**
+   * 新建并不等于「确认没有可复用的」：复用扫描没查全时这里列出原因，项目里可能因此多出
+   * 一份重复会话。扫描完整（或落点不是 new）时不输出；只有中文 warnings 的话，脚本会把
+   * 「没找到」与「没查全」读成同一个结论。
+   */
+  reuseScanIncomplete?: ReuseScanGap[];
+};
+
+function publicPlan(plan: OpenPlan): PublicOpenPlan {
+  return {
+    kind: plan.kind,
+    turnCount: plan.turns.length,
+    ...(plan.kind === 'new' && plan.reuseScanGaps?.length ? { reuseScanIncomplete: plan.reuseScanGaps } : {}),
+  };
+}
 
 /** 把写入拒绝异常转成结构化 blocked（其余错误返回 undefined） */
 function blockedFrom(error: unknown): OpenSessionResult['blocked'] | undefined {
@@ -1051,6 +1077,8 @@ export type OpenPlan = {
    * 不能沿用 resumeUnreadable 的「执行会失败」。
    */
   resumeCompressed?: 'intact' | 'empty';
+  /** new 时：复用扫描没查全的原因（见 `ReuseScanGap`）；查全了为空或缺省 */
+  reuseScanGaps?: ReuseScanGap[];
 };
 
 type PlannedOpen =
@@ -1442,6 +1470,8 @@ async function planOpenInProvider(
   // 撞上 listSessionsCap 时枚举到的只是「最近 N 个」：更早的会话根本没参与复用匹配，
   // 复用失败不等于「确实没有可复用的」，而后果是多出一份重复会话
   let scanCappedAt = 0;
+  // 与下面各条 diagnostics 一一对应的结构化原因：新建时随 plan 一起公开
+  const reuseScanGaps: ReuseScanGap[] = [];
   const unreadableCandidates: string[] = [];
   if (typeof target.listSessions === 'function') {
     try {
@@ -1475,11 +1505,13 @@ async function planOpenInProvider(
       }
     } catch (error) {
       // 扫不动只能新建：会多出一份会话，必须说明原因，而不是让用户以为 「本该复用却新建」
+      reuseScanGaps.push('list-failed');
       diagnostics?.push(
         `目标 ${target.displayName} 会话列表读取失败，未能复用既有会话（将新建）：${describePathReadFailureReason(error)}`,
       );
     }
     if (parseFailed > 0) {
+      reuseScanGaps.push('candidates-unreadable');
       const detail =
         unreadableCandidates.length > 0
           ? `（读不出来的：${unreadableCandidates[0]}${
@@ -1540,6 +1572,7 @@ async function planOpenInProvider(
   // 只在本轮真的会新建时披露：已经复用成功说明上限不影响结论，多喊一句就是假警。
   // 文案要说清「不是没有」，以及后果（多一份会话）——否则「新建」看起来像正常决策。
   if (scanCappedAt > 0) {
+    reuseScanGaps.push('capped');
     diagnostics?.push(
       `${target.displayName} 在 ${escapeControlChars(cwd)} 的会话已达列表上限 ${scanCappedAt} 个，本次只在最近 ${scanCappedAt} 个里找可复用的既有会话` +
         `（更早的会话没参与匹配，无法确认其中是否已有能承接这些内容的会话）；本次将新建一份，项目里可能因此多出一份重复会话——` +
@@ -1554,7 +1587,10 @@ async function planOpenInProvider(
     '目标会话的复用匹配',
     '目标这一侧可能因此多出一份重复会话，而被跳过的那条文件里可能正有能承接这些内容的会话',
   );
-  if (hiddenCandidates) diagnostics?.push(hiddenCandidates);
+  if (hiddenCandidates) {
+    reuseScanGaps.push('unattributable');
+    diagnostics?.push(hiddenCandidates);
+  }
   return {
     ...base,
     plan: {
@@ -1562,6 +1598,7 @@ async function planOpenInProvider(
       turns: outgoing,
       merged: outgoing.length,
       snapshot: null,
+      ...(reuseScanGaps.length ? { reuseScanGaps } : {}),
       note: `已把 ${source.adapter.displayName} 的 ${outgoing.length} 轮内容转入 ${target.displayName} 新会话`,
     },
   };
@@ -1640,7 +1677,7 @@ export async function openInProvider(
       // 「没有内容可并入」与「根本没走转入」
       notes: [describePlan(target, plan)],
       // 与 --check 同字段：脚本不必解析 notes 才知道这次没有转入
-      plan: { kind: plan.kind, turnCount: plan.turns.length },
+      plan: publicPlan(plan),
       // 记录目录不可用时命令仍成功，但返回的 cd 会失败：与 openSession 同一字段
       ...(cwdState ? { cwdState } : {}),
       ...(mapping ? {} : { storeAvailable: false as const }),
@@ -1753,7 +1790,7 @@ export async function openInProvider(
       sourceUsage,
       notes,
       // 预检说「会落到哪」，执行也得说「落到了哪」：只有 notes 的话分不出复用既有会话与新建
-      plan: { kind: plan.kind, turnCount: plan.turns.length },
+      plan: publicPlan(plan),
       ...recreated,
       ...planDrift,
       ...(cwdState ? { cwdState } : {}),
@@ -1851,7 +1888,7 @@ export async function checkOpenInProvider(
     ...(mapping ? {} : { storeAvailable: false as const }),
     ...(diagnostics.length ? { warnings: [...diagnostics] } : {}),
     writable: true,
-    plan: { kind: plan.kind, turnCount: plan.turns.length },
+    plan: publicPlan(plan),
   };
   // 空来源也会新建会话（Kimi 要真跑一次 CLI），所以 CLI 判定不能放在 turns===0 之后
   const cliBlock = await newSessionCliBlock(target, plan);
