@@ -5,7 +5,7 @@ import path from 'node:path';
 import { describeWriteFailureReason } from '../../core/atomic.js';
 import { isMissingPathError } from '../../core/read-text.js';
 import { describeSqliteTableNames, probeSqliteTables, readSqliteFileHead } from '../../core/sqlite-file.js';
-import { escapeControlChars } from '../../core/display.js';
+import { escapeControlChars, cliOutputPreview } from '../../core/display.js';
 import { assertDataDirectory } from '../../core/provider-directory.js';
 
 export function opencodeDbPath(): string {
@@ -74,7 +74,9 @@ function describeSqliteFailure(raw: string): { reason: string; hint: string } {
       hint: '先用 opencode 正常打开一次该目录，让它把库结构迁移完',
     };
   }
-  return { reason: `无法识别的 SQLite 错误：${raw}`, hint: '确认该库文件是否可读，必要时先备份再让 opencode 重建' };
+  // 兜底要带原文（否则「无法识别的 SQLite 错误」等于没说），但原文是 SQLite 自己拼的字符串：
+  // 表名 / 列名损坏时可能带 ESC，长度也不受控——先按码点截断再转义，别让错误通道变成注入点
+  return { reason: `无法识别的 SQLite 错误：${cliOutputPreview(raw, 200)}`, hint: '确认该库文件是否可读，必要时先备份再让 opencode 重建' };
 }
 
 /** 打开 / 查询库失败：SQLite 的错误不带 errno，也不说该修哪个路径 */
@@ -160,7 +162,8 @@ export function ensureOpencodeDbDir(dbPath: string): void {
     }
     const reason = describeWriteFailureReason(error);
     if (!reason) {
-      const raw = error instanceof Error ? error.message : String(error);
+      // 非 fs 错误走兜底：message 来自任意异常，路径已单独转义，message 同样要过一遍
+      const raw = cliOutputPreview(error instanceof Error ? error.message : String(error), 200);
       throw new Error(`无法使用 OpenCode 数据目录：${escapeControlChars(dir)}（${raw}）；本次未写入任何内容`);
     }
     // describeWriteFailureReason 的几条里只有部分带了「本次未写入」，补齐一次别再重复
@@ -239,7 +242,7 @@ export async function probeOpencodeDbFile(dbPath: string): Promise<'missing' | '
       throw new Error(`无法确认 OpenCode 数据库路径能否使用：无权限访问（权限问题，不是路径写错）：${escapeControlChars(dbPath)}`);
     }
     throw new Error(
-      `无法确认 OpenCode 数据库路径能否使用：读取路径状态失败（${code ?? (error instanceof Error ? error.message : String(error))}）：${escapeControlChars(dbPath)}`,
+      `无法确认 OpenCode 数据库路径能否使用：读取路径状态失败（${code ?? cliOutputPreview(error instanceof Error ? error.message : String(error), 200)}）：${escapeControlChars(dbPath)}`,
     );
   }
   if (!info.isFile()) throw opencodeDbNotFileError(dbPath);
