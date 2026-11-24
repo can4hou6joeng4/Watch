@@ -3236,6 +3236,11 @@ async function cmdChain(cwd: string, json: boolean, action?: string, a?: string,
             ok: true,
             chain,
             ...(switchedFrom ? { previousChain: switchedFrom } : {}),
+            // 与 watch new 同理：链记录已经写进本地库并绑定了这个 --cwd 字符串，
+            // 但目录不可用时 resume 会在进入时失败。它是「目录不可用」的披露，不是「操作被阻止」。
+            // rename / archive / use 的成功输出也带同一字段（链按 --cwd 原字符串分组，
+            // 目录没了照样查得到、改得动，脚本仍需要知道这条链绑在一个不可用的路径上）
+            ...cwdStateField(cwdProbe),
             ...(warnings.length ? { warnings } : {}),
           }),
         );
@@ -3263,7 +3268,7 @@ async function cmdChain(cwd: string, json: boolean, action?: string, a?: string,
         const note =
           `链「${shown}」本来就叫这个名字，本次没有做任何改动` +
           (wasArchived ? `；它是归档状态，可用 watch chain use ${shown} 恢复成当前链` : '');
-        if (json) console.log(JSON.stringify({ ok: true, unchanged: true, chain: found, warnings: [note] }));
+        if (json) console.log(JSON.stringify({ ok: true, unchanged: true, chain: found, ...cwdStateField(cwdProbe), warnings: [note] }));
         else console.log(`未改动: ${shown}  (${escapeControlChars(found.id)})——${note}`);
         return;
       }
@@ -3277,7 +3282,7 @@ async function cmdChain(cwd: string, json: boolean, action?: string, a?: string,
       const renameWarnings = [renameHint, ephemeralWrite].filter((w): w is string => Boolean(w));
       if (json) {
         console.log(
-          JSON.stringify({ ok: true, chain, ...(renameWarnings.length ? { warnings: renameWarnings } : {}) }),
+          JSON.stringify({ ok: true, chain, ...cwdStateField(cwdProbe), ...(renameWarnings.length ? { warnings: renameWarnings } : {}) }),
         );
       } else {
         if (ephemeralWrite) console.error(`警告: ${ephemeralWrite}`);
@@ -3297,7 +3302,7 @@ async function cmdChain(cwd: string, json: boolean, action?: string, a?: string,
       if (found.status === 'archived') {
         const shown = escapeControlChars(found.name);
         const note = `链「${shown}」本来就是归档状态，本次没有做任何改动；可用 watch chain use ${shown} 把它恢复成当前链`;
-        if (json) console.log(JSON.stringify({ ok: true, unchanged: true, id: found.id, warnings: [note] }));
+        if (json) console.log(JSON.stringify({ ok: true, unchanged: true, id: found.id, ...cwdStateField(cwdProbe), warnings: [note] }));
         else console.log(`未改动: ${shown}（${note}）`);
         return;
       }
@@ -3323,6 +3328,7 @@ async function cmdChain(cwd: string, json: boolean, action?: string, a?: string,
             ok: true,
             id: found.id,
             ...(nextCurrent ? { currentChain: nextCurrent } : {}),
+            ...cwdStateField(cwdProbe),
             ...(archiveWarnings.length ? { warnings: archiveWarnings } : {}),
           }),
         );
@@ -3351,6 +3357,7 @@ async function cmdChain(cwd: string, json: boolean, action?: string, a?: string,
               ok: true,
               restored: true,
               chain: restored,
+              ...cwdStateField(cwdProbe),
               ...(ephemeralWrite ? { warnings: [ephemeralWrite] } : {}),
             }),
           );
@@ -3381,6 +3388,7 @@ async function cmdChain(cwd: string, json: boolean, action?: string, a?: string,
             ok: true,
             ...(unchanged ? { unchanged: true } : {}),
             chain: touched,
+            ...cwdStateField(cwdProbe),
             ...(useWarnings.length ? { warnings: useWarnings } : {}),
           }),
         );
