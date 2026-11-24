@@ -2239,8 +2239,9 @@ export async function handoff(
         }
       } catch (error) {
         if (error instanceof HandoffBlockedError) throw error;
-        console.error('[watch] 重写目标 session 失败，仍尝试 resume:', error);
         const reason = describeWriteFailureReason(error) ?? (error instanceof Error ? error.message : String(error));
+        // 原因可能是上游 errno 文案或路径，终端出口统一转义；Error 对象本身会带堆栈与裸 ESC
+        console.error('[watch] 重写目标 session 失败，仍尝试 resume:', escapeControlChars(reason));
         warnings.push(`重写目标会话失败，目标内容可能未更新: ${reason}`);
       }
       // 零增量不等于零写入：rewrite_only 会整份重写目标，来源的推定时间按原值留在那里。
@@ -2367,7 +2368,10 @@ export async function handoff(
       store.recordSwitch(id, sourceTip.provider, sourceTip.ref, targetId, newRef);
       chainRecordState = 'written';
     } catch (error) {
-      console.error('[watch] 记录 switch_events 失败，交接仍完成:', error);
+      console.error(
+        '[watch] 记录 switch_events 失败，交接仍完成:',
+        escapeControlChars(describeStoreErrorReason(error)),
+      );
       chainRecordState = 'failed';
       // 建链与写记录是两次提交：空库上建出来的链已在库里，失败后 chain list 会凭空多
       // 一条没有任何切换记录的「默认」。零增量分支从第 311 轮起就用这个函数，追加分支
