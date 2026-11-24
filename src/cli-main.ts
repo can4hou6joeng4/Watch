@@ -34,7 +34,7 @@ import { CLAUDE_PROJECT_SETTINGS_RELATIVE_PATHS, type ClaudeRetentionProbe } fro
 import { cwdAliasHint, cwdProblem, describeCwdProblem, describeRecordedCwd, describeRepoBranchNote, describeWorktreeNote, describeWriteCwd, inspectCwd, inspectRepoBranch, inspectWorktree, sameDirectorySync, splitElsewhereByDirectory, type CwdInspection } from './core/cwd.js';
 import { escapeControlChars, hasControlChars } from './core/display.js';
 import { isoFromEpochMs } from './core/time.js';
-import { BOOLEAN_FLAGS, CHAIN_POSITIONAL, COMMAND_LIST, FLAGS_BY_COMMAND, HELP_COMMAND_ALIASES, POSITIONAL_BY_COMMAND, VALUE_FLAGS, VERSION_COMMAND_ALIASES, closestCommand, closestFlag, optionArgs } from './core/cli-commands.js';
+import { BOOLEAN_FLAGS, CHAIN_POSITIONAL, COMMAND_LIST, CWD_UNUSED_COMMANDS, FLAGS_BY_COMMAND, HELP_COMMAND_ALIASES, POSITIONAL_BY_COMMAND, VALUE_FLAGS, VERSION_COMMAND_ALIASES, closestCommand, closestFlag, cwdUnusedNote, optionArgs } from './core/cli-commands.js';
 import { commandControlWarnings } from './core/terminal-command.js';
 import { trimUserKey } from './core/cli-input.js';
 import { describeResumeTargetUnfinished } from './core/rich.js';
@@ -1794,13 +1794,17 @@ async function cmdRecent(cwd: string, json: boolean, limit: number = 8, cwdGiven
   }
 }
 
-async function cmdProviders(json: boolean): Promise<void> {
+async function cmdProviders(json: boolean, cwdGiven = false): Promise<void> {
   try {
     const providers = await listProviders();
+    // 检测只看本机命令在不在，`--cwd` 不参与：显式给了就说出来（同 open / prompt <id>），
+    // 否则 `providers --cwd <写错的路径>` 照样 exit 0，看着像「在那个目录下检测过」
+    const cwdIgnored = cwdGiven ? cwdUnusedNote('providers') : null;
     if (json) {
-      console.log(JSON.stringify({ ok: true, providers }));
+      console.log(JSON.stringify({ ok: true, providers, ...(cwdIgnored ? { warnings: [cwdIgnored] } : {}) }));
       return;
     }
+    if (cwdIgnored) console.error(`提示: ${cwdIgnored}`);
     console.log('支持的 Agent 与本机检测状态:');
     for (const p of providers) {
       const state = p.available ? '✓ 已就绪' : p.error ? `✗ 检测失败: ${p.error}` : '✗ 未检测到';
@@ -2278,9 +2282,12 @@ async function cmdPrompt(
  * 是 `watch providers` 的职责（那一步会 spawn 六次 CLI）。把两件事混在一起，脚本想拿
  * 能力矩阵就得先等六次进程探测，某家 CLI 挂起时还会拖住整张表。
  */
-function cmdCapabilities(json: boolean): void {
+function cmdCapabilities(json: boolean, cwdGiven = false): void {
   const providers = describeCapabilities(listAdapters());
+  // 同 providers：能力表与目录无关，显式 `--cwd` 不能被静默吞掉
+  const cwdIgnored = cwdGiven ? cwdUnusedNote('capabilities') : null;
   if (!json) {
+    if (cwdIgnored) console.error(`提示: ${cwdIgnored}`);
     console.log(formatCapabilities(providers));
     return;
   }
@@ -2294,6 +2301,7 @@ function cmdCapabilities(json: boolean): void {
     },
     providers,
     notes: [CAPABILITY_VERIFICATION_NOTE],
+    ...(cwdIgnored ? { warnings: [cwdIgnored] } : {}),
   }));
 }
 
@@ -2385,7 +2393,12 @@ function describeClaudeProjectRetention(probes: ClaudeRetentionProbe[]): string 
  * `watch inspect <id>` 输出会话元数据与结构统计。
  * 复用只读反查与解析，跳过本地库和原生 CLI。
  */
-async function cmdInspect(json: boolean, sessionId: string | undefined, provider: string | undefined): Promise<void> {
+async function cmdInspect(
+  json: boolean,
+  sessionId: string | undefined,
+  provider: string | undefined,
+  cwdGiven = false,
+): Promise<void> {
   if (!sessionId) usage('inspect 需要会话 id；先用 watch sessions / watch recent 找到它，例：watch inspect <session-id>');
   if (provider && !getAdapter(provider)) fail(json, unknownProviderMessage(provider));
 
@@ -2404,6 +2417,10 @@ async function cmdInspect(json: boolean, sessionId: string | undefined, provider
   const adapter = resolved.adapter;
   const foundRef = resolved.found.ref;
   const warnings = [...diagnostics];
+  // inspect 按 id 全局反查：显式 `--cwd` 不参与任何一步（同 open / prompt <id>）。
+  // 不说的话，`inspect <id> --cwd <另一个项目>` 会被读成「只在那个项目里找」
+  const cwdIgnored = cwdGiven ? cwdUnusedNote('inspect') : null;
+  if (cwdIgnored) warnings.push(cwdIgnored);
   const id = escapeControlChars(foundRef.sessionId);
   const sharedDatabase = adapter.id === 'opencode';
   const recordedUpdatedAt = sharedDatabase ? isoFromEpochMs(resolved.found.updatedAt) || null : null;
@@ -3448,7 +3465,12 @@ function rejectUnusedFlags(cmd: string, usedFlags: string[], json: boolean): voi
   if (!allowed) return;
   const bad = usedFlags.find((flag) => !allowed.includes(flag));
   if (!bad) return;
-  const supports = allowed.length ? allowed.map((flag) => `--${flag}`).join(' / ') : '（无，仅 --cwd / --json）';
+  // `--cwd` 对 providers / capabilities 不起作用：兜底文案不能把它列成「支持的参数」
+  const supports = allowed.length
+    ? allowed.map((flag) => `--${flag}`).join(' / ')
+    : cmd in CWD_UNUSED_COMMANDS
+      ? '（无，仅 --json）'
+      : '（无，仅 --cwd / --json）';
   rejectArguments(json, `--${bad} 不能与 ${cmd} 同用；${cmd} 支持的参数: ${supports}`);
 }
 
@@ -3510,11 +3532,11 @@ async function main(): Promise<void> {
     return;
   }
   if (cmd === 'providers') {
-    await cmdProviders(json);
+    await cmdProviders(json, cwdGiven);
     return;
   }
   if (cmd === 'capabilities') {
-    cmdCapabilities(json);
+    cmdCapabilities(json, cwdGiven);
     return;
   }
   if (cmd === 'prompt') {
@@ -3524,7 +3546,7 @@ async function main(): Promise<void> {
     return;
   }
   if (cmd === 'inspect') {
-    await cmdInspect(json, target, provider);
+    await cmdInspect(json, target, provider, cwdGiven);
     return;
   }
   if (cmd === 'doctor') {

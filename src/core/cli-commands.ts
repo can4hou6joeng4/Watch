@@ -32,6 +32,24 @@ export const FLAGS_BY_COMMAND: Record<string, string[]> = {
 };
 
 /**
+ * 不读 `--cwd` 的命令：`providers` / `capabilities` 只看本机与注册表，`inspect` 按会话 id
+ * 全局反查。`--cwd` 是全局参数、不会被拒绝，所以显式给了就必须说它没参与——否则
+ * `providers --cwd <写错的路径>` 照样 exit 0，用户会以为检测是在那个目录下做的。
+ * `open` 与 `prompt <session-id>` 同类，但它们有各自更具体的文案，不在这张表里。
+ */
+export const CWD_UNUSED_COMMANDS: Readonly<Record<string, string>> = {
+  providers: '检测的是本机装了哪些 Agent，与目录无关',
+  capabilities: '能力表来自各适配器的注册信息，与目录无关',
+  inspect: '会话按 id 全局反查，会话记录的工作目录见 recordedCwd',
+};
+
+/** `--cwd` 被这条命令忽略时的披露文案；该命令会读 `--cwd` 时返回 null */
+export function cwdUnusedNote(cmd: string): string | null {
+  const why = CWD_UNUSED_COMMANDS[cmd];
+  return why ? `--cwd 不参与 ${cmd}：${why}` : null;
+}
+
+/**
  * 每个命令接受的位置参数（命令名之后）。`rejectUnusedFlags` 只管 `--flag`；
  * `watch recent 3`（本意是 `--limit 3`）、`watch status foo` 这类多给的位置参数
  * 以前被静默吞掉、照样 exit 0，用户会以为参数生效了。`search` 不限：查询词本身就是位置参数。
