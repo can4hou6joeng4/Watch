@@ -1,6 +1,6 @@
 import { stat } from 'node:fs/promises';
 import { describeWriteFailureReason, type FileDigest } from './core/atomic.js';
-import { assertTargetUnchanged, describeVanishedTarget, blockedHint, describeSourceChangedDuringHandoff, diffTurns, HandoffBlockedError, snapshotSourceState, sourceChangeSince, sourceDriftFields, type SourceChangeSince, type SourceDriftFields, type SourceStateSnapshot } from './core/handoff.js';
+import { assertTargetUnchanged, describeVanishedTarget, blockedHint, describeSourceChangedDuringHandoff, diffTurns, HandoffBlockedError, snapshotSourceState, sourceChangeSince, sourceDriftFields, targetRecreatedField, type SourceChangeSince, type SourceDriftFields, type SourceStateSnapshot, type TargetRecreatedField } from './core/handoff.js';
 import { describeAttachmentLoss, describeBashControlLoss, describeTextEventLoss, describeToolFailureLoss, describeDanglingToolCalls, describeUnansweredTail, describeResumeTargetUnfinished, dedupeCallEvents, findContextDisclosure, countPairedTurnsMissingEvents } from './core/rich.js';
 import { Store, defaultDbPath, describeStoreErrorReason, describeStoreOpenFailure } from './core/store.js';
 import { clipCodePoints } from './core/display.js';
@@ -91,6 +91,11 @@ export type OpenSessionResult = {
    * 这次反查是全盘扫描，命中也没有写回映射。命令本身成功；库正常时不输出。
    */
   storeAvailable?: false;
+  /**
+   * 目标会话在写入前被移走，本次改为新建（与 switch 同字段）：`sessionId` 已是新会话，
+   * 原 id 在这里；新会话只有这次写入的内容，原目标的旧历史没有并入。
+   */
+  targetRecreated?: { previousSessionId: string };
   /** 来源会话在 --from 并入 / --to 转入期间被写入过（stat 字节数与方向），与 switch / prompt 同字段 */
   sourceDrift?: SourceChangeSince;
   /** 来源会话在期间「量不出来」有没有变化，附原因；与 sourceDrift 互斥 */
@@ -521,6 +526,7 @@ export async function openSession(
   const notes: string[] = [];
   let merged = 0;
   let srcDrift: SourceDriftFields = {};
+  let recreated: TargetRecreatedField = {};
   let sourceUsage: TokenUsage | null = null;
   // 记录的目录可能已被移动 / 删除：会话内容照常可读、转入也能写成，但返回的 cd 会在第一步失败
   const cwdInspection = await sessionCwdInspection(target.found.ref.cwd);
@@ -768,6 +774,7 @@ export async function openSession(
           if (failureLoss) warnings.push(failureLoss);
           const vanished = describeVanishedTarget(target.found.ref, newRef, target.adapter.displayName);
           if (vanished) warnings.push(vanished);
+          recreated = targetRecreatedField(target.found.ref, newRef);
           merged = dedup.length;
           notes.push(
             `已把 ${escapeControlChars(from)} 的 ${merged} 轮新内容${vanished ? '写入' : '并入'} ` +
@@ -965,6 +972,7 @@ export async function openSession(
     usage,
     summary,
     notes,
+    ...recreated,
     ...srcDrift,
     // 与 status / new / chain 写操作同一字段：命令成功、命令已给出，但 cd 会在不可用目录上失败
     ...(cwdInspection.probe.state !== 'ok' ? { cwdState: cwdInspection.probe } : {}),
@@ -1594,6 +1602,7 @@ export async function openInProvider(
   // 来源快照的基线在 `planOpenInProvider` 读取来源之前就取好了（见那里的注释）：
   // 这里只负责写完之后再比一次，期间（含规划阶段）被追加的话都能报出来
   let planDrift: SourceDriftFields = {};
+  let recreated: TargetRecreatedField = {};
 
   const cliBlock = await newSessionCliBlock(target, plan);
   if (cliBlock) {
@@ -1691,6 +1700,7 @@ export async function openInProvider(
     const vanished = plan.targetRef ? describeVanishedTarget(plan.targetRef, newRef, target.displayName) : null;
     if (vanished) {
       warnings.push(vanished);
+      recreated = targetRecreatedField(plan.targetRef, newRef);
       notes.push(`已把 ${plan.merged} 轮新内容写入 ${target.displayName} 新会话 ${escapeControlChars(newRef.sessionId)}`);
     } else if (plan.note) {
       notes.push(plan.note);
@@ -1734,6 +1744,7 @@ export async function openInProvider(
       mergedTurns: plan.merged,
       sourceUsage,
       notes,
+      ...recreated,
       ...planDrift,
       ...(cwdState ? { cwdState } : {}),
       ...(mapping ? {} : { storeAvailable: false as const }),

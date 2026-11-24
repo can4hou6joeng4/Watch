@@ -247,6 +247,19 @@ export function describeVanishedTarget(into: SessionRef, written: SessionRef, pr
 }
 
 /**
+ * `describeVanishedTarget()` 的结构化出口（switch / open --from / open --to 共用）：
+ * 目标在写入前被移走，适配器改为新建会话时给 `targetRecreated: { previousSessionId }`。
+ * 结果里的 `sessionId` / `newRef` 已经是新会话；这个字段说的是「原本要并入的那条没并成」，
+ * 只有中文警告时脚本会把新会话当成既有目标（里面只有这次追加的内容）。id 保留原值，不转义。
+ */
+export type TargetRecreatedField = { targetRecreated?: { previousSessionId: string } };
+
+export function targetRecreatedField(into: SessionRef | null | undefined, written: SessionRef): TargetRecreatedField {
+  if (!into || written.sessionId === into.sessionId) return {};
+  return { targetRecreated: { previousSessionId: into.sessionId } };
+}
+
+/**
  * 写前 TOCTOU 校验：目标会话指纹与快照不一致（被外部写入）则拒绝。
  * `action` 只影响错误文案（“已中止本次<action>”）。open / switch 两条写入路径共用。
  */
@@ -1373,6 +1386,8 @@ export type HandoffResult = {
    * 只有 recorded 才谈得上「链尾已在 X」，其余两档要说明没有可交接的来源、本次未写入链记录。
    */
   chainTipState?: 'recorded' | 'empty' | 'unknown';
+  /** 目标会话在写入前被移走，本次改为新建：newRef 是新会话，原 id 在这里；旧历史没有并入 */
+  targetRecreated?: { previousSessionId: string };
   /** 来源会话在交接期间被写入过（stat 字节数与方向），与 `watch prompt --json` 同字段 */
   sourceDrift?: SourceChangeSince;
   /** 来源会话在交接期间「量不出来」有没有变化，附原因；与 sourceDrift 互斥 */
@@ -2419,6 +2434,7 @@ export async function handoff(
     turnCount: outgoing.length,
     ...(notes.length ? { notes } : {}),
     chainRecordState,
+    ...(vanished ? targetRecreatedField(into, newRef) : {}),
     ...driftFields,
     warnings,
     findings,
