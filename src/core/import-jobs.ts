@@ -76,10 +76,12 @@ export function describeReadError(error: unknown, file: string): string {
   const shown = escapeControlChars(file);
   const code = (error as NodeJS.ErrnoException).code;
   if (code === 'ENOTDIR') {
-    return `日志路径上的某一级不是目录（被同名文件占住了？）：${shown}；删掉占用它的文件后重试，或按下面的 id 手动核对`;
+    // 「按下面的 id 手动核对」在 list / doctor 上都是假话：列目录失败时根本没有 id 可核对。
+    // 下一步必须与触发场景无关：先挪开占位的文件，再核对日志根是怎么算出来的。
+    return `日志路径上的某一级不是目录（被同名文件占住了？）：${shown}；删掉占用它的文件后重试，或核对 WATCH_DB / HOME 是否指向了预期位置`;
   }
   if (code === 'EACCES' || code === 'EPERM') {
-    return `没有权限读取执行日志（权限或归属变了？）：${shown}`;
+    return `没有权限读取执行日志（权限或归属变了？）：${shown}；确认该目录对当前用户可读（或改用有权限的 WATCH_DB / HOME）后重试`;
   }
   if (code === 'EISDIR') {
     return `该路径是目录而不是日志文件：${shown}`;
