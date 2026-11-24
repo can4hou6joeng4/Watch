@@ -134,6 +134,78 @@ function journalEntryKindLabel(kind: 'directory' | 'file' | 'symlink' | 'other')
 }
 
 /** An exclusive, persistent claim survives crashes. Never erase it to retry a write. */
+/**
+ * 计划文件在用户可写的执行日志目录里：字段被删掉或改错类型时，`status` / `confirm` 会在
+ * `plan.source.sessionId`、`path.join(plan.target.path, …)` 这类取值处抛英文 TypeError，
+ * 经 `{ ok:false, error }` 原样到桌面卡片。两个 route 各有一个形状检查，由 `plan()` /
+ * `projectPlan()` 与 `priorImports()` 共用；只检查读取侧真正会取值 / stat 的字段，
+ * 不校验值域（UUID、绝对路径等仍由各调用点的中文判定负责）。
+ */
+function refShapeProblem(ref: unknown, label: string): string | null {
+  if (!ref || typeof ref !== 'object' || Array.isArray(ref)) return `${label} 不是对象`;
+  const r = ref as Record<string, unknown>;
+  for (const key of ['provider', 'sessionId', 'filePath', 'cwd'] as const) {
+    if (typeof r[key] !== 'string' || !r[key]) return `${label}.${key} 不是非空字符串`;
+  }
+  return null;
+}
+
+export function officialPlanShapeProblem(plan: unknown): string | null {
+  if (!plan || typeof plan !== 'object' || Array.isArray(plan)) return '不是 JSON 对象';
+  const p = plan as Record<string, unknown>;
+  const source = refShapeProblem(p.source, 'source');
+  if (source) return source;
+  const digest = p.digest;
+  if (!digest || typeof digest !== 'object' || Array.isArray(digest)) return 'digest 不是对象';
+  const d = digest as Record<string, unknown>;
+  if (typeof d.sha256 !== 'string' || !d.sha256) return 'digest.sha256 不是非空字符串';
+  if (typeof d.sizeBytes !== 'number' || !Number.isFinite(d.sizeBytes)) return 'digest.sizeBytes 不是数字';
+  for (const key of ['cliVersion', 'home', 'codexHome'] as const) {
+    if (typeof p[key] !== 'string' || !p[key]) return `${key} 不是非空字符串`;
+  }
+  if (p.target !== undefined) {
+    const target = p.target;
+    if (!target || typeof target !== 'object' || Array.isArray(target)) return 'target 不是对象';
+    const t = target as Record<string, unknown>;
+    if (typeof t.path !== 'string' || !t.path) return 'target.path 不是非空字符串';
+    if (t.policy !== undefined && typeof t.policy !== 'string') return 'target.policy 不是字符串';
+  }
+  if (p.desktopProject !== undefined) {
+    const project = p.desktopProject;
+    if (!project || typeof project !== 'object' || Array.isArray(project)) return 'desktopProject 不是对象';
+    const dp = project as Record<string, unknown>;
+    // status 的重复项目检查会把这几项拼进警告并参与比较，缺一个就会在 clipCodePoints() 处抛 TypeError
+    for (const key of ['policy', 'legacyProjectId', 'nativeProjectId', 'name'] as const) {
+      if (typeof dp[key] !== 'string') return `desktopProject.${key} 不是字符串`;
+    }
+  }
+  return null;
+}
+
+export function projectPlanShapeProblem(plan: unknown): string | null {
+  if (!plan || typeof plan !== 'object' || Array.isArray(plan)) return '不是 JSON 对象';
+  const p = plan as Record<string, unknown>;
+  const thread = refShapeProblem(p.thread, 'thread');
+  if (thread) return thread;
+  for (const key of ['importPlanId', 'projectId', 'projectName', 'historyDigest', 'home', 'codexHome', 'cliVersion'] as const) {
+    if (typeof p[key] !== 'string' || !p[key]) return `${key} 不是非空字符串`;
+  }
+  const target = p.target;
+  if (!target || typeof target !== 'object' || Array.isArray(target)) return 'target 不是对象';
+  const t = target as Record<string, unknown>;
+  if (typeof t.path !== 'string' || !t.path) return 'target.path 不是非空字符串';
+  return null;
+}
+
+/** 形状问题的统一下一步：日志仍可用于核对结果，但这份计划不能再按原样读取。 */
+function planShapeMessage(label: string, id: string, problem: string): string {
+  return (
+    `${label} ${escapeControlChars(id)} 的 plan.json ${problem}（被改动，或来自更早的格式）；` +
+    '这份日志不能按计划读取——可删除该日志目录后重新 prepare（会得到新的计划 id）；' +
+    '若只是想核对那次执行结果，同目录的 started.json / outcome.json 仍在，不要删除'
+  );
+}
+
 export class ImportJobs {
   constructor(private root: string) {}
 
@@ -280,6 +352,9 @@ export class ImportJobs {
           '若它是官方导入计划，请改用 watch import-codex status ' + id,
       );
     }
+    // 同一族：project-status 直接 path.join(plan.target.path, …)，形状不对时以前只抛英文 TypeError
+    const problem = projectPlanShapeProblem(plan);
+    if (problem) throw new Error(planShapeMessage(label, id, problem));
     return plan;
   }
 
@@ -310,6 +385,9 @@ export class ImportJobs {
           '若它是项目关联计划，请改用 watch import-codex project-status ' + id,
       );
     }
+    // plan.json 可被手工改动：形状不对时在这里给中文原因，别让 TypeError 冒到 { ok:false, error }
+    const problem = officialPlanShapeProblem(plan);
+    if (problem) throw new Error(planShapeMessage(label, id, problem));
     return plan;
   }
 
@@ -468,6 +546,13 @@ export class ImportJobs {
       }
       // 只有官方导入 route 才有「导入过同一来源会话」这回事
       if (plan.route !== 'claude-code-to-codex-official' || plan.schema !== 1) continue;
+      // 下面要读 plan.source / plan.digest：形状不对时以前直接抛英文 TypeError，
+      // 被 status 的 catch 讲成「读取导入执行日志失败」（还是英文）；这里按「这一份读不出来」记进 skipped
+      const problem = officialPlanShapeProblem(plan);
+      if (problem) {
+        skipped.push({ id, reason: `plan.json ${problem}（被改动，或来自更早的格式）；无法用它确认是否重复导入` });
+        continue;
+      }
       try {
         outcome = await this.outcome(id);
       } catch (error) {
