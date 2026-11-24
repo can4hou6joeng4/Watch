@@ -87,6 +87,11 @@ export type OpenSessionResult = {
    */
   cwdState?: CwdInspection;
   /**
+   * 本地映射库没打开时为 false（与 status / sessions / usage / recent / 写操作同字段）：
+   * 这次反查是全盘扫描，命中也没有写回映射。命令本身成功；库正常时不输出。
+   */
+  storeAvailable?: false;
+  /**
    * 降级原因（读取失败、复用扫描失败、链上配对读不出…）：说明「为什么是这个结果」，
    * 不是结果本身。文本模式一律打到 stderr，避免和可复制的结果行混在 stdout。
    */
@@ -954,6 +959,8 @@ export async function openSession(
     notes,
     // 与 status / new / chain 写操作同一字段：命令成功、命令已给出，但 cd 会在不可用目录上失败
     ...(cwdInspection.probe.state !== 'ok' ? { cwdState: cwdInspection.probe } : {}),
+    // 映射库没打开：只有中文 warnings 的话，脚本 / 桌面端分不出「这次没写回映射」
+    ...(mapping ? {} : { storeAvailable: false as const }),
     ...(warnings.length ? { warnings } : {}),
   };
 }
@@ -1609,6 +1616,7 @@ export async function openInProvider(
       notes: [describePlan(target, plan)],
       // 记录目录不可用时命令仍成功，但返回的 cd 会失败：与 openSession 同一字段
       ...(cwdState ? { cwdState } : {}),
+      ...(mapping ? {} : { storeAvailable: false as const }),
       ...(diagnostics.length ? { warnings: [...diagnostics] } : {}),
     };
   }
@@ -1714,6 +1722,7 @@ export async function openInProvider(
       sourceUsage,
       notes,
       ...(cwdState ? { cwdState } : {}),
+      ...(mapping ? {} : { storeAvailable: false as const }),
       ...(warnings.length ? { warnings } : {}),
     };
   } catch (error) {
@@ -1803,6 +1812,8 @@ export async function checkOpenInProvider(
     filePath: plan.targetRef?.filePath,
     notes: [describePlan(target, plan)],
     ...(planned.cwdState ? { cwdState: planned.cwdState } : {}),
+    // 预检同样受影响：复用判定少了映射库这一路，执行时也不会写回
+    ...(mapping ? {} : { storeAvailable: false as const }),
     ...(diagnostics.length ? { warnings: [...diagnostics] } : {}),
     writable: true,
     plan: { kind: plan.kind, turnCount: plan.turns.length },
