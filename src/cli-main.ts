@@ -6,7 +6,7 @@ import { chainsElsewhereHint, chainsSameDirectoryHint, isStoreError, SEARCH_MAX_
 import type { Chain, SearchElsewhere } from './core/store.js';
 import { aliasChainGroupWarning, chainNamesOf, chainsElsewhereOf, newChainName, splitChainsElsewhere } from './core/chain-alias.js';
 import { describeFindings } from './core/findings.js';
-import { adoptedParseFailureWarning, adoptedSessionReadProblemWarning, adoptIntoChain, blockedHint, chainStatus, chainUsage, collectTips, createChainSession, currentChainShiftNote, describeSourceChangedDuringPrompt, emptyChainBindHint, handoff, HandoffBlockedError, notCurrentChainWarning, pickLatestTip, rebindHint, snapshotSourceState, sourceChangeSince, storeUnavailableWarning } from './core/handoff.js';
+import { adoptedParseFailureWarning, adoptedSessionReadProblemWarning, adoptIntoChain, blockedHint, chainStatus, chainUsage, collectTips, createChainSession, currentChainShiftNote, describeSourceChangedDuringPrompt, emptyChainBindHint, handoff, HandoffBlockedError, notCurrentChainWarning, pickLatestTip, rebindHint, snapshotSourceState, sourceChangeSince, sourceDriftFields, storeUnavailableWarning } from './core/handoff.js';
 import { reindexCwd, type SearchCoverage } from './core/search.js';
 import type { SessionRef } from './core/types.js';
 import type { TokenUsage } from './core/types.js';
@@ -2231,9 +2231,9 @@ async function cmdPrompt(
       // 与头部「时间范围」括注同源：脚本不必解析 Markdown 才知道时间是推定值、或只覆盖部分轮次
       ...(adapter.timingNote ? { timeRangeNote: adapter.timingNote } : {}),
       ...(result.timestampNote ? { timestampNote: result.timestampNote } : {}),
-      ...(sourceChange.kind === 'changed' ? { sourceDrift: { from: sourceChange.from, to: sourceChange.to, growth: sourceChange.growth } } : {}),
-      // 「量不出来」单独给结构化字段：脚本不能把缺字段当成「没变化」
-      ...(sourceChange.kind === 'unverifiable' ? { sourceDriftUnknown: sourceChange.reason } : {}),
+      // 两个结构化字段（sourceDrift / sourceDriftUnknown）与 switch / open 共用同一个出口：
+      // 脚本不能把缺字段当成「没变化」
+      ...sourceDriftFields(sourceChange),
       ...(sourceBranch ? { sourceBranch } : {}),
       ...(sourceWorktree ? { sourceWorktree } : {}),
       ...(sourceWorktreeUnknown ? { sourceWorktreeUnknown } : {}),

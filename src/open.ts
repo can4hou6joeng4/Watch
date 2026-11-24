@@ -1,6 +1,6 @@
 import { stat } from 'node:fs/promises';
 import { describeWriteFailureReason, type FileDigest } from './core/atomic.js';
-import { assertTargetUnchanged, describeVanishedTarget, blockedHint, describeSourceChangedDuringHandoff, diffTurns, HandoffBlockedError, snapshotSourceState, type SourceStateSnapshot } from './core/handoff.js';
+import { assertTargetUnchanged, describeVanishedTarget, blockedHint, describeSourceChangedDuringHandoff, diffTurns, HandoffBlockedError, snapshotSourceState, sourceChangeSince, sourceDriftFields, type SourceChangeSince, type SourceDriftFields, type SourceStateSnapshot } from './core/handoff.js';
 import { describeAttachmentLoss, describeBashControlLoss, describeTextEventLoss, describeToolFailureLoss, describeDanglingToolCalls, describeUnansweredTail, describeResumeTargetUnfinished, dedupeCallEvents, findContextDisclosure, countPairedTurnsMissingEvents } from './core/rich.js';
 import { Store, defaultDbPath, describeStoreErrorReason, describeStoreOpenFailure } from './core/store.js';
 import { clipCodePoints } from './core/display.js';
@@ -91,6 +91,10 @@ export type OpenSessionResult = {
    * 这次反查是全盘扫描，命中也没有写回映射。命令本身成功；库正常时不输出。
    */
   storeAvailable?: false;
+  /** 来源会话在 --from 并入 / --to 转入期间被写入过（stat 字节数与方向），与 switch / prompt 同字段 */
+  sourceDrift?: SourceChangeSince;
+  /** 来源会话在期间「量不出来」有没有变化，附原因；与 sourceDrift 互斥 */
+  sourceDriftUnknown?: string;
   /**
    * 降级原因（读取失败、复用扫描失败、链上配对读不出…）：说明「为什么是这个结果」，
    * 不是结果本身。文本模式一律打到 stderr，避免和可复制的结果行混在 stdout。
@@ -516,6 +520,7 @@ export async function openSession(
   }
   const notes: string[] = [];
   let merged = 0;
+  let srcDrift: SourceDriftFields = {};
   let sourceUsage: TokenUsage | null = null;
   // 记录的目录可能已被移动 / 删除：会话内容照常可读、转入也能写成，但返回的 cd 会在第一步失败
   const cwdInspection = await sessionCwdInspection(target.found.ref.cwd);
@@ -816,11 +821,14 @@ export async function openSession(
     // 写完了再比一次来源：期间被追加的话，并进去的只是开始那一刻的内容。
     // 只在真的并入了内容时说——一句都没并时这句「并进去的是…」会自相矛盾。
     if (merged > 0) {
+      const change = await sourceChangeSince(source.found.ref.filePath, srcSnapshot);
+      srcDrift = sourceDriftFields(change);
       const drift = await describeSourceChangedDuringHandoff(
         source.found.ref.filePath,
         srcSnapshot,
         `${escapeControlChars(source.found.ref.sessionId)}（${source.adapter.displayName}）`,
         '并入',
+        change,
       );
       if (drift) warnings.push(drift);
     }
@@ -957,6 +965,7 @@ export async function openSession(
     usage,
     summary,
     notes,
+    ...srcDrift,
     // 与 status / new / chain 写操作同一字段：命令成功、命令已给出，但 cd 会在不可用目录上失败
     ...(cwdInspection.probe.state !== 'ok' ? { cwdState: cwdInspection.probe } : {}),
     // 映射库没打开：只有中文 warnings 的话，脚本 / 桌面端分不出「这次没写回映射」
@@ -1584,6 +1593,7 @@ export async function openInProvider(
   const { adapter: target, sourceRef, sourceProvider, cwd, plan, sourceSnapshot: srcSnapshot, cwdState } = planned;
   // 来源快照的基线在 `planOpenInProvider` 读取来源之前就取好了（见那里的注释）：
   // 这里只负责写完之后再比一次，期间（含规划阶段）被追加的话都能报出来
+  let planDrift: SourceDriftFields = {};
 
   const cliBlock = await newSessionCliBlock(target, plan);
   if (cliBlock) {
@@ -1687,11 +1697,14 @@ export async function openInProvider(
     }
     // 真的转入了内容才谈得上「转过去的是哪一刻的」：resume 快路径在上面已经返回
     if (plan.turns.length > 0) {
+      const change = await sourceChangeSince(sourceRef.filePath, srcSnapshot);
+      planDrift = sourceDriftFields(change);
       const drift = await describeSourceChangedDuringHandoff(
         sourceRef.filePath,
         srcSnapshot,
         `${escapeControlChars(sourceRef.sessionId)}（${source?.displayName ?? sourceProvider}）`,
         '转入',
+        change,
       );
       if (drift) warnings.push(drift);
     }
@@ -1721,6 +1734,7 @@ export async function openInProvider(
       mergedTurns: plan.merged,
       sourceUsage,
       notes,
+      ...planDrift,
       ...(cwdState ? { cwdState } : {}),
       ...(mapping ? {} : { storeAvailable: false as const }),
       ...(warnings.length ? { warnings } : {}),

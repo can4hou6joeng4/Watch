@@ -395,21 +395,44 @@ export async function sourceChangeSince(
   return { kind: 'changed', from: before.size, to: size, growth: size > before.size };
 }
 
+/**
+ * `--json` 的结构化出口（switch / open --from / open --to / prompt 共用，字段同名同形状）：
+ * - `sourceDrift`：期间被写入过，给出 stat 得到的字节数与方向；
+ * - `sourceDriftUnknown`：量不出来（读取后被删 / 被换 / 权限变了），附原因。
+ * 未变化、或这次根本没交接内容时两个字段都不出现——只有中文警告的话，脚本与桌面端分不出
+ * 「没变」和「变化没有带上」。
+ */
+export type SourceDriftFields = {
+  sourceDrift?: SourceChangeSince;
+  sourceDriftUnknown?: string;
+};
+
+export function sourceDriftFields(change: SourceChangeProbe): SourceDriftFields {
+  if (change.kind === 'changed') {
+    return { sourceDrift: { from: change.from, to: change.to, growth: change.growth } };
+  }
+  if (change.kind === 'unverifiable') return { sourceDriftUnknown: change.reason };
+  return {};
+}
+
 export async function describeSourceChangedDuringHandoff(
   filePath: string,
   before: SourceStateSnapshot | null,
   label: string,
   action = '交接',
+  change?: SourceChangeProbe,
 ): Promise<string | null> {
-  const change = await sourceChangeSince(filePath, before);
-  if (change.kind === 'unchanged') return null;
-  if (change.kind === 'unverifiable') {
+  // 调用方已经量过一次时复用同一份结论：再量一次可能得到不同结果，
+  // 于是 `--json` 的结构化字段与警告各说一套（与 describeSourceChangedDuringPrompt 同一条）。
+  const actual = change ?? (await sourceChangeSince(filePath, before));
+  if (actual.kind === 'unchanged') return null;
+  if (actual.kind === 'unverifiable') {
     return (
-      `无法确认来源会话 ${label} 在这次${action}期间有没有被写入（${change.reason}）：` +
+      `无法确认来源会话 ${label} 在这次${action}期间有没有被写入（${actual.reason}）：` +
       '转过去的是开始读取时的内容，之后若有新增记录不会带上——先确认来源文件仍在且可读，再执行一次同一条命令核对'
     );
   }
-  const { from, to, growth } = change;
+  const { from, to, growth } = actual;
   // 增长与改写/截断的下一步不一样：前者再执行一次就能补齐；后者要先确认文件本身没坏
   // （内容变了的那部分不会被 diff 当成增量，重跑也补不回来）
   if (growth) {
@@ -1350,6 +1373,10 @@ export type HandoffResult = {
    * 只有 recorded 才谈得上「链尾已在 X」，其余两档要说明没有可交接的来源、本次未写入链记录。
    */
   chainTipState?: 'recorded' | 'empty' | 'unknown';
+  /** 来源会话在交接期间被写入过（stat 字节数与方向），与 `watch prompt --json` 同字段 */
+  sourceDrift?: SourceChangeSince;
+  /** 来源会话在交接期间「量不出来」有没有变化，附原因；与 sourceDrift 互斥 */
+  sourceDriftUnknown?: string;
   /**
    * 这次到底有没有把链绑定 / 切换记录写进去：
    * - written：写成了；
@@ -2305,11 +2332,16 @@ export async function handoff(
   if (vanished) warnings.push(vanished);
   // 期间来源被追加：交接的内容只到读取那一刻。只在真的写入了内容时说（`outgoing` 为空时
   // 这句「交接的是…」会与「已全部包含」自相矛盾）
+  let driftFields: SourceDriftFields = {};
   if (outgoing.length > 0) {
+    const change = await sourceChangeSince(sourceTip.ref.filePath, srcSnapshot);
+    driftFields = sourceDriftFields(change);
     const drift = await describeSourceChangedDuringHandoff(
       sourceTip.ref.filePath,
       srcSnapshot,
       `${escapeControlChars(sourceTip.ref.sessionId)}（${source.displayName}）`,
+      '交接',
+      change,
     );
     if (drift) warnings.push(drift);
   }
@@ -2387,6 +2419,7 @@ export async function handoff(
     turnCount: outgoing.length,
     ...(notes.length ? { notes } : {}),
     chainRecordState,
+    ...driftFields,
     warnings,
     findings,
   };
