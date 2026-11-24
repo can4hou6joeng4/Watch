@@ -434,8 +434,24 @@ export class OfficialCodexImport {
     if (!previous.canConfirm) throw new Error('这次导入已经尝试过；请用 status 查看结果，不要重复写入');
     const { plan } = previous;
     const target = plan.target!;
-    if (plan.home !== this.deps.home || plan.codexHome !== this.deps.codexHome || plan.cliVersion !== await this.deps.version()) {
-      throw new Error('Codex 版本或数据目录在预览之后已变化');
+    // 三项前置条件以前合成一句「Codex 版本或数据目录在预览之后已变化」：用户分不清是自己换了
+    // 用户目录、改了 CODEX_HOME，还是 codex 升了级，三者的下一步完全不同。三者都在 claim / 取锁
+    // 之前，所以可以说「本次未写入任何内容」。
+    if (plan.home !== this.deps.home) {
+      throw new Error(`运行用户的 HOME 与预览时不同：预览时 ${escapeControlChars(plan.home)}，当前 ${escapeControlChars(this.deps.home)}；计划绑定的是预览时的用户目录，请回到那个用户环境重新预览——本次未写入任何内容`);
+    }
+    if (plan.codexHome !== this.deps.codexHome) {
+      throw new Error(`CODEX_HOME 与预览时不同：预览时 ${escapeControlChars(plan.codexHome)}，当前 ${escapeControlChars(this.deps.codexHome)}；计划绑定的是预览时的 Codex 数据目录，请改回该目录或重新预览——本次未写入任何内容`);
+    }
+    let currentVersion: string;
+    try {
+      currentVersion = await this.deps.version();
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error);
+      throw new Error(`无法重新核对 Codex 版本（${escapeControlChars(reason)}）；先确认 PATH 上的 codex 能正常执行 codex --version 再重试——本次未写入任何内容`);
+    }
+    if (plan.cliVersion !== currentVersion) {
+      throw new Error(`Codex 版本在预览之后已变化：预览时 ${escapeControlChars(plan.cliVersion)}，当前 ${escapeControlChars(currentVersion)}；这条路径只在 ${SUPPORTED_VERSION} 上验证过，请换回该版本或重新预览——本次未写入任何内容`);
     }
     await assertSource(plan);
     await assertImportTarget(this.deps.codexHome, target);
