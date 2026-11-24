@@ -2389,6 +2389,8 @@ async function cmdInspect(json: boolean, sessionId: string | undefined, provider
 
   let tokenUsage: TokenUsage | null = null;
   let usageNote: string | undefined;
+  let usageBadLines = 0;
+  let usageBadLinesScanError: string | undefined;
   if (adapter.sessionUsage) {
     try {
       tokenUsage = await adapter.sessionUsage(foundRef);
@@ -2402,6 +2404,14 @@ async function cmdInspect(json: boolean, sessionId: string | undefined, provider
         usageNote = sidecar;
         warnings.push(sidecar);
       }
+    }
+    // 坏行让合计**静默偏少**：与 `watch usage` / `watch prompt` / `open` 共用同一份扫描与判据。
+    // `inspect` 的用途就是回答「读到了什么、少了什么」，用量这一半此前只有内容坏行没有它。
+    const badUsage = await usageBadLinesDetail(adapter, foundRef, '来源会话');
+    if (badUsage) {
+      usageBadLines = badUsage.count;
+      if (badUsage.scanFailed) usageBadLinesScanError = badUsage.scanError;
+      warnings.push(badUsage.reason);
     }
   }
 
@@ -2436,6 +2446,8 @@ async function cmdInspect(json: boolean, sessionId: string | undefined, provider
         badLines: badScan?.count ?? null,
         badLinesStatus: badScan ? (badScan.error ? 'incomplete' : 'complete') : 'not-applicable',
         usage: tokenUsage,
+        ...(usageBadLines > 0 ? { usageBadLines } : {}),
+        ...(usageBadLinesScanError ? { usageBadLinesScanError } : {}),
         ...(usageNote ? { usageNote } : {}),
         ...(warnings.length ? { warnings } : {}),
       }),
@@ -2474,10 +2486,19 @@ async function cmdInspect(json: boolean, sessionId: string | undefined, provider
   if (!badScan) console.log('坏行: 不适用（仅扫描 JSONL 会话）');
   else if (badScan.error) console.log(`坏行: 扫描未完成（已确认 ${badScan.count} 行，原因见警告）`);
   else console.log(`坏行: ${badScan.count}`);
-  if (tokenUsage) console.log(`用量: 输入 ${tokenUsage.inputTokens} · 输出 ${tokenUsage.outputTokens}`);
+  // 用量数字必须带上下界说明：坏行没计入时「输入/输出」是下界，扫描没完成时连程度都不知道。
+  // 与 `watch usage` / `watch prompt` / `open` 同一判据（`usageBadLinesDetail()`）。
+  const usageBadNote = [
+    usageBadLines > 0 ? `用量数据源有 ${usageBadLines} 行无法解析，这些行没有计入，合计可能偏少` : null,
+    usageBadLinesScanError
+      ? `用量数据源的坏行无法统计（${escapeControlChars(usageBadLinesScanError)}），合计可能偏少且无法确认程度`
+      : null,
+  ].filter(Boolean).join('；');
+  const usageSuffix = usageBadNote ? `（${usageBadNote}）` : '';
+  if (tokenUsage) console.log(`用量: 输入 ${tokenUsage.inputTokens} · 输出 ${tokenUsage.outputTokens}${usageSuffix}`);
   else if (usageNote) console.log(`用量: 不可用（${escapeControlChars(usageNote)}）`);
   else if (!adapter.sessionUsage) console.log('用量: 该 provider 不提供用量记录');
-  else console.log('用量: 没有可读的用量记录');
+  else console.log(`用量: 没有可读的用量记录${usageSuffix}`);
   console.log('（输出含会话标识、本机路径和工具名。公开前请核对这些字段。）');
 }
 
