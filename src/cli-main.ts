@@ -1759,6 +1759,9 @@ async function cmdRecent(cwd: string, json: boolean, limit: number = 8, cwdGiven
       ...(cappedProviders.length ? { capped: cappedProviders } : {}),
       // 空列表 + ok:true 分不清「近期没聊过」与「--cwd 不可用」；与 status / sessions / usage / search 同字段
       ...cwdStateField(cwdProbe),
+      // 库没打开时 `unavailable` 里是中文「本地库」：脚本不该解析中文，与 status / sessions / usage
+      // 统一成 `storeAvailable: false`；`unavailable` 保留（文本与既有脚本仍依赖它）
+      ...(store ? {} : { storeAvailable: false }),
       ...(unavailable.length ? { unavailable } : {}),
       ...(unattributableStats.length ? { unattributable: unattributableJson(unattributableStats) } : {}),
       ...(warnings.length ? { warnings } : {}),
