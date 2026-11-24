@@ -251,6 +251,26 @@ function publicResult<T extends { chainRecordState?: unknown }>(result: T): Omit
 }
 
 /**
+ * 写操作（new / switch / adopt）成功时「链记录没写成」的结构化出口。
+ *
+ * 原生会话已经写好、`ok:true` 也成立，但链记录没落库时后续 `status` / `switch` 不认这次绑定——
+ * 以前只有中文 warnings 说这件事，脚本与桌面端得解析文案。两个字段都只在异常时出现：
+ * - `storeAvailable: false`：本地库没打开（与 status / sessions / usage / recent 同字段）；
+ * - `chainRecordFailed: true`：库打开了、也尝试写了，但写入抛错（只读、磁盘满、SQLITE_BUSY…）。
+ * 「本来就不需要写」（alreadyAtTarget / unchanged）不属于这两种，不输出任何字段——
+ * 这也是不直接公开三态 `chainRecordState` 的原因。
+ */
+function chainRecordFields(
+  store: Store | null,
+  state: 'written' | 'failed' | 'not-attempted' | undefined,
+): { storeAvailable?: false; chainRecordFailed?: true } {
+  return {
+    ...(store ? {} : { storeAvailable: false as const }),
+    ...(state === 'failed' ? { chainRecordFailed: true as const } : {}),
+  };
+}
+
+/**
  * `WATCH_DB=:memory:` 的披露文案，`subject` 说明这条命令本来写进去了什么。
  *
  * 这一档与「库打不开」完全不同：库是好的，`ok:true` 也是真的，只是它随进程消失。
@@ -871,6 +891,8 @@ async function cmdSwitch(cwd: string, targetId: string, json: boolean, chain?: s
           // 同 new / chain 写操作：内容已经写进目标 provider 的原生文件，但 --cwd 不可用时
           // resume 会在进入该目录时失败；目录的事与「交接是否成功」分开披露
           ...cwdStateField(cwdProbe),
+          // 交接已经写进原生文件，但链记录没落库：status / 桌面端不会显示这次切换
+          ...chainRecordFields(store, result.chainRecordState),
           ...(shiftNote ? { warnings: [...result.warnings, shiftNote], previousChain, currentChain } : {}),
         }),
       );
@@ -1225,6 +1247,8 @@ async function cmdAdopt(
           ...publicJson,
           // 同 switch：链记录已经写入 / 目标文件已经可用，但 --cwd 不可用时 resume 进不去
           ...cwdStateField(cwdProbe),
+          // 同 switch：会话找到了，但绑定没落库——后续切换不会认这条绑定
+          ...chainRecordFields(store, result.chainRecordState),
           ...(shiftNote ? { warnings: [...result.warnings, shiftNote], previousChain, currentChain } : {}),
           ...(resumeCommand ? { resumeCommand } : {}),
         }),
@@ -2919,13 +2943,16 @@ async function cmdNew(cwd: string, providerId: string, json: boolean, chain?: st
       // 别名组警告讲的是「这个 --cwd 写法下多了一条链」，只要链行写成就是真的（第 310 轮审查：
       // 第 309 轮把门禁挂在 `recordSwitch` 之后，等于把一条真实的两组链警告吞掉了）。
       let chainGroupWritten = false;
+      let chainRecordState: 'written' | 'failed' | 'not-attempted' = 'not-attempted';
       if (store) {
         try {
           const id = store.getOrCreateChainSession(cwd, chain);
           chainGroupWritten = true;
           // 把首开聊记录为链的起点，后续 handoff 才能正确判断链尾
           store.recordSwitch(id, null, null, providerId, ref);
+          chainRecordState = 'written';
         } catch (error) {
+          chainRecordState = 'failed';
           // 会话已经建出来了，不能因为写链失败整条命令报错（用户拿到的 ref 仍可 resume），
           // 但后续 switch 不会认这条绑定，必须说明——否则 status 里看不到它却毫无提示。
           // 措辞分开：链行都没建成时说「链记录失败」，只有切换记录失败时说「切换记录失败」，
@@ -2961,6 +2988,8 @@ async function cmdNew(cwd: string, providerId: string, json: boolean, chain?: st
             fromProvider: providerId,
             // 写入已经发生：这里不是「操作被阻止」，而是告诉脚本 resume 会在一个不可用的目录里失败
             ...cwdStateField(cwdProbe),
+            // 会话已经建好，但链记录没落库：后续切换不会认这条绑定
+            ...chainRecordFields(store, chainRecordState),
             ...(shiftNote ? { previousChain, currentChain } : {}),
             ...(warnings.length || shiftNote ? { warnings: shiftNote ? [...warnings, shiftNote] : warnings } : {}),
           }),
@@ -3002,6 +3031,7 @@ async function cmdNew(cwd: string, providerId: string, json: boolean, chain?: st
           ...publicResult(result),
           // 同空链分支：会话与链记录已经写入，但 resume 会在不可用的 --cwd 上失败
           ...cwdStateField(cwdProbe),
+          ...chainRecordFields(store, result.chainRecordState),
           ...(shiftNote ? { previousChain, currentChain } : {}),
           ...(allWarnings.length || shiftNote ? { warnings: shiftNote ? [...allWarnings, shiftNote] : allWarnings } : {}),
         }),
