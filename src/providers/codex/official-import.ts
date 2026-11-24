@@ -63,7 +63,10 @@ async function sourceCwdWarning(cwd: string): Promise<string | undefined> {
 // 来源文件的年龄与「大小是否仍与预览时一致」共用一次只读 stat：前者决定是否超出官方界面
 // 默认窗口，后者是内容变化的低成本早信号（confirm 会在提交前做摘要校验；这里只按字节数报，
 // 大小相同不代表内容没变，文案不能反过来说成「内容未变」）。
-async function sourceFileWarnings(filePath: string, expectedBytes: number): Promise<string[]> {
+// `live` 表示这份计划还没有被 claim 过：已经执行过（imported / uncertain）的计划上再说
+// 「confirm 会重新校验」是假话——confirm 对 imported 直接返回原结果，对 uncertain 直接拒绝，
+// 都不会再校验一次。已执行时只说明这次变化不影响已写入的结果。
+async function sourceFileWarnings(filePath: string, expectedBytes: number, live: boolean): Promise<string[]> {
   let info;
   try {
     info = await stat(filePath);
@@ -76,7 +79,9 @@ async function sourceFileWarnings(filePath: string, expectedBytes: number): Prom
     warnings.push(`来源会话最后一次写入距今 ${days} 天，超出官方界面默认的 30 天检测窗口；本次导入按扩大的窗口（${DETECT_MAX_SESSIONS} 条 / ${DETECT_MAX_AGE_DAYS} 天）提交，该路径未在原生客户端复验。`);
   }
   if (info.size !== expectedBytes) {
-    warnings.push(`来源会话文件大小与预览时不同：预览时 ${expectedBytes} 字节，当前 ${info.size} 字节；confirm 会在提交前重新校验内容，若内容确实已变化，需要重新 prepare 并审阅新计划。`);
+    warnings.push(live
+      ? `来源会话文件大小与预览时不同：预览时 ${expectedBytes} 字节，当前 ${info.size} 字节；confirm 会在提交前重新校验内容，若内容确实已变化，需要重新 prepare 并审阅新计划。`
+      : `来源会话文件大小与预览时不同：预览时 ${expectedBytes} 字节，当前 ${info.size} 字节；这份计划已经执行过，之后的来源写入不会改变已写入的目标会话。`);
   }
   return warnings;
 }
@@ -100,6 +105,7 @@ async function desktopProjectStatusWarning(
   expected: CodexDesktopProject | undefined,
   cwd: string,
   deps: Dependencies,
+  live: boolean,
 ): Promise<string | undefined> {
   if (!expected) return undefined;
   let current: CodexDesktopProject;
@@ -107,13 +113,17 @@ async function desktopProjectStatusWarning(
     current = await (deps.inspectDesktopProject ?? inspectCodexDesktopProject)(deps.codexHome, cwd);
   } catch (error) {
     const reason = escapeControlChars(error instanceof Error ? error.message : String(error));
-    return `无法重新核对预览绑定的 Codex Desktop 项目：${reason}；status 不会因此失败，但 confirm 会在取锁前再次核对，核对不通过就无法继续——请先修好这个项目状态，或重新 prepare。`;
+    return live
+      ? `无法重新核对预览绑定的 Codex Desktop 项目：${reason}；status 不会因此失败，但 confirm 会在取锁前再次核对，核对不通过就无法继续——请先修好这个项目状态，或重新 prepare。`
+      : `无法重新核对预览绑定的 Codex Desktop 项目：${reason}；status 不会因此失败；这份计划已经执行过，这次核对失败不影响已写入的结果。`;
   }
   if (current.policy === expected.policy && current.legacyProjectId === expected.legacyProjectId &&
     current.nativeProjectId === expected.nativeProjectId) return undefined;
   const describe = (project: CodexDesktopProject) =>
     escapeControlChars(`${project.name}（legacy ${project.legacyProjectId}，app-server ${project.nativeProjectId}）`);
-  return `预览绑定的 Codex Desktop 项目现在与计划不一致：预览时 ${describe(expected)}，当前 ${describe(current)}；confirm 会在取锁前重新核对并拒绝这次计划（未写入任何内容），请重新在桌面端打开该项目，或重新 prepare。`;
+  return live
+    ? `预览绑定的 Codex Desktop 项目现在与计划不一致：预览时 ${describe(expected)}，当前 ${describe(current)}；confirm 会在取锁前重新核对并拒绝这次计划（未写入任何内容），请重新在桌面端打开该项目，或重新 prepare。`
+    : `预览绑定的 Codex Desktop 项目现在与计划不一致：预览时 ${describe(expected)}，当前 ${describe(current)}；这份计划已经执行过，这次核对只说明当时的项目绑定已变，不会改变已写入的结果。`;
 }
 
 async function fingerprint(ref: SessionRef): Promise<FileDigest> {
@@ -430,9 +440,10 @@ export class OfficialCodexImport {
     const prior = await this.deps.jobs
       .priorImports(plan.source, plan.digest, planId)
       .catch((error: unknown) => ({ error: error instanceof Error ? error.message : String(error) }));
-    const sourceWarnings = await sourceFileWarnings(plan.source.filePath, plan.digest.sizeBytes);
+    const live = !attempted;
+    const sourceWarnings = await sourceFileWarnings(plan.source.filePath, plan.digest.sizeBytes, live);
     const cwdWarning = await sourceCwdWarning(plan.source.cwd);
-    const desktopWarning = await desktopProjectStatusWarning(plan.desktopProject, plan.source.cwd, this.deps);
+    const desktopWarning = await desktopProjectStatusWarning(plan.desktopProject, plan.source.cwd, this.deps, live);
     const warnings = [
       ...WARNINGS,
       ...sourceWarnings,
