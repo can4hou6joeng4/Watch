@@ -40,6 +40,21 @@ const WARNINGS = [
   '本命令未验证桌面端打开或模型继续。',
 ];
 
+// 扩大的 detect 窗口本身是未在原生客户端复验的路径；来源一旦超出官方默认的 30 天，
+// 就要在预览里说清这次导入依赖扩窗，而不是让用户以为它走的是界面同款范围。
+// 只用文件最后写入时间：它不是会话创建时间，也不判断同一目录里是否已排到 50 条之后。
+async function sourceAgeWarning(filePath: string): Promise<string | undefined> {
+  let mtimeMs: number;
+  try {
+    mtimeMs = (await stat(filePath)).mtimeMs;
+  } catch (error) {
+    return `无法确认来源会话的最后写入时间（${escapeControlChars(describePathReadFailureReason(error))}），不能判断它是否超出官方界面默认的 30 天检测窗口；这条导入路径仍会按扩大的窗口提交。`;
+  }
+  const days = Math.floor((Date.now() - mtimeMs) / 86_400_000);
+  if (days < 30) return undefined;
+  return `来源会话最后一次写入距今 ${days} 天，超出官方界面默认的 30 天检测窗口；本次导入按扩大的窗口（${DETECT_MAX_SESSIONS} 条 / ${DETECT_MAX_AGE_DAYS} 天）提交，该路径未在原生客户端复验。`;
+}
+
 type Dependencies = {
   jobs: ImportJobs;
   home: string;
@@ -347,8 +362,10 @@ export class OfficialCodexImport {
     const prior = await this.deps.jobs
       .priorImports(plan.source, plan.digest, planId)
       .catch((error: unknown) => ({ error: error instanceof Error ? error.message : String(error) }));
+    const ageWarning = await sourceAgeWarning(plan.source.filePath);
     const warnings = [
       ...WARNINGS,
+      ...(ageWarning ? [ageWarning] : []),
       ...('error' in prior
         ? [`读取导入执行日志失败，已跳过重复导入检查：${prior.error}`]
         : [
