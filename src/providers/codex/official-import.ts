@@ -377,10 +377,22 @@ export class OfficialCodexImport {
    * 该抄哪一个；这里与 `watch doctor` 共用同一份 `listSummary()`，不连 Codex、不读原生会话、
    * 不写任何文件。坏日志与非常规条目原样带出（`skipped` / `ignored`），由调用方披露——
    * 只回一份「能读的列表」会把读不出来的那几条讲成不存在。
+   *
+   * 顺序按**关注度**排：`uncertain` 最前（结果未知，不能重试、不能删日志），其次 `prepared`，
+   * 已结束的排后面。`readdir` 的顺序不保证稳定，同档内再按 planId 排，脚本与人工对照都要可复现；
+   * `skipped` / `ignored` 同样按名称排序。
    */
   async list() {
     const { items, skipped, ignored } = await this.deps.jobs.listSummary();
-    return { plans: items, skipped, ignored };
+    const rank: Record<string, number> = { uncertain: 0, prepared: 1, imported: 2, associated: 3 };
+    const compareNames = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0);
+    // planId 唯一，同档内按它排即可得到全序（Node 的 sort 稳定，未知状态档也不会乱序）
+    const plans = items
+      .slice()
+      .sort((a, b) => (rank[a.status] ?? 9) - (rank[b.status] ?? 9) || compareNames(a.id, b.id));
+    skipped.sort((a, b) => compareNames(a.id, b.id));
+    ignored.sort((a, b) => compareNames(a.name, b.name));
+    return { plans, skipped, ignored };
   }
 
   async prepare(sourceId: string, cwd: string, options: { desktopProject?: boolean } = {}) {

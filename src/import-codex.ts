@@ -189,6 +189,13 @@ export async function runImportCodex(args: string[]): Promise<void> {
           console.log(`  ${escapeControlChars(plan.id)}  ${escapeControlChars(plan.route)}  ${plan.status}`);
         }
         if (!listing.plans.length) console.log('  （还没有 prepare 过任何计划）');
+        const uncertain = listing.plans.filter((plan) => plan.status === 'uncertain');
+        // 结果未知的计划不能靠重跑修正：列表只给一行状态的话，用户很难看出该先处理哪几条
+        if (uncertain.length) {
+          console.log(
+            `其中 ${uncertain.length} 个计划结果未知：不要重复执行，也不要删除执行日志或目标锁；用 watch import-codex status <plan-id> 查看具体结果。`,
+          );
+        }
       }
       // 读不出来的日志与非常规条目都不计入上面的数字：只报「能读的那几条」，用户会以为其余的
       // 根本不存在。与 doctor 同一分档，下一步各不相同（坏日志可删除后重新 prepare，非常规条目先确认来源）
