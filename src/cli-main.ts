@@ -3751,11 +3751,21 @@ async function cmdSearch(cwd: string, json: boolean, query: string, resetIndex =
       if (emptiedNote) notes.push(emptiedNote);
     }
     if (json) {
+      // 覆盖范围的结构化出口：文本模式早就用 capped / incomplete 决定「无结果」能不能下结论，
+      // `--json` 以前只有 `unavailable` / `unattributable` / `emptied`，脚本无法分辨
+      // 「本目录没有匹配」与「有一家没搜全」。`sessions` 是本次枚举到的会话总数（0 有意义：
+      // 这个 cwd 下一条会话都没有）；其余键只在非空时出现，与上面几个可选字段同一约定。
+      const coverageJson = {
+        ...(coverage.sessions !== undefined ? { sessions: coverage.sessions } : {}),
+        ...(coverage.capped.length ? { capped: coverage.capped } : {}),
+        ...(coverage.incomplete.length ? { incomplete: coverage.incomplete } : {}),
+      };
       console.log(JSON.stringify({
         ok: true,
         query,
         cwd,
         hits,
+        ...(Object.keys(coverageJson).length ? { coverage: coverageJson } : {}),
         ...(truncated ? { truncated: true } : {}),
         ...(perSessionCapped ? { perSessionCapped: true } : {}),
         ...(idPrefixCapped ? { idPrefixCapped: true } : {}),
