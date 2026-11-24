@@ -694,6 +694,9 @@ async function cmdStatus(cwd: string, json: boolean, chain?: string): Promise<vo
   if (json) {
     console.log(JSON.stringify({
       ok: true,
+      // 每个命令都接受 `--cwd`，省略时就是进程工作目录：--json 里回显它，
+      // 脚本 / 桌面端才不用自己记「这次是在哪个目录跑的」。与 sessions / search / doctor 同一字段
+      cwd,
       ...result,
       // `ok:true` + `history:[]` 分不清「链确实没有记录」与「库打不开 / switch_events 读失败」。
       // 文本模式已用「（历史读取失败…）」区分，JSON 也要一个显式字段，桌面端才能渲染失败态。
@@ -1749,6 +1752,8 @@ async function cmdRecent(cwd: string, json: boolean, limit: number = 8, cwdGiven
   if (json) {
     console.log(JSON.stringify({
       ok: true,
+      // 同 status / usage：回显本次使用的 `--cwd`（省略时是进程工作目录）
+      cwd,
       sessions: final,
       ...(truncated ? { truncated: true, total: results.length } : {}),
       ...(cappedProviders.length ? { capped: cappedProviders } : {}),
@@ -3573,6 +3578,8 @@ async function cmdUsage(cwd: string, json: boolean, chain?: string): Promise<voi
       // 与「没有当前链」同形，`storeAvailable: false` 才能把「读不出来」与「确实没有」分开
       console.log(JSON.stringify({
         ok: true,
+        // 同 status：`--cwd` 省略时是进程工作目录，回显出来脚本不必自己记
+        cwd,
         ...result,
         ...cwdStateField(cwdProbe),
         ...(store ? {} : { storeAvailable: false }),
