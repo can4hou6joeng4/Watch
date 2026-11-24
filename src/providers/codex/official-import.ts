@@ -5,7 +5,7 @@ import path from 'node:path';
 import { promisify } from 'node:util';
 import { digestFile, type FileDigest } from '../../core/atomic.js';
 import { sameDirectorySync } from '../../core/cwd.js';
-import { escapeControlChars } from '../../core/display.js';
+import { clipCodePoints, escapeControlChars } from '../../core/display.js';
 import { ImportJobs, type ImportOutcome, type ImportPlan } from '../../core/import-jobs.js';
 import { resolveCli } from '../../core/platform.js';
 import { describePathReadFailureReason, isEmptySessionFileReason, isMissingPathError, iterateFileLines } from '../../core/read-text.js';
@@ -483,12 +483,18 @@ export class OfficialCodexImport {
                 ? `这个会话此前已导入到 Codex 线程 ${p.outcome.target?.sessionId ?? 'unknown'}（计划 ${p.id.slice(0, 8)}）；再次导入会在 Codex 里多出一份会话。`
                 : `这个会话此前以不同内容导入过（计划 ${p.id.slice(0, 8)}，线程 ${p.outcome.target?.sessionId ?? 'unknown'}），来源此后已经变化。`,
             ),
-            // 读不出来的那几份没法判断是不是同一个来源：不能说成「确认没导过」
+            // 读不出来的那几份没法判断是不是同一个来源：不能说成「确认没导过」。
+            // 与 list / doctor 同一口径：警告只点名前 10 条、截断原因，完整原因留在 list --json
             ...(prior.skipped.length
               ? [
                   `有 ${prior.skipped.length} 份导入执行日志读不出来，无法确认是否重复导入：${prior.skipped
-                    .map((s) => `${s.id.slice(0, 8)}（${s.reason}）`)
-                    .join('；')}`,
+                    .slice(0, 10)
+                    .map((s) => {
+                      // reason 以完整 planId 开头时会吃掉截断预算，先缩成 8 位再截
+                      const reason = s.reason.split(s.id).join(s.id.slice(0, 8));
+                      return `${s.id.slice(0, 8)}（${escapeControlChars(clipCodePoints(reason, 60).text)}）`;
+                    })
+                    .join('；')}${prior.skipped.length > 10 ? ' 等' : ''}；完整清单与原因见 watch import-codex list --json 的 skipped`,
                 ]
               : []),
           ]),

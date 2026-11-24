@@ -204,7 +204,11 @@ export async function runImportCodex(args: string[]): Promise<void> {
       if (listing.skipped.length) {
         const shown = listing.skipped
           .slice(0, 10)
-          .map((s) => `${escapeControlChars(s.id)}（${escapeControlChars(clipCodePoints(s.reason, 60).text)}）`)
+          .map((s) => {
+            // reason 通常以完整 planId 开头；先把它缩成 8 位前缀，截断预算留给真正的原因
+            const reason = s.reason.split(s.id).join(s.id.slice(0, 8));
+            return `${escapeControlChars(s.id)}（${escapeControlChars(clipCodePoints(reason, 60).text)}）`;
+          })
           .join('；');
         console.error(
           `警告: 有 ${listing.skipped.length} 份日志读不出来、未计入上面的列表：${shown}${listing.skipped.length > 10 ? ' 等' : ''}；完整原因见 --json 的 skipped；它们不影响其他计划，可核对后删除该日志目录重新 prepare`,
