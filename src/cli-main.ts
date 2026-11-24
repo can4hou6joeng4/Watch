@@ -3139,6 +3139,9 @@ async function cmdChain(cwd: string, json: boolean, action?: string, a?: string,
             ...(current && current.id === c.id ? { current: true } : {}),
             ...(tips.has(c.id) ? { tip: tips.get(c.id) } : {}),
           })),
+          // 链按 --cwd 原字符串分组：路径写错时 `chains: []` 看起来就是「没建过链」。
+          // 与 status / sessions / recent / usage / search / doctor 同字段，健康目录不出现
+          ...(cwdProbe.state !== 'ok' ? { cwdState: cwdProbe } : {}),
           ...(elsewhere.length ? { chainsElsewhere: elsewhere } : {}),
           ...(warnings.length ? { warnings } : {}),
         }));
