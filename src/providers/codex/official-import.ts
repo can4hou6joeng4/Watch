@@ -311,10 +311,15 @@ export class OfficialCodexImport {
     if (!path.isAbsolute(cwd)) throw new Error(`--cwd 需要绝对路径，收到: ${escapeControlChars(cwd)}`);
     // `--cwd` 存在、但不是目录（最常见是误填了一个文件）时，findSource 只按字符串比较，随后报
     // 「来源会话不属于指定的项目目录」——用户会去核对一个根本不可能是项目目录的路径。只拦得出
-    // 确定结论的这一种：stat 成功且不是目录；ENOENT（项目目录可能早已删除，原生记录仍指向它）与
-    // EACCES 等读不出来的情况保持原判定，不在这里把不确定讲成输入错误。
-    const cwdStat = await stat(cwd).catch(() => undefined);
-    if (cwdStat && !cwdStat.isDirectory()) {
+    // 确定结论的两种：stat 成功且不是目录，以及 stat 报 ENOTDIR（路径上某一级是文件，这个路径
+    // 不可能是目录）。ENOENT（项目目录可能早已删除，原生记录仍指向它）与 EACCES 等读不出来的
+    // 情况保持原判定，不在这里把不确定讲成输入错误。
+    const cwdStat = await stat(cwd).catch((error: NodeJS.ErrnoException) => error);
+    if (cwdStat instanceof Error) {
+      if (cwdStat.code === 'ENOTDIR') {
+        throw new Error(`--cwd 指向的路径上有某一级不是目录：${escapeControlChars(cwd)}；Claude Code 记录的 cwd 必须是目录，请给出项目目录后重新预览——本次未写入任何内容`);
+      }
+    } else if (!cwdStat.isDirectory()) {
       throw new Error(`--cwd 指向的是一个文件，不是目录：${escapeControlChars(cwd)}；Claude Code 记录的 cwd 必须是目录，请给出项目目录后重新预览——本次未写入任何内容`);
     }
     // 版本门禁有两种失败，以前合成一句「只支持 codex-cli 0.153.4」：
