@@ -70,7 +70,7 @@ export function importPlanId(plan: ImportJobPlan): string {
  * `EACCES: permission denied` 只会出现在 `watch doctor` 的「读取失败」行里，
  * 既不说是哪一种情况，也不给下一步。这里按常见的 errno 翻成「哪里坏了 + 怎么办」。
  */
-function describeReadError(error: unknown, file: string): string {
+export function describeReadError(error: unknown, file: string): string {
   // 日志根目录取自 HOME / `WATCH_DB`，两处都可能是用户手输或粘贴的路径；这几句只进终端
   // （文本模式的错误行与 doctor 的「读取失败」行），不转义就等于把控制字符原样交出去
   const shown = escapeControlChars(file);
@@ -84,7 +84,9 @@ function describeReadError(error: unknown, file: string): string {
   if (code === 'EISDIR') {
     return `该路径是目录而不是日志文件：${shown}`;
   }
-  return `${error instanceof Error ? error.message : String(error)}：${shown}`;
+  // 兜底把原始 message 拼进终端文案：Node 的 fs 错误消息里通常带着路径原文，路径已单独
+  // 转义，message 同样要过一遍，否则 ESC / BEL 仍会从这里漏进终端
+  return `${escapeControlChars(error instanceof Error ? error.message : String(error))}：${shown}`;
 }
 
 /**
@@ -92,7 +94,7 @@ function describeReadError(error: unknown, file: string): string {
  * 不是「按 id 手动核对」；而且「未写入任何内容」这句在 claim 之后不能再说（那时写入可能
  * 已经发生）。两处都只用 fs `code` 判定，非 fs 错误原样带原文。
  */
-function describeWriteError(error: unknown, file: string, next: string): string {
+export function describeWriteError(error: unknown, file: string, next: string): string {
   const shown = escapeControlChars(file);
   const code = (error as NodeJS.ErrnoException).code;
   if (code === 'EACCES' || code === 'EPERM') {
@@ -110,7 +112,7 @@ function describeWriteError(error: unknown, file: string, next: string): string 
   if (code === 'EEXIST' && file.endsWith('started.json')) {
     return `这次导入已被另一次执行 claim（执行日志里已有 started.json）：${shown}；${next}`;
   }
-  const reason = error instanceof Error ? error.message : String(error);
+  const reason = escapeControlChars(error instanceof Error ? error.message : String(error));
   return `写执行日志失败（${reason}）：${shown}；${next}`;
 }
 
