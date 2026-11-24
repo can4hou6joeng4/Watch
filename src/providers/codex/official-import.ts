@@ -71,7 +71,10 @@ async function sourceFileWarnings(filePath: string, expectedBytes: number, live:
   try {
     info = await stat(filePath);
   } catch (error) {
-    return [`无法确认来源会话的最后写入时间（${escapeControlChars(describePathReadFailureReason(error))}），不能判断它是否超出官方界面默认的 30 天检测窗口，也无法核对它是否仍与预览时一致；这条导入路径仍会按扩大的窗口提交。`];
+    const reason = escapeControlChars(describePathReadFailureReason(error));
+    return [live
+      ? `无法确认来源会话的最后写入时间（${reason}），不能判断它是否超出官方界面默认的 30 天检测窗口，也无法核对它是否仍与预览时一致；这条导入路径仍会按扩大的窗口提交。`
+      : `无法确认来源会话的最后写入时间（${reason}），不能判断它是否超出官方界面默认的 30 天检测窗口，也无法核对它是否仍与预览时一致；这份计划已经执行过，之后的来源写入不影响已写入的结果。`];
   }
   const warnings: string[] = [];
   const days = Math.floor((Date.now() - info.mtimeMs) / 86_400_000);
