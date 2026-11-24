@@ -1542,6 +1542,9 @@ async function cmdSessions(cwd: string, json: boolean, chain?: string): Promise<
         // `providers: []` 分不清「这个目录没有会话」与「--cwd 不可用」：后者时所有 provider
         // 都按字符串精确匹配、必然为空。与 status / recent / usage / search 同一字段
         ...(cwdProbe.state !== 'ok' ? { cwdState: cwdProbe } : {}),
+        // 库打不开时列表只来自原生扫描（`--chain` 过滤也被忽略）：只有中文 warnings 的话，
+        // 脚本会把「已按链过滤」与「过滤根本没生效」当成同一份列表。缺省即库已打开
+        ...(store ? {} : { storeAvailable: false }),
         providers: result,
         ...(unavailable.length ? { unavailable } : {}),
         ...(unattributableStats.length ? { unattributable: unattributableJson(unattributableStats) } : {}),
@@ -3526,8 +3529,14 @@ async function cmdUsage(cwd: string, json: boolean, chain?: string): Promise<voi
     }
     if (json) {
       // 空报告（byProvider: []）在 --cwd 不可用时也是必然结果：与 status / sessions / recent / search
-      // 同一字段，脚本不必解析中文警告
-      console.log(JSON.stringify({ ok: true, ...result, ...(cwdProbe.state !== 'ok' ? { cwdState: cwdProbe } : {}) }));
+      // 同一字段，脚本不必解析中文警告。库本身打不开是另一种空：`chain: null` + `total: 0`
+      // 与「没有当前链」同形，`storeAvailable: false` 才能把「读不出来」与「确实没有」分开
+      console.log(JSON.stringify({
+        ok: true,
+        ...result,
+        ...(cwdProbe.state !== 'ok' ? { cwdState: cwdProbe } : {}),
+        ...(store ? {} : { storeAvailable: false }),
+      }));
       return;
     }
     if (result.chain) {
