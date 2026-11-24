@@ -1549,6 +1549,9 @@ async function cmdSessions(cwd: string, json: boolean, chain?: string): Promise<
         // 库打不开时列表只来自原生扫描（`--chain` 过滤也被忽略）：只有中文 warnings 的话，
         // 脚本会把「已按链过滤」与「过滤根本没生效」当成同一份列表。缺省即库已打开
         ...(store ? {} : { storeAvailable: false }),
+        // `--chain` 给了却没用上（本目录没有这条链 / 链查询失败 / 库没打开）：此时上面的
+        // `providers` 是全部会话，脚本不能把它当成过滤结果。不带 `--chain` 时不出现
+        ...(chain && !chainRow ? { chainFilterApplied: false } : {}),
         providers: result,
         ...(unavailable.length ? { unavailable } : {}),
         ...(unattributableStats.length ? { unattributable: unattributableJson(unattributableStats) } : {}),
