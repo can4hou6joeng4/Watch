@@ -159,7 +159,7 @@ import-codex  prepare|confirm|status|list|project-prepare|project-confirm|projec
 
 `search` 同理：某条会话的文件里有无法解析的行时，这些行的内容不会进索引，搜索会在 `warnings` 里说明（文件没变、复用索引时也照样说），而不是只回一句「无结果」。`--json` 另有 `coverage`：`sessions` 是本次枚举到的会话总数（0 表示这个目录下没有会话），`capped` 与 `incomplete` 列出撞上列表上限、未完整进入索引的 provider，只在非空时出现——脚本据此区分「没有匹配」与「没搜全」。
 
-`status` / `sessions` / `recent` / `usage` / `search` / `doctor` / `chain list` 的 `--json` 在 `--cwd` 不可用时还带 `cwdState: { state }`（`missing` / `not-directory` / `denied` / `unknown`，最后一种附 `reason`），健康目录不输出该字段。字段与文本模式那条「--cwd 目录不存在…」的警告来自同一次探测：空列表、零命中或 `total: 0` 加 `ok: true` 都不能读成「这个目录没有会话或匹配」，先看 `cwdState` 再下结论。
+`status` / `sessions` / `recent` / `usage` / `search` / `doctor` / `chain list` 的 `--json` 在 `--cwd` 不可用时还带 `cwdState: { state }`（`missing` / `not-directory` / `denied` / `unknown`，最后一种附 `reason`），健康目录不输出该字段。`new --json` 写入成功时也带该字段：会话与链记录**已经写入**，但 `resume` 会在进入该目录时失败——它表示「目录不可用」，不是「操作被阻止」；文本模式的写入口径警告不变。字段与文本模式那条「--cwd 目录不存在…」的警告来自同一次探测：空列表、零命中或 `total: 0` 加 `ok: true` 都不能读成「这个目录没有会话或匹配」，先看 `cwdState` 再下结论。
 
 `sessions --json` 与 `usage --json` 在本地库打不开时另带 `storeAvailable: false`：前者此时只列出原生扫描结果（`--chain` 过滤不生效），后者的 `chain: null` / `byProvider: []` 只表示读不出来。`sessions --json` 在给了 `--chain` 却没用上时（本目录没有这条链、链查询失败或库没打开）另带 `chainFilterApplied: false`——此时 `providers` 是全部会话，不是过滤结果；不带 `--chain` 或过滤已生效时该字段不出现。`status --json` 同样带 `storeAvailable: false`，用来把 `historyAvailable: false` 分成「库没打开」与「库打开但切换历史读失败」两档。`recent --json` 的同一事实已在 `unavailable` 里列出「本地库」；库正常打开时这些命令都不出现 `storeAvailable`。
 
