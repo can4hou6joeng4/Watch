@@ -116,6 +116,20 @@ export function describeWriteError(error: unknown, file: string, next: string): 
   return `写执行日志失败（${reason}）：${shown}；${next}`;
 }
 
+/** 执行日志根目录里「不是计划目录」的条目形状，用于 doctor 的说明 */
+function journalEntryKindLabel(kind: 'directory' | 'file' | 'symlink' | 'other'): string {
+  switch (kind) {
+    case 'directory':
+      return '目录';
+    case 'file':
+      return '普通文件';
+    case 'symlink':
+      return '符号链接';
+    default:
+      return '非普通条目';
+  }
+}
+
 /** An exclusive, persistent claim survives crashes. Never erase it to retry a write. */
 export class ImportJobs {
   constructor(private root: string) {}
@@ -311,14 +325,22 @@ export class ImportJobs {
    * 列执行日志根目录下的条目。只有 ENOENT（还没导入过）是空的；
    * ENOTDIR / EACCES 等读不出来要翻成中文再抛——doctor / status 会把这句话直接显示给用户，
    * 以前抛的是裸 `ENOTDIR: not a directory, scandir '…'`，看不出是哪个路径被什么占住了。
+   *
+   * 带 `kind` 是为了让 `listSummary()` 能如实披露「不是计划目录」的条目：
+   * 计划目录名固定是 64 位小写十六进制，其余条目以前被静默跳过，doctor 的总数于是比目录里实际有的少。
    */
-  private async listJournalIds(): Promise<string[]> {
+  private async listJournalEntries(): Promise<{ name: string; kind: 'directory' | 'file' | 'symlink' | 'other' }[]> {
+    let entries;
     try {
-      return await readdir(this.root);
+      entries = await readdir(this.root, { withFileTypes: true });
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') return [];
       throw new Error(describeReadError(error, this.root));
     }
+    return entries.map((entry) => ({
+      name: entry.name,
+      kind: entry.isDirectory() ? 'directory' : entry.isSymbolicLink() ? 'symlink' : entry.isFile() ? 'file' : 'other',
+    }));
   }
 
   async claim(id: string): Promise<void> {
@@ -350,12 +372,20 @@ export class ImportJobs {
   async listSummary(): Promise<{
     items: { id: string; route: string; status: ImportJournalStatus }[];
     skipped: { id: string; reason: string }[];
+    ignored: { name: string; reason: string }[];
   }> {
-    const ids = await this.listJournalIds();
+    const entries = await this.listJournalEntries();
     const items: { id: string; route: string; status: ImportJournalStatus }[] = [];
     const skipped: { id: string; reason: string }[] = [];
-    for (const id of ids) {
-      if (!/^[a-f0-9]{64}$/.test(id)) continue;
+    const ignored: { name: string; reason: string }[] = [];
+    for (const entry of entries) {
+      if (!/^[a-f0-9]{64}$/.test(entry.name)) {
+        // 不静默跳过：doctor 的「共 N 条」必须能与目录里实际有的条目对上，否则少掉的条目
+        // 到底是不存在、读不出来还是根本不是计划目录，用户无从判断
+        ignored.push({ name: entry.name, reason: `名称不是 64 位小写十六进制（${journalEntryKindLabel(entry.kind)}，不是 Watch 的执行日志目录）` });
+        continue;
+      }
+      const id = entry.name;
       try {
         // 这里不按 route 分支校验（导入与项目关联共用一份汇总），只确认 id 对得上，
         // 但读取仍走 readText / parseJson：坏日志被跳过时要说清是哪份、下一步做什么
@@ -388,7 +418,7 @@ export class ImportJobs {
         skipped.push({ id, reason: error instanceof Error ? error.message : String(error) });
       }
     }
-    return { items, skipped };
+    return { items, skipped, ignored };
   }
 
   /**
@@ -405,7 +435,7 @@ export class ImportJobs {
     hits: { id: string; outcome: ImportOutcome; sameContent: boolean }[];
     skipped: { id: string; reason: string }[];
   }> {
-    const ids = await this.listJournalIds();
+    const ids = (await this.listJournalEntries()).map((entry) => entry.name);
     const hits: { id: string; outcome: ImportOutcome; sameContent: boolean }[] = [];
     const skipped: { id: string; reason: string }[] = [];
     for (const id of ids) {

@@ -9,7 +9,7 @@ import { diffTurns, rebindHint } from './handoff.js';
 import type { SessionRef } from './types.js';
 import { readWatchVersion } from './watch-version.js';
 import { cwdProblem, splitElsewhereByDirectory } from './cwd.js';
-import { escapeControlChars } from './display.js';
+import { clipCodePoints, escapeControlChars } from './display.js';
 import { describeBadLinesScanFailure, scanUnparsableJsonLines } from './jsonl.js';
 import { compressedCopy, compressedRetryAdvice, describeSessionReadFailureReason, isEmptySessionFileReason, isFileSystemErrorCode, probeSessionReadable, sessionFilePresence } from './read-text.js';
 import { collectUnattributable, unattributableWarning } from './session-coverage.js';
@@ -202,6 +202,10 @@ export type DoctorReport = {
         skipped: number;
         /** 被跳过的日志与原因（最多 10 个）：只说「有 N 条读不出」同样没法排查 */
         skippedJournals: { id: string; reason: string }[];
+        /** 目录里不是计划目录的条目数：它们不进 total，不说就会让「共 N 条」比目录里实际有的少 */
+        ignored: number;
+        /** 这些条目与形状（最多 10 个） */
+        ignoredEntries: { name: string; reason: string }[];
       }
     | { available: false; error: string };
   warnings: string[];
@@ -951,7 +955,10 @@ export async function doctorReport(cwd: string, deps: DoctorDeps): Promise<Docto
     imports = { available: false, error: deps.importJobsError ?? '导入日志目录不可用' };
   } else {
     try {
-      const { items, skipped } = await deps.importJobs.listSummary();
+      const summary = await deps.importJobs.listSummary();
+      const { items, skipped } = summary;
+      // 注入的假实现可能还是旧形状：缺这一项时按「没有非常规条目」处理，不让 doctor 整段降级
+      const ignored = summary.ignored ?? [];
       const count = (status: string) => items.filter((i) => i.status === status).length;
       imports = {
         available: true,
@@ -964,6 +971,9 @@ export async function doctorReport(cwd: string, deps: DoctorDeps): Promise<Docto
         uncertainIds: items.filter((i) => i.status === 'uncertain').map((i) => i.id).slice(0, 10),
         skipped: skipped.length,
         skippedJournals: skipped.slice(0, 10),
+        ignored: ignored.length,
+        // `--json` 保留原文（与其他结构化字段一致），转义 / 截断只在文本与警告里做
+        ignoredEntries: ignored.slice(0, 10).map((e) => ({ name: e.name, reason: e.reason })),
       };
       if (imports.uncertain > 0) {
         warnings.push(`有 ${imports.uncertain} 个导入/关联计划结果未知（uncertain）：不要重试，也不要删除其执行日志`);
@@ -974,6 +984,17 @@ export async function doctorReport(cwd: string, deps: DoctorDeps): Promise<Docto
         const ids = imports.skippedJournals.map((j) => j.id.slice(0, 8)).join('、');
         warnings.push(
           `有 ${imports.skipped} 份导入日志读不出来，已跳过（不计入上面的统计）：${ids}${imports.skipped > 10 ? ' 等' : ''}`,
+        );
+      }
+      // 不是计划目录的条目同样不进 total：以前被静默跳过，doctor 的条数比目录里实际有的少，
+      // 用户却看不出少掉的是什么
+      if (imports.ignored > 0) {
+        const shown = imports.ignoredEntries
+          .map((e) => `${escapeControlChars(clipCodePoints(e.name, 40).text)}（${e.reason}）`)
+          .join('；');
+        warnings.push(
+          `导入日志目录里有 ${imports.ignored} 个条目不是计划目录，未计入统计：${shown}${imports.ignored > 10 ? ' 等' : ''}；` +
+            '它们不影响已有计划的 prepare / confirm / status，先确认来源再清理',
         );
       }
     } catch (error) {

@@ -2620,6 +2620,10 @@ async function cmdDoctor(cwd: string, json: boolean, strict: boolean): Promise<v
       for (const j of i.skippedJournals) {
         console.log(`  读取失败（未计入上面的统计）: ${escapeControlChars(j.id)}（${escapeControlChars(j.reason)}）`);
       }
+      // 不是计划目录的条目以前被静默跳过，「共 N 条」与目录里实际有的对不上
+      for (const e of i.ignoredEntries) {
+        console.log(`  不是计划目录（未计入统计）: ${escapeControlChars(e.name)}（${escapeControlChars(e.reason)}）`);
+      }
     } else {
       console.log(`导入日志: 不可用（${escapeControlChars(report.imports.error)}）`);
     }
