@@ -1649,6 +1649,10 @@ async function cmdRecent(cwd: string, json: boolean, limit: number = 8, cwdGiven
   // 归属那一行坏了的条目不属于任何目录，因此不会出现在「近期」里；不说就会被读成「最近没聊过」
   const unattributableStats = await collectUnattributable(recentAdapters);
   for (const stat of unattributableStats) warnings.push(unattributableWarning(stat, cwd));
+  // 文本模式靠 warnings 里那句「已达列表上限」说明列表不完整；`--json` 只有 `truncated` / `total`
+  // 两个数，脚本分不清「这个目录就这么多会话」与「某一家枚举时就只拿到最近 N 个」——
+  // 后者的 total 本身就是低估。与 `search --json` 的 `coverage.capped` 同一口径。
+  const cappedProviders: string[] = [];
   for (const adapter of recentAdapters) {
     if (!adapter.listSessions) continue;
     try {
@@ -1657,6 +1661,7 @@ async function cmdRecent(cwd: string, json: boolean, limit: number = 8, cwdGiven
       // truncated / total 都会低估，不说明就会被当成「这个目录只有这些会话」
       const cap = adapter.listSessionsCap;
       if (cap !== undefined && sessions.length >= cap) {
+        cappedProviders.push(adapter.id);
         // 不承诺「用某命令看全集」：sessions / doctor 同样走这个上限，指过去只会再撞一次
         warnings.push(`${adapter.id} 已达列表上限 ${cap} 个，更早的会话不在「近期」里；这一条列表不完整`);
       }
@@ -1706,6 +1711,7 @@ async function cmdRecent(cwd: string, json: boolean, limit: number = 8, cwdGiven
       ok: true,
       sessions: final,
       ...(truncated ? { truncated: true, total: results.length } : {}),
+      ...(cappedProviders.length ? { capped: cappedProviders } : {}),
       ...(unavailable.length ? { unavailable } : {}),
       ...(unattributableStats.length ? { unattributable: unattributableJson(unattributableStats) } : {}),
       ...(warnings.length ? { warnings } : {}),
@@ -1972,7 +1978,8 @@ async function cmdPrompt(
     }
     // 坏行让合计**静默偏少**：数字照印，但文档里要括注这是下界。判据与 `watch usage` / `open`
     // 共用 `usageBadLinesDetail()`（同一份扫描同时给出行数与完整警告，不扫第二遍文件）。
-    const badUsage = await usageBadLinesDetail(adapter, foundRef, '来源会话');
+    // 内容扫描（`badSourceScan`）刚刚读过同一个文件时直接复用；旁路文件由函数内部挡住。
+    const badUsage = await usageBadLinesDetail(adapter, foundRef, '来源会话', { knownScan: badSourceScan });
     if (badUsage) {
       usageBadLines = badUsage.count;
       if (badUsage.scanFailed) usageBadLinesScanError = badUsage.scanError;
