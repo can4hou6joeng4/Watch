@@ -821,7 +821,8 @@ async function cmdSwitch(cwd: string, targetId: string, json: boolean, chain?: s
   // 清单里正含那个名字，而多出来的空白在终端上几乎看不见，用户只会反复核对一串正确的拼写。
   targetId = trimUserKey(targetId);
   const store = openStore();
-  const cwdIssue = await cwdProblem(cwd);
+  const cwdProbe = await inspectCwd(cwd);
+  const cwdIssue = describeCwdProblem(cwdProbe, cwd);
   // 写之前先记下当前链：handoff() 经 getOrCreateChainSession() 调 touchChain() 抬高
   // `--chain` 指定那条的 last_used_at，而「当前链」就是按它算的——写完当前链就换人了。
   // 这一读只为事后对比，读不出来不能让整条命令崩在 try 外面（见 safeActiveChain）
@@ -855,6 +856,9 @@ async function cmdSwitch(cwd: string, targetId: string, json: boolean, chain?: s
         JSON.stringify({
           ok: true,
           ...publicResult(result),
+          // 同 new / chain 写操作：内容已经写进目标 provider 的原生文件，但 --cwd 不可用时
+          // resume 会在进入该目录时失败；目录的事与「交接是否成功」分开披露
+          ...cwdStateField(cwdProbe),
           ...(shiftNote ? { warnings: [...result.warnings, shiftNote], previousChain, currentChain } : {}),
         }),
       );
@@ -961,7 +965,8 @@ async function cmdAdopt(
   // provider id 同理：注册表键固定小写、无空白，归一无损（与 cmdSwitch 同一段论证）
   providerId = trimUserKey(providerId);
   const store = openStore();
-  const cwdIssue = await cwdProblem(cwd);
+  const cwdProbe = await inspectCwd(cwd);
+  const cwdIssue = describeCwdProblem(cwdProbe, cwd);
   // 同 switch：adoptIntoChain() 经 getOrCreateChainSession() 抬高目标链的 last_used_at，
   // 而「当前链」就是按它算的。先记下来，写完如实说明当前链是否被换走。
   // 这一读只为事后对比，读不出来不能让整条写命令崩在 try 外面（见 safeActiveChain）
@@ -1206,6 +1211,8 @@ async function cmdAdopt(
         JSON.stringify({
           ok: true,
           ...publicJson,
+          // 同 switch：链记录已经写入 / 目标文件已经可用，但 --cwd 不可用时 resume 进不去
+          ...cwdStateField(cwdProbe),
           ...(shiftNote ? { warnings: [...result.warnings, shiftNote], previousChain, currentChain } : {}),
           ...(resumeCommand ? { resumeCommand } : {}),
         }),
