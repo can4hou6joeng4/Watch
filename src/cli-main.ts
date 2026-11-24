@@ -2617,13 +2617,23 @@ async function cmdDoctor(cwd: string, json: boolean, strict: boolean): Promise<v
       for (const id of i.uncertainIds) {
         console.log(`  结果未知: ${escapeControlChars(id)}（用 watch import-codex status ${escapeControlChars(id)} 查看；勿重试、勿删日志）`);
       }
+      // 逐条行与 JSON 都只保留前 10 条：不说明剩余数量时，用户会以为「结果未知」就只有这 10 个
+      if (i.uncertain > i.uncertainIds.length) {
+        console.log(`  另有 ${i.uncertain - i.uncertainIds.length} 个结果未知的计划未逐条列出；用 watch import-codex list 查看完整列表`);
+      }
       // 读不出来的日志没进 total，不逐条说就只是「总数比实际少」，看不出是哪几份
       for (const j of i.skippedJournals) {
         console.log(`  读取失败（未计入上面的统计）: ${escapeControlChars(j.id)}（${escapeControlChars(j.reason)}）`);
       }
+      if (i.skipped > i.skippedJournals.length) {
+        console.log(`  另有 ${i.skipped - i.skippedJournals.length} 份读取失败的日志未逐条列出；完整清单与原因见 watch import-codex list --json 的 skipped`);
+      }
       // 不是计划目录的条目以前被静默跳过，「共 N 条」与目录里实际有的对不上
       for (const e of i.ignoredEntries) {
         console.log(`  不是计划目录（未计入统计）: ${escapeControlChars(e.name)}（${escapeControlChars(e.reason)}）`);
+      }
+      if (i.ignored > i.ignoredEntries.length) {
+        console.log(`  另有 ${i.ignored - i.ignoredEntries.length} 个非常规条目未逐条列出；完整清单与原因见 watch import-codex list --json 的 ignored`);
       }
     } else {
       console.log(`导入日志: 不可用（${escapeControlChars(report.imports.error)}）`);
