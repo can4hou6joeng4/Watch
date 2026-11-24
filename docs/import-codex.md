@@ -26,7 +26,7 @@ npm run watch -- import-codex confirm <plan-id> --experimental --json
 npm run watch -- import-codex status <plan-id> --json
 ```
 
-`list` 与 `watch doctor` 共用同一份执行日志汇总：按 `planId` / `route` / `status` 列出计划，读不出来的日志（`skipped`）与不是计划目录的条目（`ignored`）单独列出、不计入计划数，也不会让命令整体失败；文本模式下这两类各发一条警告到 stderr，`--json` 输出 `{ ok: true, plans, skipped, ignored }`。计划按关注度排序（`uncertain` 最前、其次 `prepared`、已结束的在后），同档按 `planId`，`skipped` / `ignored` 按名称，输出可复现；有 `uncertain` 计划时文本模式另加一句「不要重复执行，也不要删除执行日志或目标锁」。已导入的计划带 `targetSessionId`（文本印「目标会话 <id>」），可直接 `watch open <id>`；这个值只在 `outcome.json` 里是非空字符串时才给，形状不对当没有。它不连 app-server、不读原生会话、不写任何文件，也不需要 `--experimental`。警告与 doctor 只印计划 id 的前 8 位；照抄这段前缀去 `status` / `confirm` 时，格式错误会提示用 `import-codex list` 查完整 id。
+`list` 与 `watch doctor` 共用同一份执行日志汇总：按 `planId` / `route` / `status` 列出计划，读不出来的日志（`skipped`）与不是计划目录的条目（`ignored`）单独列出、不计入计划数，也不会让命令整体失败；文本模式下这两类各发一条警告到 stderr，警告只点名前 10 条并把名字 / 原因截断展示，完整清单与原因在 `--json` 的 `skipped` / `ignored` 中；`--json` 输出 `{ ok: true, plans, skipped, ignored }`。计划按关注度排序（`uncertain` 最前、其次 `prepared`、已结束的在后），同档按 `planId`，`skipped` / `ignored` 按名称，输出可复现；有 `uncertain` 计划时文本模式另加一句「不要重复执行，也不要删除执行日志或目标锁」。已导入的计划带 `targetSessionId`（文本印「目标会话 <id>」），可直接 `watch open <id>`；这个值只在 `outcome.json` 里是非空字符串时才给，形状不对当没有。它不连 app-server、不读原生会话、不写任何文件，也不需要 `--experimental`。警告与 doctor 只印计划 id 的前 8 位；照抄这段前缀去 `status` / `confirm` 时，格式错误会提示用 `import-codex list` 查完整 id。
 
 `prepare` 是此实验命令的预览。桌面端仅在来源识别为 Claude Code 且目标为 Codex 时调用它，并始终启用 `--desktop-project`；其他目标卡仍走原有路径。该选项只读检查 Desktop 全局状态，要求 cwd 精确匹配唯一已有项目，并绑定其 legacy ID 与 app-server ID。`confirm` 会启动官方 app-server，只发送与计划路径及 cwd 精确匹配的单条会话；导入后设置并验证原生项目成员关系，再只读确认目标没有落入 Desktop 私有 `projectless` 排除。项目状态在确认前发生变化会拒绝提交。
 

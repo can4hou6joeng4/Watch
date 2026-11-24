@@ -2,7 +2,7 @@ import path from 'node:path';
 import { parseArgs } from 'node:util';
 import { closestCommand, closestFlag, optionArgs } from './core/cli-commands.js';
 import { trimUserKey } from './core/cli-input.js';
-import { escapeControlChars } from './core/display.js';
+import { clipCodePoints, escapeControlChars } from './core/display.js';
 import { createOfficialCodexImport, officialImportJournalRoot } from './providers/codex/official-import.js';
 
 const IMPORT_BOOLEAN_FLAGS = new Set(['json', 'experimental', 'desktop-project']);
@@ -202,17 +202,21 @@ export async function runImportCodex(args: string[]): Promise<void> {
       // 读不出来的日志与非常规条目都不计入上面的数字：只报「能读的那几条」，用户会以为其余的
       // 根本不存在。与 doctor 同一分档，下一步各不相同（坏日志可删除后重新 prepare，非常规条目先确认来源）
       if (listing.skipped.length) {
+        const shown = listing.skipped
+          .slice(0, 10)
+          .map((s) => `${escapeControlChars(s.id)}（${escapeControlChars(clipCodePoints(s.reason, 60).text)}）`)
+          .join('；');
         console.error(
-          `警告: 有 ${listing.skipped.length} 份日志读不出来、未计入上面的列表：` +
-            listing.skipped.map((s) => `${escapeControlChars(s.id)}（${escapeControlChars(s.reason)}）`).join('；') +
-            '；它们不影响其他计划，可核对后删除该日志目录重新 prepare',
+          `警告: 有 ${listing.skipped.length} 份日志读不出来、未计入上面的列表：${shown}${listing.skipped.length > 10 ? ' 等' : ''}；完整原因见 --json 的 skipped；它们不影响其他计划，可核对后删除该日志目录重新 prepare`,
         );
       }
       if (listing.ignored.length) {
+        const shown = listing.ignored
+          .slice(0, 10)
+          .map((e) => `${escapeControlChars(clipCodePoints(e.name, 40).text)}（${escapeControlChars(clipCodePoints(e.reason, 60).text)}）`)
+          .join('；');
         console.error(
-          `警告: 执行日志目录里有 ${listing.ignored.length} 个条目不是计划目录，未计入统计：` +
-            listing.ignored.map((e) => `${escapeControlChars(e.name)}（${escapeControlChars(e.reason)}）`).join('；') +
-            '；先确认来源再清理',
+          `警告: 执行日志目录里有 ${listing.ignored.length} 个条目不是计划目录，未计入统计：${shown}${listing.ignored.length > 10 ? ' 等' : ''}；完整清单与原因见 --json 的 ignored；先确认来源再清理`,
         );
       }
       return;
