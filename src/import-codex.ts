@@ -195,7 +195,15 @@ export async function runImportCodex(args: string[]): Promise<void> {
             : '';
           console.log(`  ${escapeControlChars(plan.id)}  ${route}  ${plan.status}${target}`);
         }
-        if (!listing.plans.length) console.log('  （还没有 prepare 过任何计划）');
+        // 计划数为 0 不等于「没 prepare 过」：坏日志与非常规条目会让可读计划数为 0，
+        // 这时先说「没有可读的计划」，别让用户以为执行日志目录是空的
+        if (!listing.plans.length) {
+          console.log(
+            listing.skipped.length || listing.ignored.length
+              ? '  （没有可读的导入计划；读不出来或不是计划目录的条目见警告）'
+              : '  （还没有 prepare 过任何计划）',
+          );
+        }
         const uncertain = listing.plans.filter((plan) => plan.status === 'uncertain');
         // 结果未知的计划不能靠重跑修正：列表只给一行状态的话，用户很难看出该先处理哪几条
         if (uncertain.length) {
