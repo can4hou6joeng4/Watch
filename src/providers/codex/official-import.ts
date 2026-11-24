@@ -60,16 +60,25 @@ async function sourceCwdWarning(cwd: string): Promise<string | undefined> {
   }
 }
 
-async function sourceAgeWarning(filePath: string): Promise<string | undefined> {
-  let mtimeMs: number;
+// 来源文件的年龄与「大小是否仍与预览时一致」共用一次只读 stat：前者决定是否超出官方界面
+// 默认窗口，后者是内容变化的低成本早信号（confirm 会在提交前做摘要校验；这里只按字节数报，
+// 大小相同不代表内容没变，文案不能反过来说成「内容未变」）。
+async function sourceFileWarnings(filePath: string, expectedBytes: number): Promise<string[]> {
+  let info;
   try {
-    mtimeMs = (await stat(filePath)).mtimeMs;
+    info = await stat(filePath);
   } catch (error) {
-    return `无法确认来源会话的最后写入时间（${escapeControlChars(describePathReadFailureReason(error))}），不能判断它是否超出官方界面默认的 30 天检测窗口；这条导入路径仍会按扩大的窗口提交。`;
+    return [`无法确认来源会话的最后写入时间（${escapeControlChars(describePathReadFailureReason(error))}），不能判断它是否超出官方界面默认的 30 天检测窗口，也无法核对它是否仍与预览时一致；这条导入路径仍会按扩大的窗口提交。`];
   }
-  const days = Math.floor((Date.now() - mtimeMs) / 86_400_000);
-  if (days < 30) return undefined;
-  return `来源会话最后一次写入距今 ${days} 天，超出官方界面默认的 30 天检测窗口；本次导入按扩大的窗口（${DETECT_MAX_SESSIONS} 条 / ${DETECT_MAX_AGE_DAYS} 天）提交，该路径未在原生客户端复验。`;
+  const warnings: string[] = [];
+  const days = Math.floor((Date.now() - info.mtimeMs) / 86_400_000);
+  if (days >= 30) {
+    warnings.push(`来源会话最后一次写入距今 ${days} 天，超出官方界面默认的 30 天检测窗口；本次导入按扩大的窗口（${DETECT_MAX_SESSIONS} 条 / ${DETECT_MAX_AGE_DAYS} 天）提交，该路径未在原生客户端复验。`);
+  }
+  if (info.size !== expectedBytes) {
+    warnings.push(`来源会话文件大小与预览时不同：预览时 ${expectedBytes} 字节，当前 ${info.size} 字节；confirm 会在提交前重新校验内容，若内容确实已变化，需要重新 prepare 并审阅新计划。`);
+  }
+  return warnings;
 }
 
 type Dependencies = {
@@ -108,7 +117,12 @@ async function fingerprint(ref: SessionRef): Promise<FileDigest> {
 async function assertSource(plan: ImportPlan): Promise<void> {
   const current = await fingerprint(plan.source);
   if (current.sha256 !== plan.digest.sha256 || current.sizeBytes !== plan.digest.sizeBytes) {
-    throw new Error('来源会话在预览之后已变化；请重新 prepare 并审阅新计划');
+    // 只说得出的事实：大小变了就说前后字节数；大小没变但摘要变了，明说「大小未变、内容已变」，
+    // 免得用户以为「文件没动过」。这句在导入了已提交之后仍会跑到，不能承诺「未写入任何内容」。
+    const change = current.sizeBytes === plan.digest.sizeBytes
+      ? `文件大小未变（${current.sizeBytes} 字节），但内容已变`
+      : `大小从 ${plan.digest.sizeBytes} 字节变为 ${current.sizeBytes} 字节`;
+    throw new Error(`来源会话在预览之后已变化（${change}）；请重新 prepare 并审阅新计划`);
   }
 }
 
@@ -392,11 +406,11 @@ export class OfficialCodexImport {
     const prior = await this.deps.jobs
       .priorImports(plan.source, plan.digest, planId)
       .catch((error: unknown) => ({ error: error instanceof Error ? error.message : String(error) }));
-    const ageWarning = await sourceAgeWarning(plan.source.filePath);
+    const sourceWarnings = await sourceFileWarnings(plan.source.filePath, plan.digest.sizeBytes);
     const cwdWarning = await sourceCwdWarning(plan.source.cwd);
     const warnings = [
       ...WARNINGS,
-      ...(ageWarning ? [ageWarning] : []),
+      ...sourceWarnings,
       ...(cwdWarning ? [cwdWarning] : []),
       ...('error' in prior
         ? [`读取导入执行日志失败，已跳过重复导入检查：${prior.error}`]
