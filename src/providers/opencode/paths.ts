@@ -4,7 +4,7 @@ import { stat } from 'node:fs/promises';
 import path from 'node:path';
 import { describeWriteFailureReason } from '../../core/atomic.js';
 import { isMissingPathError } from '../../core/read-text.js';
-import { probeSqliteTables, readSqliteFileHead } from '../../core/sqlite-file.js';
+import { describeSqliteTableNames, probeSqliteTables, readSqliteFileHead } from '../../core/sqlite-file.js';
 import { escapeControlChars } from '../../core/display.js';
 import { assertDataDirectory } from '../../core/provider-directory.js';
 
@@ -214,7 +214,7 @@ export function assertUsableOpencodeDb(dbPath: string): void {
   if (probe.tables.some((t) => OPENCODE_KNOWN_TABLES.includes(t))) return;
 
   throw new Error(
-    `OpenCode 数据库路径上已有一个不是 opencode 的 SQLite 数据库：${escapeControlChars(dbPath)}（表: ${probe.tables.slice(0, 5).join(' / ')}）。` +
+    `OpenCode 数据库路径上已有一个不是 opencode 的 SQLite 数据库：${escapeControlChars(dbPath)}（表: ${describeSqliteTableNames(probe.tables)}）。` +
       `为避免把 opencode 的表写进别人的库，本次未写入任何内容；请改用另一个 WATCH_OPENCODE_DB；` +
       `如果这其实是 opencode 的库损坏了，先备份，再挪走它让 opencode 重建`,
   );

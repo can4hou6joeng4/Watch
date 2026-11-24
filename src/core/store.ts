@@ -6,7 +6,7 @@ import { randomUUID } from 'node:crypto';
 import { cwdControlCharsNote, sameDirectorySync } from './cwd.js';
 import { clipCodePoints, escapeControlChars } from './display.js';
 import { normalizePath } from './platform.js';
-import { probeSqliteTables, readSqliteFileHead } from './sqlite-file.js';
+import { describeSqliteTableNames, probeSqliteTables, readSqliteFileHead } from './sqlite-file.js';
 import type { ProcessEvent, SessionRef, UnifiedTurn } from './types.js';
 
 /**
@@ -263,7 +263,9 @@ function sqliteMessageDetail(error: unknown): string | null {
   const trimmed = message.trim();
   if (!trimmed) return null;
   if (/^(SQL logic error|constraint failed|unknown error|not an error)$/i.test(trimmed)) return null;
-  return escapeControlChars(trimmed).slice(0, 200);
+  // 先按原文码点截断、再转义：反过来会把 `\u001B` 这类转义序列切成半截（第 269 轮的既有约定）。
+  // SQLite 的 message 里会带表名 / 列名 / 触发器的 RAISE 文案，这些同样来自不可信文本。
+  return escapeControlChars(clipCodePoints(trimmed, 200).text);
 }
 
 /**
@@ -370,7 +372,7 @@ function assertUsableStoreFile(dbPath: string): void {
     throw Object.assign(
       new Error(
         `本地库路径上已有一个不是 Watch 的 SQLite 数据库：${escapeControlChars(dbPath)}` +
-          `（user_version=${head.userVersion}，表: ${tables.slice(0, 5).map((t) => escapeControlChars(t)).join(' / ') || '（没有任何表）'}）。` +
+          `（user_version=${head.userVersion}，表: ${describeSqliteTableNames(tables)}）。` +
           '为避免把 Watch 的表写进别人的库、改掉它的 user_version，本次未写入任何内容；' +
           '请改用另一个 WATCH_DB（默认 ~/.watch/watch.db）；如果这其实是 Watch 首次建库被中断留下的空库，先备份并挪走 watch.db / watch.db-wal / watch.db-shm 让它重建',
       ),

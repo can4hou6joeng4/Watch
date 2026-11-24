@@ -1,5 +1,6 @@
 import { closeSync, existsSync, openSync, readSync, statSync, unlinkSync } from 'node:fs';
 import { DatabaseSync } from 'node:sqlite';
+import { clipCodePoints, escapeControlChars } from './display.js';
 
 /**
  * 判断「这个路径上已有的文件是不是我们能接管的 SQLite 库」的公共只读工具。
@@ -85,4 +86,27 @@ export function probeSqliteTables(filePath: string): { tables: string[] } | { er
       }
     }
   }
+}
+
+/** 表名清单在错误文案里最多列几个、每个多长（表名来自别人的库，长度与字符集都不受我们控制） */
+const SHOWN_TABLE_NAMES = 5;
+const SHOWN_TABLE_NAME_CHARS = 40;
+
+/**
+ * 把 `sqlite_master` 里的表名渲染成错误文案里的一小段。
+ *
+ * 表名来自**别人的** SQLite 库：可以是任意文本（含 ESC / C1 / 极长的名字），条数也没有上限。
+ * 以前两处调用点各自 `tables.slice(0, 5).join(...)`——`store.ts` 逐项转义了但没有截断，
+ * `opencode/paths.ts` 连转义都没有，一句「表: …」就能把控制字符带进终端、或把警告撑成巨串。
+ * 先按原文码点截断、再转义（反过来会把 `\u001B` 切成半截序列），条数超出的写「另有 N 个」。
+ */
+export function describeSqliteTableNames(tables: readonly unknown[]): string {
+  if (!tables.length) return '（没有任何表）';
+  // 非字符串不走 `String()`：那会调用对象自己的 toString，表名清单不值得为它冒一次抛错
+  const names = tables.map((t) => (typeof t === 'string' ? t : '（非文本表名）'));
+  const shown = names
+    .slice(0, SHOWN_TABLE_NAMES)
+    .map((name) => escapeControlChars(clipCodePoints(name, SHOWN_TABLE_NAME_CHARS).text));
+  const rest = names.length - shown.length;
+  return shown.join(' / ') + (rest > 0 ? ` / 另有 ${rest} 个` : '');
 }
