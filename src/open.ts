@@ -27,7 +27,7 @@ import {
   probeSessionReadable,
   sessionFilePresence,
 } from './core/read-text.js';
-import { sessionCwdProblem } from './core/cwd.js';
+import { sessionCwdInspection, type CwdInspection } from './core/cwd.js';
 import { escapeControlChars } from './core/display.js';
 import { commandControlWarnings } from './core/terminal-command.js';
 import { psQuote, shellQuote } from './core/shell-quote.js';
@@ -81,6 +81,11 @@ export type OpenSessionResult = {
   summary?: SessionSummary | null;
   /** 结果说明（做了什么：已并入 N 轮 / 无需并入 / 返回链上会话…），文本模式打 stdout */
   notes?: string[];
+  /**
+   * 会话记录的工作目录不可用时的结构化状态（与 status / new / chain 写操作同字段）。
+   * 命令本身成功、cd 与 resume 都已给出，但 `cd` 会失败；健康目录不输出。
+   */
+  cwdState?: CwdInspection;
   /**
    * 降级原因（读取失败、复用扫描失败、链上配对读不出…）：说明「为什么是这个结果」，
    * 不是结果本身。文本模式一律打到 stderr，避免和可复制的结果行混在 stdout。
@@ -508,7 +513,8 @@ export async function openSession(
   let merged = 0;
   let sourceUsage: TokenUsage | null = null;
   // 记录的目录可能已被移动 / 删除：会话内容照常可读、转入也能写成，但返回的 cd 会在第一步失败
-  const cwdIssue = await sessionCwdProblem(target.found.ref.cwd);
+  const cwdInspection = await sessionCwdInspection(target.found.ref.cwd);
+  const cwdIssue = cwdInspection.note;
   if (cwdIssue) warnings.push(cwdIssue);
 
   // 来源与目标是同一个会话：diffTurns 必然为空，旧实现会报「已全部包含在自身中，无需并入」，
@@ -946,6 +952,8 @@ export async function openSession(
     usage,
     summary,
     notes,
+    // 与 status / new / chain 写操作同一字段：命令成功、命令已给出，但 cd 会在不可用目录上失败
+    ...(cwdInspection.probe.state !== 'ok' ? { cwdState: cwdInspection.probe } : {}),
     ...(warnings.length ? { warnings } : {}),
   };
 }
@@ -1024,6 +1032,8 @@ type PlannedOpen =
       cwd: string;
       /** 来源快照基线，取在读取来源内容之前；resume 快路径不写文件，用不到但一并带上 */
       sourceSnapshot: SourceStateSnapshot | null;
+      /** 记录的工作目录不可用时的结构化状态；健康目录为 undefined */
+      cwdState?: CwdInspection;
       plan: OpenPlan;
     }
   | { ok: false; error: string };
@@ -1150,8 +1160,8 @@ async function planOpenInProvider(
   for (const note of mappingNotes) diagnostics?.push(note);
   const cwd = source.found.ref.cwd;
   // 预检与写入都用这个目录：它不在了要提前说，别等用户照着一句必失败的 cd 去执行
-  const cwdIssue = await sessionCwdProblem(cwd);
-  if (cwdIssue) diagnostics?.push(cwdIssue);
+  const cwdInspection = await sessionCwdInspection(cwd);
+  if (cwdInspection.note) diagnostics?.push(cwdInspection.note);
   const sourceRef = source.found.ref;
   const sourceProvider = source.adapter.id;
   // 来源快照基线必须在**任何内容读取之前**取：来源侧没有 TOCTOU 守卫，规划期间用户在原生 CLI
@@ -1159,7 +1169,15 @@ async function planOpenInProvider(
   // `planOpenInProvider` 返回之后才取（规划里已经 parse 过来源），把追加后的状态当成了基线，
   // 写完后比对永远相同；`--from` 那条路径一直是 parse 之前取（见本文件 srcSnapshot 处）。
   const sourceSnapshot = await snapshotSourceState(sourceRef.filePath);
-  const base = { ok: true as const, adapter: target, sourceRef, sourceProvider, cwd, sourceSnapshot };
+  const base = {
+    ok: true as const,
+    adapter: target,
+    sourceRef,
+    sourceProvider,
+    cwd,
+    sourceSnapshot,
+    ...(cwdInspection.probe.state !== 'ok' ? { cwdState: cwdInspection.probe } : {}),
+  };
 
   // 属主即目标：无需转化，直接 resume
   if (sourceProvider === providerId) {
@@ -1556,7 +1574,7 @@ export async function openInProvider(
   const mapping = store ?? openMappingDb(diagnostics);
   const planned = await planOpenInProvider(sourceId, providerId, mapping, diagnostics);
   if (!planned.ok) return { ok: false, error: attachDiagnostics(planned.error, diagnostics) };
-  const { adapter: target, sourceRef, sourceProvider, cwd, plan, sourceSnapshot: srcSnapshot } = planned;
+  const { adapter: target, sourceRef, sourceProvider, cwd, plan, sourceSnapshot: srcSnapshot, cwdState } = planned;
   // 来源快照的基线在 `planOpenInProvider` 读取来源之前就取好了（见那里的注释）：
   // 这里只负责写完之后再比一次，期间（含规划阶段）被追加的话都能报出来
 
@@ -1589,6 +1607,8 @@ export async function openInProvider(
       // （describePlan），预检与执行对同一件事给出两套说法。mergedTurns:0 分不出
       // 「没有内容可并入」与「根本没走转入」
       notes: [describePlan(target, plan)],
+      // 记录目录不可用时命令仍成功，但返回的 cd 会失败：与 openSession 同一字段
+      ...(cwdState ? { cwdState } : {}),
       ...(diagnostics.length ? { warnings: [...diagnostics] } : {}),
     };
   }
@@ -1693,6 +1713,7 @@ export async function openInProvider(
       mergedTurns: plan.merged,
       sourceUsage,
       notes,
+      ...(cwdState ? { cwdState } : {}),
       ...(warnings.length ? { warnings } : {}),
     };
   } catch (error) {
@@ -1781,6 +1802,7 @@ export async function checkOpenInProvider(
     sessionId: plan.targetRef?.sessionId,
     filePath: plan.targetRef?.filePath,
     notes: [describePlan(target, plan)],
+    ...(planned.cwdState ? { cwdState: planned.cwdState } : {}),
     ...(diagnostics.length ? { warnings: [...diagnostics] } : {}),
     writable: true,
     plan: { kind: plan.kind, turnCount: plan.turns.length },

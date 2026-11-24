@@ -262,23 +262,36 @@ export async function splitElsewhereByDirectory<T extends { cwd: string }>(
  * 只有一句成功的 resume 命令，用户会以为是 CLI 或会话坏了。原因按 errno 分开说：
  * 权限问题不是「被删除」，别把人引去重建目录。
  */
-export async function sessionCwdProblem(cwd: string): Promise<string | null> {
+export async function sessionCwdInspection(
+  cwd: string,
+): Promise<{ note: string | null; probe: CwdInspection }> {
   const probe = await inspectCwd(cwd);
   const shown = showPathInMessage(cwd);
   const note = cwdControlCharsNote(cwd);
   const tail = '下面的 cd 命令会在这里失败——先恢复这个目录，或手动 cd 到新位置再执行 resume 命令';
+  let problem: string | null;
   switch (probe.state) {
     case 'ok':
-      return null;
+      problem = null;
+      break;
     case 'not-directory':
-      return `会话记录的工作目录不是目录（被同名文件占住了）：${shown}；下面的 cd 命令会失败——先让这个路径重新成为目录${note}`;
+      problem = `会话记录的工作目录不是目录（被同名文件占住了）：${shown}；下面的 cd 命令会失败——先让这个路径重新成为目录${note}`;
+      break;
     case 'missing':
-      return `会话记录的工作目录已不存在：${shown}（项目可能被移动或删除）；${tail}；会话内容本身仍可读取 / 转入${note}`;
+      problem = `会话记录的工作目录已不存在：${shown}（项目可能被移动或删除）；${tail}；会话内容本身仍可读取 / 转入${note}`;
+      break;
     case 'denied':
-      return `会话记录的工作目录无权访问：${shown}（权限问题，不是被删除）；${tail}${note}`;
+      problem = `会话记录的工作目录无权访问：${shown}（权限问题，不是被删除）；${tail}${note}`;
+      break;
     case 'unknown':
-      return `无法确认会话记录的工作目录能否进入：${shown}（${escapeControlChars(probe.reason)}）；${tail}${note}`;
+      problem = `无法确认会话记录的工作目录能否进入：${shown}（${escapeControlChars(probe.reason)}）；${tail}${note}`;
+      break;
   }
+  return { note: problem, probe };
+}
+
+export async function sessionCwdProblem(cwd: string): Promise<string | null> {
+  return (await sessionCwdInspection(cwd)).note;
 }
 
 /**
