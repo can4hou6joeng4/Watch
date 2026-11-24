@@ -142,6 +142,8 @@ inspect  <session-id> [--provider <name>] [--json]         只读查看会话元
 import-codex  prepare|confirm|status|list|project-prepare|project-confirm|project-status   官方单会话导入（实验性，详见 docs/import-codex.md）
 ```
 
+`watch --help`（`help` / `-h` 同义）把完整用法打到 stdout 并以 0 退出，可以直接接管道；`--json` 时回单行 `{ ok: true, help }`。参数写错时用法仍走 stderr、退出码 1。`import-codex --help` 同一约定。
+
 将 `--check` 与 `open ... --to <provider>` 一起使用，可预览目标和待写入的轮数，并检查当前能否转入。预检不会改动原生会话，但可能创建 Watch 本地数据库，或新增、刷新其中的会话位置记录。
 
 `inspect` 只对 JSONL 会话统计坏行。`--json` 中，`badLinesStatus` 为 `complete` 时，`badLines` 是完整扫描的计数。`incomplete` 表示扫描未完成，计数是已确认的下界，原因见 `warnings`。SQLite 等不适用的来源返回 `not-applicable`，`badLines` 为 `null`。用量数字同一判据：来源的用量数据源里有无法解析的行时，`--json` 带 `usageBadLines`，文本在数字后括注这只是下界；扫描失败时带 `usageBadLinesScanError`，表示合计可能偏少且无法确认程度。

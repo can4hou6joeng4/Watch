@@ -142,6 +142,8 @@ inspect  <session-id> [--provider <name>] [--json]   read-only session metadata 
 import-codex  prepare|confirm|status|list|project-prepare|project-confirm|project-status   official single-session import (experimental; see docs/import-codex.md)
 ```
 
+`watch --help` (also `help` / `-h`) prints the full usage to stdout and exits 0, so it can be piped; with `--json` it returns a single-line `{ ok: true, help }`. A mistyped argument still prints usage to stderr and exits 1. `import-codex --help` follows the same convention.
+
 Use `--check` with `open ... --to <provider>` to preview the target and pending turn count and check whether the transfer can proceed. The preflight leaves native sessions intact but may create Watch’s local database or add or refresh a session location record.
 
 `inspect` counts malformed lines in JSONL sessions. In `--json` output, `badLinesStatus: "complete"` means `badLines` is the count from a completed scan. With `"incomplete"`, the count is a confirmed lower bound and `warnings` explains why. SQLite and other sources outside the JSONL scan return `"not-applicable"` with `badLines: null`. Usage numbers follow the same rule: when the session's usage source contains unparsable lines, `--json` includes `usageBadLines` and the text marks the number as a lower bound; if the scan itself fails, `usageBadLinesScanError` says the total may be low by an unknown amount.
