@@ -47,7 +47,7 @@ import { usageBadLinesDetail, usageSidecarProblem } from './core/usage-integrity
 import { describeBadLinesScanFailure, scanUnparsableJsonLines } from './core/jsonl.js';
 import { readWatchVersion } from './core/watch-version.js';
 import { CAPABILITY_VERIFICATION_NOTE, describeCapabilities, formatCapabilities } from './core/capabilities.js';
-import { summarizeSessionStructure } from './core/inspect.js';
+import { formatToolCounts, summarizeSessionStructure } from './core/inspect.js';
 
 /**
  * 参数还没解析完就要报用法错误（缺值 / 越界 / 未知 flag）：此时 `--json` 已经能从 argv 看出来。
@@ -2465,7 +2465,7 @@ async function cmdInspect(json: boolean, sessionId: string | undefined, provider
   );
   console.log(
     structure.tools.length
-      ? `工具: ${structure.tools.map((tool) => `${escapeControlChars(tool.name)}×${tool.count}`).join(' · ')}`
+      ? `工具: ${formatToolCounts(structure.tools)}`
       : '工具: 没有工具调用',
   );
   console.log(`附件: 图片 ${structure.attachments.images} · 文件 ${structure.attachments.files}`);

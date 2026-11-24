@@ -1,4 +1,4 @@
-import { danglingToolCalls, orphanToolResults, WATCH_CONTEXT_DISCLOSURE_PREFIX } from './rich.js';
+import { danglingToolCalls, orphanToolResults, unknownTypeLabel, WATCH_CONTEXT_DISCLOSURE_PREFIX } from './rich.js';
 import type { UnifiedTurn } from './types.js';
 
 /** 统计适配器解析出的轮次、过程事件与附件，不输出事件正文。 */
@@ -101,4 +101,17 @@ export function summarizeSessionStructure(turns: readonly UnifiedTurn[]): Sessio
       .map(([name, count]) => ({ name, count }))
       .sort((a, b) => b.count - a.count || a.name.localeCompare(b.name)),
   };
+}
+
+/**
+ * 文本模式的工具计数行。工具名来自会话文件，是不可信字符串：损坏或构造过的会话可以有
+ * 任意多种、任意长的名字，直接 `join` 会把一行撑成巨串（第 269 / 288 轮同族规则）。
+ * 最多展示 8 种（沿用 `structure.tools` 的次数降序），余量写「另有 N 种」；名字先按码点
+ * 截断再转义（`unknownTypeLabel()`，先截断可避免切开 `\u001B` 这类转义序列）。
+ * 只改显示：`--json` 的 `structure.tools` 保留全部条目与原文。
+ */
+export function formatToolCounts(tools: readonly { name: string; count: number }[], limit = 60): string {
+  const shown = tools.slice(0, 8).map((tool) => `${unknownTypeLabel(tool.name, limit)}×${tool.count}`);
+  if (tools.length > 8) shown.push(`另有 ${tools.length - 8} 种`);
+  return shown.join(' · ');
 }
