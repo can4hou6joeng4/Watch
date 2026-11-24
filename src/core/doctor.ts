@@ -987,14 +987,15 @@ export async function doctorReport(cwd: string, deps: DoctorDeps): Promise<Docto
         );
       }
       // 不是计划目录的条目同样不进 total：以前被静默跳过，doctor 的条数比目录里实际有的少，
-      // 用户却看不出少掉的是什么
+      // 用户却看不出少掉的是什么。与 skippedJournals 同一口径：警告只点名，类型与原因已在
+      // 逐条说明（`--json` 里是 `imports.ignoredEntries`）里给过，别把同一段长文案印两遍
       if (imports.ignored > 0) {
-        const shown = imports.ignoredEntries
-          .map((e) => `${escapeControlChars(clipCodePoints(e.name, 40).text)}（${e.reason}）`)
-          .join('；');
+        const names = imports.ignoredEntries
+          .map((e) => escapeControlChars(clipCodePoints(e.name, 40).text))
+          .join('、');
         warnings.push(
-          `导入日志目录里有 ${imports.ignored} 个条目不是计划目录，未计入统计：${shown}${imports.ignored > 10 ? ' 等' : ''}；` +
-            '它们不影响已有计划的 prepare / confirm / status，先确认来源再清理',
+          `导入日志目录里有 ${imports.ignored} 个条目不是计划目录，未计入统计：${names}${imports.ignored > 10 ? ' 等' : ''}；` +
+            '各条目的类型与原因见逐条说明（--json 见 imports.ignoredEntries），不影响已有计划的 prepare / confirm / status，先确认来源再清理',
         );
       }
     } catch (error) {
