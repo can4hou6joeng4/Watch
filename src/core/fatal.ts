@@ -11,7 +11,13 @@
  *   变成两行，消费者拿到哪一行全看实现。
  * - 补的那行同样只有一行：错误消息里的换行与 C0 / C1 一律由 `JSON.stringify` 转义。
  * - 非 `Error` 的抛出（字符串、对象）也要有可读文案，不能输出 `{}`。
+ *
+ * 文本模式原先直接把异常对象交给 `console.error`，Node 会打印带换行的堆栈，消息里的 ESC
+ * 也原样进终端（与 `fail()` 的转义口径不一致）。顶层兜底是最后一道终端出口，统一只写一行
+ * 转义后的消息；排查仍以 `--json` 的单行错误为准。
  */
+
+import { escapeControlChars } from './display.js';
 
 export type FatalOptions = {
   /** 本次调用是否带 `--json` */
@@ -20,20 +26,24 @@ export type FatalOptions = {
   bytesWritten: number;
   /** 写一行 JSON（调用方负责在写完后再退出，避免管道下被截断） */
   writeJson: (line: string) => void;
-  /** 文本模式的错误输出 */
-  writeError: (error: unknown) => void;
+  /** 文本模式的错误输出：已转义成单行，调用方直接写 stderr */
+  writeError: (message: string) => void;
   exit: (code: number) => void;
 };
+
+/** 非 `Error` 的抛出（字符串、对象）也要有可读文案，不能输出 `{}` */
+function fatalMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
 
 /** 返回实际走了哪条通道，便于测试断言，也便于调用方决定是否要额外清理。 */
 export function handleFatal(error: unknown, options: FatalOptions): 'json' | 'stderr' {
   if (options.json && options.bytesWritten === 0) {
-    const message = error instanceof Error ? error.message : String(error);
-    options.writeJson(`${JSON.stringify({ ok: false, error: message })}\n`);
+    options.writeJson(`${JSON.stringify({ ok: false, error: fatalMessage(error) })}\n`);
     options.exit(1);
     return 'json';
   }
-  options.writeError(error);
+  options.writeError(escapeControlChars(fatalMessage(error)));
   options.exit(1);
   return 'stderr';
 }

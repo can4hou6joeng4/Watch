@@ -922,12 +922,7 @@ async function cmdSwitch(cwd: string, targetId: string, json: boolean, chain?: s
     const probe = !isStoreError(error) && chainProbe.length ? chainProbe.join('；') : '';
     const message = [probe, describeCommandError(error)].filter(Boolean).join('；');
     // 目录本身有问题时，失败原因先说路径，否则「找不到来源会话」会被当成「目录里没东西」
-    if (json) {
-      console.log(JSON.stringify({ ok: false, error: cwdIssue ? `${cwdIssue}；${message}` : message }));
-    } else {
-      console.error(cwdIssue ? `${cwdIssue}；${message}` : message);
-    }
-    process.exit(1);
+    fail(json, cwdIssue ? `${cwdIssue}；${message}` : message);
   }
 }
 
@@ -1234,9 +1229,7 @@ async function cmdAdopt(
     // 同 switch：「当前链没读成」只在失败原因本身不是库故障时才补，避免同一件事说两遍
     const probe = !isStoreError(error) && chainProbe.length ? chainProbe.join('；') : '';
     const message = [probe, describeCommandError(error)].filter(Boolean).join('；');
-    if (json) console.log(JSON.stringify({ ok: false, error: cwdIssue ? `${cwdIssue}；${message}` : message }));
-    else console.error(cwdIssue ? `${cwdIssue}；${message}` : message);
-    process.exit(1);
+    fail(json, cwdIssue ? `${cwdIssue}；${message}` : message);
   }
 }
 
@@ -2804,7 +2797,10 @@ async function cmdNew(cwd: string, providerId: string, json: boolean, chain?: st
           // 但后续 switch 不会认这条绑定，必须说明——否则 status 里看不到它却毫无提示。
           // 措辞分开：链行都没建成时说「链记录失败」，只有切换记录失败时说「切换记录失败」，
           // 免得与随后那条「这次建了链」的别名组警告互相矛盾。
-          console.error('[watch] 记录 switch_events 失败，新会话仍已创建:', error);
+          console.error(
+            '[watch] 记录 switch_events 失败，新会话仍已创建:',
+            escapeControlChars(describeStoreErrorReason(error)),
+          );
           warnings.push(
             (chainGroupWritten ? '切换记录失败' : '链记录失败') +
               `，后续切换不会认这条绑定：${describeStoreErrorReason(error)}`,
@@ -2888,9 +2884,7 @@ async function cmdNew(cwd: string, providerId: string, json: boolean, chain?: st
     const msg = [probe, describeCommandError(error)].filter(Boolean).join('；');
     // 与 switch / adopt 一致：目录本身有问题时先说路径，否则「还没有切换链」会被当成「目录里没东西」
     const message = cwdIssue ? `${cwdIssue}；${msg}` : msg;
-    if (json) console.log(JSON.stringify({ ok: false, error: message }));
-    else console.error(message);
-    process.exit(1);
+    fail(json, message);
   }
 }
 
@@ -3810,7 +3804,7 @@ main().catch((error) => {
     bytesWritten: Number(process.stdout.bytesWritten ?? 0),
     // 写完再退出：管道 / 重定向下 process.exit() 会丢掉还没刷出去的缓冲
     writeJson: (line) => process.stdout.write(line, () => process.exit(1)),
-    writeError: (fatal) => console.error(fatal),
+    writeError: (message) => console.error(message),
     exit: (code) => process.exit(code),
   });
 });
