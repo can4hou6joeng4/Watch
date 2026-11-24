@@ -59,7 +59,9 @@ const OPTION_ARGS = optionArgs(process.argv.slice(2));
 const JSON_REQUESTED = OPTION_ARGS.includes('--json');
 /**
  * 用户是来要用法的，不是写错了参数：`--help` 出现在任意位置，或第一个参数是 `help` / `-h`；
- * 命令之后的 `-h` 在参数解析时补记。只影响 `--json` 下那一句说明，用法文本与退出码不变。
+ * 命令之后的 `-h` 在参数解析时补记。要用法是成功路径：用法走 stdout、exit 0（`--json` 回
+ * `{ ok:true, help }`），这样 `watch --help | less`、`watch --help | grep search` 才拿得到内容，
+ * 脚本里的 `watch --help && …` 也不会被当成失败。写错参数仍是 stderr + exit 1。
  */
 let helpRequested = OPTION_ARGS.includes('--help') || HELP_COMMAND_ALIASES.includes(process.argv[2] ?? '');
 
@@ -67,11 +69,8 @@ let helpRequested = OPTION_ARGS.includes('--help') || HELP_COMMAND_ALIASES.inclu
  * `reason` 用来把「哪里不对」讲清楚：只打一整段用法时，用户得自己翻整页才知道
  * 是命令名拼错了、少了 provider，还是 `--limit` 越界。
  */
-function usage(reason?: string): never {
-  // 用法错误里插值的是命令行原文（拼错的 flag、多给的位置参数、给了两次的取值）：与路径、链名
-  // 同属不可信字符串，进终端前转义；下面的 JSON 保留原值（JSON.stringify 自己会编码控制字符）
-  if (reason) console.error(`[watch] ${escapeControlChars(reason)}`);
-  console.error(`用法:
+function usageText(): string {
+  return `用法:
   watch --version [--json]                          打印版本号（读 package.json；读不出来给 null）；watch version / -v 同义
   watch --help                                      打印这页用法；watch help / -h 同义
   watch status [--json] [--cwd <path>] [--chain <id|name>]
@@ -94,17 +93,27 @@ function usage(reason?: string): never {
   watch import-codex prepare|confirm|status <id> [--cwd <path>] [--desktop-project] [--experimental] [--json]
   watch import-codex list [--json]                  只读列出执行日志里的导入计划与状态（不连 Codex）
   watch import-codex project-prepare|project-confirm|project-status <plan-id> [--project <project-id>] [--experimental] [--json]
-  watch open <session-id> [--from <session-id>] [--provider <name>] [--to <provider>] [--check] [--json]  反查 cwd 并输出 cd + 打开命令；带 --from 先并入旧会话；带 --to 转入指定 provider；带 --check 预检目标（不改动原生会话，可能更新 Watch 本地会话映射库）`);
+  watch open <session-id> [--from <session-id>] [--provider <name>] [--to <provider>] [--check] [--json]  反查 cwd 并输出 cd + 打开命令；带 --from 先并入旧会话；带 --to 转入指定 provider；带 --check 预检目标（不改动原生会话，可能更新 Watch 本地会话映射库）`;
+}
+
+function usage(reason?: string): never {
+  // 带着 reason 进来的一定是用法错误（即使命令行里另有 `--help`）：先报错，不当成「要用法」
+  if (helpRequested && !reason) {
+    if (JSON_REQUESTED) console.log(JSON.stringify({ ok: true, help: usageText() }));
+    else console.log(usageText());
+    process.exit(0);
+  }
+  // 用法错误里插值的是命令行原文（拼错的 flag、多给的位置参数、给了两次的取值）：与路径、链名
+  // 同属不可信字符串，进终端前转义；下面的 JSON 保留原值（JSON.stringify 自己会编码控制字符）
+  if (reason) console.error(`[watch] ${escapeControlChars(reason)}`);
+  console.error(usageText());
   if (JSON_REQUESTED) {
-    const help = helpRequested;
     console.log(
       JSON.stringify({
         ok: false,
-        error: help
-          ? '已打印用法到 stderr（--json 模式下不输出结果）'
-          : reason
-            ? `用法错误：${reason}（完整用法见 stderr）`
-            : '用法错误：参数不完整或不合法（完整用法见 stderr）',
+        error: reason
+          ? `用法错误：${reason}（完整用法见 stderr）`
+          : '用法错误：参数不完整或不合法（完整用法见 stderr）',
       }),
     );
   }

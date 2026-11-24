@@ -148,11 +148,11 @@ export async function runImportCodex(args: string[]): Promise<void> {
   // 开关只在 `--` 之前找：之后的 token 是位置参数，下面的参数校验与 parseArgs 也都这样处理
   const options = optionArgs(args);
   const json = options.includes('--json');
-  // 与主 CLI 的 `--help` 同一份契约：用法走 stderr、exit 1，`--json` 时补一行说明
+  // 与主 CLI 的 `--help` 同一份契约：要用法是成功路径，用法走 stdout、exit 0，
+  // `--json` 回 `{ ok:true, help }`（仍是单行 JSON）
   if (options.includes('--help') || options.includes('-h') || args[0] === 'help') {
-    console.error(importUsageText());
-    if (json) console.log(JSON.stringify({ ok: false, error: '已打印用法到 stderr（--json 模式下不输出结果）' }));
-    process.exitCode = 1;
+    if (json) console.log(JSON.stringify({ ok: true, help: importUsageText() }));
+    else console.log(importUsageText());
     return;
   }
   try {
