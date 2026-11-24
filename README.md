@@ -139,7 +139,7 @@ doctor   [--cwd <path>] [--strict]                          环境诊断（Agent
 open     <session-id> [--from <id>] [--provider <name>] [--to <provider>] [--check]
 prompt   [<session-id>] [--provider <name>] [--profile minimal|standard|verbose|full] [--last <n>] [--since-compact]   摘要交接：把会话渲染成可粘贴的 Markdown（降级方案，不写任何文件）
 inspect  <session-id> [--provider <name>] [--json]         只读查看会话元数据与轮次、事件、附件、坏行及披露计数
-import-codex  prepare|confirm|status|list|project-prepare|project-confirm|project-status
+import-codex  prepare|confirm|status|list|project-prepare|project-confirm|project-status   官方单会话导入（实验性，详见 docs/import-codex.md）
 ```
 
 将 `--check` 与 `open ... --to <provider>` 一起使用，可预览目标和待写入的轮数，并检查当前能否转入。预检不会改动原生会话，但可能创建 Watch 本地数据库，或新增、刷新其中的会话位置记录。

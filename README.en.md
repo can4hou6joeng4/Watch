@@ -139,7 +139,7 @@ doctor   [--cwd <path>] [--strict]                           environment diagnos
 open     <session-id> [--from <id>] [--provider <name>] [--to <provider>] [--check]
 prompt   [<session-id>] [--provider <name>] [--profile minimal|standard|verbose|full] [--last <n>] [--since-compact]   summary handoff: render the session as paste-ready Markdown (degraded path, writes nothing)
 inspect  <session-id> [--provider <name>] [--json]   read-only session metadata and counts for turns, events, attachments, malformed lines and disclosures
-import-codex  prepare|confirm|status|list|project-prepare|project-confirm|project-status
+import-codex  prepare|confirm|status|list|project-prepare|project-confirm|project-status   official single-session import (experimental; see docs/import-codex.md)
 ```
 
 Use `--check` with `open ... --to <provider>` to preview the target and pending turn count and check whether the transfer can proceed. The preflight leaves native sessions intact but may create Watch’s local database or add or refresh a session location record.
