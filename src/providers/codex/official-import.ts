@@ -92,6 +92,30 @@ type Dependencies = {
   assertDesktopThreadPlacement?(codexHome: string, threadId: string, project: CodexDesktopProject): Promise<void>;
 };
 
+// `status` 是只读查询：桌面项目在预览之后被移除、重新添加或换了 app-server 映射时，
+// 旧计划仍显示 `project-first-preflight`，用户要到 confirm 才看到拒绝。这里复用 prepare
+// 的只读检查给出同名披露。只比三项身份——name / rootPaths 的重排不影响导入目标，
+// 用逐字段比较会把桌面端的无害刷新报成「已变化」。核对失败不能让 status 整体失败。
+async function desktopProjectStatusWarning(
+  expected: CodexDesktopProject | undefined,
+  cwd: string,
+  deps: Dependencies,
+): Promise<string | undefined> {
+  if (!expected) return undefined;
+  let current: CodexDesktopProject;
+  try {
+    current = await (deps.inspectDesktopProject ?? inspectCodexDesktopProject)(deps.codexHome, cwd);
+  } catch (error) {
+    const reason = escapeControlChars(error instanceof Error ? error.message : String(error));
+    return `无法重新核对预览绑定的 Codex Desktop 项目：${reason}；status 不会因此失败，但 confirm 会在取锁前再次核对，核对不通过就无法继续——请先修好这个项目状态，或重新 prepare。`;
+  }
+  if (current.policy === expected.policy && current.legacyProjectId === expected.legacyProjectId &&
+    current.nativeProjectId === expected.nativeProjectId) return undefined;
+  const describe = (project: CodexDesktopProject) =>
+    escapeControlChars(`${project.name}（legacy ${project.legacyProjectId}，app-server ${project.nativeProjectId}）`);
+  return `预览绑定的 Codex Desktop 项目现在与计划不一致：预览时 ${describe(expected)}，当前 ${describe(current)}；confirm 会在取锁前重新核对并拒绝这次计划（未写入任何内容），请重新在桌面端打开该项目，或重新 prepare。`;
+}
+
 async function fingerprint(ref: SessionRef): Promise<FileDigest> {
   if (ref.provider !== 'claude' || !UUID.test(ref.sessionId) || !path.isAbsolute(ref.filePath) || !path.isAbsolute(ref.cwd)) {
     throw new Error('来源必须是本地 Claude Code 会话');
@@ -408,10 +432,12 @@ export class OfficialCodexImport {
       .catch((error: unknown) => ({ error: error instanceof Error ? error.message : String(error) }));
     const sourceWarnings = await sourceFileWarnings(plan.source.filePath, plan.digest.sizeBytes);
     const cwdWarning = await sourceCwdWarning(plan.source.cwd);
+    const desktopWarning = await desktopProjectStatusWarning(plan.desktopProject, plan.source.cwd, this.deps);
     const warnings = [
       ...WARNINGS,
       ...sourceWarnings,
       ...(cwdWarning ? [cwdWarning] : []),
+      ...(desktopWarning ? [desktopWarning] : []),
       ...('error' in prior
         ? [`读取导入执行日志失败，已跳过重复导入检查：${prior.error}`]
         : [
