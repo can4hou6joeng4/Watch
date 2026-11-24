@@ -25,6 +25,12 @@ import { CodexProjectBinding } from './project-binding.js';
 import { acquireImportTarget, assertImportTarget, assertNativeSqliteHome, assertTargetFile, IMPORT_TARGET_LOCK, inspectImportTarget } from './import-target.js';
 
 const SUPPORTED_VERSION = 'codex-cli 0.153.4';
+// `externalAgentConfig/detect` 的默认窗口是官方 UI 的「最近 30 天、最多 50 条」，而 prepare 并不限制来源年龄：
+// 更老的会话能预览成功，到 confirm 才被窗口过滤掉，只剩一句「必须恰好识别出一个匹配的来源会话」。
+// app-server 接受自定义窗口（同类原生导入工具以 100000 条 / 36500 天调用），这里取同样的上界，
+// 由 Codex 按本机实际会话数截断；不要重新收紧——那会让老会话在确认阶段重新变成误导性失败。
+export const DETECT_MAX_SESSIONS = 100_000;
+export const DETECT_MAX_AGE_DAYS = 36_500;
 const UUID = /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i;
 const execFileAsync = promisify(execFile);
 // 用户面文案与仓库其余命令一致用中文：桌面端把它们直接显示在卡片下方，英文会显得像另一个人写的
@@ -397,7 +403,7 @@ export class OfficialCodexImport {
       await assertNativeSqliteHome(config, target, '；未提交导入');
       if (plan.desktopProject) await this.assertNativeProject(rpc, plan.desktopProject, plan.source.cwd);
       const migrationItem = selectedSession(await rpc.request('externalAgentConfig/detect', {
-        includeHome: true, cwds: [plan.source.cwd], maxSessions: 50, maxSessionAgeDays: 30,
+        includeHome: true, cwds: [plan.source.cwd], maxSessions: DETECT_MAX_SESSIONS, maxSessionAgeDays: DETECT_MAX_AGE_DAYS,
       }), plan);
       await assertImportTarget(this.deps.codexHome, target);
       await assertSource(plan);
