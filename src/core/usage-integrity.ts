@@ -1,6 +1,6 @@
 import type { ProviderAdapter } from '../providers/adapter.js';
 import { escapeControlChars } from './display.js';
-import { scanUnparsableJsonLines } from './jsonl.js';
+import { scanUnparsableJsonLines, type BadLinesScan } from './jsonl.js';
 import { emptySessionFileReasonFromStat, sessionFilePresence } from './read-text.js';
 import type { SessionRef } from './types.js';
 
@@ -38,14 +38,19 @@ export async function usageBadLinesReason(
  *
  * 扫描失败也返回一项（`count` 是已确认的行数，可能为 0）：消费方据此在正文里写「无法确认」，
  * 而不是把「没扫成」当成「没有坏行」。
+ *
+ * `knownScan`：调用方已经扫过**同一个文件**时传入（`watch inspect` 的内容坏行扫描与用量扫描
+ * 在绝大多数 provider 上是同一份 `ref.filePath`），省掉一次整文件重扫。只在用量数据源就是
+ * `ref.filePath` 时生效——旁路文件（grok 的 `updates.jsonl`）绝不能拿内容扫描的结果顶替。
  */
 export async function usageBadLinesDetail(
   adapter: ProviderAdapter,
   ref: SessionRef,
   label: string,
+  { knownScan }: { knownScan?: BadLinesScan } = {},
 ): Promise<{ count: number; reason: string; scanFailed?: boolean; scanError?: string } | null> {
   const filePath = adapter.sessionUsagePath?.(ref) ?? ref.filePath;
-  const scan = await scanUnparsableJsonLines(filePath);
+  const scan = knownScan && filePath === ref.filePath ? knownScan : await scanUnparsableJsonLines(filePath);
   if (scan.error) {
     return {
       count: scan.count,

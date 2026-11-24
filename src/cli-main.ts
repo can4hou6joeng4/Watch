@@ -2407,7 +2407,9 @@ async function cmdInspect(json: boolean, sessionId: string | undefined, provider
     }
     // 坏行让合计**静默偏少**：与 `watch usage` / `watch prompt` / `open` 共用同一份扫描与判据。
     // `inspect` 的用途就是回答「读到了什么、少了什么」，用量这一半此前只有内容坏行没有它。
-    const badUsage = await usageBadLinesDetail(adapter, foundRef, '来源会话');
+    // 内容扫描（`badScan`）已经读过同一个文件时直接复用：绝大多数 provider 的用量数据源
+    // 就是 `ref.filePath`，不必为同一份行再扫一遍整文件；旁路文件由函数内部挡住。
+    const badUsage = await usageBadLinesDetail(adapter, foundRef, '来源会话', { knownScan: badScan ?? undefined });
     if (badUsage) {
       usageBadLines = badUsage.count;
       if (badUsage.scanFailed) usageBadLinesScanError = badUsage.scanError;
