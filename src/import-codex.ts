@@ -186,9 +186,14 @@ export async function runImportCodex(args: string[]): Promise<void> {
           `导入计划: ${listing.plans.length} 个（执行日志目录: ${escapeControlChars(officialImportJournalRoot())}）`,
         );
         for (const plan of listing.plans) {
-          // 已导入的计划带上目标会话 id：不必再跑一次 status 才敢 watch open
-          const target = plan.targetSessionId ? `  目标会话 ${escapeControlChars(plan.targetSessionId)}` : '';
-          console.log(`  ${escapeControlChars(plan.id)}  ${escapeControlChars(plan.route)}  ${plan.status}${target}`);
+          // 已导入的计划带上目标会话 id：不必再跑一次 status 才敢 watch open。
+          // route / targetSessionId 来自 plan.json 与 outcome.json（用户可写），文本行必须有界；
+          // JSON 仍保留原文，别在结构里截断
+          const route = escapeControlChars(clipCodePoints(plan.route, 80).text);
+          const target = plan.targetSessionId
+            ? `  目标会话 ${escapeControlChars(clipCodePoints(plan.targetSessionId, 80).text)}`
+            : '';
+          console.log(`  ${escapeControlChars(plan.id)}  ${route}  ${plan.status}${target}`);
         }
         if (!listing.plans.length) console.log('  （还没有 prepare 过任何计划）');
         const uncertain = listing.plans.filter((plan) => plan.status === 'uncertain');
