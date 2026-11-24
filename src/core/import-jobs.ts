@@ -84,7 +84,8 @@ export function describeReadError(error: unknown, file: string): string {
     return `没有权限读取执行日志（权限或归属变了？）：${shown}；确认该目录对当前用户可读（或改用有权限的 WATCH_DB / HOME）后重试`;
   }
   if (code === 'EISDIR') {
-    return `该路径是目录而不是日志文件：${shown}`;
+    // 日志文件被同名目录占住时，删除目录会顺手删掉里面的内容；先让人确认它是什么再动手
+    return `该路径是目录而不是日志文件：${shown}；先确认这个目录里没有需要保留的内容，再挪走它并重新 prepare`;
   }
   // 兜底把原始 message 拼进终端文案：Node 的 fs 错误消息里通常带着路径原文，路径已单独
   // 转义，message 同样要过一遍，否则 ESC / BEL 仍会从这里漏进终端
