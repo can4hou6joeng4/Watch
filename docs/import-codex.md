@@ -4,7 +4,7 @@
 
 ## 范围
 
-只处理用户指定的本地 Claude Code 会话，通过 Codex 官方 `externalAgentConfig/detect` / `externalAgentConfig/import` 提交一个 `SESSIONS` 项。不会回退到 Watch 私有转换器，不选择设置、记忆、插件、MCP、hooks 或权限；不发送模型 turn、不批准服务器工具请求、不打开应用。
+只处理用户指定的本地 Claude Code 会话，通过 Codex 官方 `externalAgentConfig/detect` / `externalAgentConfig/import` 提交一个 `SESSIONS` 项。检测时显式请求一个宽窗口（最多 100000 条、36500 天），不会因为界面默认的「最近 30 天、50 条」而漏掉更老的来源会话；实际返回范围仍由本机 Codex 的检测结果决定。不会回退到 Watch 私有转换器，不选择设置、记忆、插件、MCP、hooks 或权限；不发送模型 turn、不批准服务器工具请求、不打开应用。
 
 当前版本门禁为 `codex-cli 0.153.4`，来自已记录的原生样本版本，并非完整兼容性认证。其他版本先重新核验，不自动放行。官方依据和既有实验见 [COMPATIBILITY.md](COMPATIBILITY.md)。
 
