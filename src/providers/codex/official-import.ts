@@ -487,8 +487,11 @@ export class OfficialCodexImport {
             // 目标会话 id 来自 outcome.json（用户可写）：警告会原样打到终端，先截断再拼；
             // 完整值仍在 --json 的 prior / outcome 字段里
             ...prior.hits.map((p) => {
+              // 形状也要收窄：target.sessionId 不是字符串时 clipCodePoints() 会抛 TypeError
               const target = p.outcome.target?.sessionId;
-              const shown = target ? escapeControlChars(clipCodePoints(target, 80).text) : 'unknown';
+              const shown = typeof target === 'string' && target
+                ? escapeControlChars(clipCodePoints(target, 80).text)
+                : 'unknown';
               return p.sameContent
                 ? `这个会话此前已导入到 Codex 线程 ${shown}（计划 ${p.id.slice(0, 8)}）；再次导入会在 Codex 里多出一份会话。`
                 : `这个会话此前以不同内容导入过（计划 ${p.id.slice(0, 8)}，线程 ${shown}），来源此后已经变化。`;

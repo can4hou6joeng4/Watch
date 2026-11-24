@@ -58,6 +58,22 @@ function showJournalField(value: string, limit: number): string {
 }
 
 /**
+ * `outcome.json` 同样是用户可写文件：`target` 不是对象、`sessionId` 不是字符串时，
+ * 以前 `'target' in result.outcome` 会抛 `Cannot use 'in' operator…`（outcome 是字符串 / 数字），
+ * 或 `clipCodePoints(number)` 抛 TypeError。这里收窄成「有没有可展示的目标会话 id」，
+ * `--json` 的 outcome 保留原文。
+ */
+function outcomeTargetSessionId(outcome: unknown): { shown: string } | { unusable: true } | null {
+  if (!outcome || typeof outcome !== 'object' || Array.isArray(outcome)) return null;
+  if (!('target' in outcome)) return null;
+  const target = (outcome as { target?: unknown }).target;
+  if (!target) return null;
+  if (typeof target !== 'object' || Array.isArray(target)) return { unusable: true };
+  const id = (target as { sessionId?: unknown }).sessionId;
+  return typeof id === 'string' && id ? { shown: id } : { unusable: true };
+}
+
+/**
  * 项目关联计划的文本模式摘要（三行）。`projectName` / `projectId` 来自原生 app-server 的
  * `project/read` 响应，是 Codex 侧写入的名字——与本仓库所有插值进终端的字符串同属不可信输入，
  * 必须过 `escapeControlChars()`（ESC 能改颜色 / 窗口标题 / 清屏，而 stdout 没有第二个显示层），
@@ -330,7 +346,10 @@ export async function runImportCodex(args: string[]): Promise<void> {
       console.log(`Codex 数据目录: ${showJournalField(result.plan.target?.path ?? result.plan.codexHome, SHOW_PATH_LIMIT)}`);
       if ('warnings' in result) for (const warning of result.warnings) console.error(`警告: ${escapeControlChars(warning)}`);
       if (result.canConfirm) console.log(`审阅计划后，显式执行：watch import-codex ${action!.startsWith('project-') ? 'project-confirm' : 'confirm'} ${result.planId} --experimental`);
-      if (result.outcome && 'target' in result.outcome && result.outcome.target) console.log(`目标: ${showJournalField(result.outcome.target.sessionId, SHOW_ID_LIMIT)}`);
+      const outcomeTarget = outcomeTargetSessionId(result.outcome);
+      if (outcomeTarget && 'shown' in outcomeTarget) console.log(`目标: ${showJournalField(outcomeTarget.shown, SHOW_ID_LIMIT)}`);
+      // 有 target 却读不出会话 id：不能静默当成「没有目标」，原文在 --json 的 outcome 里
+      else if (outcomeTarget) console.log('目标: 无法识别（outcome.json 里的 target.sessionId 不是非空字符串；完整原文见 --json 的 outcome）');
       if (!ok) console.log(`导入可能已部分完成：不要重复执行，也不要删除执行日志或目标锁：${result.targetLockPath ? showJournalField(result.targetLockPath, SHOW_PATH_LIMIT) : 'unknown'}`);
     }
     if (!ok) process.exitCode = 2;
