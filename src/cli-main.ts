@@ -687,6 +687,10 @@ async function cmdStatus(cwd: string, json: boolean, chain?: string): Promise<vo
       // `ok:true` + `history:[]` 分不清「链确实没有记录」与「库打不开 / switch_events 读失败」。
       // 文本模式已用「（历史读取失败…）」区分，JSON 也要一个显式字段，桌面端才能渲染失败态。
       historyAvailable: Boolean(store) && !result.historyFailed,
+      // `historyAvailable: false` 有两档：库根本没打开（链与切换记录都无从读起），
+      // 或库打开了、只是 switch_events 读失败。只有中文警告时脚本分不开；与
+      // sessions / usage 的 `storeAvailable` 同一字段，缺省即库已打开
+      ...(store ? {} : { storeAvailable: false }),
       ...(elsewhereJson.length ? { chainsElsewhere: elsewhereJson } : {}),
       ...(unattributableStats.length ? { unattributable: unattributableJson(unattributableStats) } : {}),
       // 与 `prompt --json` 的 `sourceCwd` 同一组取值：健康目录不出现，脚本据此把
