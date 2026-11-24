@@ -112,8 +112,14 @@ export type OpenSessionResult = {
     holders?: { pid: number; command: string }[];
     hint?: string;
   };
-  /** 点击前预检（`--check`）：本次转入会落到哪种目标、是否可写 */
+  /** 点击前预检（`--check`）：是否可写 */
   writable?: boolean;
+  /**
+   * 本次转入落到哪种目标（`--check` 预检与 `open --to` 执行同字段）：
+   * resume = 来源即目标、什么都没写；chain = 链上配对会话；reuse = 内容匹配到的既有会话；
+   * new = 新建。`turnCount` 是计划写入的轮数。执行结果里它说的是**规划时的落点**：
+   * 目标在写入前被移走而改为新建时另有 `targetRecreated`，kind 不改写成 new。
+   */
   plan?: { kind: 'resume' | 'chain' | 'reuse' | 'new'; turnCount: number };
 };
 
@@ -1633,6 +1639,8 @@ export async function openInProvider(
       // （describePlan），预检与执行对同一件事给出两套说法。mergedTurns:0 分不出
       // 「没有内容可并入」与「根本没走转入」
       notes: [describePlan(target, plan)],
+      // 与 --check 同字段：脚本不必解析 notes 才知道这次没有转入
+      plan: { kind: plan.kind, turnCount: plan.turns.length },
       // 记录目录不可用时命令仍成功，但返回的 cd 会失败：与 openSession 同一字段
       ...(cwdState ? { cwdState } : {}),
       ...(mapping ? {} : { storeAvailable: false as const }),
@@ -1744,6 +1752,8 @@ export async function openInProvider(
       mergedTurns: plan.merged,
       sourceUsage,
       notes,
+      // 预检说「会落到哪」，执行也得说「落到了哪」：只有 notes 的话分不出复用既有会话与新建
+      plan: { kind: plan.kind, turnCount: plan.turns.length },
       ...recreated,
       ...planDrift,
       ...(cwdState ? { cwdState } : {}),
