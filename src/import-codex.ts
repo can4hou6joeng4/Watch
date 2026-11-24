@@ -3,16 +3,17 @@ import { parseArgs } from 'node:util';
 import { closestCommand, closestFlag, optionArgs } from './core/cli-commands.js';
 import { trimUserKey } from './core/cli-input.js';
 import { escapeControlChars } from './core/display.js';
-import { createOfficialCodexImport } from './providers/codex/official-import.js';
+import { createOfficialCodexImport, officialImportJournalRoot } from './providers/codex/official-import.js';
 
 const IMPORT_BOOLEAN_FLAGS = new Set(['json', 'experimental', 'desktop-project']);
 const IMPORT_VALUE_FLAGS = new Set(['cwd', 'project']);
 const IMPORT_USAGE_HINT = '--json --experimental --cwd <绝对路径> --project <UUID> --desktop-project（详见 docs/import-codex.md）';
-/** 六条子命令：拼错时要照着这张表报「可用」，与 `cmdChain` 的写法一致 */
+/** 七条子命令：拼错时要照着这张表报「可用」，与 `cmdChain` 的写法一致 */
 const IMPORT_ACTIONS = [
   'prepare',
   'confirm',
   'status',
+  'list',
   'project-prepare',
   'project-confirm',
   'project-status',
@@ -22,6 +23,7 @@ const IMPORT_POSITIONAL_HINT: Record<string, string> = {
   prepare: 'prepare 需要一个 Claude 会话 UUID；例：watch import-codex prepare <session-id> --cwd /绝对路径 --experimental',
   confirm: 'confirm 需要一个导入计划 id（watch import-codex prepare 的输出）；例：watch import-codex confirm <plan-id> --experimental',
   status: 'status 需要一个导入计划 id（watch import-codex prepare 的输出）；例：watch import-codex status <plan-id>',
+  list: 'list 不带位置参数，列出执行日志里的全部导入计划（只读）；例：watch import-codex list',
   'project-prepare': 'project-prepare 需要一个导入计划 id 与 --project <UUID>；例：watch import-codex project-prepare <plan-id> --project <uuid> --experimental',
   'project-confirm': 'project-confirm 需要一个项目关联计划 id；例：watch import-codex project-confirm <plan-id> --experimental',
   'project-status': 'project-status 需要一个项目关联计划 id；例：watch import-codex project-status <plan-id>',
@@ -39,7 +41,7 @@ export function importUsageText(): string {
     '用法（官方单会话导入，详见 docs/import-codex.md）:',
     ...IMPORT_ACTIONS.map((action) => `  ${IMPORT_POSITIONAL_HINT[action]}`),
     '  写操作（prepare / confirm / project-prepare / project-confirm）必须带 --experimental；--cwd 只有 prepare 接受且必须是绝对路径',
-    '  任一子命令加 --json 输出单行 JSON；prepare 可加 --desktop-project',
+    '  任一子命令加 --json 输出单行 JSON；prepare 可加 --desktop-project；list 只读、不需要 --experimental',
   ].join('\n');
 }
 
@@ -164,6 +166,47 @@ export async function runImportCodex(args: string[]): Promise<void> {
       throw new Error(
         `缺少 import-codex 子命令；可用: ${IMPORT_ACTIONS.join(' / ')}（详见 docs/import-codex.md）`,
       );
+    }
+    // `list` 是唯一不带位置参数的子命令，必须排在「缺 id」「多给位置参数」两条通用判定之前：
+    // 落到那两条会得到「list 需要一个位置参数」，而这条命令恰恰是用来找计划 id 的。
+    // 它只读执行日志（与 `watch doctor` 同一份 `listSummary()`）：不连 Codex、不读原生会话、不写文件。
+    if (action === 'list') {
+      if (positionals.length > 1) {
+        throw new Error(
+          `list 不接受位置参数，多给了: ${escapeControlChars(positionals.slice(1).join(' '))}；列出全部计划用 watch import-codex list，只查一份计划请用 watch import-codex status <plan-id>`,
+        );
+      }
+      if (values.cwd) throw new Error('list 不接受 --cwd（它只读执行日志，不绑定目录）；去掉 --cwd 重跑：watch import-codex list');
+      if (values['desktop-project']) throw new Error('list 不接受 --desktop-project（它只读执行日志）；去掉它重跑：watch import-codex list');
+      if (project) throw new Error('list 不接受 --project（它只读执行日志）；去掉 --project 重跑：watch import-codex list');
+      const listing = await createOfficialCodexImport().list();
+      if (json) console.log(JSON.stringify({ ok: true, ...listing }));
+      else {
+        console.log(
+          `导入计划: ${listing.plans.length} 个（执行日志目录: ${escapeControlChars(officialImportJournalRoot())}）`,
+        );
+        for (const plan of listing.plans) {
+          console.log(`  ${escapeControlChars(plan.id)}  ${escapeControlChars(plan.route)}  ${plan.status}`);
+        }
+        if (!listing.plans.length) console.log('  （还没有 prepare 过任何计划）');
+      }
+      // 读不出来的日志与非常规条目都不计入上面的数字：只报「能读的那几条」，用户会以为其余的
+      // 根本不存在。与 doctor 同一分档，下一步各不相同（坏日志可删除后重新 prepare，非常规条目先确认来源）
+      if (listing.skipped.length) {
+        console.error(
+          `警告: 有 ${listing.skipped.length} 份日志读不出来、未计入上面的列表：` +
+            listing.skipped.map((s) => `${escapeControlChars(s.id)}（${escapeControlChars(s.reason)}）`).join('；') +
+            '；它们不影响其他计划，可核对后删除该日志目录重新 prepare',
+        );
+      }
+      if (listing.ignored.length) {
+        console.error(
+          `警告: 执行日志目录里有 ${listing.ignored.length} 个条目不是计划目录，未计入统计：` +
+            listing.ignored.map((e) => `${escapeControlChars(e.name)}（${escapeControlChars(e.reason)}）`).join('；') +
+            '；先确认来源再清理',
+        );
+      }
+      return;
     }
     if (!id) {
       throw new Error(IMPORT_POSITIONAL_HINT[action] ?? `import-codex ${action} 需要一个位置参数`);

@@ -13,6 +13,9 @@
 以下是使用说明，不是自动执行授权。先准备专用测试会话；真实会话导入、退出应用、GUI 打开和模型调用仍分别授权。
 
 ```bash
+# 忘了计划 id 时先只读列出执行日志里的全部计划与状态（不启动 Codex、不写文件）
+npm run watch -- import-codex list --json
+
 # 先在 Codex Desktop 添加并保留 /absolute/project，再生成绑定该项目的预览
 npm run watch -- import-codex prepare <claude-session-id> --cwd /absolute/project --desktop-project --experimental --json
 
@@ -22,6 +25,8 @@ npm run watch -- import-codex confirm <plan-id> --experimental --json
 # 仅查询本地执行记录，不启动 Codex、不重复导入
 npm run watch -- import-codex status <plan-id> --json
 ```
+
+`list` 与 `watch doctor` 共用同一份执行日志汇总：按 `planId` / `route` / `status` 列出计划，读不出来的日志（`skipped`）与不是计划目录的条目（`ignored`）单独列出、不计入计划数，也不会让命令整体失败；文本模式下这两类各发一条警告到 stderr，`--json` 输出 `{ ok: true, plans, skipped, ignored }`。它不连 app-server、不读原生会话、不写任何文件，也不需要 `--experimental`。
 
 `prepare` 是此实验命令的预览。桌面端仅在来源识别为 Claude Code 且目标为 Codex 时调用它，并始终启用 `--desktop-project`；其他目标卡仍走原有路径。该选项只读检查 Desktop 全局状态，要求 cwd 精确匹配唯一已有项目，并绑定其 legacy ID 与 app-server ID。`confirm` 会启动官方 app-server，只发送与计划路径及 cwd 精确匹配的单条会话；导入后设置并验证原生项目成员关系，再只读确认目标没有落入 Desktop 私有 `projectless` 排除。项目状态在确认前发生变化会拒绝提交。
 

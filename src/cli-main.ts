@@ -92,6 +92,7 @@ function usage(reason?: string): never {
   watch search <query> [--json] [--cwd <path>] [--reset-index]   查询词以 - 开头时写成 watch search -- <query>
   watch usage [--json] [--cwd <path>] [--chain <id|name>]
   watch import-codex prepare|confirm|status <id> [--cwd <path>] [--desktop-project] [--experimental] [--json]
+  watch import-codex list [--json]                  只读列出执行日志里的导入计划与状态（不连 Codex）
   watch import-codex project-prepare|project-confirm|project-status <plan-id> [--project <project-id>] [--experimental] [--json]
   watch open <session-id> [--from <session-id>] [--provider <name>] [--to <provider>] [--check] [--json]  反查 cwd 并输出 cd + 打开命令；带 --from 先并入旧会话；带 --to 转入指定 provider；带 --check 预检目标（不改动原生会话，可能更新 Watch 本地会话映射库）`);
   if (JSON_REQUESTED) {

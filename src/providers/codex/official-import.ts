@@ -372,6 +372,17 @@ export class OfficialCodexImport {
   readonly projects: CodexProjectBinding;
   constructor(private deps: Dependencies) { this.projects = new CodexProjectBinding(deps); }
 
+  /**
+   * 只读列出执行日志里的全部计划。`status` 需要一个 planId，而终端重开后用户往往已经不知道
+   * 该抄哪一个；这里与 `watch doctor` 共用同一份 `listSummary()`，不连 Codex、不读原生会话、
+   * 不写任何文件。坏日志与非常规条目原样带出（`skipped` / `ignored`），由调用方披露——
+   * 只回一份「能读的列表」会把读不出来的那几条讲成不存在。
+   */
+  async list() {
+    const { items, skipped, ignored } = await this.deps.jobs.listSummary();
+    return { plans: items, skipped, ignored };
+  }
+
   async prepare(sourceId: string, cwd: string, options: { desktopProject?: boolean } = {}) {
     // 两件事分开说：--cwd 是否绝对路径这条在 runImportCodex 里已先拦过，到这里多半是来源 id 写错，
     // 合成一句「需要 Claude 会话 UUID 与绝对路径 --cwd」会把人引去核对一个本来没问题的路径。
