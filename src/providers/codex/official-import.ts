@@ -47,12 +47,13 @@ const WARNINGS = [
 // 但之后按这个目录恢复/续聊会失败。预览只报 prepared 会让用户以为一切就绪，
 // 所以与来源年龄一样放进 warnings；读不出来时单独一档，不能把「没查成」说成可用。
 async function sourceCwdWarning(cwd: string): Promise<string | undefined> {
+  // cwd 来自 plan.json（用户可写）：警告会原样打到终端，先按码点截断再转义，--json 的 plan 仍是原文
+  const shown = escapeControlChars(clipCodePoints(cwd, 160).text);
   try {
     const info = await stat(cwd);
     if (info.isDirectory()) return undefined;
-    return `来源会话的工作目录现在不是目录：${escapeControlChars(cwd)}；导入本身不要求该目录存在，但之后按这个目录恢复会话会失败，请先确认路径。`;
+    return `来源会话的工作目录现在不是目录：${shown}；导入本身不要求该目录存在，但之后按这个目录恢复会话会失败，请先确认路径。`;
   } catch (error) {
-    const shown = escapeControlChars(cwd);
     if (isMissingPathError(error)) {
       return `来源会话的工作目录现在不存在：${shown}；导入本身不要求该目录存在，但之后按这个目录恢复会话会失败（若目录被移动，先在原路径恢复它再恢复会话）。`;
     }
@@ -122,8 +123,13 @@ async function desktopProjectStatusWarning(
   }
   if (current.policy === expected.policy && current.legacyProjectId === expected.legacyProjectId &&
     current.nativeProjectId === expected.nativeProjectId) return undefined;
+  // 项目名与两个 id 来自原生 app-server 的 project/read（Codex 侧写入），同样有界展示；
+  // 这里的警告会被 prepare / status / confirm 三处原样打给用户
   const describe = (project: CodexDesktopProject) =>
-    escapeControlChars(`${project.name}（legacy ${project.legacyProjectId}，app-server ${project.nativeProjectId}）`);
+    escapeControlChars(
+      `${clipCodePoints(project.name, 80).text}（legacy ${clipCodePoints(project.legacyProjectId, 80).text}，` +
+        `app-server ${clipCodePoints(project.nativeProjectId, 80).text}）`,
+    );
   return live
     ? `预览绑定的 Codex Desktop 项目现在与计划不一致：预览时 ${describe(expected)}，当前 ${describe(current)}；confirm 会在取锁前重新核对并拒绝这次计划（未写入任何内容），请重新在桌面端打开该项目，或重新 prepare。`
     : `预览绑定的 Codex Desktop 项目现在与计划不一致：预览时 ${describe(expected)}，当前 ${describe(current)}；这份计划已经执行过，这次核对只说明当时的项目绑定已变，不会改变已写入的结果。`;
@@ -478,11 +484,15 @@ export class OfficialCodexImport {
       ...('error' in prior
         ? [`读取导入执行日志失败，已跳过重复导入检查：${escapeControlChars(prior.error)}`]
         : [
-            ...prior.hits.map((p) =>
-              p.sameContent
-                ? `这个会话此前已导入到 Codex 线程 ${p.outcome.target?.sessionId ?? 'unknown'}（计划 ${p.id.slice(0, 8)}）；再次导入会在 Codex 里多出一份会话。`
-                : `这个会话此前以不同内容导入过（计划 ${p.id.slice(0, 8)}，线程 ${p.outcome.target?.sessionId ?? 'unknown'}），来源此后已经变化。`,
-            ),
+            // 目标会话 id 来自 outcome.json（用户可写）：警告会原样打到终端，先截断再拼；
+            // 完整值仍在 --json 的 prior / outcome 字段里
+            ...prior.hits.map((p) => {
+              const target = p.outcome.target?.sessionId;
+              const shown = target ? escapeControlChars(clipCodePoints(target, 80).text) : 'unknown';
+              return p.sameContent
+                ? `这个会话此前已导入到 Codex 线程 ${shown}（计划 ${p.id.slice(0, 8)}）；再次导入会在 Codex 里多出一份会话。`
+                : `这个会话此前以不同内容导入过（计划 ${p.id.slice(0, 8)}，线程 ${shown}），来源此后已经变化。`;
+            }),
             // 读不出来的那几份没法判断是不是同一个来源：不能说成「确认没导过」。
             // 与 list / doctor 同一口径：警告只点名前 10 条、截断原因，完整原因留在 list --json
             ...(prior.skipped.length
