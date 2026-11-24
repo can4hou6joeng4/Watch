@@ -43,6 +43,23 @@ const WARNINGS = [
 // 扩大的 detect 窗口本身是未在原生客户端复验的路径；来源一旦超出官方默认的 30 天，
 // 就要在预览里说清这次导入依赖扩窗，而不是让用户以为它走的是界面同款范围。
 // 只用文件最后写入时间：它不是会话创建时间，也不判断同一目录里是否已排到 50 条之后。
+// 来源的 cwd 不存在或已不是目录时，导入本身仍可能成功（Codex 接受路径字符串），
+// 但之后按这个目录恢复/续聊会失败。预览只报 prepared 会让用户以为一切就绪，
+// 所以与来源年龄一样放进 warnings；读不出来时单独一档，不能把「没查成」说成可用。
+async function sourceCwdWarning(cwd: string): Promise<string | undefined> {
+  try {
+    const info = await stat(cwd);
+    if (info.isDirectory()) return undefined;
+    return `来源会话的工作目录现在不是目录：${escapeControlChars(cwd)}；导入本身不要求该目录存在，但之后按这个目录恢复会话会失败，请先确认路径。`;
+  } catch (error) {
+    const shown = escapeControlChars(cwd);
+    if (isMissingPathError(error)) {
+      return `来源会话的工作目录现在不存在：${shown}；导入本身不要求该目录存在，但之后按这个目录恢复会话会失败（若目录被移动，先在原路径恢复它再恢复会话）。`;
+    }
+    return `无法确认来源会话的工作目录是否可用（${describePathReadFailureReason(error)}）：${shown}；之后的恢复会话同样依赖这个路径，请先核对。`;
+  }
+}
+
 async function sourceAgeWarning(filePath: string): Promise<string | undefined> {
   let mtimeMs: number;
   try {
@@ -376,9 +393,11 @@ export class OfficialCodexImport {
       .priorImports(plan.source, plan.digest, planId)
       .catch((error: unknown) => ({ error: error instanceof Error ? error.message : String(error) }));
     const ageWarning = await sourceAgeWarning(plan.source.filePath);
+    const cwdWarning = await sourceCwdWarning(plan.source.cwd);
     const warnings = [
       ...WARNINGS,
       ...(ageWarning ? [ageWarning] : []),
+      ...(cwdWarning ? [cwdWarning] : []),
       ...('error' in prior
         ? [`读取导入执行日志失败，已跳过重复导入检查：${prior.error}`]
         : [
