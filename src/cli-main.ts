@@ -274,6 +274,17 @@ function cwdUnusableConclusion(subject: string, consequence: string): string {
 }
 
 /**
+ * 结构化 `--cwd` 状态的可选字段：健康目录返回空对象，调用方直接展开。
+ *
+ * 同一组取值（`missing` / `not-directory` / `denied` / `unknown`，后者附 reason）在七个只读
+ * 入口与 `new` 的 `--json` 上共用；抽出来是为了不再各写一遍三元表达式，也避免新增出口时漏掉。
+ * 与 `prompt --json` 的 `sourceCwd` 同源（各自保留自己的字段名：那边描述来源记录，这边描述 `--cwd`）。
+ */
+function cwdStateField(probe: CwdInspection): { cwdState?: CwdInspection } {
+  return probe.state !== 'ok' ? { cwdState: probe } : {};
+}
+
+/**
  * 列表里的时间格式化。
  *
  * 原生记录里的数值时间戳可能越界（单位写错、字段被写坏）：`new Date(ms).toISOString()`
@@ -695,7 +706,7 @@ async function cmdStatus(cwd: string, json: boolean, chain?: string): Promise<vo
       ...(unattributableStats.length ? { unattributable: unattributableJson(unattributableStats) } : {}),
       // 与 `prompt --json` 的 `sourceCwd` 同一组取值：健康目录不出现，脚本据此把
       // 「本目录没有链 / 没有历史」与「这个 --cwd 根本不可用」分开
-      ...(cwdProbe.state !== 'ok' ? { cwdState: cwdProbe } : {}),
+      ...cwdStateField(cwdProbe),
     }));
     return;
   }
@@ -1545,7 +1556,7 @@ async function cmdSessions(cwd: string, json: boolean, chain?: string): Promise<
         cwd,
         // `providers: []` 分不清「这个目录没有会话」与「--cwd 不可用」：后者时所有 provider
         // 都按字符串精确匹配、必然为空。与 status / recent / usage / search 同一字段
-        ...(cwdProbe.state !== 'ok' ? { cwdState: cwdProbe } : {}),
+        ...cwdStateField(cwdProbe),
         // 库打不开时列表只来自原生扫描（`--chain` 过滤也被忽略）：只有中文 warnings 的话，
         // 脚本会把「已按链过滤」与「过滤根本没生效」当成同一份列表。缺省即库已打开
         ...(store ? {} : { storeAvailable: false }),
@@ -1735,7 +1746,7 @@ async function cmdRecent(cwd: string, json: boolean, limit: number = 8, cwdGiven
       ...(truncated ? { truncated: true, total: results.length } : {}),
       ...(cappedProviders.length ? { capped: cappedProviders } : {}),
       // 空列表 + ok:true 分不清「近期没聊过」与「--cwd 不可用」；与 status / sessions / usage / search 同字段
-      ...(cwdProbe.state !== 'ok' ? { cwdState: cwdProbe } : {}),
+      ...cwdStateField(cwdProbe),
       ...(unavailable.length ? { unavailable } : {}),
       ...(unattributableStats.length ? { unattributable: unattributableJson(unattributableStats) } : {}),
       ...(warnings.length ? { warnings } : {}),
@@ -2895,6 +2906,8 @@ async function cmdNew(cwd: string, providerId: string, json: boolean, chain?: st
             resumeCommand,
             turnCount,
             fromProvider: providerId,
+            // 写入已经发生：这里不是「操作被阻止」，而是告诉脚本 resume 会在一个不可用的目录里失败
+            ...cwdStateField(cwdProbe),
             ...(shiftNote ? { previousChain, currentChain } : {}),
             ...(warnings.length || shiftNote ? { warnings: shiftNote ? [...warnings, shiftNote] : warnings } : {}),
           }),
@@ -2934,6 +2947,8 @@ async function cmdNew(cwd: string, providerId: string, json: boolean, chain?: st
         JSON.stringify({
           ok: true,
           ...publicResult(result),
+          // 同空链分支：会话与链记录已经写入，但 resume 会在不可用的 --cwd 上失败
+          ...cwdStateField(cwdProbe),
           ...(shiftNote ? { previousChain, currentChain } : {}),
           ...(allWarnings.length || shiftNote ? { warnings: shiftNote ? [...allWarnings, shiftNote] : allWarnings } : {}),
         }),
@@ -3141,7 +3156,7 @@ async function cmdChain(cwd: string, json: boolean, action?: string, a?: string,
           })),
           // 链按 --cwd 原字符串分组：路径写错时 `chains: []` 看起来就是「没建过链」。
           // 与 status / sessions / recent / usage / search / doctor 同字段，健康目录不出现
-          ...(cwdProbe.state !== 'ok' ? { cwdState: cwdProbe } : {}),
+          ...cwdStateField(cwdProbe),
           ...(elsewhere.length ? { chainsElsewhere: elsewhere } : {}),
           ...(warnings.length ? { warnings } : {}),
         }));
@@ -3544,7 +3559,7 @@ async function cmdUsage(cwd: string, json: boolean, chain?: string): Promise<voi
       console.log(JSON.stringify({
         ok: true,
         ...result,
-        ...(cwdProbe.state !== 'ok' ? { cwdState: cwdProbe } : {}),
+        ...cwdStateField(cwdProbe),
         ...(store ? {} : { storeAvailable: false }),
       }));
       return;
@@ -3813,7 +3828,7 @@ async function cmdSearch(cwd: string, json: boolean, query: string, resetIndex =
         query,
         cwd,
         // 零命中 + ok:true 分不清「这个目录没有匹配」与「--cwd 不可用」：与 status / sessions / recent / usage 同字段
-        ...(cwdProbe.state !== 'ok' ? { cwdState: cwdProbe } : {}),
+        ...cwdStateField(cwdProbe),
         hits,
         ...(Object.keys(coverageJson).length ? { coverage: coverageJson } : {}),
         ...(truncated ? { truncated: true } : {}),
