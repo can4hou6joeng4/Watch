@@ -8,7 +8,7 @@ import { defaultDbPath, describeStoreErrorReason } from './store.js';
 import { diffTurns, rebindHint } from './handoff.js';
 import type { SessionRef } from './types.js';
 import { readWatchVersion } from './watch-version.js';
-import { cwdProblem, splitElsewhereByDirectory } from './cwd.js';
+import { describeCwdProblem, inspectCwd, splitElsewhereByDirectory, type CwdInspection } from './cwd.js';
 import { clipCodePoints, escapeControlChars } from './display.js';
 import { describeBadLinesScanFailure, scanUnparsableJsonLines } from './jsonl.js';
 import { compressedCopy, compressedRetryAdvice, describeSessionReadFailureReason, isEmptySessionFileReason, isFileSystemErrorCode, probeSessionReadable, sessionFilePresence } from './read-text.js';
@@ -147,6 +147,13 @@ export type StorageProbe = {
 
 export type DoctorReport = {
   cwd: string;
+  /**
+   * `--cwd` 不可用时的结构化状态：与 status / sessions / recent / usage / search 的
+   * `--json` 同一组取值（`missing` / `not-directory` / `denied` / `unknown`，后者附 reason）。
+   * 文本模式只有 warnings 里的中文说明，CI / 脚本据此把「路径写错」与「确实没有会话」分开；
+   * 健康目录不出现。
+   */
+  cwdState?: CwdInspection;
   environment: DoctorEnvironment;
   providers: ProviderInfo[];
   storage: StorageProbe[];
@@ -398,8 +405,10 @@ export async function doctorReport(cwd: string, deps: DoctorDeps): Promise<Docto
   const failures: string[] = [];
   const environment = deps.environment ?? resolveEnvironment(deps.importsRoot ?? null);
 
-  // 路径本身错了，下面每项都会安静地返回 0，看起来像「一切正常」——先把它说清楚
-  const cwdIssue = await cwdProblem(cwd);
+  // 路径本身错了，下面每项都会安静地返回 0，看起来像「一切正常」——先把它说清楚。
+  // 探测结果留到报告里：`--json` 只有 warnings 时脚本得解析中文才知道 --cwd 不可用
+  const cwdProbe = await inspectCwd(cwd);
+  const cwdIssue = describeCwdProblem(cwdProbe, cwd);
   if (cwdIssue) warnings.push(cwdIssue);
   // 符号链接是另一类「路径没写错但匹配不到」：provider 按原生记录的字符串精确比较，
   // 用另一写法打开过的会话不会出现在这里。先记下 realpath，等扫完会话再决定要不要提醒。
@@ -1021,5 +1030,18 @@ export async function doctorReport(cwd: string, deps: DoctorDeps): Promise<Docto
     failures,
     warnings: warnings.length,
   };
-  return { cwd, environment, providers, storage, store, imports, storeFootprint, claudeRetention, claudeProjectRetention, warnings, summary };
+  return {
+    cwd,
+    environment,
+    providers,
+    storage,
+    store,
+    imports,
+    storeFootprint,
+    claudeRetention,
+    claudeProjectRetention,
+    warnings,
+    summary,
+    ...(cwdProbe.state !== 'ok' ? { cwdState: cwdProbe } : {}),
+  };
 }
