@@ -1910,6 +1910,7 @@ async function cmdPrompt(
   profileRaw: string | undefined,
   lastUserTurns: number | undefined,
   sinceCompact: boolean,
+  cwdGiven: boolean,
 ): Promise<void> {
   const profile = profileRaw === undefined ? DEFAULT_PROMPT_PROFILE : parsePromptProfile(profileRaw);
   if (!profile) {
@@ -1951,6 +1952,13 @@ async function cmdPrompt(
   }
   const warnings = [...diagnostics];
   const id = escapeControlChars(foundRef.sessionId);
+  // 与 open 的「--cwd 不参与 open」同一类误读：显式给了 id 时目录来自会话自身记录，
+  // --cwd 一个字节都不参与，静默忽略会让人以为「只在这个目录里找 / 只输出这个目录的内容」
+  if (cwdGiven && !autoPicked) {
+    warnings.push(
+      '--cwd 不参与 prompt <session-id>：会话按 id 全局反查，正文里的目录与路径都来自会话自身记录；它只在不带会话 id、按目录自动挑选时生效',
+    );
+  }
   if (autoPicked) {
     warnings.push(
       `没有指定会话 id，已按修改时间挑选本目录最新的可读会话（${adapter.id} ${id}）；` +
@@ -3509,7 +3517,7 @@ async function main(): Promise<void> {
   if (cmd === 'prompt') {
     // 会话 id 可省略：只输入 `watch prompt` 时按本目录最新可读会话自动挑选（与 catchup 的
     // 「不指定就用最近一条」对齐）。自动挑选是替用户做选择，所以文档头会写明这一点。
-    await cmdPrompt(cwd, json, target, provider, profile, last, sinceCompact);
+    await cmdPrompt(cwd, json, target, provider, profile, last, sinceCompact, cwdGiven);
     return;
   }
   if (cmd === 'inspect') {
