@@ -186,7 +186,9 @@ export async function runImportCodex(args: string[]): Promise<void> {
           `导入计划: ${listing.plans.length} 个（执行日志目录: ${escapeControlChars(officialImportJournalRoot())}）`,
         );
         for (const plan of listing.plans) {
-          console.log(`  ${escapeControlChars(plan.id)}  ${escapeControlChars(plan.route)}  ${plan.status}`);
+          // 已导入的计划带上目标会话 id：不必再跑一次 status 才敢 watch open
+          const target = plan.targetSessionId ? `  目标会话 ${escapeControlChars(plan.targetSessionId)}` : '';
+          console.log(`  ${escapeControlChars(plan.id)}  ${escapeControlChars(plan.route)}  ${plan.status}${target}`);
         }
         if (!listing.plans.length) console.log('  （还没有 prepare 过任何计划）');
         const uncertain = listing.plans.filter((plan) => plan.status === 'uncertain');

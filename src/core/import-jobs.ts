@@ -368,14 +368,17 @@ export class ImportJobs {
   /**
    * 只读汇总全部执行日志的状态。坏目录 / 坏文件逐条跳过（不因一条坏日志整体失败），
    * 但要记进 `skipped`：只报「总数少了」的话，用户不知道少的那些是读不出来还是本来就不存在。
+   *
+   * `targetSessionId` 只在结果里带**非空字符串**时才出现：已导入的计划据此可以直接
+   * `watch open <id>`，不必再跑一次 status；缺失或形状不对时宁可不给，也不把原值当真。
    */
   async listSummary(): Promise<{
-    items: { id: string; route: string; status: ImportJournalStatus }[];
+    items: { id: string; route: string; status: ImportJournalStatus; targetSessionId?: string }[];
     skipped: { id: string; reason: string }[];
     ignored: { name: string; reason: string }[];
   }> {
     const entries = await this.listJournalEntries();
-    const items: { id: string; route: string; status: ImportJournalStatus }[] = [];
+    const items: { id: string; route: string; status: ImportJournalStatus; targetSessionId?: string }[] = [];
     const skipped: { id: string; reason: string }[] = [];
     const ignored: { name: string; reason: string }[] = [];
     for (const entry of entries) {
@@ -405,14 +408,20 @@ export class ImportJobs {
           continue;
         }
         // outcome() 只做 JSON.parse，没按 route 校验；未知状态一律当 uncertain，不虚报成功
-        const outcomeStatus = (await this.outcome(id))?.status as string | undefined;
+        const outcome = await this.outcome(id);
+        const outcomeStatus = outcome?.status as string | undefined;
         const status: ImportJournalStatus =
           outcomeStatus === 'imported' || outcomeStatus === 'associated'
             ? outcomeStatus
             : outcomeStatus || (await this.attempted(id))
               ? 'uncertain'
               : 'prepared';
-        items.push({ id, route: plan.route, status });
+        const target = outcome?.target?.sessionId;
+        items.push(
+          typeof target === 'string' && target
+            ? { id, route: plan.route, status, targetSessionId: target }
+            : { id, route: plan.route, status },
+        );
       } catch (error) {
         // 写了一半或旧格式：跳过，但要说清是这一条读不出来
         skipped.push({ id, reason: error instanceof Error ? error.message : String(error) });
