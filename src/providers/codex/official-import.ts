@@ -453,7 +453,7 @@ export class OfficialCodexImport {
       ...(cwdWarning ? [cwdWarning] : []),
       ...(desktopWarning ? [desktopWarning] : []),
       ...('error' in prior
-        ? [`读取导入执行日志失败，已跳过重复导入检查：${prior.error}`]
+        ? [`读取导入执行日志失败，已跳过重复导入检查：${escapeControlChars(prior.error)}`]
         : [
             ...prior.hits.map((p) =>
               p.sameContent
