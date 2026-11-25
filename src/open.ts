@@ -177,9 +177,24 @@ export type OpenSessionResult = {
  */
 export type ReuseScanGap = 'list-failed' | 'candidates-unreadable' | 'capped' | 'unattributable';
 
+/**
+ * 链上有一条目标 provider 的配对会话、这次却没有沿用它的原因：
+ * zero-byte = 文件 0 字节（内容已丢失）；zero-turns = 文件有内容却解析出 0 轮；
+ * unreadable = 读取 / 解析失败；compressed = 只剩完好的同名压缩副本（让原生重新展开后可再用）；
+ * compressed-empty = 只剩 0 字节的压缩副本；diverged = 它缺少来源一半或更多的轮次，不按同一条线沿用。
+ */
+export type ChainPairSkipReason = 'zero-byte' | 'zero-turns' | 'unreadable' | 'compressed' | 'compressed-empty' | 'diverged';
+export type ChainPairSkipped = { sessionId: string; reason: ChainPairSkipReason };
+
 export type PublicOpenPlan = {
   kind: 'resume' | 'chain' | 'reuse' | 'new';
   turnCount: number;
+  /**
+   * 落点是 reuse / new，但链上其实有一条配对会话没被沿用：链绑定仍指向它（`open` 不写链记录），
+   * 之后的 switch 还会落回那条会话，而这次可能多出一份重复会话。只有中文 warnings 的话，
+   * 脚本分不出「链上本来就没有配对」与「有配对但这次跳过了」。沿用了或链上没有配对时不输出。
+   */
+  chainPairSkipped?: ChainPairSkipped;
   /**
    * 新建并不等于「确认没有可复用的」：复用扫描没查全时这里列出原因，项目里可能因此多出
    * 一份重复会话。扫描完整（或落点不是 new）时不输出；只有中文 warnings 的话，脚本会把
@@ -192,6 +207,7 @@ function publicPlan(plan: OpenPlan): PublicOpenPlan {
   return {
     kind: plan.kind,
     turnCount: plan.turns.length,
+    ...(plan.chainPairSkipped ? { chainPairSkipped: plan.chainPairSkipped } : {}),
     ...(plan.kind === 'new' && plan.reuseScanGaps?.length ? { reuseScanIncomplete: plan.reuseScanGaps } : {}),
   };
 }
@@ -1184,6 +1200,8 @@ export type OpenPlan = {
   resumeCompressed?: 'intact' | 'empty';
   /** new 时：复用扫描没查全的原因（见 `ReuseScanGap`）；查全了为空或缺省 */
   reuseScanGaps?: ReuseScanGap[];
+  /** reuse / new 时：链上有配对会话却没沿用的原因（见 `ChainPairSkipped`）；沿用了或没有配对时缺省 */
+  chainPairSkipped?: ChainPairSkipped;
   /** 来源 / 目标的坏行扫描（见 `unparsableLinesField`）；resume 快路径不扫，两侧干净时缺省 */
   unparsableLines?: UnparsableLines;
   /** 来源会话没收尾（见 `sourceUnfinishedField`）；resume 快路径没有来源，已收尾时缺省 */
@@ -1502,6 +1520,8 @@ async function planOpenInProvider(
   // 不能退到内容匹配/新建——那可能在链上已有配对时多出一个重复会话。
   // `tests/cli-partial-schema-crash.test.ts` 固定了这条契约（坏库下 open --to 必须失败）。
   const chainPaired = mapping ? findChainPaired(mapping, sourceProvider, sourceId, providerId, cwd) : null;
+  // 与下面每一句「本次不沿用」同一处赋值：落到内容匹配 / 新建时随 plan 一起公开
+  let chainPairSkipped: ChainPairSkipped | null = null;
   if (chainPaired) {
     let pairTurns: UnifiedTurn[] | null = null;
     // 写前指纹先于 parse（与 --from 目标侧同一规则）：期间外部追加的内容会进快照，
@@ -1511,6 +1531,7 @@ async function planOpenInProvider(
     // 用户只看到「已转入新会话」，不知道链上原本那一条的历史已经没了、链绑定仍指向它。
     const pairedEmpty = await zeroByteSessionReason(chainPaired);
     if (pairedEmpty) {
+      chainPairSkipped = { sessionId: chainPaired.sessionId, reason: 'zero-byte' };
       diagnostics?.push(
         `链上 ${target.displayName} 会话 ${escapeControlChars(chainPaired.sessionId)} 的${pairedEmpty}；这次不沿用这条空会话（改用内容匹配或新建），` +
           `但链绑定仍指向它——若它本该有内容，先从备份恢复该文件，否则之后的 switch 还会落回这条空会话；也可 watch adopt ${target.id} --session <另一个会话 id> 换绑，或用 watch chain new <新名字> 另起一条链`,
@@ -1525,6 +1546,10 @@ async function planOpenInProvider(
         // 原因按 errno 说清楚：权限问题会被「已不存在」引去白换一次绑定；压缩副本又相反，
         // 它还在、只是本版不读，必须说「让原生展开」而不是让人重建历史。
         const copy = compressedCopy(await sessionFilePresence(chainPaired.filePath));
+        chainPairSkipped = {
+          sessionId: chainPaired.sessionId,
+          reason: copy?.kind === 'intact' ? 'compressed' : copy ? 'compressed-empty' : 'unreadable',
+        };
         // 与 pairedEmpty 同理：本次改用内容匹配或新建，但 open 不写链记录，链仍指向这条
         // 不可用的会话，下一次 switch 会再次撞上。完好压缩副本除外——重新展开后同一会话可复用。
         const chainStillBound = copy?.kind === 'intact'
@@ -1570,6 +1595,18 @@ async function planOpenInProvider(
                 : `已把 ${source.adapter.displayName} 的新增 ${delta.length} 轮并入链上 ${target.displayName} 会话 ${escapeControlChars(chainPaired.sessionId)}`,
           },
         };
+      }
+      chainPairSkipped = { sessionId: chainPaired.sessionId, reason: pairTurns.length === 0 ? 'zero-turns' : 'diverged' };
+      if (pairTurns.length > 0) {
+        // 配对会话有内容，却缺少来源一半或更多的轮次：内容校验不通过，落进内容匹配或新建。
+        // 以前这一档一个字都不说——来源在上次交接后又写了很多时最常见，结果是 `已转入新会话`，
+        // 用户不知道链上那条会话被跳过了、项目里多出一份与它部分重复的会话。
+        diagnostics?.push(
+          `链上 ${target.displayName} 会话 ${escapeControlChars(chainPaired.sessionId)} 缺少来源 ${turns.length} 轮里的 ${delta.length} 轮（达到一半），` +
+            `本次不按同一条线沿用，改用内容匹配或新建——来源在上次交接之后又写了很多，或这条链上分叉出了另一条线时都会这样；` +
+            `若没有别的会话可复用，本次会新建一份，${target.displayName} 侧可能因此多出一份与它部分重复的会话。` +
+            `链绑定仍指向它，之后的 switch 仍会落回那条会话；要把这些内容并进它，用 watch open ${escapeControlChars(chainPaired.sessionId)} --from ${escapeControlChars(sourceId)}`,
+        );
       }
       if (pairTurns.length === 0) {
         // 文件在、parse 也成功，却解析不出任何对话（只剩 rollout 头 / 内容被清空）：
@@ -1695,6 +1732,7 @@ async function planOpenInProvider(
         turns: delta,
         merged: delta.length,
         snapshot,
+        ...(chainPairSkipped ? { chainPairSkipped } : {}),
         ...unparsableLinesField(badSourceScan, reuseBadLines),
         ...unfinished,
         ...targetUnfinishedField(destinationTurns, delta.length),
@@ -1736,6 +1774,7 @@ async function planOpenInProvider(
       merged: outgoing.length,
       snapshot: null,
       ...(reuseScanGaps.length ? { reuseScanGaps } : {}),
+      ...(chainPairSkipped ? { chainPairSkipped } : {}),
       ...unparsableLinesField(badSourceScan, null),
       ...unfinished,
       ...contextDisclosuresField(turns, null),
