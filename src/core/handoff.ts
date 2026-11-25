@@ -1508,6 +1508,8 @@ export type HandoffResult = {
    * 但结论句本身也得改，否则用户复制的那条命令一执行就失败却找不到矛盾在哪。
    */
   resumeUnreadable?: boolean;
+  /** 恢复同家会话时仅找到压缩副本。`intact` 表示非零字节，`empty` 表示 0 字节。 */
+  resumeCompressed?: CompressedCopyNote['kind'];
   /** 文件探测通过，但 Watch 未能解析要恢复的会话内容。 */
   resumeParseFailed?: boolean;
   /**
@@ -2134,6 +2136,7 @@ export async function handoff(
         // 这条分支从不写链记录：调用方不得据此说「这次写了链记录」（第 310 轮）
         chainRecordState: 'not-attempted',
         ...(resumeReadProblem ? { resumeUnreadable: true } : {}),
+        ...(resumeCompressed ? { resumeCompressed: resumeCompressed.kind } : {}),
         ...(resumeParseFailed ? { resumeParseFailed: true } : {}),
         ...(resumeTargetReadableEmpty ? { resumeTargetEmpty: true } : {}),
         ...(resumeTargetBadLines ? { unparsableLines: resumeTargetBadLines } : {}),
