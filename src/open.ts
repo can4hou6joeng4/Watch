@@ -143,6 +143,13 @@ export type OpenSessionResult = {
    * 这个字段能。两侧都有内容时不输出，目标是这次新建的会话时不给 target。
    */
   emptySessions?: EmptySessions;
+  /**
+   * 目标会话里已有、与来源同文本的回复中，缺少来源过程事件（思考 / 过程文本 / 工具调用等）的轮数。
+   * 这些轮次按文本对齐被判为「已包含」而跳过，过程事件不会写进目标——`mergedTurns` 与
+   * 「内容已全部包含」都看不出这一点。`--from` 与 `--to` 的链上配对 / 复用落点给；只数目标格式
+   * 写得出的事件，与对应的中文 warnings 同一处取数。为 0、或目标是这次新建的会话时不输出。
+   */
+  pairedTurnsMissingEvents?: number;
   /** 来源会话在 --from 并入 / --to 转入期间被写入过（stat 字节数与方向），与 switch / prompt 同字段 */
   sourceDrift?: SourceChangeSince;
   /** 来源会话在期间「量不出来」有没有变化，附原因；与 sourceDrift 互斥 */
@@ -629,6 +636,7 @@ export async function openSession(
   let targetUnfinished: TargetUnfinishedField = {};
   let contextField: ContextDisclosuresField = {};
   let emptyField: EmptySessionsField = {};
+  let pairedMissing: { pairedTurnsMissingEvents?: number } = {};
   let sourceUsage: TokenUsage | null = null;
   // 记录的目录可能已被移动 / 删除：会话内容照常可读、转入也能写成，但返回的 cd 会在第一步失败
   const cwdInspection = await sessionCwdInspection(target.found.ref.cwd);
@@ -847,6 +855,7 @@ export async function openSession(
       // `--from` 都会重演一次），但必须披露有多少轮只并入了文本。
       const missingEvents = countPairedTurnsMissingEvents(srcTurns, dstTurns, target.adapter);
       if (missingEvents > 0) {
+        pairedMissing = { pairedTurnsMissingEvents: missingEvents };
         warnings.push(
           `目标会话 ${escapeControlChars(targetId)}（${target.adapter.displayName}）已有 ${missingEvents} 轮与来源同文本的回复，` +
             `但缺少来源里的过程事件（思考 / 过程文本 / 工具调用等）：这些轮次按文本对齐被判为「已包含」，对应过程事件不会写进目标` +
@@ -915,6 +924,7 @@ export async function openSession(
             targetUnfinished = {};
             contextField = sourceContextDisclosuresOnly(contextField.contextDisclosures);
             emptyField = sourceEmptySessionOnly(emptyField.emptySessions);
+            pairedMissing = {};
           }
           merged = dedup.length;
           notes.push(
@@ -1126,6 +1136,7 @@ export async function openSession(
     ...targetUnfinished,
     ...contextField,
     ...emptyField,
+    ...pairedMissing,
     ...srcDrift,
     // 与 status / new / chain 写操作同一字段：命令成功、命令已给出，但 cd 会在不可用目录上失败
     ...(cwdInspection.probe.state !== 'ok' ? { cwdState: cwdInspection.probe } : {}),
@@ -1212,6 +1223,8 @@ export type OpenPlan = {
   contextDisclosures?: ContextDisclosures;
   /** resume 快路径要恢复的会话读到时是空的（见 `emptySessionsField`）；有内容时缺省 */
   emptySessions?: EmptySessions;
+  /** chain / reuse 时：既有目标里同文本、却缺来源过程事件的轮数；为 0 时缺省 */
+  pairedTurnsMissingEvents?: number;
 };
 
 type PlannedOpen =
@@ -1295,7 +1308,7 @@ function warnPairedMissingEvents(
   target: ProviderAdapter,
   sourceId: string,
   diagnostics?: string[],
-): void {
+): { pairedTurnsMissingEvents?: number } {
   const missingEvents = countPairedTurnsMissingEvents(sourceTurns, targetTurns, target);
   if (missingEvents > 0) {
     diagnostics?.push(
@@ -1304,6 +1317,8 @@ function warnPairedMissingEvents(
         `；需要完整过程记录时可用 watch prompt ${escapeControlChars(sourceId)} --profile full 查看来源原文`,
     );
   }
+  // 与上面那句警告同一处取数
+  return missingEvents > 0 ? { pairedTurnsMissingEvents: missingEvents } : {};
 }
 
 /**
@@ -1567,7 +1582,7 @@ async function planOpenInProvider(
       const delta = dedupeCallEvents(diffTurns(turns, pairTurns));
       if (delta.length < turns.length / 2) {
         const pairBadLines = await warnTargetBadLines(chainPaired, target, diagnostics);
-        warnPairedMissingEvents(turns, pairTurns, chainPaired, target, sourceId, diagnostics);
+        const pairMissing = warnPairedMissingEvents(turns, pairTurns, chainPaired, target, sourceId, diagnostics);
         // 复用后 resume 的就是这条会话：它自己的断点要披露，与来源那一侧分开说
         warnResumeTargetUnfinished(
           pairTurns,
@@ -1589,6 +1604,7 @@ async function planOpenInProvider(
             ...unfinished,
             ...targetUnfinishedField(pairTurns, delta.length),
             ...contextDisclosuresField(turns, pairTurns),
+            ...pairMissing,
             note:
               delta.length === 0
                 ? `回到链上 ${target.displayName} 会话 ${escapeControlChars(chainPaired.sessionId)}，无需并入`
@@ -1714,7 +1730,7 @@ async function planOpenInProvider(
       };
     }
     const reuseBadLines = await warnTargetBadLines(reuse, target, diagnostics);
-    warnPairedMissingEvents(turns, destinationTurns, reuse, target, sourceId, diagnostics);
+    const reuseMissingEvents = warnPairedMissingEvents(turns, destinationTurns, reuse, target, sourceId, diagnostics);
     const delta = dedupeCallEvents(diffTurns(turns, destinationTurns));
     // 复用后 resume 的就是这条会话：目标自己的上下文差异（OpenCode 回退标记等）不属于增量，
     // 零增量时同样要说，否则「内容已全部包含」会成为唯一结论；与来源同文时只留一条。
@@ -1737,6 +1753,7 @@ async function planOpenInProvider(
         ...unfinished,
         ...targetUnfinishedField(destinationTurns, delta.length),
         ...contextDisclosuresField(turns, destinationTurns),
+        ...reuseMissingEvents,
         note:
           delta.length === 0
             ? `已在 ${target.displayName} 找到包含全部内容的既有会话 ${escapeControlChars(reuse.sessionId)}，直接打开，无需新建`
@@ -1984,6 +2001,9 @@ export async function openInProvider(
       ...(plan.sourceUnfinished ? { sourceUnfinished: plan.sourceUnfinished } : {}),
       // 旧目标被移走而改为新建时不给：新会话里只有本次写入的内容（见 targetRecreated）
       ...(plan.targetUnfinished && !recreated.targetRecreated ? { targetUnfinished: plan.targetUnfinished } : {}),
+      ...(plan.pairedTurnsMissingEvents && !recreated.targetRecreated
+        ? { pairedTurnsMissingEvents: plan.pairedTurnsMissingEvents }
+        : {}),
       ...(recreated.targetRecreated
         ? sourceContextDisclosuresOnly(plan.contextDisclosures)
         : plan.contextDisclosures
@@ -2099,6 +2119,7 @@ export async function checkOpenInProvider(
     ...(plan.targetUnfinished ? { targetUnfinished: plan.targetUnfinished } : {}),
     ...(plan.contextDisclosures ? { contextDisclosures: plan.contextDisclosures } : {}),
     ...(plan.emptySessions ? { emptySessions: plan.emptySessions } : {}),
+    ...(plan.pairedTurnsMissingEvents ? { pairedTurnsMissingEvents: plan.pairedTurnsMissingEvents } : {}),
   };
   // 空来源也会新建会话（Kimi 要真跑一次 CLI），所以 CLI 判定不能放在 turns===0 之后
   const cliBlock = await newSessionCliBlock(target, plan);
