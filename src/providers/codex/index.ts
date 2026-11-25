@@ -184,7 +184,7 @@ async function readFirstLine(filePath: string): Promise<string> {
  * 前者说明这个会话可能存在却没查成，后者说明会话文件本身不可用。 */
 async function rolloutCwdDetail(
   filePath: string,
-): Promise<{ cwd: string | null; error?: string; code?: string }> {
+): Promise<{ cwd: string | null; error?: string; code?: string; emptyFile?: true }> {
   let first: string;
   try {
     first = await readFirstLine(filePath);
@@ -195,7 +195,7 @@ async function rolloutCwdDetail(
       code: (error as NodeJS.ErrnoException).code ?? 'EIO',
     };
   }
-  if (!first) return { cwd: null, error: '文件是空的（没有 session_meta 首行）' };
+  if (!first) return { cwd: null, error: '文件是空的（没有 session_meta 首行）', emptyFile: true };
   const record = parseJsonObject(first);
   if (!record) return { cwd: null, error: '首行不是合法 JSON 对象' };
   if (record.type !== 'session_meta') return { cwd: null, error: '首行不是 session_meta 记录' };
@@ -426,6 +426,7 @@ export async function findCodexSessionById(
               'Watch 没有读取也没有改动这个文件；只能从备份恢复或重新开一次会话'
           : `找到会话 ${escapeControlChars(sessionId)} 的压缩副本 ${escapeControlChars(compressedMatch)}，但本版 Watch 只读取未压缩的 .jsonl：` +
               'Watch 没有读取也没有改动这个文件；在 Codex 里继续该会话会把它重新展开为 .jsonl，不要直接删除或改名',
+        empty || undefined,
       );
     }
     // 有目录读不出来时不能下「没有这个会话」的结论：抛出原因，由 resolveById 记进 diagnostics，
@@ -440,11 +441,12 @@ export async function findCodexSessionById(
   }
   // 文件是按名字精确命中的，读不出 cwd 不等于「会话不存在」：抛给 resolveById 记进 diagnostics，
   // 否则用户会去核对 id 或以为 Codex 没装，而不是检查这个文件的权限 / 内容
-  const { cwd, error } = await rolloutCwdDetail(filePath);
+  const { cwd, error, emptyFile } = await rolloutCwdDetail(filePath);
   if (!cwd) {
     throw new SessionLookupFailureError(
       'found-unreadable',
       `找到 rollout 文件 ${escapeControlChars(filePath)}，但读不出它的工作目录：${error ?? '原因未知'}`,
+      emptyFile,
     );
   }
   const fileRef: SessionRef = { provider: 'codex', sessionId, filePath, cwd };

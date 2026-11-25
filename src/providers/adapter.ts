@@ -115,10 +115,13 @@ export type SessionLookupFailureKind = 'found-unreadable' | 'incomplete';
 /** 见 `SessionLookupFailureKind`：消息原样保留（已是中文），额外带一个机器可读的 kind */
 export class SessionLookupFailureError extends Error {
   readonly kind: SessionLookupFailureKind;
-  constructor(kind: SessionLookupFailureKind, message: string) {
+  /** 适配器已确认这条会话文件是 0 字节（内容已丢失）；不靠中文原因去猜 */
+  readonly emptyFile?: true;
+  constructor(kind: SessionLookupFailureKind, message: string, emptyFile?: true) {
     super(message);
     this.name = 'SessionLookupFailureError';
     this.kind = kind;
+    this.emptyFile = emptyFile;
   }
 }
 

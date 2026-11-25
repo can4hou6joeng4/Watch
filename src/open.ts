@@ -303,7 +303,8 @@ export function lookupMissHeadline(
     // 尾句不能预设「文件坏了」：压缩副本那一档文件完好，只是本版不读压缩格式，
     // 说「先修好这条会话」会与原因里的「不要直接删除或改名」自相矛盾。
     // 0 字节文件的下一步又和权限相反（内容已丢失，只能恢复或重开），单独补一句。
-    const anyEmpty = found.some((m) => isEmptySessionFileReason(m.reason));
+    // 优先读结构化字段，再回退到文本（兼容尚未声明 emptyFile 的适配器）
+    const anyEmpty = found.some((m) => m.emptyFile || isEmptySessionFileReason(m.reason));
     return (
       `${subject} ${escapeControlChars(id)} 找到了，但读不出来${scope}：${list}。` +
       (anyEmpty
@@ -438,7 +439,9 @@ export async function resolveById(
           provider: a.id,
           kind: error.kind,
           reason,
-          ...(isEmptySessionFileReason(reason) ? { emptyFile: true as const } : {}),
+          // 判据优先用适配器显式声明的 emptyFile：Codex 的 0 字节 rollout / 0 字节压缩副本
+          // 说的是「文件是空的（没有 session_meta 首行）」，原文判据认不出来
+          ...(error.emptyFile || isEmptySessionFileReason(reason) ? { emptyFile: true as const } : {}),
         });
       }
       continue;
