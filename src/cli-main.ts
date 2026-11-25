@@ -377,6 +377,14 @@ function pushEscapedContentWarning(
 }
 
 /**
+ * 行级 `emptyFile`：`previewError` 只给人读，脚本不该解析中文才知道 0 字节。
+ * 判据与 `pushPreviewErrorWarning()` 同源；权限 / I/O 失败不出现该字段。
+ */
+function withEmptyFileFlag<T extends { previewError?: string }>(item: T): T & { emptyFile?: true } {
+  return item.previewError && isEmptySessionFileReason(item.previewError) ? { ...item, emptyFile: true } : item;
+}
+
+/**
  * 预览读不出来时不能说成「这条会话没有内容」。
  *
  * 各适配器的预览都是从会话文件**再读一遍**取首条用户消息，以前读失败一律 `catch { return null }`，
@@ -1675,7 +1683,9 @@ async function cmdSessions(cwd: string, json: boolean, chain?: string): Promise<
         // `--chain` 给了却没用上（本目录没有这条链 / 链查询失败 / 库没打开）：此时上面的
         // `providers` 是全部会话，脚本不能把它当成过滤结果。不带 `--chain` 时不出现
         ...(chain && !chainRow ? { chainFilterApplied: false } : {}),
-        providers: result,
+        // 0 字节的行在 `previewError` 之外另带 `emptyFile`：脚本不用解析中文，
+        // 权限 / I/O 失败的行不出现该字段（与 status / chain list / doctor 同口径）
+        providers: result.map((group) => ({ ...group, sessions: group.sessions.map(withEmptyFileFlag) })),
         ...(unavailable.length ? { unavailable } : {}),
         ...(unattributableStats.length ? { unattributable: unattributableJson(unattributableStats) } : {}),
         ...(warnings.length ? { warnings } : {}),
@@ -1724,6 +1734,8 @@ async function cmdRecent(cwd: string, json: boolean, limit: number = 8, cwdGiven
     preview?: string;
     /** 预览读不出来的原因：缺省不等于「这条会话没有内容」 */
     previewError?: string;
+    /** `previewError` 属于 0 字节档：内容已丢失，脚本不必解析中文 */
+    emptyFile?: true;
   };
   // 用 Map 而不是数组 + Set：同一会话可能先由映射表命中、再被原生扫描命中，
   // 原生那边的 mtime 与 preview 更准，合并时不能被「先到先得」丢掉（以前映射先入就丢 preview）。
@@ -1819,6 +1831,7 @@ async function cmdRecent(cwd: string, json: boolean, limit: number = 8, cwdGiven
           updatedAt: s.updatedAt,
           preview: s.preview,
           ...(s.previewError ? { previewError: s.previewError } : {}),
+          ...(s.previewError && isEmptySessionFileReason(s.previewError) ? { emptyFile: true as const } : {}),
         });
       }
     } catch (error) {
