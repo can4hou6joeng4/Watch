@@ -156,6 +156,10 @@ Run `watch open <session-id> --to <provider> --check --json` to preview the targ
 
 Preflight and execution share the same `plan` fields.
 
+**Blocked writes**
+
+Write paths in `new`, `switch`, `adopt`, and `open` share a refusal contract: `ok: false`, `blocked: true`, `code`, and `hint`, with exit status 1 and a `sessionId` when one can be identified. `new` uses the same structure when the chain tip is already the target provider but its session file is missing, exists only as a compressed copy, or cannot be read: `code` is `target_missing` or `target_unreadable`, and `hint` distinguishes the copy state and the repair path. A healthy tip that merely merits "resume directly" or a zero-turn notice stays a plain `error` without `blocked`. In text mode the error is prefixed with `[blocked:<code>]` and the hint follows on its own line.
+
 - `plan.kind` describes how the target was selected. `resume` uses the original session in the same tool, `chain` uses a paired session on the chain, `reuse` uses an existing session matched by content, and `new` creates a session. `plan.turnCount` is the number of turns planned for writing.
 - `plan.reuseScanIncomplete` lists the reasons when the plan creates a session after an incomplete reuse scan. `capped` means the list reached its cap, `candidates-unreadable` means some candidates could not be read, `list-failed` means the list could not be read, and `unattributable` means files were skipped because they could not be assigned to a directory. Creating a session in these cases may produce a duplicate.
 - `plan.chainPairSkipped` gives the paired session’s ID and the reason it was skipped. `zero-byte` means an empty file, `zero-turns` means it parsed to zero turns, `unreadable` means the read failed, `compressed` / `compressed-empty` mean only a compressed copy remains, and `diverged` means the paired session is missing at least half of the source turns. The chain still points to the original paired session, so a later `switch` may select it.
