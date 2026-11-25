@@ -158,7 +158,7 @@ import-codex  prepare|confirm|status|list|project-prepare|project-confirm|projec
 
 **写入被拒（`blocked`）**
 
-`new`、`switch`、`adopt` 与 `open` 的写路径在实际写入被拒时统一给出 `ok: false`、`blocked: true`、`code`、`hint`，退出码为 1；能指认会话时还带 `sessionId`。`new` 的链尾已是目标 provider 但会话文件被删、只剩压缩副本或读不出来时也走这份结构：`code` 分别为 `target_missing` / `target_unreadable`，`hint` 按副本形态与修复方向分档；健康链尾的「直接 resume 即可」或 0 轮提示仍是普通 `error`，不带 `blocked`。文本模式在错误前加 `[blocked:<code>]`，另起一行给 `hint`。
+`new`、`switch`、`adopt` 与 `open` 的写路径在实际写入被拒时统一给出 `ok: false`、`blocked: true`、`code`、`hint`，退出码为 1；能指认会话时还带 `sessionId`。`new` 的链尾已是目标 provider 但会话文件被删、只剩压缩副本或读不出来时也走这份结构：`code` 分别为 `target_missing` / `target_unreadable`，`hint` 按副本形态与修复方向分档；健康链尾的「直接 resume 即可」或 0 轮提示仍是普通 `error`，不带 `blocked`。文本模式在错误前加 `[blocked:<code>]`，另起一行给 `hint`。如果链尾文件缺失，可从备份还原、用 `watch adopt <provider> --session <另一个会话 id>` 换绑，或另建一条链。
 
 - `plan.kind` 表示目标选择方式。`resume` 恢复同一家工具的原会话，`chain` 使用链上配对会话，`reuse` 使用按内容匹配的既有会话，`new` 新建。`plan.turnCount` 是计划写入的轮数。
 - `plan.reuseScanIncomplete` 在计划新建且复用扫描不完整时列出原因。`capped` 表示达到列表上限，`candidates-unreadable` 表示有候选会话读不出来，`list-failed` 表示会话列表读取失败，`unattributable` 表示有会话文件因无法归属目录而被跳过。此时新建可能产生重复会话。

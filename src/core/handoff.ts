@@ -847,7 +847,7 @@ export async function createChainSession(
         `链尾已是 ${providerId}，但链尾会话 ${escapeControlChars(tipId)} ${broken}：${escapeControlChars(tail.toRef.filePath)}；` +
           `本次无法交接也无法 resume——可先恢复该文件，或用 watch chain new <新名字> 另起一条链`,
         tipPresence.state === 'missing'
-          ? '本次未写入任何内容；文件不在了，可先 watch switch <另一侧> 重新绑定，或 watch chain new <新名字> 另起一条链。'
+          ? `本次未写入任何内容。可从备份恢复原文件，用 watch adopt ${providerId} --session <另一个会话 id> 换绑，或用 watch chain new <新名字> 另起一条链。`
           : '本次未写入任何内容；先恢复该路径（权限或同名目录占位），或 watch chain new <新名字> 另起一条链。',
       );
     }
