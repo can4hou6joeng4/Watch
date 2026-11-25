@@ -2112,9 +2112,13 @@ async function cmdPrompt(
   // 坏行扫描管「文件在、但内容被截断」，都没有才是合法空会话或格式没认出来。
   // 文档里那句结论必须说清是哪一种：0 字节要从备份恢复，有坏行则先确认文件完整性。
   let emptySourceNote: string | undefined;
+  // 0 字节与「可读但没有记录」在 md 里只是两句中文；脚本要分档就得有结构化字段
+  // （与 status / sessions / recent / usage / doctor 的 `emptyFile` 同口径）
+  let sourceEmptyFile = false;
   if (turns.length === 0) {
     const emptyReason = await probeSessionReadable(foundRef.filePath);
     if (emptyReason) {
+      sourceEmptyFile = isEmptySessionFileReason(emptyReason);
       warnings.push(`会话 ${id} 没有可交接的内容：${emptyReason}`);
       emptySourceNote = `${emptyReason}；需要完整内容请先恢复来源文件`;
     } else {
@@ -2320,6 +2324,9 @@ async function cmdPrompt(
       // 脚本要能区分「按 id 查到的」与「替你猜的」：两者的可信度不一样
       ...(autoPicked ? { autoPicked: true } : {}),
       markdown: result.markdown,
+      // 来源是 0 字节（内容已丢失）时的结构化结论：正文里那句中文与 warnings 同源，
+      // 但脚本不该解析中文；可读的空会话、坏行截断都不出现该字段
+      ...(sourceEmptyFile ? { sourceEmptyFile: true } : {}),
       // 与头部「时间范围」括注同源：脚本不必解析 Markdown 才知道时间是推定值、或只覆盖部分轮次
       ...(adapter.timingNote ? { timeRangeNote: adapter.timingNote } : {}),
       ...(result.timestampNote ? { timestampNote: result.timestampNote } : {}),
