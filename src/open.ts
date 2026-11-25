@@ -740,7 +740,7 @@ export async function openSession(
       if (contextDisclosure) warnings.push(contextDisclosure.summary);
       // 目标那一侧还没读：先记来源，后面读目标失败时这一半也不会丢
       contextField = contextDisclosuresField(srcTurns, null);
-      const srcBadScan = await scanUnparsableJsonLines(source.found.ref.filePath);
+      const srcBadScan = await scanUnparsableJsonLines(source.found.ref.filePath, { allowMissing: false });
       // 目标那一侧还没扫：先记来源，后面读目标失败时这一半也不会丢
       badLines = unparsableLinesField(srcBadScan, null);
       if (srcBadScan.count > 0) {
@@ -835,7 +835,7 @@ export async function openSession(
         (msg) => warnings.push(msg),
       );
       unfinished = sourceUnfinishedField(srcTurns);
-      const dstBadScan = await scanUnparsableJsonLines(target.found.ref.filePath);
+      const dstBadScan = await scanUnparsableJsonLines(target.found.ref.filePath, { allowMissing: false });
       badLines = unparsableLinesField(srcBadScan, dstBadScan);
       if (dstBadScan.count > 0) {
         warnings.push(
@@ -882,9 +882,17 @@ export async function openSession(
         // 目标自己解析出 0 轮（文件不是 0 字节）而这次又什么都没并入：结果里的 resume 打开的是一条
         // 空会话。单独 `open <id>` 对同一条会话会说，这里以前只说来源那一侧——目标的状态无人提及。
         if (dstTurns.length === 0 && !targetZeroByte) {
+          const dstZeroConsequence = `下面这条 resume 命令打开的是空会话——如果它本该有历史，先在 ${target.adapter.displayName} 里打开它确认，或从备份恢复该文件（Watch 不会替你重建历史）`;
           warnings.push(
             `目标会话 ${escapeControlChars(targetId)}（${target.adapter.displayName}）解析出 0 轮（没有可继续的对话），这次也没有并入任何内容：` +
-              `下面这条 resume 命令打开的是空会话——如果它本该有历史，先在 ${target.adapter.displayName} 里打开它确认，或从备份恢复该文件（Watch 不会替你重建历史）`,
+              // 干净的空目标保留原口径；只有坏行或扫描失败时才改说文件事实，避免把「没扫完」讲成合法空会话
+              (dstBadScan.count > 0 || dstBadScan.error
+                ? describeZeroTurnReason(
+                    dstBadScan,
+                    '可能是刚建出来的空会话，也可能内容已被清空',
+                    dstBadScan.error ? '' : dstZeroConsequence,
+                  )
+                : dstZeroConsequence),
           );
         }
         notes.push(
@@ -1037,12 +1045,17 @@ export async function openSession(
         } else {
           // 文件可读、parse 也成功，却 0 轮：`watch new` 建出的合法空会话、内容被清空只剩占位头，
           // 以及末尾被截断的 JSONL（parse 跳过坏行）都长这样；显式扫一次坏行，按事实分档。
-          const zeroScan = await scanUnparsableJsonLines(target.found.ref.filePath);
+          const zeroScan = await scanUnparsableJsonLines(target.found.ref.filePath, { allowMissing: false });
           badLines = unparsableLinesField(null, zeroScan);
           warnings.push(
             `会话 ${escapeControlChars(target.found.ref.sessionId)}（${target.adapter.displayName}）解析出 0 轮（没有可继续的对话）：` +
-              `${describeZeroTurnReason(zeroScan, '可能是刚建出来的空会话，也可能内容已被清空')}；` +
-              `下面这条 resume 命令打开的是空会话——如果它本该有历史，先在 ${target.adapter.displayName} 里打开它确认，或从备份恢复该文件（Watch 不会替你重建历史）`,
+              describeZeroTurnReason(
+                zeroScan,
+                '可能是刚建出来的空会话，也可能内容已被清空',
+                zeroScan.error
+                  ? ''
+                  : `下面这条 resume 命令打开的是空会话——如果它本该有历史，先在 ${target.adapter.displayName} 里打开它确认，或从备份恢复该文件（Watch 不会替你重建历史）`,
+              ),
           );
         }
       }
@@ -1286,7 +1299,7 @@ async function warnTargetBadLines(
   target: ProviderAdapter,
   diagnostics?: string[],
 ): Promise<BadLinesScan> {
-  const scan = await scanUnparsableJsonLines(ref.filePath);
+  const scan = await scanUnparsableJsonLines(ref.filePath, { allowMissing: false });
   if (scan.count > 0) {
     diagnostics?.push(
       `目标会话 ${escapeControlChars(ref.sessionId)}（${target.displayName}）有 ${scan.count} 行无法解析（截断或损坏）：增量判定可能偏多，可能重复追加既有内容`,
@@ -1420,12 +1433,17 @@ async function planOpenInProvider(
         } else {
           // 与 `open <id>` 单独打开同一档：可读、parse 成功却 0 轮，可能刚建出来，也可能内容已被清空
           // 或末尾损坏；显式扫一次坏行后再分档。`--check` 也吃这份 diagnostics，预检会提前说。
-          const ownZeroScan = await scanUnparsableJsonLines(sourceRef.filePath);
+          const ownZeroScan = await scanUnparsableJsonLines(sourceRef.filePath, { allowMissing: false });
           resumeBadLines = unparsableLinesField(null, ownZeroScan);
           diagnostics?.push(
             `目标会话 ${escapeControlChars(sourceRef.sessionId)}（${target.displayName}）解析出 0 轮（没有可继续的对话）：` +
-              `${describeZeroTurnReason(ownZeroScan, '可能是刚建出来的空会话，也可能内容已被清空')}；这次要 resume 的就是它——` +
-              `如果它本该有历史，先在 ${target.displayName} 里打开它确认，或从备份恢复该文件（Watch 不会替你重建历史）`,
+              describeZeroTurnReason(
+                ownZeroScan,
+                '可能是刚建出来的空会话，也可能内容已被清空',
+                ownZeroScan.error
+                  ? ''
+                  : `这次要 resume 的就是它——如果它本该有历史，先在 ${target.displayName} 里打开它确认，或从备份恢复该文件（Watch 不会替你重建历史）`,
+              ),
           );
         }
       }
@@ -1482,7 +1500,7 @@ async function planOpenInProvider(
   const contextDisclosure = findContextDisclosure(turns);
   if (contextDisclosure) diagnostics?.push(contextDisclosure.summary);
   // parse 跳过坏行不会报错，round-trip 也比的是解析结果：不扫一遍就会把「少了几轮」当完整转入
-  const badSourceScan = await scanUnparsableJsonLines(sourceRef.filePath);
+  const badSourceScan = await scanUnparsableJsonLines(sourceRef.filePath, { allowMissing: false });
   if (badSourceScan.count > 0) {
     diagnostics?.push(
       `来源会话 ${escapeControlChars(sourceId)} 有 ${badSourceScan.count} 行无法解析（截断或损坏），已跳过；转入内容可能不完整`,
@@ -1634,7 +1652,7 @@ async function planOpenInProvider(
         // 决策 1 的内容校验必然不通过，静默退到内容匹配或新建。链绑定仍指向这条空会话，
         // 下一次 switch 会再次撞上——与 0 字节副本同一类，不能当作「正常换用」。
         // parse 跳过坏行不会报错：不扫一遍就会把「文件被截断」讲成「本来就没有对话」。
-        const pairBadScan = await scanUnparsableJsonLines(chainPaired.filePath);
+        const pairBadScan = await scanUnparsableJsonLines(chainPaired.filePath, { allowMissing: false });
         const pairZeroFacts =
           pairBadScan.count > 0
             ? `文件里有 ${pairBadScan.count} 行无法解析（截断或损坏），内容可能是被截断而不只是「本来就没有对话」`
