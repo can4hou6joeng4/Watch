@@ -1038,6 +1038,7 @@ export async function openSession(
           // 文件可读、parse 也成功，却 0 轮：`watch new` 建出的合法空会话、内容被清空只剩占位头，
           // 以及末尾被截断的 JSONL（parse 跳过坏行）都长这样；显式扫一次坏行，按事实分档。
           const zeroScan = await scanUnparsableJsonLines(target.found.ref.filePath);
+          badLines = unparsableLinesField(null, zeroScan);
           warnings.push(
             `会话 ${escapeControlChars(target.found.ref.sessionId)}（${target.adapter.displayName}）解析出 0 轮（没有可继续的对话）：` +
               `${describeZeroTurnReason(zeroScan, '可能是刚建出来的空会话，也可能内容已被清空')}；` +
@@ -1213,7 +1214,7 @@ export type OpenPlan = {
   reuseScanGaps?: ReuseScanGap[];
   /** reuse / new 时：链上有配对会话却没沿用的原因（见 `ChainPairSkipped`）；沿用了或没有配对时缺省 */
   chainPairSkipped?: ChainPairSkipped;
-  /** 来源 / 目标的坏行扫描（见 `unparsableLinesField`）；resume 快路径不扫，两侧干净时缺省 */
+  /** 来源 / 目标的坏行扫描（见 `unparsableLinesField`），两侧干净时缺省 */
   unparsableLines?: UnparsableLines;
   /** 来源会话没收尾（见 `sourceUnfinishedField`）；resume 快路径没有来源，已收尾时缺省 */
   sourceUnfinished?: SourceUnfinished;
@@ -1398,6 +1399,7 @@ async function planOpenInProvider(
     let resumeTargetUnfinished: TargetUnfinishedField = {};
     let resumeContext: ContextDisclosuresField = {};
     let resumeEmpty: EmptySessionsField = {};
+    let resumeBadLines: UnparsableLinesField = {};
     try {
       const ownTurns = await source.adapter.parse(sourceRef);
       // 上下文完整性（被转入后台 / Pi context_edit / Codex compacted）是整份日志的差异，
@@ -1419,6 +1421,7 @@ async function planOpenInProvider(
           // 与 `open <id>` 单独打开同一档：可读、parse 成功却 0 轮，可能刚建出来，也可能内容已被清空
           // 或末尾损坏；显式扫一次坏行后再分档。`--check` 也吃这份 diagnostics，预检会提前说。
           const ownZeroScan = await scanUnparsableJsonLines(sourceRef.filePath);
+          resumeBadLines = unparsableLinesField(null, ownZeroScan);
           diagnostics?.push(
             `目标会话 ${escapeControlChars(sourceRef.sessionId)}（${target.displayName}）解析出 0 轮（没有可继续的对话）：` +
               `${describeZeroTurnReason(ownZeroScan, '可能是刚建出来的空会话，也可能内容已被清空')}；这次要 resume 的就是它——` +
@@ -1456,6 +1459,7 @@ async function planOpenInProvider(
         ...resumeTargetUnfinished,
         ...resumeContext,
         ...resumeEmpty,
+        ...resumeBadLines,
       },
     };
   }
@@ -1875,6 +1879,7 @@ export async function openInProvider(
       notes: [describePlan(target, plan)],
       // 与 --check 同字段：脚本不必解析 notes 才知道这次没有转入
       plan: publicPlan(plan),
+      ...(plan.unparsableLines ? { unparsableLines: plan.unparsableLines } : {}),
       ...(plan.targetUnfinished ? { targetUnfinished: plan.targetUnfinished } : {}),
       ...(plan.contextDisclosures ? { contextDisclosures: plan.contextDisclosures } : {}),
       ...(plan.emptySessions ? { emptySessions: plan.emptySessions } : {}),
