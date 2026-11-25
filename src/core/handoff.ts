@@ -50,6 +50,31 @@ export class HandoffEmptySourceError extends Error {
   }
 }
 
+/** 来源会话读不出来的档位：下一步分别是恢复文件 / 让原生展开副本 / 修权限 / 确认内容 */
+export type SourceReadFailureState = 'missing' | 'compressed' | 'denied' | 'unreadable';
+
+/**
+ * 来源会话读不出来（`switch` / `new` 的链尾来源），本次未写入任何内容。
+ *
+ * 与 `HandoffEmptySourceError` 分开——那一档是「读到了但没有内容」，这一档是「根本没读成」；
+ * 与 `HandoffBlockedError` 也不同，不是目标不可写。`--json` 需要可机读的档位与文件，
+ * 否则脚本只能解析中文才知道该恢复文件、让原生展开副本，还是先修权限。
+ */
+export class HandoffSourceReadError extends Error {
+  constructor(
+    message: string,
+    public sourceReadFailure: {
+      state: SourceReadFailureState;
+      provider: string;
+      sessionId: string;
+      filePath: string;
+    },
+  ) {
+    super(message);
+    this.name = 'HandoffSourceReadError';
+  }
+}
+
 function turnKey(t: UnifiedTurn): string {
   return turnIdentityKey(t);
 }
@@ -2176,8 +2201,21 @@ export async function handoff(
         : `文件 ${escapeControlChars(sourceTip.ref.filePath)} 读不出来：如果只是格式坏掉可先确认文件内容；确认文件确实没了再 watch switch ${sourceTip.provider} 重新绑定`;
     const knownFsError = gone || code === 'EACCES' || code === 'EPERM';
     const detail = knownFsError ? '' : `${describeReadFailureOrSelf(error)}；`;
-    throw new Error(
+    const state: SourceReadFailureState = copy
+      ? 'compressed'
+      : gone
+        ? 'missing'
+        : code === 'EACCES' || code === 'EPERM'
+          ? 'denied'
+          : 'unreadable';
+    throw new HandoffSourceReadError(
       `来源会话 ${escapeControlChars(sourceTip.ref.sessionId)}（${source.displayName}）读取失败：${detail}${reason}`,
+      {
+        state,
+        provider: sourceTip.provider,
+        sessionId: sourceTip.ref.sessionId,
+        filePath: sourceTip.ref.filePath,
+      },
     );
   }
   // 各家 parse 对坏行一律跳过：跳过的内容既不在 turns 里，也不会被 round-trip 查出（两边都按解析结果比），

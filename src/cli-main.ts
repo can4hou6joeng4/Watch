@@ -6,7 +6,7 @@ import { chainsElsewhereHint, chainsSameDirectoryHint, isStoreError, SEARCH_MAX_
 import type { Chain, SearchElsewhere } from './core/store.js';
 import { aliasChainGroupWarning, chainNamesOf, chainsElsewhereOf, newChainName, splitChainsElsewhere } from './core/chain-alias.js';
 import { describeFindings } from './core/findings.js';
-import { adoptedParseFailureWarning, adoptedSessionReadProblemWarning, adoptIntoChain, blockedHint, chainStatus, chainUsage, collectTips, createChainSession, currentChainShiftNote, describeSourceChangedDuringPrompt, emptyChainBindHint, handoff, HandoffBlockedError, HandoffEmptySourceError, notCurrentChainWarning, pickLatestTip, rebindHint, snapshotSourceState, sourceChangeSince, sourceDriftFields, storeUnavailableWarning } from './core/handoff.js';
+import { adoptedParseFailureWarning, adoptedSessionReadProblemWarning, adoptIntoChain, blockedHint, chainStatus, chainUsage, collectTips, createChainSession, currentChainShiftNote, describeSourceChangedDuringPrompt, emptyChainBindHint, handoff, HandoffBlockedError, HandoffEmptySourceError, HandoffSourceReadError, notCurrentChainWarning, pickLatestTip, rebindHint, snapshotSourceState, sourceChangeSince, sourceDriftFields, storeUnavailableWarning } from './core/handoff.js';
 import { reindexCwd, type SearchCoverage } from './core/search.js';
 import type { SessionRef } from './core/types.js';
 import type { TokenUsage } from './core/types.js';
@@ -214,6 +214,12 @@ function failEmptySource(error: HandoffEmptySourceError, json: boolean, prefix: 
     emptySessions: error.emptySessions,
     ...(error.unparsableLines ? { unparsableLines: error.unparsableLines } : {}),
   });
+}
+
+/** 来源读不出来的失败输出：除正文外带可机读的档位、provider 与文件路径 */
+function failSourceRead(error: HandoffSourceReadError, json: boolean, prefix: string[] = []): never {
+  const message = [...prefix, error.message].filter(Boolean).join('；');
+  fail(json, message, { sourceReadFailure: error.sourceReadFailure });
 }
 
 /** 最近一次 openStore 失败的原因；供「需要库」的子命令拼进错误文案 */
@@ -1023,6 +1029,11 @@ async function cmdSwitch(cwd: string, targetId: string, json: boolean, chain?: s
     // emptySessions / unparsableLines，脚本不必解析中文才知道是 0 字节还是可读 0 轮。
     if (error instanceof HandoffEmptySourceError) {
       failEmptySource(error, json, [cwdIssue ?? '', probe].filter(Boolean));
+    }
+    // 来源根本没读成（缺失 / 只剩压缩副本 / 无权限 / 其它）：与空来源分开给档位，
+    // 四档的下一步相反，脚本不解析中文也要能选对恢复动作。
+    if (error instanceof HandoffSourceReadError) {
+      failSourceRead(error, json, [cwdIssue ?? '', probe].filter(Boolean));
     }
     const message = [probe, describeCommandError(error)].filter(Boolean).join('；');
     // 目录本身有问题时，失败原因先说路径，否则「找不到来源会话」会被当成「目录里没东西」
@@ -3140,6 +3151,10 @@ async function cmdNew(cwd: string, providerId: string, json: boolean, chain?: st
     // 失败结果同样要带 emptySessions / unparsableLines，脚本不必解析中文
     if (error instanceof HandoffEmptySourceError) {
       failEmptySource(error, json, [cwdIssue ?? '', probe].filter(Boolean));
+    }
+    // 与 switch 同一档：链尾来源根本没读成时给出可机读的原因，四档恢复动作不同
+    if (error instanceof HandoffSourceReadError) {
+      failSourceRead(error, json, [cwdIssue ?? '', probe].filter(Boolean));
     }
     const msg = [probe, describeCommandError(error)].filter(Boolean).join('；');
     // 与 switch / adopt 一致：目录本身有问题时先说路径，否则「还没有切换链」会被当成「目录里没东西」
