@@ -1548,6 +1548,12 @@ export async function chainStatus(
    */
   chainTipTurns?: number;
   /**
+   * 链尾解析出 0 轮时确认的坏行数（扫描未完成时附 `error`，此时 `count` 是下界）。
+   * 只在 `chainTipEmpty` 为真、且真有坏行或扫描失败时给出；与 warnings 里那句
+   * 「N 行无法解析」来自同一次扫描，脚本不用再解析中文才知道 0 轮是不是文件损坏造成的。
+   */
+  chainTipBadLines?: BadLinesScan;
+  /**
    * 这次根本没读成的 provider（findLatestSession 抛错）。
    * 文本模式靠它区分「这个目录真没聊过」与「有几家没查成」——后者不能给出
    * 「请先在任一受支持的 Agent 里开聊」这类结论性建议。
@@ -1621,6 +1627,7 @@ export async function chainStatus(
   // 同时为真，文本模式换成「解析出 0 轮」的说明；有内容时用户能一眼看到链尾还剩多少。
   // 只在 parse 成功时给值（undefined = 没解析 / 解析失败），不拿 0 冒充
   let chainTipTurns: number | undefined;
+  let chainTipBadLines: BadLinesScan | undefined;
   if (history.length) {
     const last = history.at(-1)!;
     chainTip = { provider: last.toProvider, ref: last.toRef, updatedAt: last.createdAt, onChain: true };
@@ -1676,6 +1683,9 @@ export async function chainStatus(
               // 「刚建出来还没聊过 / 内容被清空」。
               const subject = `链尾会话 ${last.toProvider} ${escapeControlChars(last.toRef.sessionId)}`;
               const badScan = await scanUnparsableJsonLines(last.toRef.filePath);
+              // 与 warnings 同一次扫描：坏行数和扫描失败原因都按 `unparsableLinesField` 的
+              // 同一口径输出，干净文件不给出字段（0 轮不等于文件损坏）
+              chainTipBadLines = unparsableLinesField(null, badScan).unparsableLines?.target;
               const badFailure = describeBadLinesScanFailure(
                 badScan,
                 subject,
@@ -1735,7 +1745,7 @@ export async function chainStatus(
       ...(readProblem ? { unreadable: true } : {}),
     });
   }
-  return { tips, chainTip, chainTipUnusable, chainTipEmpty, chainTipTurns, unreadable, history, historyFailed, ...(lineage ? { lineage } : {}), chain, chains, warnings };
+  return { tips, chainTip, chainTipUnusable, chainTipEmpty, chainTipTurns, ...(chainTipBadLines ? { chainTipBadLines } : {}), unreadable, history, historyFailed, ...(lineage ? { lineage } : {}), chain, chains, warnings };
 }
 
 /** 把链尾会话转换到 targetId，落 switch_events（store 可选）；opts.forceNew 强制新建目标会话（不追加既有配对） */
