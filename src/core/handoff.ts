@@ -2106,7 +2106,7 @@ export async function handoff(
   let destBadScan: BadLinesScan = { count: 0 };
   let destBadScanFailure: string | null = null;
   if (into) {
-    destBadScan = await scanUnparsableJsonLines(into.filePath);
+    destBadScan = await scanUnparsableJsonLines(into.filePath, { allowMissing: false });
     if (destBadScan.count > 0) {
       warnings.push(
         `目标会话 ${escapeControlChars(into.sessionId)}（${target.displayName}）有 ${destBadScan.count} 行无法解析（截断或损坏）：增量判定可能偏多，可能重复追加既有内容`,
@@ -2156,7 +2156,7 @@ export async function handoff(
   }
   // 各家 parse 对坏行一律跳过：跳过的内容既不在 turns 里，也不会被 round-trip 查出（两边都按解析结果比），
   // 不主动扫一遍就会把「少了几轮」当成完整交接
-  const sourceBadScan = await scanUnparsableJsonLines(sourceTip.ref.filePath);
+  const sourceBadScan = await scanUnparsableJsonLines(sourceTip.ref.filePath, { allowMissing: false });
   if (sourceBadScan.count > 0) {
     warnings.push(
       `来源会话 ${escapeControlChars(sourceTip.ref.sessionId)}（${source.displayName}）有 ${sourceBadScan.count} 行无法解析（截断或损坏），已跳过；交接内容可能不完整，可在原生 CLI 里打开确认`,

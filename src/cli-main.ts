@@ -2042,7 +2042,7 @@ async function cmdPrompt(
   let sessionUsage: TokenUsage | null = null;
   // 坏行被 `parse` 静默跳过：正文里的记录会缺一段，而读者看不出「少了」。文档要被复制走，
   // 所以这一档既进 warnings（终端里立刻能看到）也进正文（`sourceBadLines`）。
-  const badSourceScan = await scanUnparsableJsonLines(foundRef.filePath);
+  const badSourceScan = await scanUnparsableJsonLines(foundRef.filePath, { allowMissing: false });
   const badSourceLines = badSourceScan.count;
   if (badSourceLines > 0) {
     warnings.push(
