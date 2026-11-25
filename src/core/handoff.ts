@@ -1502,10 +1502,11 @@ export type HandoffResult = {
    */
   chainRecordState?: 'written' | 'failed' | 'not-attempted';
   /**
-   * alreadyAtTarget 时这条 resume 指向的会话文件现在读不出来（`chmod 000` 之类）。
+   * 这条 resume 指向的会话文件现在读不出来（`chmod 000` 之类）。
    *
-   * 文本模式据此把「直接打开即可」换成「直接打开会失败」——`warnings` 已经逐条说明原因，
+   * alreadyAtTarget 时文本模式据此把「直接打开即可」换成「直接打开会失败」——`warnings` 已经逐条说明原因，
    * 但结论句本身也得改，否则用户复制的那条命令一执行就失败却找不到矛盾在哪。
+   * 零增量返回既有目标的恢复命令时也设置该字段，原因与换绑建议由 `warnings` 给出。
    */
   resumeUnreadable?: boolean;
   /** 恢复同家会话时仅找到压缩副本。`intact` 表示非零字节，`empty` 表示 0 字节。 */
@@ -2386,8 +2387,46 @@ export async function handoff(
     let zeroTurnDisclosure:
       | { head: string; targetName: string; targetLabel: string; sourceName: string; sourceProvider: string }
       | null = null;
-    // 零增量时既有目标自己的空会话档位：resume 命中的就是它，警告与 JSON 必须同一口径
+    // 零增量时 resume 命中的就是既有目标：先探一次它现在的文件状态。
+    // 0 字节 / 可读 0 轮进入 `emptySessions.target`；缺失或读不出来必须披露，
+    // 不能让一条可能打不开的 resume 看起来与健康恢复一样（与 alreadyAtTarget 同口径）。
     let zeroIncrementTargetKind: 'zero-byte' | 'zero-turns' | null = null;
+    let zeroIncrementTargetUnreadable = false;
+    const targetPresence = into ? await probeSessionReadable(into.filePath) : null;
+    if (into) {
+      const targetZeroByte = Boolean(targetPresence && isEmptySessionFileReason(targetPresence));
+      if (targetZeroByte) {
+        warnings.push(
+          `目标会话 ${escapeControlChars(into.sessionId)}（${target.displayName}）的${targetPresence}；` +
+            `它原有的历史已经没了，这条 resume 打开的是空会话——先从备份恢复那次丢失的内容（Watch 不会替你重建历史）`,
+        );
+      } else if (targetPresence) {
+        // 解析成功过、探测时却不见了或读不出来（被移走 / 权限变化）：这次不写入，但 resume 仍指向它
+        zeroIncrementTargetUnreadable = true;
+        warnings.push(
+          `目标会话 ${escapeControlChars(into.sessionId)}（${target.displayName}）的${targetPresence}；` +
+            `这次没有可写入的增量，但这条 resume 仍指向它，可能无法打开——${rebindHint(targetId)}`,
+        );
+      } else if (destTurns.length === 0) {
+        // 坏行 / 扫描未完成时，0 轮更可能是截断而非空会话：与来源侧同一规则，
+        // 「打开的是空会话」只能出现在干净扫描之后。
+        const targetScanDirty = destBadScan.count > 0 || Boolean(destBadScan.error);
+        warnings.push(
+          targetScanDirty
+            ? `目标会话 ${escapeControlChars(into.sessionId)}（${target.displayName}）解析出 0 轮：` +
+              `${describeZeroTurnReason(destBadScan, '可能已被清空')}；这次 resume 打开的不一定是空会话`
+            : `目标会话 ${escapeControlChars(into.sessionId)}（${target.displayName}）解析出 0 轮；` +
+              `这条 resume 打开的是空会话——如果它本该有内容，先在原生 CLI 里打开确认（可能已被清空），或从备份恢复该文件（Watch 不会替你重建历史）`,
+        );
+      }
+      zeroIncrementTargetKind = targetZeroByte
+        ? 'zero-byte'
+        : targetPresence
+          ? null
+          : destTurns.length === 0
+            ? 'zero-turns'
+            : null;
+    }
     if (into && turns.length === 0) {
       if (!emptiedSourceFile) {
         const subject = `来源会话 ${escapeControlChars(sourceTip.ref.sessionId)}（${source.displayName}）`;
@@ -2508,6 +2547,7 @@ export async function handoff(
       fromProvider: sourceTip?.provider ?? targetId,
       turnCount: 0,
       zeroIncrementReason: turns.length === 0 ? 'source-empty' : 'up-to-date',
+      ...(zeroIncrementTargetUnreadable ? { resumeUnreadable: true } : {}),
       // 来源一侧按解析 / 抽查结果分档；目标一侧只在上面确认它是空会话时报告
       ...emptySessionsField(
         turns.length === 0 ? (emptiedSourceFile ? 'zero-byte' : 'zero-turns') : null,
