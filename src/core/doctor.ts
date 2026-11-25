@@ -10,7 +10,7 @@ import type { SessionRef } from './types.js';
 import { readWatchVersion } from './watch-version.js';
 import { describeCwdProblem, inspectCwd, splitElsewhereByDirectory, type CwdInspection } from './cwd.js';
 import { clipCodePoints, escapeControlChars } from './display.js';
-import { describeBadLinesScanFailure, scanUnparsableJsonLines } from './jsonl.js';
+import { describeBadLinesScanFailure, scanUnparsableJsonLines, unparsableLinesField, type BadLinesScan } from './jsonl.js';
 import { compressedCopy, compressedRetryAdvice, describeSessionReadFailureReason, isEmptySessionFileReason, isFileSystemErrorCode, probeSessionReadable, sessionFilePresence } from './read-text.js';
 import { collectUnattributable, unattributableWarning } from './session-coverage.js';
 import { CLAUDE_DEFAULT_CLEANUP_DAYS, hasHigherPrecedenceClaudeRetentionSetting, probeClaudeProjectRetention, probeClaudeRetention, resolveEffectiveClaudeRetention, type ClaudeProjectRetentionProbe, type ClaudeRetentionProbe } from '../providers/claude/retention.js';
@@ -58,6 +58,8 @@ export type EmptyTip = {
   provider: string;
   sessionId: string;
   filePath: string;
+  /** 0 轮同一次扫描确认的坏行；扫描未完成时有 `error` 且 `count` 是下界，干净文件不输出 */
+  badLines?: BadLinesScan;
 };
 
 /** 报告来源：贴到 issue 里要能定位「哪一版、什么环境、看的是哪个库」 */
@@ -771,12 +773,14 @@ export async function doctorReport(cwd: string, deps: DoctorDeps): Promise<Docto
           // 「比来源少 N 条记录」——那是内容漂移的说法；链尾本来就空时，说漂移会把
           // 人引去 switch / adopt 重新对齐，而真正该做的是把内容补回来或另起一条链。
           if (toTurns.length === 0) {
+            const toBadLines = unparsableLinesField(null, toBadScan).unparsableLines?.target;
             emptyTips.push({
               chainId: chain.id,
               chainName: chain.name,
               provider: to.provider,
               sessionId: to.sessionId,
               filePath: to.filePath,
+              ...(toBadLines ? { badLines: toBadLines } : {}),
             });
             // 与未进入对账的链尾同档：toBadScan 已在上面算过，parse 跳过坏行时
             // 「0 轮」不能讲成刚建出来 / 内容被清空；不要把人引去 switch / adopt 重新对齐。
@@ -840,17 +844,19 @@ export async function doctorReport(cwd: string, deps: DoctorDeps): Promise<Docto
           try {
             const turns = await tipAdapter.parse(tip);
             if (turns.length === 0) {
+              // 与 status / chain list 同档：parse 跳过坏行，0 轮也可能是文件截断或损坏。
+              // 排障入口尤其不能把「文件坏了」讲成「刚建出来还没聊过」。
+              const subject = `链「${escapeControlChars(chain.name)}」的链尾会话 ${tip.provider} ${tip.sessionId}`;
+              const badScan = await scanUnparsableJsonLines(tip.filePath);
+              const tipBadLines = unparsableLinesField(null, badScan).unparsableLines?.target;
               emptyTips.push({
                 chainId: chain.id,
                 chainName: chain.name,
                 provider: tip.provider,
                 sessionId: tip.sessionId,
                 filePath: tip.filePath,
+                ...(tipBadLines ? { badLines: tipBadLines } : {}),
               });
-              // 与 status / chain list 同档：parse 跳过坏行，0 轮也可能是文件截断或损坏。
-              // 排障入口尤其不能把「文件坏了」讲成「刚建出来还没聊过」。
-              const subject = `链「${escapeControlChars(chain.name)}」的链尾会话 ${tip.provider} ${tip.sessionId}`;
-              const badScan = await scanUnparsableJsonLines(tip.filePath);
               const badFailure = describeBadLinesScanFailure(
                 badScan,
                 subject,
