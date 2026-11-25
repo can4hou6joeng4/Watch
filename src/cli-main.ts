@@ -2068,6 +2068,9 @@ async function cmdPrompt(
         headline ??
           `未找到会话: ${escapeControlChars(sessionId)}${provider ? `（provider=${provider}）` : ''}。` +
             `请确认 id 正确且对应 CLI 已安装登录。${LOOKUP_NEXT_STEP}`,
+        // 与 open 失败结果同口径：反查「命中却读不出来 / 没查全」时给脚本逐家结论，
+        // 不用解析中文才知道 id 没写错；干净未命中不输出
+        misses.length ? { lookupMisses: misses } : {},
       );
     }
     adapter = resolved.adapter;
@@ -2544,6 +2547,8 @@ async function cmdInspect(
       headline ??
         `未找到会话: ${escapeControlChars(sessionId)}${provider ? `（provider=${provider}）` : ''}。` +
           `请确认 id 正确且对应 CLI 已安装登录。${LOOKUP_NEXT_STEP}`,
+      // 与 open / prompt 失败结果同口径：命中却读不出来 / 没查全时给结构化 misses
+      misses.length ? { lookupMisses: misses } : {},
     );
   }
   const adapter = resolved.adapter;
