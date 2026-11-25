@@ -3287,8 +3287,12 @@ async function cmdChain(cwd: string, json: boolean, action?: string, a?: string,
                   : tip.error
                     ? '（链尾文件状态无法确认）'
                     : tip.turns === 0
-                      // 与 status 同一措辞：0 轮不写成「（0 轮）」那种像正常计数的写法
-                      ? '（解析出 0 轮，空会话）'
+                      // 与 status 同一措辞：0 轮不写成「（0 轮）」那种像正常计数的写法。
+                      // 坏行时说「文件有坏行」而不是「空会话」：上一行 warnings 已经说明损坏，
+                      // 这里再说空会话会让同一屏出现两种相反的结论
+                      ? tip.badLines
+                        ? '（解析出 0 轮，文件有坏行）'
+                        : '（解析出 0 轮，空会话）'
                       : tip.turns !== undefined
                         ? `（${tip.turns} 轮）`
                         : ''
