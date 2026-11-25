@@ -44,7 +44,7 @@ import { collectUnattributable, emptiedJson, emptiedSearchNote, emptiedSessionsW
 import type { EmptiedSession } from './core/session-coverage.js';
 import { describeSpawnFailure } from './core/platform.js';
 import { usageBadLinesDetail, usageSidecarProblem } from './core/usage-integrity.js';
-import { describeBadLinesScanFailure, describeZeroTurnReason, scanUnparsableJsonLines, unparsableLinesField, type BadLinesScan } from './core/jsonl.js';
+import { describeBadLinesScanFailure, describeZeroTurnReason, scanUnparsableJsonLines, unparsableLinesField, zeroTurnResumeClaim, type BadLinesScan } from './core/jsonl.js';
 import { readWatchVersion } from './core/watch-version.js';
 import { CAPABILITY_VERIFICATION_NOTE, describeCapabilities, formatCapabilities } from './core/capabilities.js';
 import { formatToolCounts, summarizeSessionStructure } from './core/inspect.js';
@@ -3279,7 +3279,7 @@ async function cmdChain(cwd: string, json: boolean, action?: string, a?: string,
             const reason = confirmedBadLines ?? '可能刚建出来还没聊过，也可能内容已被清空';
             warnings.push(
               `${subject} 解析出 0 轮（没有可继续的对话）：${reason}；` +
-                (badScan.count === 0 ? 'resume 打开就是空会话——' : '') +
+                zeroTurnResumeClaim(badScan, 'resume 打开就是空会话——') +
                 `如果它本该有历史，先确认文件是否需要从备份恢复（Watch 不会替你重建历史）`,
             );
           }

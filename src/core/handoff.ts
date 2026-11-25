@@ -2060,7 +2060,7 @@ export async function handoff(
               `可能是刚建出来的空会话，也可能内容已被清空`,
               badScan.error
                 ? ''
-                : (badScan.count === 0 ? `下面这条 resume 打开的是空会话——` : '') +
+                : zeroTurnResumeClaim(badScan, `下面这条 resume 打开的是空会话——`) +
                   `如果它本该有历史，先在 ${target.displayName} 里打开它确认，或从备份恢复该文件（Watch 不会替你重建历史）；` +
                   `如果挑错了会话，用 watch adopt ${targetId} --session <另一个会话 id> 换绑`,
             ),
