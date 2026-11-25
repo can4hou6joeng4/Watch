@@ -1,7 +1,7 @@
 import { stat } from 'node:fs/promises';
 import { describeWriteFailureReason, type FileDigest } from './core/atomic.js';
 import { assertTargetUnchanged, describeVanishedTarget, blockedHint, describeSourceChangedDuringHandoff, diffTurns, HandoffBlockedError, snapshotSourceState, sourceChangeSince, sourceDriftFields, targetRecreatedField, type SourceChangeSince, type SourceDriftFields, type SourceStateSnapshot, type TargetRecreatedField } from './core/handoff.js';
-import { contentLossField, contentLossOf, sourceUnfinishedField, type SourceUnfinished, type SourceUnfinishedField, countAttachmentLoss, countBashControlLoss, countTextEventLoss, countToolFailureLoss, type ContentLoss, type ContentLossField, describeAttachmentLoss, describeBashControlLoss, describeTextEventLoss, describeToolFailureLoss, describeDanglingToolCalls, describeUnansweredTail, describeResumeTargetUnfinished, dedupeCallEvents, findContextDisclosure, countPairedTurnsMissingEvents } from './core/rich.js';
+import { contentLossField, contentLossOf, sourceUnfinishedField, type SourceUnfinished, type SourceUnfinishedField, targetUnfinishedField, type TargetUnfinished, type TargetUnfinishedField, countAttachmentLoss, countBashControlLoss, countTextEventLoss, countToolFailureLoss, type ContentLoss, type ContentLossField, describeAttachmentLoss, describeBashControlLoss, describeTextEventLoss, describeToolFailureLoss, describeDanglingToolCalls, describeUnansweredTail, describeResumeTargetUnfinished, dedupeCallEvents, findContextDisclosure, countPairedTurnsMissingEvents } from './core/rich.js';
 import { Store, defaultDbPath, describeStoreErrorReason, describeStoreOpenFailure } from './core/store.js';
 import { clipCodePoints } from './core/display.js';
 import { IS_WIN, normalizePath, stripDevicePrefix } from './core/platform.js';
@@ -121,6 +121,13 @@ export type OpenSessionResult = {
    * 两种形状都没有时不输出。
    */
   sourceUnfinished?: SourceUnfinished;
+  /**
+   * 结果里那条 resume 指向的会话自己没收尾（与 switch 同字段、键同 `sourceUnfinished`）：
+   * 单独 `open <id>`、`--from` 的目标、`--to` 的同家快路径 / 链上配对 / 复用的既有会话。
+   * 工具调用没有结果一直算；最后停在用户消息上只在这次没并入内容时算。与对应的中文 warnings
+   * 同一处判定；`--to` 新建时没有既有目标，不输出。
+   */
+  targetUnfinished?: TargetUnfinished;
   /** 来源会话在 --from 并入 / --to 转入期间被写入过（stat 字节数与方向），与 switch / prompt 同字段 */
   sourceDrift?: SourceChangeSince;
   /** 来源会话在期间「量不出来」有没有变化，附原因；与 sourceDrift 互斥 */
@@ -588,6 +595,7 @@ export async function openSession(
   let badLines: UnparsableLinesField = {};
   let lossField: ContentLossField = {};
   let unfinished: SourceUnfinishedField = {};
+  let targetUnfinished: TargetUnfinishedField = {};
   let sourceUsage: TokenUsage | null = null;
   // 记录的目录可能已被移动 / 删除：会话内容照常可读、转入也能写成，但返回的 cd 会在第一步失败
   const cwdInspection = await sessionCwdInspection(target.found.ref.cwd);
@@ -818,6 +826,7 @@ export async function openSession(
       warnResumeTargetUnfinished(dstTurns, `目标会话 ${escapeControlChars(targetId)}（${target.adapter.displayName}）`, outgoing.length, (msg) =>
         warnings.push(msg),
       );
+      targetUnfinished = targetUnfinishedField(dstTurns, outgoing.length);
       if (outgoing.length === 0) {
         notes.push(
           sourceZeroByte
@@ -851,6 +860,8 @@ export async function openSession(
           const vanished = describeVanishedTarget(target.found.ref, newRef, target.adapter.displayName);
           if (vanished) warnings.push(vanished);
           recreated = targetRecreatedField(target.found.ref, newRef);
+          // 旧目标被移走、这次落在新建的会话上：里面只有本次写入的内容，旧目标的断点不属于它
+          if (recreated.targetRecreated) targetUnfinished = {};
           merged = dedup.length;
           notes.push(
             `已把 ${escapeControlChars(from)} 的 ${merged} 轮新内容${vanished ? '写入' : '并入'} ` +
@@ -974,6 +985,8 @@ export async function openSession(
         `会话 ${escapeControlChars(target.found.ref.sessionId)}（${target.adapter.displayName}）`,
         (msg) => warnings.push(msg),
       );
+      // 单独打开：没有并入发生，两种形状都算（与上面两句警告同一批轮次）
+      targetUnfinished = targetUnfinishedField(turns, 0);
       const userTurns = turns.filter((t) => t.role === 'user' && t.text.trim());
       const assistantTurns = turns.filter(
         (t) => t.role === 'assistant' && (t.text.trim() || (t.events?.length ?? 0) > 0),
@@ -1054,6 +1067,7 @@ export async function openSession(
     ...badLines,
     ...lossField,
     ...unfinished,
+    ...targetUnfinished,
     ...srcDrift,
     // 与 status / new / chain 写操作同一字段：命令成功、命令已给出，但 cd 会在不可用目录上失败
     ...(cwdInspection.probe.state !== 'ok' ? { cwdState: cwdInspection.probe } : {}),
@@ -1132,6 +1146,8 @@ export type OpenPlan = {
   unparsableLines?: UnparsableLines;
   /** 来源会话没收尾（见 `sourceUnfinishedField`）；resume 快路径没有来源，已收尾时缺省 */
   sourceUnfinished?: SourceUnfinished;
+  /** 即将 resume 的既有目标会话没收尾（见 `targetUnfinishedField`）；new 没有既有目标 */
+  targetUnfinished?: TargetUnfinished;
 };
 
 type PlannedOpen =
@@ -1299,6 +1315,7 @@ async function planOpenInProvider(
     // `diagnostics` 同时喂给预检与写入，所以 `--check` 也会提前说。
     let resumeUnreadable: string | null = null;
     let resumeCompressed: 'intact' | 'empty' | null = null;
+    let resumeTargetUnfinished: TargetUnfinishedField = {};
     try {
       const ownTurns = await source.adapter.parse(sourceRef);
       // 上下文完整性（被转入后台 / Pi context_edit / Codex compacted）是整份日志的差异，
@@ -1328,6 +1345,7 @@ async function planOpenInProvider(
       warnResumeTargetUnfinished(ownTurns, `目标会话 ${escapeControlChars(sourceRef.sessionId)}（${target.displayName}）`, 0, (msg) =>
         diagnostics?.push(msg),
       );
+      resumeTargetUnfinished = targetUnfinishedField(ownTurns, 0);
     } catch (error) {
       // 解析不了不等于没问题：这次 resume 落在这条会话上，至少要说明「没能确认」。
       // 原因同时进计划：notes 的「直接恢复原会话」要按它改口，否则执行与 --check 都在
@@ -1351,6 +1369,7 @@ async function planOpenInProvider(
         snapshot: null,
         ...(resumeUnreadable ? { resumeUnreadable } : {}),
         ...(resumeCompressed ? { resumeCompressed } : {}),
+        ...resumeTargetUnfinished,
       },
     };
   }
@@ -1488,6 +1507,7 @@ async function planOpenInProvider(
             snapshot: pairDigest,
             ...unparsableLinesField(badSourceScan, pairBadLines),
             ...unfinished,
+            ...targetUnfinishedField(pairTurns, delta.length),
             note:
               delta.length === 0
                 ? `回到链上 ${target.displayName} 会话 ${escapeControlChars(chainPaired.sessionId)}，无需并入`
@@ -1621,6 +1641,7 @@ async function planOpenInProvider(
         snapshot,
         ...unparsableLinesField(badSourceScan, reuseBadLines),
         ...unfinished,
+        ...targetUnfinishedField(destinationTurns, delta.length),
         note:
           delta.length === 0
             ? `已在 ${target.displayName} 找到包含全部内容的既有会话 ${escapeControlChars(reuse.sessionId)}，直接打开，无需新建`
@@ -1739,6 +1760,7 @@ export async function openInProvider(
       notes: [describePlan(target, plan)],
       // 与 --check 同字段：脚本不必解析 notes 才知道这次没有转入
       plan: publicPlan(plan),
+      ...(plan.targetUnfinished ? { targetUnfinished: plan.targetUnfinished } : {}),
       // 记录目录不可用时命令仍成功，但返回的 cd 会失败：与 openSession 同一字段
       ...(cwdState ? { cwdState } : {}),
       ...(mapping ? {} : { storeAvailable: false as const }),
@@ -1855,6 +1877,8 @@ export async function openInProvider(
       ...recreated,
       ...(plan.unparsableLines ? { unparsableLines: plan.unparsableLines } : {}),
       ...(plan.sourceUnfinished ? { sourceUnfinished: plan.sourceUnfinished } : {}),
+      // 旧目标被移走而改为新建时不给：新会话里只有本次写入的内容（见 targetRecreated）
+      ...(plan.targetUnfinished && !recreated.targetRecreated ? { targetUnfinished: plan.targetUnfinished } : {}),
       // 与上面四句损失警告同一批轮次（计划写入的内容）
       ...contentLossOf(plan.turns, target),
       ...planDrift,
@@ -1956,6 +1980,7 @@ export async function checkOpenInProvider(
     plan: publicPlan(plan),
     ...(plan.unparsableLines ? { unparsableLines: plan.unparsableLines } : {}),
     ...(plan.sourceUnfinished ? { sourceUnfinished: plan.sourceUnfinished } : {}),
+    ...(plan.targetUnfinished ? { targetUnfinished: plan.targetUnfinished } : {}),
   };
   // 空来源也会新建会话（Kimi 要真跑一次 CLI），所以 CLI 判定不能放在 turns===0 之后
   const cliBlock = await newSessionCliBlock(target, plan);

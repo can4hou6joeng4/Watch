@@ -1225,6 +1225,24 @@ export function describeUnansweredTail(
  * - 最后停在用户消息上：`merged > 0` 时最后一条 turn 已不是它，「最后停在用户消息上」
  *   会变成假话，所以只在这轮**零增量**（也就是「直接打开」）时说。
  */
+export type TargetUnfinished = SourceUnfinished;
+export type TargetUnfinishedField = { targetUnfinished?: TargetUnfinished };
+
+/**
+ * 「即将被 resume 的那条会话自己没收尾」的结构化形式，与 `describeResumeTargetUnfinished()`
+ * 同一处判定、同样分两档：工具调用没有结果一直算；最后停在用户消息上只在这次**零增量**
+ * （`merged === 0`）时算——并入增量之后最后一条 turn 已不是它。键与 `sourceUnfinished` 相同。
+ * 两种形状都没有时不输出。
+ */
+export function targetUnfinishedField(turns: UnifiedTurn[], merged: number): TargetUnfinishedField {
+  const all = sourceUnfinishedField(turns).sourceUnfinished;
+  if (!all) return {};
+  const unfinished: TargetUnfinished = {};
+  if (all.danglingToolCalls) unfinished.danglingToolCalls = all.danglingToolCalls;
+  if (merged === 0 && all.unansweredTail) unfinished.unansweredTail = all.unansweredTail;
+  return Object.keys(unfinished).length ? { targetUnfinished: unfinished } : {};
+}
+
 export function describeResumeTargetUnfinished(
   turns: UnifiedTurn[],
   label: string,

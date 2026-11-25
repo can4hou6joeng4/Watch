@@ -3,7 +3,7 @@ import { stat } from 'node:fs/promises';
 import type { SessionRef, TokenUsage, UnifiedTurn } from './types.js';
 import { chainsElsewhereHint, chainsSameDirectoryHint, describeStoreErrorReason, emptyChainBindHint } from './store.js';
 import type { Chain, ChainsElsewhere, Store, SwitchRecord } from './store.js';
-import { contentLossField, sourceUnfinishedField, type SourceUnfinished, countAttachmentLoss, countBashControlLoss, countTextEventLoss, countToolFailureLoss, type ContentLoss, dedupeCallEvents, describeAttachmentLoss, describeBashControlLoss, describeTextEventLoss, describeToolFailureLoss, describeDanglingToolCalls, describeUnansweredTail, describeResumeTargetUnfinished, findContextDisclosure, mergeTurns, shouldReplacePairedSession, turnIdentityKey } from './rich.js';
+import { contentLossField, sourceUnfinishedField, type SourceUnfinished, targetUnfinishedField, type TargetUnfinished, type TargetUnfinishedField, countAttachmentLoss, countBashControlLoss, countTextEventLoss, countToolFailureLoss, type ContentLoss, dedupeCallEvents, describeAttachmentLoss, describeBashControlLoss, describeTextEventLoss, describeToolFailureLoss, describeDanglingToolCalls, describeUnansweredTail, describeResumeTargetUnfinished, findContextDisclosure, mergeTurns, shouldReplacePairedSession, turnIdentityKey } from './rich.js';
 import { describeWriteFailureReason, type FileDigest } from './atomic.js';
 import { addFinding, type Finding } from './findings.js';
 import { describeInferredTimeWrite } from './time.js';
@@ -1410,6 +1410,12 @@ export type HandoffResult = {
    */
   sourceUnfinished?: SourceUnfinished;
   /**
+   * 结果里那条 resume 指向的目标会话自己没收尾（见 `targetUnfinishedField`）：与来源那一侧
+   * 各说各的。工具调用没有结果一直算；最后停在用户消息上只在这次没并入内容时算。
+   * 目标是这次新建的（含旧目标被移走后改为新建）时不输出——那条会话里只有本次写入的内容。
+   */
+  targetUnfinished?: TargetUnfinished;
+  /**
    * 这次到底有没有把链绑定 / 切换记录写进去：
    * - written：写成了；
    * - failed：尝试过但抛错（库只读、磁盘满、SQLITE_BUSY 等），`warnings` 里已有一条
@@ -1854,6 +1860,9 @@ export async function handoff(
     await assertTargetUnchanged(target, into, destDigest, '切换');
   };
 
+  // 与 `describeResumeTargetUnfinished()` 的三处警告同一处赋值
+  let targetUnfinished: TargetUnfinishedField = {};
+
   // 文件可打开后仍需解析正文，才能确认是空会话、存在对话，还是内容无法核对。
   const checkResumeTarget = async (
     ref: SessionRef,
@@ -1884,6 +1893,7 @@ export async function handoff(
       return 'failed';
     }
     warnings.push(...describeResumeTargetUnfinished(resumeTurns, subject, 0));
+    targetUnfinished = targetUnfinishedField(resumeTurns, 0);
     // 上下文完整性披露（转入后台 / context_edit / compacted）与 `open` 同一口径：
     // 用户复制的是这条 resume 命令，而这份日志的差异不会出现在链记录或 resume 命令里。
     const context = findContextDisclosure(resumeTurns);
@@ -2022,6 +2032,7 @@ export async function handoff(
         ...(resumeReadProblem ? { resumeUnreadable: true } : {}),
         ...(resumeParseFailed ? { resumeParseFailed: true } : {}),
         ...(resumeTargetReadableEmpty ? { resumeTargetEmpty: true } : {}),
+        ...targetUnfinished,
         warnings,
         findings,
       };
@@ -2284,6 +2295,7 @@ export async function handoff(
       warnings.push(
         ...describeResumeTargetUnfinished(destTurns, `目标会话 ${escapeControlChars(into.sessionId)}（${target.displayName}）`, 0),
       );
+      targetUnfinished = targetUnfinishedField(destTurns, 0);
     }
     // 目标 session 已包含全部最新内容，无需追加增量；但用户主动切回来时，
     // 仍应把链尾更新为目标 provider，否则桌面端状态会停留在旧 provider。
@@ -2356,6 +2368,7 @@ export async function handoff(
       ...unparsableLinesField(sourceBadScan, destBadScan),
       ...contentLossField(lossCounts),
       ...sourceUnfinishedField(turns),
+      ...targetUnfinished,
       warnings,
       findings,
     };
@@ -2435,6 +2448,7 @@ export async function handoff(
         outgoing.length,
       ),
     );
+    targetUnfinished = targetUnfinishedField(destTurns, outgoing.length);
   }
 
   let chainRecordState: 'written' | 'failed' | 'not-attempted' = 'not-attempted';
@@ -2468,6 +2482,7 @@ export async function handoff(
     ...unparsableLinesField(sourceBadScan, destBadScan),
     ...contentLossField(lossCounts),
     ...sourceUnfinishedField(turns),
+    ...targetUnfinished,
     warnings,
     findings,
   };
