@@ -1528,7 +1528,7 @@ export type HandoffResult = {
    */
   zeroIncrementReason?: 'source-empty' | 'up-to-date';
   /**
-   * 零增量时报告空来源，同家恢复时报告空目标。
+   * 零增量时报告空来源，同家恢复或向既有会话写入前报告空目标。
    * `zero-byte` 表示文件 0 字节，`zero-turns` 表示可读文件解析出 0 轮。
    * 字段与警告复用同一次检查，取值与 `open` / `adopt` 一致。
    */
@@ -2514,6 +2514,9 @@ export async function handoff(
   const newRef = await guardedWrite(dedupeCallEvents(outgoing), replace ? { replace: true } : undefined);
   const vanished = into && !replace ? describeVanishedTarget(into, newRef, target.displayName) : null;
   if (vanished) warnings.push(vanished);
+  const targetEmptyKind = into && !vanished && destTurns.length === 0 && outgoing.length > 0
+    ? (emptiedTarget ? 'zero-byte' : 'zero-turns')
+    : null;
   // 期间来源被追加：交接的内容只到读取那一刻。只在真的写入了内容时说（`outgoing` 为空时
   // 这句「交接的是…」会与「已全部包含」自相矛盾）
   let driftFields: SourceDriftFields = {};
@@ -2548,7 +2551,7 @@ export async function handoff(
     // 推定时间按原值写进目标记录：结果说明里不说来路，读者会把目标里的时间戳当真实发生时间。
     notes.push(describeInferredTimeWrite(source.timingNote, inferredTimeTurnCount));
   }
-  if (into && !vanished && destTurns.length === 0 && !emptiedTarget && outgoing.length > 0) {
+  if (into && targetEmptyKind === 'zero-turns') {
     // `parse` 跳过坏行：解析出 0 轮不等于文件里只有这次并入的内容。坏行在（或扫不成）时
     // 断言「就是它的全部内容」正是把「读不出来」讲成「没有」（第 345 轮审计）。
     const zeroDestRest =
@@ -2607,6 +2610,7 @@ export async function handoff(
     chainRecordState,
     ...(vanished ? targetRecreatedField(into, newRef) : {}),
     ...driftFields,
+    ...emptySessionsField(null, targetEmptyKind),
     ...unparsableLinesField(sourceBadScan, destBadScan),
     ...contentLossField(lossCounts),
     ...sourceUnfinishedField(turns),
