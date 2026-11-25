@@ -6,7 +6,7 @@ import { chainsElsewhereHint, chainsSameDirectoryHint, isStoreError, SEARCH_MAX_
 import type { Chain, SearchElsewhere } from './core/store.js';
 import { aliasChainGroupWarning, chainNamesOf, chainsElsewhereOf, newChainName, splitChainsElsewhere } from './core/chain-alias.js';
 import { describeFindings } from './core/findings.js';
-import { adoptedParseFailureWarning, adoptedSessionReadProblemWarning, adoptIntoChain, blockedHint, chainStatus, chainUsage, collectTips, createChainSession, currentChainShiftNote, describeSourceChangedDuringPrompt, emptyChainBindHint, handoff, HandoffBlockedError, notCurrentChainWarning, pickLatestTip, rebindHint, snapshotSourceState, sourceChangeSince, sourceDriftFields, storeUnavailableWarning } from './core/handoff.js';
+import { adoptedParseFailureWarning, adoptedSessionReadProblemWarning, adoptIntoChain, blockedHint, chainStatus, chainUsage, collectTips, createChainSession, currentChainShiftNote, describeSourceChangedDuringPrompt, emptyChainBindHint, handoff, HandoffBlockedError, HandoffEmptySourceError, notCurrentChainWarning, pickLatestTip, rebindHint, snapshotSourceState, sourceChangeSince, sourceDriftFields, storeUnavailableWarning } from './core/handoff.js';
 import { reindexCwd, type SearchCoverage } from './core/search.js';
 import type { SessionRef } from './core/types.js';
 import type { TokenUsage } from './core/types.js';
@@ -1008,6 +1008,14 @@ async function cmdSwitch(cwd: string, targetId: string, json: boolean, chain?: s
     for (const line of describeFindings(result.findings ?? [])) console.error(`说明: ${line}`);
   } catch (error) {
     if (error instanceof HandoffBlockedError || error instanceof PreflightBlockedError) failBlocked(error, json);
+    // 来源为空是「没有可交接的内容」，不是目标不可写：与 open --to 的失败结果给出同样的
+    // emptySessions / unparsableLines，脚本不必解析中文才知道是 0 字节还是可读 0 轮。
+    if (error instanceof HandoffEmptySourceError) {
+      fail(json, error.message, {
+        emptySessions: error.emptySessions,
+        ...(error.unparsableLines ? { unparsableLines: error.unparsableLines } : {}),
+      });
+    }
     // 「当前链没读成」只在失败原因本身不是库故障时才补：库坏掉时下面那句已经带原因与下一步
     const probe = !isStoreError(error) && chainProbe.length ? chainProbe.join('；') : '';
     const message = [probe, describeCommandError(error)].filter(Boolean).join('；');

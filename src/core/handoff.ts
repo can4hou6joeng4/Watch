@@ -33,6 +33,23 @@ export class HandoffBlockedError extends Error {
   }
 }
 
+/**
+ * 来源会话没有可交接的内容（0 字节或解析出 0 轮），本次未写入任何内容。
+ *
+ * 与 `HandoffBlockedError` 分开：这一档不是「目标不可写」，而是来源本身为空；`--json`
+ * 需要带上 `open --to` 同款的 `emptySessions` / `unparsableLines`，脚本不必解析中文。
+ */
+export class HandoffEmptySourceError extends Error {
+  constructor(
+    message: string,
+    public emptySessions: EmptySessions,
+    public unparsableLines?: UnparsableLines,
+  ) {
+    super(message);
+    this.name = 'HandoffEmptySourceError';
+  }
+}
+
 function turnKey(t: UnifiedTurn): string {
   return turnIdentityKey(t);
 }
@@ -2291,10 +2308,15 @@ export async function handoff(
           `如果这条会话本该有内容，先从备份恢复该文件（Watch 不会替你重建历史）再重试；`
         : `来源会话 ${escapeControlChars(sourceTip.ref.sessionId)}（${source.displayName}）没有任何可交接的内容（0 轮）：` +
           `${zeroTurnFacts ? `${zeroTurnFacts}。` : ''}${tipAfter}。` +
-          `如果这条会话本该有内容，先在 ${source.displayName} 里打开它确认（可能已被清空），或从备份恢复该文件（Watch 不会替你重建历史）。`;
-      throw new Error(
+          // 有坏行 / 扫描未完成时不能再追加「可能已被清空」：同一句里刚说过更可能是截断
+          (sourceBadScan.count > 0 || sourceBadScan.error
+            ? `如果这条会话本该有内容，先在 ${source.displayName} 里打开它确认文件完整性，或从备份恢复该文件（Watch 不会替你重建历史）。`
+            : `如果这条会话本该有内容，先在 ${source.displayName} 里打开它确认（可能已被清空），或从备份恢复该文件（Watch 不会替你重建历史）。`);
+      throw new HandoffEmptySourceError(
         lead +
           zeroTurnNextStep({ target, targetId, store, history, historyFailed }),
+        { source: emptiedSourceFile ? 'zero-byte' : 'zero-turns' },
+        unparsableLinesField(sourceBadScan, null).unparsableLines,
       );
     }
     const resumeRef = into ?? mtimeTip.ref;
