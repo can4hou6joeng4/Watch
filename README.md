@@ -163,9 +163,7 @@ import-codex  prepare|confirm|status|list|project-prepare|project-confirm|projec
 `inspect` 只对 JSONL 会话统计坏行。`--json` 中，`badLinesStatus` 为 `complete` 时，`badLines` 是完整扫描的计数。`incomplete` 表示扫描未完成，计数是已确认的下界，原因见 `warnings`。SQLite 等不适用的来源返回 `not-applicable`，`badLines` 为 `null`。用量数字同一判据：来源的用量数据源里有无法解析的行时，`--json` 带 `usageBadLines`，文本在数字后括注这只是下界；扫描失败时带 `usageBadLinesScanError`，表示合计可能偏少且无法确认程度。
 
 `inspect --json` 的 `session.storageScope` 为 `session-file`（单会话文件）或 `shared-database`（OpenCode 共享数据库）。`sizeBytes` 和 `modifiedAt` 描述 `filePath` 指向的文件。OpenCode 单条会话的更新时间另见 `session.recordedUpdatedAt`，值缺失或不可用时为 `null`。会话记录的工作目录不可用时，`session.recordedCwdState` 带与 `cwdState` 相同的取值（`missing` / `not-directory` / `denied` / `unknown`，最后一种附 `reason`）；健康目录或会话没有记录目录时不出现。`inspect`、`providers` 与 `capabilities` 都不读 `--cwd`（前者按会话 id 全局反查，后两者与目录无关）；显式给了会在 `warnings` 里说明它没有参与，文本模式打到 stderr。Grok 的记录没有逐轮时间戳，`structure.firstTimestamp` / `lastTimestamp` 是推定值，此时 `--json` 另带 `timeRangeNote` 说明来源，文本输出在时间范围后括注。`structure.timestampedTurns` 是计入时间范围的轮数；部分轮次缺时间戳时，`--json` 另有 `timestampNote` 写明覆盖比例，文本输出同样括注。`structure.events.danglingToolCalls` 统计按 callId 找不到对应结果的工具调用；可能在等待用户审批、仍在运行或已中断，不等于数据丢失，输出只给计数，不给 callId 或工具入参。`structure.events.orphanToolResults` 统计按 callId 找不到对应调用的工具结果（常见于上下文压缩后的残留）；部分来源会把这类结果转成上下文披露而不是孤立结果事件，此时看 `disclosureEvents` 与相关 `warnings`。
-`prompt` 交接文档还会在元信息与「继续工作」里披露未闭合的工具调用（整条会话计数，不受档位 / `--last` 裁剪）：可能在等待用户审批、仍在运行或已中断，不是明确失败，不能当成已完成，也不应不核对就重做；`--json` 的 `stats.danglingToolCalls` 与 `findings` 里 `prompt_dangling_tool_calls` 同源。只给计数，不带 callId、入参或结果正文。反方向的缺口同样按整条会话披露：有结果、找不到调用的工具结果可能来自上下文压缩或记录截断，不代表失败，但不能据此重建原有操作顺序；`--json` 对应 `stats.orphanToolResults` 与 `prompt_orphan_tool_results`，也只给计数。
 `open` / `switch` 的未闭合调用警告会给出 callId 预览，其中的 ESC / 换行等控制字符先转义再显示；`inspect` 文本模式的警告也按同一规则显示，`--json` 保留原值。失败输出、阻断提示与用量 / 坏行说明同样先转义再打印；悬空尾轮的用户文本预览也按此处理。链名、链 id 与会话 id 在 `chain` / `status` 的文本输出里同样转义，`--json` 仍保留原值。
-`prompt` 还会披露「最后一条用户消息没有助手回复」的半轮（Ctrl-C、用量耗尽、进程中断或文件截断都可能）；明确标成失败 / 中止的来源会照实写，`--json` 同步给出 `stats.unansweredTail` 与 `prompt_unanswered_tail` finding；原因另见 `stats.unansweredTailReason`（`cancelled` / `error` 为来源明确标记，`unknown` 为无法确认，只在半轮时出现）。判据只在尾部用户轮有实际正文时生效，占位空轮不算。这条消息通常正是要在目标侧继续的任务，不应要求用户重复确认是否接手；只有来源可能已开始执行时才先核对再动手。
 
 读取 `status --json` 的血缘图时，用 `nodes[].key` 匹配 `edges[].from` 和 `edges[].to`。展示会话身份时用节点里的原始 `provider` 和 `sessionId`。
 
@@ -178,8 +176,6 @@ import-codex  prepare|confirm|status|list|project-prepare|project-confirm|projec
 `status` / `sessions` / `recent` / `usage` / `search` / `doctor` / `chain list` 的 `--json` 在 `--cwd` 不可用时还带 `cwdState: { state }`（`missing` / `not-directory` / `denied` / `unknown`，最后一种附 `reason`），健康目录不输出该字段。`new --json` 写入成功时也带该字段：会话与链记录**已经写入**，但 `resume` 会在进入该目录时失败——它表示「目录不可用」，不是「操作被阻止」；`chain new` 同理（链记录已写入），`chain rename` / `chain archive` / `chain use` 成功时也带同一字段：链按 `--cwd` 原字符串分组，目录没了照样改得动，但这条链绑在一个不可用的路径上。`switch` / `adopt` 成功时同样带：会话内容已经写进目标 provider 的原生文件、链记录也按该字符串写入，但 `resume` 会在进入目录时失败。`open` / `open --to` / `open --check` 成功时也带：返回的 `cd` 与 `resume` 都已给出，但 `cd` 会在会话记录的工作目录上失败。文本模式的写入口径警告不变。字段与文本模式那条「--cwd 目录不存在…」的警告来自同一次探测：空列表、零命中或 `total: 0` 加 `ok: true` 都不能读成「这个目录没有会话或匹配」，先看 `cwdState` 再下结论。
 
 `sessions --json` 与 `usage --json` 在本地库打不开时另带 `storeAvailable: false`：前者此时只列出原生扫描结果（`--chain` 过滤不生效），后者的 `chain: null` / `byProvider: []` 只表示读不出来。`sessions --json` 在给了 `--chain` 却没用上时（本目录没有这条链、链查询失败或库没打开）另带 `chainFilterApplied: false`——此时 `providers` 是全部会话，不是过滤结果；不带 `--chain` 或过滤已生效时该字段不出现。`status --json` 同样带 `storeAvailable: false`，用来把 `historyAvailable: false` 分成「库没打开」与「库打开但切换历史读失败」两档。`recent --json` 同样带 `storeAvailable: false`，并继续在 `unavailable` 里列出「本地库」；库正常打开时这些命令都不出现 `storeAvailable`。写操作 `new` / `switch` / `adopt` 在库打不开时仍会完成原生会话的写入并返回 `ok: true`，此时同样带 `storeAvailable: false`，表示这次绑定没有写进链记录（后续 `status` / `switch` 不认它）；库打开了但链记录写入抛错时带 `chainRecordFailed: true`。两个字段都只在异常时出现，原因仍在 `warnings` 里。`open`、`open --to` 与 `open --check` 在本地库打不开时照常成功，`--json` 同样带 `storeAvailable: false`：这次反查是全盘扫描，命中也没有写回会话位置映射。`status` / `usage` / `recent` 的 `--json` 始终回显本次使用的 `cwd`（`--cwd` 省略时即进程工作目录），与 sessions / search / doctor 一致。
-
-目标工具还没有适配器（或那家的格式刚漂移、写回有风险）时用 `prompt`：它只读，把会话渲染成一份 Markdown，正文开头就写明「这是摘要交接、不是目标助手的原生会话」；`--profile` 控制保留多少内容，`--last <n>` 则只保留最近 n 个用户轮（显式窗口，此时不再强制保留首轮，文档里会写明；`--json` 的 `stats.includedUserTurns` 给出实际保留的真实用户轮数，不含压缩摘要锚点，`stats.taskDescription` 取 `kept` / `omitted` / `summarized` / `absent`，与正文「首条任务描述…」同源；`absent` 表示来源本来没有用户轮，不是被裁掉）；`--since-compact` 从最近一次可识别的压缩摘要开始渲染（Claude Code、Pi、Kimi、OpenCode 的记录格式都认；Codex 的 compacted 记录与 OpenCode 2.x 的 provider 原生压缩只披露、不并入摘要）——摘要已概括更早的内容，不再重复带上摘要之前的原文（摘要本身标明由哪家生成、不是用户原话；来源没有可用摘要时不按它裁剪，并在正文写明未生效——另有 `--last` / 档位裁剪时也会如实说明还省略了多少轮；`--json` 的 `stats.sinceCompactResult` 取 `off` / `applied` / `unavailable` 区分「没请求 / 找到 / 没找到」，`stats.compactSource` 取 `claude-code` / `opencode` / `pi` / `kimi`，只在 applied 时出现）；任何被裁剪的部分都会进 `--json` 的 `findings` 并在 stderr 说明。省略会话 id 时，它在 `--cwd`（默认当前目录）里按修改时间挑最新的一条可读会话，`--provider` 可把范围收窄到一家；文档头部会标明「自动挑选」，`--json` 也会带 `autoPicked: true`——挑不到时不会输出半份文档，读不出来与确实没有会话分开说明。显式给出会话 id 时 `--cwd` 不参与（会话按 id 全局反查，正文来自会话自身记录），给了也会在 `warnings` 里说明这一点。头部的时间范围会注明两端各取什么（起点是首条记录，终点可能是文件修改时间；grok 的记录行内没有逐轮时间戳，逐轮时间由 `summary.json` 的创建时间按顺序推定，缺这份摘要时以会话文件的修改时间为锚点，头部括注会写明这一点——那个时间不是逐轮的真实时间；首条记录没有时间戳时，起点取后面第一条有时间戳的记录并照实写出，部分轮次缺时间戳时括注覆盖比例，如「2/3 轮有时间戳」）。`--json` 的 `timeRangeNote`（推定时间的来源）与 `timestampNote`（覆盖比例）和头部括注同源，缺时间戳的轮数另记 `findings` 的 `prompt_turns_without_timestamp`；用量读不出来或用量数据源已被清空时，那一行写的是原因并说明「这不代表来源会话没有用量」，不会一律落回「没有用量记录」；数据源里有无法解析的行时，数字照印但会括注它只是下界；源文件本身有坏行时，正文会另起一行说明「可能缺少这些记录」；来源解析出 0 轮时，正文会说清是 0 字节（需要从备份恢复）还是文件可读但没有可交接的记录。文档头还会给出工作目录当前状态、工作树类型与当前分支；仓库子目录会向上找到最近的仓库根并把位置写出。工作目录不可用时，`--json` 另有 `sourceCwd: { state }`（`missing` / `not-directory` / `denied` / `unknown`，后者附 `reason`），健康目录不输出该字段。`--json` 另有结构化 `sourceBranch`（普通仓库根为 `{ branch, repoRoot }`，detached 为 `{ detached: true, repoRoot }`），链接工作树为 `sourceWorktree: { mainWorktree, branch }`；工作树探测失败时给 `sourceWorktreeUnknown: <原因>` 与 `prompt_source_worktree_unreadable` finding，缺省的 `sourceWorktree` 不能读成「不是链接工作树」。读取前后来源文件的大小或修改时间有变化时，`--json` 返回 `sourceDrift: { from, to, growth }`；量不出来（stat 失败）时另给 `sourceDriftUnknown: <原因>`——没有 `sourceDrift` 可能是没变化，也可能是没能确认，脚本不能把它当成「没变化」。它描述字节数和增长方向，仅凭这个字段无法确认正文包含了哪些记录。明确标记失败的工具调用另有 `failedAttempts`（工具、路径或命令、次数；不复制工具输出），正文也保留「失败与中断」一节；没有失败标记时不输出。正文还会列出会话里写过 / 编辑过的文件与运行过的命令（「改动概览」，不受档位裁剪影响），并对照生成那一刻的磁盘：确定已不在的标注「本次生成时磁盘上已不在」，相对路径没找到或读不出来标注「无法确认」，被补丁删除 / 移走的标注「本次会话里被补丁删除或移走」，会话目录之外的路径只计数、不核对；会话目录不可用或没有记录时，正文直接写明「本次没有核对」，不与「都还在」长得一样。`--json` 的 `manifest.files[].disk` 取值为 `missing` / `unverified` / `removed`（缺省既可能是「都还在」也可能是「没核对」），`manifestDisk: { checked, missing, unverified, outside, removed }` 给出计数，只有会话目录可用、且清单里有文件时才出现。这份文档是要复制给另一个助手的，所以会话里**格式固定**的密钥 / 令牌（常见厂商的 API 密钥，GitHub / GitLab / Slack / npm / Hugging Face 令牌，AWS 访问密钥 ID，JWT，PEM / PGP 私钥块），以及四种位置固定的值（`postgres://user:口令@host` 这类连接串里的口令、`X-Api-Key` / `X-Auth-Token` 这类密钥头的值、`Cookie` / `Set-Cookie` 头与 `curl --cookie` 里的 `name=value` 值（保留后续命令参数；请求头或带引号的参数里前一项是变量引用时，也会继续检查后面的 Cookie）、`Authorization` 头的 Bearer / Token / Basic 值）在进入文档前会换成 `[已隐去：种类]`，头部写明种类与个数，`--json` 另给 `credentialsMasked: { total, kinds }`（只有种类与个数）；来源文件不改，原文仍在那里。只认固定格式与固定位置：单独出现的口令、内部地址与没有固定前缀的密钥不会被识别，没有这一行不代表文档里没有敏感内容，转交前仍需自行检查。这一处理只在 `prompt` 生效，`open --to` 等写入原生会话的路径按原记录转入；来源逐轮时间是推定值时（当前仅 Grok），`switch`、`open --from` 与 `open --to` 真的写入内容后会在结果说明里写明这一点、来源如何推定以及按原值写入了几轮；零增量但为修复格式整份重写目标时，也按来源轮数披露。`--check` 与同家 resume 没有写入，不带这条说明。
 
 **交接结果**
 
@@ -194,7 +190,57 @@ import-codex  prepare|confirm|status|list|project-prepare|project-confirm|projec
 - `emptySessions: { source?, target? }` 表示 `open` 读取时的空会话。`zero-byte` 表示会话文件 0 字节，`zero-turns` 表示解析出 0 轮。即使 `mergedTurns` 同为 0，也可通过该字段识别空来源。`open --to` 因来源为空而拒绝时，失败结果也包含该字段。
 - `pairedTurnsMissingEvents` 统计既有目标中已有同文本回复却缺少可保留来源过程事件的轮数。适用于 `open --from` 及 `open --to` 的链上配对和内容复用。这些轮次按已包含处理。计数为 0 或使用新建目标时省略。
 
+来源逐轮时间是推定值时（当前仅 Grok），`switch`、`open --from` 与 `open --to` 真的写入内容后会在结果说明里写明这一点、来源如何推定以及按原值写入了几轮；零增量但为修复格式整份重写目标时，也按来源轮数披露。`--check` 与同家 resume 没有写入，不带这条说明。
+
+</details>
+
+<details>
+<summary><code>prompt</code> 摘要交接参考</summary>
+<br>
+
+目标工具还没有适配器（或那家的格式刚漂移、写回有风险）时用 `prompt`：它只读，把会话渲染成一份 Markdown，正文开头就写明「这是摘要交接、不是目标助手的原生会话」。
+
+**选择来源会话**
+
+省略会话 id 时，它在 `--cwd`（默认当前目录）里按修改时间挑最新的一条可读会话，`--provider` 可把范围收窄到一家；文档头部会标明「自动挑选」，`--json` 也会带 `autoPicked: true`——挑不到时不会输出半份文档，读不出来与确实没有会话分开说明。显式给出会话 id 时 `--cwd` 不参与（会话按 id 全局反查，正文来自会话自身记录），给了也会在 `warnings` 里说明这一点。
+
+**裁剪范围**
+
+- `--profile` 控制保留多少内容。
+- `--last <n>` 则只保留最近 n 个用户轮（显式窗口，此时不再强制保留首轮，文档里会写明；`--json` 的 `stats.includedUserTurns` 给出实际保留的真实用户轮数，不含压缩摘要锚点，`stats.taskDescription` 取 `kept` / `omitted` / `summarized` / `absent`，与正文「首条任务描述…」同源；`absent` 表示来源本来没有用户轮，不是被裁掉）。
+- `--since-compact` 从最近一次可识别的压缩摘要开始渲染（Claude Code、Pi、Kimi、OpenCode 的记录格式都认；Codex 的 compacted 记录与 OpenCode 2.x 的 provider 原生压缩只披露、不并入摘要）——摘要已概括更早的内容，不再重复带上摘要之前的原文（摘要本身标明由哪家生成、不是用户原话；来源没有可用摘要时不按它裁剪，并在正文写明未生效——另有 `--last` / 档位裁剪时也会如实说明还省略了多少轮；`--json` 的 `stats.sinceCompactResult` 取 `off` / `applied` / `unavailable` 区分「没请求 / 找到 / 没找到」，`stats.compactSource` 取 `claude-code` / `opencode` / `pi` / `kimi`，只在 applied 时出现）。
+
+任何被裁剪的部分都会进 `--json` 的 `findings` 并在 stderr 说明。
+
+**时间、用量和读取状态**
+
+头部的时间范围会注明两端各取什么（起点是首条记录，终点可能是文件修改时间；grok 的记录行内没有逐轮时间戳，逐轮时间由 `summary.json` 的创建时间按顺序推定，缺这份摘要时以会话文件的修改时间为锚点，头部括注会写明这一点——那个时间不是逐轮的真实时间；首条记录没有时间戳时，起点取后面第一条有时间戳的记录并照实写出，部分轮次缺时间戳时括注覆盖比例，如「2/3 轮有时间戳」）。`--json` 的 `timeRangeNote`（推定时间的来源）与 `timestampNote`（覆盖比例）和头部括注同源，缺时间戳的轮数另记 `findings` 的 `prompt_turns_without_timestamp`；用量读不出来或用量数据源已被清空时，那一行写的是原因并说明「这不代表来源会话没有用量」，不会一律落回「没有用量记录」；数据源里有无法解析的行时，数字照印但会括注它只是下界；源文件本身有坏行时，正文会另起一行说明「可能缺少这些记录」；来源解析出 0 轮时，正文会说清是 0 字节（需要从备份恢复）还是文件可读但没有可交接的记录。
+
+**工作目录与分支**
+
+文档头还会给出工作目录当前状态、工作树类型与当前分支；仓库子目录会向上找到最近的仓库根并把位置写出。工作目录不可用时，`--json` 另有 `sourceCwd: { state }`（`missing` / `not-directory` / `denied` / `unknown`，后者附 `reason`），健康目录不输出该字段。`--json` 另有结构化 `sourceBranch`（普通仓库根为 `{ branch, repoRoot }`，detached 为 `{ detached: true, repoRoot }`），链接工作树为 `sourceWorktree: { mainWorktree, branch }`；工作树探测失败时给 `sourceWorktreeUnknown: <原因>` 与 `prompt_source_worktree_unreadable` finding，缺省的 `sourceWorktree` 不能读成「不是链接工作树」。
+
+**生成期间的来源变化**
+
+读取前后来源文件的大小或修改时间有变化时，`--json` 返回 `sourceDrift: { from, to, growth }`；量不出来（stat 失败）时另给 `sourceDriftUnknown: <原因>`——没有 `sourceDrift` 可能是没变化，也可能是没能确认，脚本不能把它当成「没变化」。它描述字节数和增长方向，仅凭这个字段无法确认正文包含了哪些记录。
+
 `prompt` 生成期间检测到来源变化时，会在文档正文中写明内容以开始读取时的记录为准。重新运行会生成一份新文档。
+
+**未完成的操作**
+
+`prompt` 交接文档还会在元信息与「继续工作」里披露未闭合的工具调用（整条会话计数，不受档位 / `--last` 裁剪）：可能在等待用户审批、仍在运行或已中断，不是明确失败，不能当成已完成，也不应不核对就重做；`--json` 的 `stats.danglingToolCalls` 与 `findings` 里 `prompt_dangling_tool_calls` 同源。只给计数，不带 callId、入参或结果正文。反方向的缺口同样按整条会话披露：有结果、找不到调用的工具结果可能来自上下文压缩或记录截断，不代表失败，但不能据此重建原有操作顺序；`--json` 对应 `stats.orphanToolResults` 与 `prompt_orphan_tool_results`，也只给计数。
+
+`prompt` 还会披露「最后一条用户消息没有助手回复」的半轮（Ctrl-C、用量耗尽、进程中断或文件截断都可能）；明确标成失败 / 中止的来源会照实写，`--json` 同步给出 `stats.unansweredTail` 与 `prompt_unanswered_tail` finding；原因另见 `stats.unansweredTailReason`（`cancelled` / `error` 为来源明确标记，`unknown` 为无法确认，只在半轮时出现）。判据只在尾部用户轮有实际正文时生效，占位空轮不算。这条消息通常正是要在目标侧继续的任务，不应要求用户重复确认是否接手；只有来源可能已开始执行时才先核对再动手。
+
+明确标记失败的工具调用另有 `failedAttempts`（工具、路径或命令、次数；不复制工具输出），正文也保留「失败与中断」一节；没有失败标记时不输出。
+
+**改动清单与磁盘核对**
+
+正文还会列出会话里写过 / 编辑过的文件与运行过的命令（「改动概览」，不受档位裁剪影响），并对照生成那一刻的磁盘：确定已不在的标注「本次生成时磁盘上已不在」，相对路径没找到或读不出来标注「无法确认」，被补丁删除 / 移走的标注「本次会话里被补丁删除或移走」，会话目录之外的路径只计数、不核对；会话目录不可用或没有记录时，正文直接写明「本次没有核对」，不与「都还在」长得一样。`--json` 的 `manifest.files[].disk` 取值为 `missing` / `unverified` / `removed`（缺省既可能是「都还在」也可能是「没核对」），`manifestDisk: { checked, missing, unverified, outside, removed }` 给出计数，只有会话目录可用、且清单里有文件时才出现。
+
+**凭据遮盖**
+
+这份文档是要复制给另一个助手的，所以会话里**格式固定**的密钥 / 令牌（常见厂商的 API 密钥，GitHub / GitLab / Slack / npm / Hugging Face 令牌，AWS 访问密钥 ID，JWT，PEM / PGP 私钥块），以及四种位置固定的值（`postgres://user:口令@host` 这类连接串里的口令、`X-Api-Key` / `X-Auth-Token` 这类密钥头的值、`Cookie` / `Set-Cookie` 头与 `curl --cookie` 里的 `name=value` 值（保留后续命令参数；请求头或带引号的参数里前一项是变量引用时，也会继续检查后面的 Cookie）、`Authorization` 头的 Bearer / Token / Basic 值）在进入文档前会换成 `[已隐去：种类]`，头部写明种类与个数，`--json` 另给 `credentialsMasked: { total, kinds }`（只有种类与个数）；来源文件不改，原文仍在那里。只认固定格式与固定位置：单独出现的口令、内部地址与没有固定前缀的密钥不会被识别，没有这一行不代表文档里没有敏感内容，转交前仍需自行检查。这一处理只在 `prompt` 生效，`open --to` 等写入原生会话的路径按原记录转入。
 
 </details>
 
