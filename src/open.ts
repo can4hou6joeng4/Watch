@@ -814,9 +814,12 @@ export async function openSession(
         }
         if (sourceZeroTurns) {
           warnings.push(
-            `来源会话 ${escapeControlChars(source.found.ref.sessionId)}（${source.adapter.displayName}）解析出 0 轮，没有可并入的内容；` +
+            `来源会话 ${escapeControlChars(source.found.ref.sessionId)}（${source.adapter.displayName}）解析出 0 轮，没有可并入的内容：` +
+              // 与 switch / prompt / --to 同一判据：parse 跳过坏行后截断文件同样是 0 轮，
+              // 只说「可能已被清空」会和同一屏的坏行警告互相矛盾
+              `${describeZeroTurnReason(srcBadScan, '可能是刚建出来的空会话，也可能内容已被清空')}；` +
               `本次未写入任何内容，目标会话 ${escapeControlChars(targetId)}（${target.adapter.displayName}）未被改动——` +
-              `如果这条会话本该有内容，先在 ${source.adapter.displayName} 里打开它确认（可能已被清空），或从备份恢复该文件（Watch 不会替你重建历史）；` +
+              `如果这条会话本该有内容，先在 ${source.adapter.displayName} 里打开它确认，或从备份恢复该文件（Watch 不会替你重建历史）；` +
               `如果只是挑错了会话，核对 --from 的会话 id 是否真的要并进来`,
           );
         }
