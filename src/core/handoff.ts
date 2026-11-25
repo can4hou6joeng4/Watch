@@ -2416,9 +2416,15 @@ export async function handoff(
             `它原有的历史已经没了，这条 resume 打开的是空会话——先从备份恢复那次丢失的内容（Watch 不会替你重建历史）`,
         );
       } else if (!targetPresence && destTurns.length === 0) {
+        // 坏行 / 扫描未完成时，0 轮更可能是截断而非空会话：与来源侧同一规则，
+        // 「打开的是空会话」只能出现在干净扫描之后。
+        const targetScanDirty = destBadScan.count > 0 || Boolean(destBadScan.error);
         warnings.push(
-          `目标会话 ${escapeControlChars(into.sessionId)}（${target.displayName}）解析出 0 轮；` +
-            `这条 resume 打开的是空会话——如果它本该有内容，先在原生 CLI 里打开确认（可能已被清空），或从备份恢复该文件（Watch 不会替你重建历史）`,
+          targetScanDirty
+            ? `目标会话 ${escapeControlChars(into.sessionId)}（${target.displayName}）解析出 0 轮：` +
+              `${describeZeroTurnReason(destBadScan, '可能已被清空')}；这次 resume 打开的不一定是空会话`
+            : `目标会话 ${escapeControlChars(into.sessionId)}（${target.displayName}）解析出 0 轮；` +
+              `这条 resume 打开的是空会话——如果它本该有内容，先在原生 CLI 里打开确认（可能已被清空），或从备份恢复该文件（Watch 不会替你重建历史）`,
         );
       }
       zeroIncrementTargetKind = targetZeroByte
