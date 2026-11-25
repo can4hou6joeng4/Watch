@@ -556,6 +556,8 @@ export async function adoptIntoChain(
   unchanged?: boolean;
   /** `unchanged` 时的结果说明，或接入时说明接入的会话是自动挑的（走 stdout；与 `warnings` 的降级原因分开） */
   note?: string;
+  /** 该会话解析出 0 轮时对文件的坏行扫描（与调用方的 0 轮警告同一次扫描）；健康会话缺省 */
+  unparsableLines?: UnparsableLines;
   /**
    * 这次有没有把链绑定 / 切换记录写进去（同 `HandoffResult.chainRecordState`）：
    * `unchanged`、本地库不可用都是 not-attempted，`recordSwitch` 抛错是 failed。
@@ -2018,10 +2020,12 @@ export async function handoff(
       // 文件探测已披露 0 字节等读取故障。下面的两档只记录探测通过后的解析结果。
       const resumeParseFailed = !resumeReadProblem && resumeTargetStatus === 'failed';
       const resumeTargetReadableEmpty = !resumeReadProblem && resumeTargetStatus === 'empty';
+      let resumeTargetBadLines: UnparsableLines | undefined;
       if (resumeTargetReadableEmpty) {
         // 与 status / chain list / doctor / new 同档：parse 跳过坏行，0 轮也可能是截断文件。
         const subject = `目标会话 ${escapeControlChars(resumeRef.sessionId)}（${target.displayName}）`;
         const badScan = await scanUnparsableJsonLines(resumeRef.filePath);
+        resumeTargetBadLines = unparsableLinesField(null, badScan).unparsableLines;
         const badFailure = describeBadLinesScanFailure(
           badScan,
           subject,
@@ -2049,6 +2053,7 @@ export async function handoff(
         ...(resumeReadProblem ? { resumeUnreadable: true } : {}),
         ...(resumeParseFailed ? { resumeParseFailed: true } : {}),
         ...(resumeTargetReadableEmpty ? { resumeTargetEmpty: true } : {}),
+        ...(resumeTargetBadLines ? { unparsableLines: resumeTargetBadLines } : {}),
         ...targetUnfinished,
         ...resumeTargetContext,
         warnings,

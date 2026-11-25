@@ -44,7 +44,7 @@ import { collectUnattributable, emptiedJson, emptiedSearchNote, emptiedSessionsW
 import type { EmptiedSession } from './core/session-coverage.js';
 import { describeSpawnFailure } from './core/platform.js';
 import { usageBadLinesDetail, usageSidecarProblem } from './core/usage-integrity.js';
-import { describeBadLinesScanFailure, scanUnparsableJsonLines } from './core/jsonl.js';
+import { describeBadLinesScanFailure, scanUnparsableJsonLines, unparsableLinesField } from './core/jsonl.js';
 import { readWatchVersion } from './core/watch-version.js';
 import { CAPABILITY_VERIFICATION_NOTE, describeCapabilities, formatCapabilities } from './core/capabilities.js';
 import { formatToolCounts, summarizeSessionStructure } from './core/inspect.js';
@@ -1196,6 +1196,8 @@ async function cmdAdopt(
         if (adoptedTurns.length === 0) {
           const subject = `会话 ${escapeControlChars(result.adoptedRef.sessionId)}（${adoptedAdapter.displayName}）`;
           const badScan = await scanUnparsableJsonLines(result.adoptedRef.filePath);
+          // 与 warning 同一次扫描：脚本不必解析中文才知道 0 轮背后还有几行坏数据
+          result.unparsableLines = unparsableLinesField(null, badScan).unparsableLines;
           const badFailure = describeBadLinesScanFailure(
             badScan,
             subject,
