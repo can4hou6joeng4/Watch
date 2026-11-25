@@ -2753,8 +2753,18 @@ async function cmdDoctor(cwd: string, json: boolean, strict: boolean): Promise<v
       // 摘要里已经报了个数；这里给出是哪条链尾、为什么打开是空的，以及下一步。
       // 不给 provider:sessionId，用户照「watch switch」也无法定位到具体会话
       for (const e of report.store.emptyTips) {
+        // 与同一份 doctor 的 warnings 同档：有坏行时不能再说「没聊过属正常」，
+        // 更不能把截断文件说成刚建出来的空会话——两者下一步相反
+        const detail = e.badLines && (e.badLines.count > 0 || e.badLines.error)
+          ? e.badLines.error && !e.badLines.count
+            ? '（解析出 0 轮，坏行扫描未完成）'
+            : `（解析出 0 轮，文件有 ${e.badLines.count} 行无法解析）`
+          : '（解析出 0 轮）';
+        const next = e.badLines && (e.badLines.count > 0 || e.badLines.error)
+          ? '更可能是文件被截断或损坏，先从备份恢复该文件，或'
+          : '如果在原生客户端里还没聊过属正常，否则从备份恢复该文件，或';
         console.log(
-          `  链「${escapeControlChars(e.chainName)}」: ${escapeControlChars(e.provider)}:${escapeControlChars(e.sessionId)} 链尾是空的（解析出 0 轮）；resume 打开就是空会话——如果在原生客户端里还没聊过属正常，否则从备份恢复该文件，或 watch switch ${e.provider} 重新绑定，或 watch chain new <新名字> 另起一条链`,
+          `  链「${escapeControlChars(e.chainName)}」: ${escapeControlChars(e.provider)}:${escapeControlChars(e.sessionId)} 链尾是空的${detail}；resume 打开就是空会话——${next} watch switch ${e.provider} 重新绑定，或 watch chain new <新名字> 另起一条链`,
         );
       }
     } else {
