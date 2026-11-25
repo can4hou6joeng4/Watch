@@ -61,17 +61,23 @@ export type SourceReadFailureState = 'missing' | 'compressed' | 'denied' | 'unre
  * 否则脚本只能解析中文才知道该恢复文件、让原生展开副本，还是先修权限。
  */
 export class HandoffSourceReadError extends Error {
+  readonly sourceReadFailure: Pick<SessionRef, 'provider' | 'sessionId' | 'filePath'> & (
+    | { state: Exclude<SourceReadFailureState, 'compressed'> }
+    // `intact` 表示非零字节。副本是否可解压仍需由原生客户端确认。
+    | { state: 'compressed'; compressedKind: CompressedCopyNote['kind'] }
+  );
+
   constructor(
     message: string,
-    public sourceReadFailure: {
-      state: SourceReadFailureState;
-      provider: string;
-      sessionId: string;
-      filePath: string;
-    },
+    { provider, sessionId, filePath }: SessionRef,
+    state: Exclude<SourceReadFailureState, 'compressed'>,
+    copy?: CompressedCopyNote | null,
   ) {
     super(message);
     this.name = 'HandoffSourceReadError';
+    this.sourceReadFailure = copy
+      ? { state: 'compressed', provider, sessionId, filePath, compressedKind: copy.kind }
+      : { state, provider, sessionId, filePath };
   }
 }
 
@@ -1877,12 +1883,15 @@ export async function handoff(
       const tipPresence = await sessionFilePresence(chainTipRef.filePath);
       if (tipPresence.state === 'missing') {
         const copy = compressedCopy(tipPresence);
-        throw new Error(
+        throw new HandoffSourceReadError(
           copy
             ? `未发现原生会话；而链尾记录的 ${chainTipRef.provider} 会话 ${escapeControlChars(chainTipRef.sessionId)} 的文件${copy.note}：` +
                 `${compressedRetryAdvice(copy, '再重试')}，或${rebindHint(chainTipRef.provider)}`
             : `未发现原生会话；而链尾记录的 ${chainTipRef.provider} 会话 ${escapeControlChars(chainTipRef.sessionId)} 文件已不存在（${escapeControlChars(chainTipRef.filePath)}）：` +
                 `${rebindHint(chainTipRef.provider)}，或在原生 CLI 里新开一个会话`,
+          chainTipRef,
+          'missing',
+          copy,
         );
       }
       if (tipPresence.state === 'unknown') {
@@ -2201,21 +2210,12 @@ export async function handoff(
         : `文件 ${escapeControlChars(sourceTip.ref.filePath)} 读不出来：如果只是格式坏掉可先确认文件内容；确认文件确实没了再 watch switch ${sourceTip.provider} 重新绑定`;
     const knownFsError = gone || code === 'EACCES' || code === 'EPERM';
     const detail = knownFsError ? '' : `${describeReadFailureOrSelf(error)}；`;
-    const state: SourceReadFailureState = copy
-      ? 'compressed'
-      : gone
-        ? 'missing'
-        : code === 'EACCES' || code === 'EPERM'
-          ? 'denied'
-          : 'unreadable';
+    const state = gone ? 'missing' : knownFsError ? 'denied' : 'unreadable';
     throw new HandoffSourceReadError(
       `来源会话 ${escapeControlChars(sourceTip.ref.sessionId)}（${source.displayName}）读取失败：${detail}${reason}`,
-      {
-        state,
-        provider: sourceTip.provider,
-        sessionId: sourceTip.ref.sessionId,
-        filePath: sourceTip.ref.filePath,
-      },
+      sourceTip.ref,
+      state,
+      copy,
     );
   }
   // 各家 parse 对坏行一律跳过：跳过的内容既不在 turns 里，也不会被 round-trip 查出（两边都按解析结果比），
