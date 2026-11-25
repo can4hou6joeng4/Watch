@@ -204,6 +204,20 @@ export type DoctorReport = {
         emptyTips: EmptyTip[];
       }
     | { available: false; error: string };
+  /**
+   * 列得出来、但预览读不出来的非链尾会话。
+   *
+   * `storage[].unreadable` 只有计数，`warnings` 只有中文摘要，脚本拿不到具体是哪条会话；
+   * 链尾由 `store.brokenTips[]` 逐条说明，这里只列其余的，同一份文件不重复出现。
+   * `emptyFile: true` 表示文件是 0 字节、内容已丢失；权限 / I/O 失败不出现该字段。
+   */
+  unreadableSessions: {
+    provider: string;
+    sessionId: string;
+    filePath: string;
+    reason: string;
+    emptyFile?: true;
+  }[];
   imports:
     | {
         available: true;
@@ -969,6 +983,12 @@ export async function doctorReport(cwd: string, deps: DoctorDeps): Promise<Docto
   // 同一份报告不把同一条文件讲两遍
   const tipFiles = new Set(store.available ? store.brokenTips.map((tip) => tip.filePath) : []);
   const unreadableBeyondTips = unreadableSessions.filter((item) => !tipFiles.has(item.filePath));
+  // 警告之外再给一份结构化明细：只读 `storage[].unreadable` 的脚本知道有几条读不出来，
+  // 却不知道是哪条；`emptyFile` 与 status / chain list / sessions / recent 同口径。
+  const unreadableSessionReport = unreadableBeyondTips.map((item) => ({
+    ...item,
+    ...(isEmptySessionFileReason(item.reason) ? { emptyFile: true as const } : {}),
+  }));
   // 与 sessions / recent 的 pushPreviewErrorWarning() 同一分档：0 字节是内容已经没了，
   // 「先确认这些文件可读（权限、路径）」对它不成立，照着做只会白检查一遍权限。
   // sessionId 来自各家存储（grok 目录名 / kimi 索引 / opencode TEXT 列），是不可信字符串；
@@ -1076,6 +1096,7 @@ export async function doctorReport(cwd: string, deps: DoctorDeps): Promise<Docto
     providers,
     storage,
     store,
+    unreadableSessions: unreadableSessionReport,
     imports,
     storeFootprint,
     claudeRetention,
