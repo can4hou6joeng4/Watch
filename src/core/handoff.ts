@@ -1417,8 +1417,8 @@ export type HandoffResult = {
   targetUnfinished?: TargetUnfinished;
   /**
    * 解析器对来源 / 目标会话做的上下文完整性声明条数（见 `ContextDisclosures`），与对应的
-   * warnings 同一处取数：来源一侧在读出来源后给；目标一侧目前只在链尾已停在目标
-   * （alreadyAtTarget）时读取并披露。没有声明时不输出。
+   * warnings 同一处取数：来源一侧在读出来源后给；目标一侧在结果里那条 resume 落在既有目标
+   * 会话上时给（alreadyAtTarget、零增量、追加），新建的目标没有。没有声明时不输出。
    */
   contextDisclosures?: ContextDisclosures;
   /**
@@ -1869,6 +1869,15 @@ export async function handoff(
   // 与 `describeResumeTargetUnfinished()` 的三处警告同一处赋值
   let targetUnfinished: TargetUnfinishedField = {};
   let resumeTargetContext: ContextDisclosuresField = {};
+  // 零增量 / 追加两条分支里那条既有目标会话自己的声明；新建或旧目标被移走时保持 null
+  let disclosedTargetTurns: UnifiedTurn[] | null = null;
+  // 目标自己的上下文差异（OpenCode 回退标记、压缩记录等）不属于增量：resume 的就是这条会话，
+  // 与 `open --from` / `--to` 复用同一口径——与来源同文时 warnings 只留一条。
+  const discloseTargetContext = (turnsOfTarget: UnifiedTurn[]): void => {
+    const context = findContextDisclosure(turnsOfTarget);
+    if (context && !warnings.includes(context.summary)) warnings.push(context.summary);
+    disclosedTargetTurns = turnsOfTarget;
+  };
 
   // 文件可打开后仍需解析正文，才能确认是空会话、存在对话，还是内容无法核对。
   const checkResumeTarget = async (
@@ -2305,6 +2314,7 @@ export async function handoff(
         ...describeResumeTargetUnfinished(destTurns, `目标会话 ${escapeControlChars(into.sessionId)}（${target.displayName}）`, 0),
       );
       targetUnfinished = targetUnfinishedField(destTurns, 0);
+      discloseTargetContext(destTurns);
     }
     // 目标 session 已包含全部最新内容，无需追加增量；但用户主动切回来时，
     // 仍应把链尾更新为目标 provider，否则桌面端状态会停留在旧 provider。
@@ -2378,7 +2388,7 @@ export async function handoff(
       ...contentLossField(lossCounts),
       ...sourceUnfinishedField(turns),
       ...targetUnfinished,
-      ...contextDisclosuresField(turns, null),
+      ...contextDisclosuresField(turns, disclosedTargetTurns),
       warnings,
       findings,
     };
@@ -2459,6 +2469,7 @@ export async function handoff(
       ),
     );
     targetUnfinished = targetUnfinishedField(destTurns, outgoing.length);
+    discloseTargetContext(destTurns);
   }
 
   let chainRecordState: 'written' | 'failed' | 'not-attempted' = 'not-attempted';
@@ -2493,7 +2504,7 @@ export async function handoff(
     ...contentLossField(lossCounts),
     ...sourceUnfinishedField(turns),
     ...targetUnfinished,
-    ...contextDisclosuresField(turns, null),
+    ...contextDisclosuresField(turns, disclosedTargetTurns),
     warnings,
     findings,
   };
