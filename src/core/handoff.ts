@@ -1528,7 +1528,7 @@ export type HandoffResult = {
    */
   zeroIncrementReason?: 'source-empty' | 'up-to-date';
   /**
-   * 零增量时报告空来源，同家恢复或向既有会话写入前报告空目标。
+   * 零增量时报告空来源与空目标，同家恢复或向既有会话写入前也报告空目标。
    * `zero-byte` 表示文件 0 字节，`zero-turns` 表示可读文件解析出 0 轮。
    * 字段与警告复用同一次检查，取值与 `open` / `adopt` 一致。
    */
@@ -2386,6 +2386,8 @@ export async function handoff(
     let zeroTurnDisclosure:
       | { head: string; targetName: string; targetLabel: string; sourceName: string; sourceProvider: string }
       | null = null;
+    // 零增量时既有目标自己的空会话档位：resume 命中的就是它，警告与 JSON 必须同一口径
+    let zeroIncrementTargetKind: 'zero-byte' | 'zero-turns' | null = null;
     if (into && turns.length === 0) {
       if (!emptiedSourceFile) {
         const subject = `来源会话 ${escapeControlChars(sourceTip.ref.sessionId)}（${source.displayName}）`;
@@ -2402,15 +2404,28 @@ export async function handoff(
           sourceProvider: sourceTip.provider,
         };
       }
-      // 目标也可能同时是 0 字节（两边都没内容）：这次 resume 打开的就是一条空会话，
+      // 目标也可能同时是空会话（两边都没内容）：这次 resume 打开的就是它，
       // 不能只说「目标未被改动」。非零增量分支有一模一样的披露（`emptiedTarget`）。
+      // 一次探测同时决定警告与 `emptySessions.target`；只有「现在读得出且非 0 字节」
+      // 才能按解析结果报 `zero-turns`，读不出来（缺失 / 权限）时不下空会话结论。
       const targetPresence = await probeSessionReadable(into.filePath);
-      if (targetPresence && isEmptySessionFileReason(targetPresence)) {
+      const targetZeroByte = Boolean(targetPresence && isEmptySessionFileReason(targetPresence));
+      if (targetZeroByte) {
         warnings.push(
           `目标会话 ${escapeControlChars(into.sessionId)}（${target.displayName}）的${targetPresence}；` +
             `它原有的历史已经没了，这条 resume 打开的是空会话——先从备份恢复那次丢失的内容（Watch 不会替你重建历史）`,
         );
+      } else if (!targetPresence && destTurns.length === 0) {
+        warnings.push(
+          `目标会话 ${escapeControlChars(into.sessionId)}（${target.displayName}）解析出 0 轮；` +
+            `这条 resume 打开的是空会话——如果它本该有内容，先在原生 CLI 里打开确认（可能已被清空），或从备份恢复该文件（Watch 不会替你重建历史）`,
+        );
       }
+      zeroIncrementTargetKind = targetZeroByte
+        ? 'zero-byte'
+        : !targetPresence && destTurns.length === 0
+          ? 'zero-turns'
+          : null;
     }
     // 这次零增量：目标会话已包含全部内容，结果里那条 resume 落在 `into` 自己身上。
     // 它停在做了一半的一轮上时要说——与 `open` 的目标侧同一口径（`merged = 0`，两种形状都说）。
@@ -2487,8 +2502,11 @@ export async function handoff(
       fromProvider: sourceTip?.provider ?? targetId,
       turnCount: 0,
       zeroIncrementReason: turns.length === 0 ? 'source-empty' : 'up-to-date',
-      // 只报来源一侧：目标是否有内容不影响这次零增量的结论，且这里没有对目标做 0 字节探测
-      ...emptySessionsField(turns.length === 0 ? (emptiedSourceFile ? 'zero-byte' : 'zero-turns') : null, null),
+      // 来源一侧按解析 / 抽查结果分档；目标一侧只在上面确认它是空会话时报告
+      ...emptySessionsField(
+        turns.length === 0 ? (emptiedSourceFile ? 'zero-byte' : 'zero-turns') : null,
+        zeroIncrementTargetKind,
+      ),
       ...(notes.length ? { notes } : {}),
       chainRecordState,
       ...unparsableLinesField(sourceBadScan, destBadScan),
