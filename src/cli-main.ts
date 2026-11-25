@@ -37,7 +37,7 @@ import { isoFromEpochMs } from './core/time.js';
 import { BOOLEAN_FLAGS, CHAIN_POSITIONAL, COMMAND_LIST, CWD_UNUSED_COMMANDS, FLAGS_BY_COMMAND, HELP_COMMAND_ALIASES, POSITIONAL_BY_COMMAND, VALUE_FLAGS, VERSION_COMMAND_ALIASES, closestCommand, closestFlag, cwdUnusedNote, optionArgs } from './core/cli-commands.js';
 import { commandControlWarnings } from './core/terminal-command.js';
 import { trimUserKey } from './core/cli-input.js';
-import { describeResumeTargetUnfinished } from './core/rich.js';
+import { describeResumeTargetUnfinished, emptySessionsField } from './core/rich.js';
 import { compressedCopy, compressedRetryAdvice, describePathReadFailureReason, describeReadFailureOrSelf, describeSessionReadFailureReason, isEmptySessionFileReason, probeSessionReadable, sessionFilePresence } from './core/read-text.js';
 import { describeWriteFailureReason } from './core/atomic.js';
 import { collectUnattributable, emptiedJson, emptiedSearchNote, emptiedSessionsWarning, unattributableEmptyNote, unattributableJson, unattributableNoPickMessage, unattributablePickWarning, unattributableSearchNote, unattributableWarning } from './core/session-coverage.js';
@@ -1159,6 +1159,8 @@ async function cmdAdopt(
       ? compressedCopy(await sessionFilePresence(result.adoptedRef.filePath))
       : null;
     if (emptyFileReason) {
+      // 与 warning 同一处判定：脚本不必解析中文才知道接入的是空会话
+      result.emptySessions = emptySessionsField(null, 'zero-byte').emptySessions;
       result.warnings.push(
         `会话 ${escapeControlChars(result.adoptedRef.sessionId)}（${adoptedAdapter?.displayName ?? result.adoptedRef.provider}）的${emptyFileReason}；` +
           `${chainWriteNote}，本次没有改动会话文件——resume 打开的是空会话，历史内容已经没有了；` +
@@ -1198,6 +1200,7 @@ async function cmdAdopt(
           const badScan = await scanUnparsableJsonLines(result.adoptedRef.filePath);
           // 与 warning 同一次扫描：脚本不必解析中文才知道 0 轮背后还有几行坏数据
           result.unparsableLines = unparsableLinesField(null, badScan).unparsableLines;
+          result.emptySessions = emptySessionsField(null, 'zero-turns').emptySessions;
           const badFailure = describeBadLinesScanFailure(
             badScan,
             subject,

@@ -3,7 +3,7 @@ import { stat } from 'node:fs/promises';
 import type { SessionRef, TokenUsage, UnifiedTurn } from './types.js';
 import { chainsElsewhereHint, chainsSameDirectoryHint, describeStoreErrorReason, emptyChainBindHint } from './store.js';
 import type { Chain, ChainsElsewhere, Store, SwitchRecord } from './store.js';
-import { contentLossField, contextDisclosuresField, type ContextDisclosures, type ContextDisclosuresField, sourceUnfinishedField, type SourceUnfinished, targetUnfinishedField, type TargetUnfinished, type TargetUnfinishedField, countAttachmentLoss, countBashControlLoss, countTextEventLoss, countToolFailureLoss, type ContentLoss, dedupeCallEvents, describeAttachmentLoss, describeBashControlLoss, describeTextEventLoss, describeToolFailureLoss, describeDanglingToolCalls, describeUnansweredTail, describeResumeTargetUnfinished, findContextDisclosure, mergeTurns, shouldReplacePairedSession, turnIdentityKey } from './rich.js';
+import { contentLossField, contextDisclosuresField, type ContextDisclosures, type ContextDisclosuresField, sourceUnfinishedField, type SourceUnfinished, targetUnfinishedField, type TargetUnfinished, type TargetUnfinishedField, countAttachmentLoss, countBashControlLoss, countTextEventLoss, countToolFailureLoss, type ContentLoss, dedupeCallEvents, describeAttachmentLoss, describeBashControlLoss, describeTextEventLoss, describeToolFailureLoss, describeDanglingToolCalls, describeUnansweredTail, describeResumeTargetUnfinished, findContextDisclosure, mergeTurns, shouldReplacePairedSession, turnIdentityKey, type EmptySessions } from './rich.js';
 import { describeWriteFailureReason, type FileDigest } from './atomic.js';
 import { addFinding, type Finding } from './findings.js';
 import { describeInferredTimeWrite } from './time.js';
@@ -558,6 +558,8 @@ export async function adoptIntoChain(
   note?: string;
   /** 该会话解析出 0 轮时对文件的坏行扫描（与调用方的 0 轮警告同一次扫描）；健康会话缺省 */
   unparsableLines?: UnparsableLines;
+  /** 接入时这条会话本身是空的（0 字节或解析出 0 轮），与对应警告同一处判定；有内容时缺省 */
+  emptySessions?: EmptySessions;
   /**
    * 这次有没有把链绑定 / 切换记录写进去（同 `HandoffResult.chainRecordState`）：
    * `unchanged`、本地库不可用都是 not-attempted，`recordSwitch` 抛错是 failed。
