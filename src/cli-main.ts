@@ -207,6 +207,15 @@ function failBlocked(error: HandoffBlockedError | PreflightBlockedError, json: b
   process.exit(1);
 }
 
+/** 来源为空的失败输出：除正文外带 `emptySessions` / `unparsableLines`，与 `open --to` 同口径 */
+function failEmptySource(error: HandoffEmptySourceError, json: boolean, prefix: string[] = []): never {
+  const message = [...prefix, error.message].filter(Boolean).join('；');
+  fail(json, message, {
+    emptySessions: error.emptySessions,
+    ...(error.unparsableLines ? { unparsableLines: error.unparsableLines } : {}),
+  });
+}
+
 /** 最近一次 openStore 失败的原因；供「需要库」的子命令拼进错误文案 */
 let lastStoreError: string | null = null;
 
@@ -1008,16 +1017,13 @@ async function cmdSwitch(cwd: string, targetId: string, json: boolean, chain?: s
     for (const line of describeFindings(result.findings ?? [])) console.error(`说明: ${line}`);
   } catch (error) {
     if (error instanceof HandoffBlockedError || error instanceof PreflightBlockedError) failBlocked(error, json);
+    // 「当前链没读成」只在失败原因本身不是库故障时才补：库坏掉时下面那句已经带原因与下一步
+    const probe = !isStoreError(error) && chainProbe.length ? chainProbe.join('；') : '';
     // 来源为空是「没有可交接的内容」，不是目标不可写：与 open --to 的失败结果给出同样的
     // emptySessions / unparsableLines，脚本不必解析中文才知道是 0 字节还是可读 0 轮。
     if (error instanceof HandoffEmptySourceError) {
-      fail(json, error.message, {
-        emptySessions: error.emptySessions,
-        ...(error.unparsableLines ? { unparsableLines: error.unparsableLines } : {}),
-      });
+      failEmptySource(error, json, [cwdIssue ?? '', probe].filter(Boolean));
     }
-    // 「当前链没读成」只在失败原因本身不是库故障时才补：库坏掉时下面那句已经带原因与下一步
-    const probe = !isStoreError(error) && chainProbe.length ? chainProbe.join('；') : '';
     const message = [probe, describeCommandError(error)].filter(Boolean).join('；');
     // 目录本身有问题时，失败原因先说路径，否则「找不到来源会话」会被当成「目录里没东西」
     fail(json, cwdIssue ? `${cwdIssue}；${message}` : message);
@@ -3130,6 +3136,11 @@ async function cmdNew(cwd: string, providerId: string, json: boolean, chain?: st
     if (error instanceof HandoffBlockedError || error instanceof PreflightBlockedError) failBlocked(error, json);
     // 同 switch / adopt：「当前链没读成」只在失败原因本身不是库故障时才补
     const probe = !isStoreError(error) && chainProbe.length ? chainProbe.join('；') : '';
+    // `new` 经 createChainSession → handoff(forceNew) 与 switch 共用空来源判定：
+    // 失败结果同样要带 emptySessions / unparsableLines，脚本不必解析中文
+    if (error instanceof HandoffEmptySourceError) {
+      failEmptySource(error, json, [cwdIssue ?? '', probe].filter(Boolean));
+    }
     const msg = [probe, describeCommandError(error)].filter(Boolean).join('；');
     // 与 switch / adopt 一致：目录本身有问题时先说路径，否则「还没有切换链」会被当成「目录里没东西」
     const message = cwdIssue ? `${cwdIssue}；${msg}` : msg;
