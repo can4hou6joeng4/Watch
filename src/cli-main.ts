@@ -2746,8 +2746,13 @@ async function cmdDoctor(cwd: string, json: boolean, strict: boolean): Promise<v
       const unknown = report.store.brokenTips.length - broken - compressed - compressedEmpty - unreadable;
       const drifted = report.store.driftedPairs.length;
       const empty = report.store.emptyTips.length;
+      // 摘要里的「链尾是空的」不能把截断文件算成健康空会话：明细行会说坏行，
+      // 但只看摘要的人会以为这些链可以继续聊
+      const emptyDamaged = report.store.emptyTips.filter(
+        (e) => e.badLines && (e.badLines.count > 0 || e.badLines.error),
+      ).length;
       console.log(
-        `本地库: 可用，本目录 ${report.store.chains} 条链（${report.store.activeChains} 条活跃${broken ? `，${broken} 条链尾缺失` : ''}${compressed ? `，${compressed} 条链尾只剩压缩副本` : ''}${compressedEmpty ? `，${compressedEmpty} 条链尾只剩 0 字节压缩副本（内容已丢失）` : ''}${unreadable ? `，${unreadable} 条链尾读不出来` : ''}${unknown ? `，${unknown} 条链尾状态无法确认` : ''}${drifted ? `，${drifted} 条链尾内容落后于来源` : ''}${empty ? `，${empty} 条链尾是空的（0 轮）` : ''}）`,
+        `本地库: 可用，本目录 ${report.store.chains} 条链（${report.store.activeChains} 条活跃${broken ? `，${broken} 条链尾缺失` : ''}${compressed ? `，${compressed} 条链尾只剩压缩副本` : ''}${compressedEmpty ? `，${compressedEmpty} 条链尾只剩 0 字节压缩副本（内容已丢失）` : ''}${unreadable ? `，${unreadable} 条链尾读不出来` : ''}${unknown ? `，${unknown} 条链尾状态无法确认` : ''}${drifted ? `，${drifted} 条链尾内容落后于来源` : ''}${empty ? `，${empty} 条链尾是空的（0 轮${emptyDamaged ? `，其中 ${emptyDamaged} 条文件有坏行或扫描未完成` : ''}）` : ''}）`,
       );
       // 上一行是结论：本目录没有链。别处有链时必须接着指路，否则会被当成链丢了 / 没建成功。
       // 「同一个目录的另一种写法」不是「别的目录」：两种说法分开，否则用户会以为链不在这个项目里
