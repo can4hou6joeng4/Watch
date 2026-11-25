@@ -192,7 +192,7 @@ import-codex  prepare|confirm|status|list|project-prepare|project-confirm|projec
 - `targetUnfinished` 使用同样的键，描述恢复命令指向的既有会话，适用于单独 `open <id>`、`open --from`、`open --to` 的同家恢复、链上配对和复用，以及 `switch`。没有结果的调用始终计入，悬空用户消息只在本次没有并入内容时计入。
 - `contextDisclosures: { source?, target? }` 分别统计来源与目标去重后的上下文声明，比如压缩记录、转入后台、未识别的记录类型或失败请求。`warnings` 包含对应的文字说明。只列出有声明的一侧。
 - `emptySessions: { source?, target? }` 表示 `open` 读取时的空会话。`zero-byte` 表示会话文件 0 字节，`zero-turns` 表示解析出 0 轮。即使 `mergedTurns` 同为 0，也可通过该字段识别空来源。`open --to` 因来源为空而拒绝时，失败结果也包含该字段。`adopt` 接入空会话时以 `target` 给出同一组值。`switch` 零增量且来源解析出 0 轮时以 `source` 给出同一组值（只报来源一侧）；其中 0 字节来源的文本结论会说明文件是空的、内容已丢失并给出备份恢复指引，「可读 0 轮」仍说没有可交接的内容。`switch` 因来源为空而拒绝时，失败结果同样带 `emptySessions` 与 `unparsableLines`；`new <另一家>` 经同一条交接路径拒绝空来源时也带这两个字段。
-- `sourceReadFailure: { state, provider, sessionId, filePath }` 表示 `switch` 或 `new <另一家>` 的链尾来源根本没读成（与 `emptySessions` 相反：不是「读到了但没有内容」），本次未写入任何内容。`state` 为 `denied`（无权限）、`missing`（文件已不存在）、`compressed`（原地只剩同名压缩副本）或 `unreadable`（其它读取失败）；四档下一步不同，脚本据此选择恢复文件、让原生展开副本还是先修权限。
+- `sourceReadFailure: { state, provider, sessionId, filePath, compressedKind? }` 用于 `switch` 或 `new <另一家>` 读取来源失败，或未扫描到会话且确认链尾原文件缺失的情形。`state` 为 `denied`（无权读取）、`missing`（文件缺失）、`compressed`（只剩同名压缩副本）或 `unreadable`（其他读取失败）。`compressedKind` 仅随 `compressed` 返回。`intact` 表示副本非零字节，能否解压仍需由原生客户端确认。`empty` 表示副本为 0 字节，需要从备份恢复历史。
 - `pairedTurnsMissingEvents` 统计既有目标中已有同文本回复却缺少可保留来源过程事件的轮数。适用于 `open --from` 及 `open --to` 的链上配对和内容复用。这些轮次按已包含处理。计数为 0 或使用新建目标时省略。
 
 来源逐轮时间是推定值时（当前仅 Grok），`switch`、`open --from` 与 `open --to` 真的写入内容后会在结果说明里写明这一点、来源如何推定以及按原值写入了几轮；零增量但为修复格式整份重写目标时，也按来源轮数披露。`--check` 与同家 resume 没有写入，不带这条说明。
