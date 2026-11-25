@@ -24,6 +24,21 @@ jobs:
             package-lock.json
             desktop/package-lock.json
 
+      - name: 核对发布标签与源码版本
+        if: github.ref_type == 'tag'
+        run: |
+          node --input-type=module <<'NODE'
+          import { readFileSync } from 'node:fs';
+
+          const tag = process.env.GITHUB_REF_NAME;
+          for (const file of ['package.json', 'desktop/package.json', 'desktop/src-tauri/tauri.conf.json']) {
+            const { version } = JSON.parse(readFileSync(file, 'utf8'));
+            if (tag !== `v${version}`) {
+              throw new Error(`发布标签 ${tag} 与 ${file} 的版本 ${version} 不一致`);
+            }
+          }
+          NODE
+
       - name: 根依赖与类型检查
         run: |
           npm ci
