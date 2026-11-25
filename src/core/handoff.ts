@@ -1528,10 +1528,9 @@ export type HandoffResult = {
    */
   zeroIncrementReason?: 'source-empty' | 'up-to-date';
   /**
-   * 零增量时来源会话本身是空的：`zero-byte` = 文件 0 字节（内容已丢失），
-   * `zero-turns` = 可读但解析出 0 轮（合法空会话或只剩占位头）。与对应警告同一处判定；
-   * 有内容（含「目标已包含全部内容」）时不输出。文本模式据此把「没有可交接的内容」
-   * 换成 0 字节的恢复指引；`open` / `adopt` 的同名字段同一口径。
+   * 零增量时报告空来源，同家恢复时报告空目标。
+   * `zero-byte` 表示文件 0 字节，`zero-turns` 表示可读文件解析出 0 轮。
+   * 字段与警告复用同一次检查，取值与 `open` / `adopt` 一致。
    */
   emptySessions?: EmptySessions;
   /**
@@ -2126,6 +2125,11 @@ export async function handoff(
             ),
         );
       }
+      const resumeEmptyKind = resumeReadProblem && isEmptySessionFileReason(resumeReadProblem)
+        ? 'zero-byte'
+        : resumeTargetReadableEmpty
+          ? 'zero-turns'
+          : null;
       return {
         newRef: resumeRef,
         resumeCommand: target.resumeCommand(resumeRef),
@@ -2140,6 +2144,7 @@ export async function handoff(
         ...(resumeParseFailed ? { resumeParseFailed: true } : {}),
         ...(resumeTargetReadableEmpty ? { resumeTargetEmpty: true } : {}),
         ...(resumeTargetBadLines ? { unparsableLines: resumeTargetBadLines } : {}),
+        ...emptySessionsField(null, resumeEmptyKind),
         ...targetUnfinished,
         ...resumeTargetContext,
         warnings,
