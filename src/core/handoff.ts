@@ -1619,6 +1619,10 @@ export async function chainStatus(
   storeError?: string,
 ): Promise<{
   tips: ProviderTip[];
+  /**
+   * 链尾；文件在、但读不出来时与 `tips[]` 同口径带 `unreadable`，0 字节另带 `emptyFile`。
+   * 脚本只读这个对象渲染链尾时，不必再去 `tips[]` 里找同一条会话。
+   */
   chainTip: ProviderTip | null;
   /**
    * 链尾已经绑定、但它的文件现在不可用（不存在 / 不是普通文件 / 状态无法确认）。
@@ -1752,11 +1756,15 @@ export async function chainStatus(
       const readProblem = await probeSessionReadable(last.toRef.filePath);
       if (readProblem) {
         chainTipUnusable = true;
+        const tipEmptyFile = isEmptySessionFileReason(readProblem);
+        // `chainTip` 是脚本渲染链尾那一行的入口；同一份文件在 `tips[]` 里已带
+        // `unreadable` / `emptyFile`，这里不带就会让两个字段对同一条会话给出相反印象
+        chainTip = { ...chainTip, unreadable: true, ...(tipEmptyFile ? { emptyFile: true } : {}) };
         // 0 字节与权限 / I/O 失败都会让 resume 失败，但下一步相反：修可读性救不回已经丢失的
         // 内容，照着「先修好这个文件（权限或内容）」做只会白查一遍权限（与 doctor 的 emptyTips
         // / sessions 的 pushPreviewErrorWarning 同一分档）。
         warnings.push(
-          isEmptySessionFileReason(readProblem)
+          tipEmptyFile
             ? `链尾会话文件是空的：${last.toProvider} ${escapeControlChars(last.toRef.sessionId)}；${readProblem}；` +
               `resume 已经没有任何内容可恢复，下一次 switch 也会失败——先从备份恢复该文件（Watch 不会替你重建历史），` +
               `或 watch adopt ${last.toProvider} --session <另一个会话 id> 换绑，或用 watch chain new <新名字> 另起一条链`
