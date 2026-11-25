@@ -951,10 +951,23 @@ async function cmdSwitch(cwd: string, targetId: string, json: boolean, chain?: s
         ? '链记录写入失败，原因见上方警告'
         : '本次没有写入链记录，原因见上方警告';
     if (result.turnCount === 0 && result.zeroIncrementReason === 'source-empty') {
+      // parse 跳过坏行后截断文件同样解析出 0 轮：这时正文若说「来源会话没有可交接的内容」，
+      // 就把「读不出来」讲成了「本来就没有」。与 alreadyAtTarget 分支同一判据：
+      // 只在扫描干净时才断言来源真的空着，坏行 / 扫描未完成按实际情况说。
+      const sourceScan = result.unparsableLines?.source;
+      const sourceEmptyDetail = sourceScan
+        ? sourceScan.count > 0
+          ? `来源会话文件有 ${sourceScan.count} 行无法解析${sourceScan.error ? '且扫描未完成' : ''}，内容可能被截断`
+          : '来源会话坏行扫描未完成，内容是否完整无法确认'
+        : null;
       console.log(
-        chainTailFailed
-          ? `内容已就位：来源会话没有可交接的内容，本次未写入会话文件；但链尾未更新（${tailFailure}）`
-          : `已切到 ${targetId}（链尾已更新；来源会话没有可交接的内容，本次未写入会话文件）`,
+        sourceEmptyDetail
+          ? chainTailFailed
+            ? `本次未写入会话文件（${sourceEmptyDetail}）；但链尾未更新（${tailFailure}）`
+            : `已切到 ${targetId}（链尾已更新；${sourceEmptyDetail}，本次未写入会话文件）`
+          : chainTailFailed
+            ? `内容已就位：来源会话没有可交接的内容，本次未写入会话文件；但链尾未更新（${tailFailure}）`
+            : `已切到 ${targetId}（链尾已更新；来源会话没有可交接的内容，本次未写入会话文件）`,
       );
     } else if (result.turnCount === 0 && result.zeroIncrementReason === 'up-to-date') {
       const contentResult = result.findings?.some(({ code }) => code === 'handoff.rewrite_only')
