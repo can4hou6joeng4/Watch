@@ -34,6 +34,8 @@ Watch 从本机原生会话记录和工作目录出发，由用户发起接力�
 
 [agentctl](https://github.com/leofmarciano/agentctl)（MIT）侧重在同一工作目录反复切回：其 README 描述每家工具各保留一个原生会话 ID，结束当前进程后再同步缺少的记录；转入 Codex 经 app-server API 写入历史，反向则在 Claude Code 的下一次用户提交时注入有限的历史上下文，两边不是相同的原生转录。接入前的 Claude 历史不会自动导入，直接从外部打开受管会话也不受其单写者锁保护。Watch 未运行该项目。
 
+[Shoal](https://github.com/qianshuixia/Shoal)（MIT）在工作台里运行 Claude Code、Codex 与 Antigravity CLI。按其 README，切换 Agent 时会调用一次 CLI，把任务、反馈与旧会话记录生成交接卡，再交给新会话；生成失败会改用日志摘录，并标明该降级。它还提供向其他任务转发结果卡的入口。Watch 未运行该项目，也未复验其原生会话行为。
+
 [ccompactor](https://github.com/ccompactor/ccompactor) 从 Claude Code、Codex 和 Pi 的本机记录生成带事件引用的交接包。`verify` 检查交接包的结构，并对照源转录核验引用。Watch 的 `prompt` 提供可复制的 Markdown 摘要和裁剪披露。
 
 [AgentCarry](https://github.com/Jettlin927/agentcarry)（Apache-2.0）将 Codex 的任务目标、约束和验证证据写入带版本的 Work Capsule，并列出无法携带的状态；用户确认后，将经过脱敏的简报送入新建的 Claude Code 会话。[Catalyst](https://github.com/adrijshikhar/catalyst)（MIT）将目标、完成条件与验收步骤记入按分支存放的 JSON，由 Claude Code 或 Codex CLI 的启动钩子载入，恢复时检查仓库和分支是否匹配。
@@ -69,6 +71,8 @@ Watch starts from local native session records and the working directory. The us
 [herdr-agent-handoff](https://github.com/sanirudh17/herdr-agent-handoff) locates a session from its source pane and hands it off to a fresh agent pane in Herdr. If the full transcript exceeds the prompt budget, the plugin provides the source path, line bounds and SHA-256 for verification. Watch `prompt` produces a Markdown summary and compares file size and modification time before and after reading to flag source changes.
 
 [agentctl](https://github.com/leofmarciano/agentctl) (MIT) focuses on switching back and forth in the same working directory. Its README describes one native session ID per tool and syncing missing records after the current process exits. It sends history into Codex through the app-server API; on the return to Claude Code, a hook supplies bounded historical context on the next user prompt. The two transcripts are not identical. Claude history from before attachment is not imported automatically, and opening a managed session directly bypasses its single-writer lock. Watch has not run the project.
+
+[Shoal](https://github.com/qianshuixia/Shoal) (MIT) runs Claude Code, Codex and Antigravity CLIs in a local workbench. Its README says switching agents makes one CLI call to turn the task, feedback and old conversation log into a handoff card for a new session. If generation fails, it uses a log excerpt and marks that fallback. It also forwards result cards to other tasks. Watch has not run the project or verified its native session behavior.
 
 [ccompactor](https://github.com/ccompactor/ccompactor) creates handoff packages with event references from local Claude Code, Codex, and Pi records. Its `verify` command checks package structure and checks quotes against the source transcript. Watch `prompt` provides a Markdown summary with disclosures about trimmed content.
 
