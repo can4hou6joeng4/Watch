@@ -1171,6 +1171,29 @@ export function unansweredTailFailure(turns: UnifiedTurn[]): 'error' | 'cancelle
   return confirmed ?? null;
 }
 
+/**
+ * 「来源会话没收尾」的结构化形式，与 `describeDanglingToolCalls()` / `describeUnansweredTail()`
+ * 两句中文警告同一处判定（`switch` / `open --from` / `open --to` 共用）：
+ * - `danglingToolCalls`：有调用、没有结果的工具调用数（按 callId 去重，覆盖整条会话）；
+ * - `unansweredTail`：最后停在用户消息上、没有助手回复——值是来源日志给的结束方式
+ *   （`cancelled` / `error`），日志没标明时为 `unknown`（可能被中断，也可能还在生成）。
+ * 命名与 `prompt --json` 的 `stats.danglingToolCalls` / `stats.unansweredTailReason` 一致。
+ * 两种形状都没有时不输出：字段缺省 = 按这两条判据来源已收尾，不代表任务本身做完了。
+ */
+export type SourceUnfinished = {
+  danglingToolCalls?: number;
+  unansweredTail?: 'cancelled' | 'error' | 'unknown';
+};
+export type SourceUnfinishedField = { sourceUnfinished?: SourceUnfinished };
+
+export function sourceUnfinishedField(turns: UnifiedTurn[]): SourceUnfinishedField {
+  const unfinished: SourceUnfinished = {};
+  const dangling = danglingToolCalls(turns).length;
+  if (dangling > 0) unfinished.danglingToolCalls = dangling;
+  if (unansweredUserTail(turns)) unfinished.unansweredTail = unansweredTailFailure(turns) ?? 'unknown';
+  return Object.keys(unfinished).length ? { sourceUnfinished: unfinished } : {};
+}
+
 /** 与 `describeDanglingToolCalls` 同一套披露口径（含可替换的结尾那句），未闭合时返回 null。 */
 export function describeUnansweredTail(
   turns: UnifiedTurn[],

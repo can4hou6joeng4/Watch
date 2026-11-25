@@ -3,7 +3,7 @@ import { stat } from 'node:fs/promises';
 import type { SessionRef, TokenUsage, UnifiedTurn } from './types.js';
 import { chainsElsewhereHint, chainsSameDirectoryHint, describeStoreErrorReason, emptyChainBindHint } from './store.js';
 import type { Chain, ChainsElsewhere, Store, SwitchRecord } from './store.js';
-import { contentLossField, countAttachmentLoss, countBashControlLoss, countTextEventLoss, countToolFailureLoss, type ContentLoss, dedupeCallEvents, describeAttachmentLoss, describeBashControlLoss, describeTextEventLoss, describeToolFailureLoss, describeDanglingToolCalls, describeUnansweredTail, describeResumeTargetUnfinished, findContextDisclosure, mergeTurns, shouldReplacePairedSession, turnIdentityKey } from './rich.js';
+import { contentLossField, sourceUnfinishedField, type SourceUnfinished, countAttachmentLoss, countBashControlLoss, countTextEventLoss, countToolFailureLoss, type ContentLoss, dedupeCallEvents, describeAttachmentLoss, describeBashControlLoss, describeTextEventLoss, describeToolFailureLoss, describeDanglingToolCalls, describeUnansweredTail, describeResumeTargetUnfinished, findContextDisclosure, mergeTurns, shouldReplacePairedSession, turnIdentityKey } from './rich.js';
 import { describeWriteFailureReason, type FileDigest } from './atomic.js';
 import { addFinding, type Finding } from './findings.js';
 import { describeInferredTimeWrite } from './time.js';
@@ -1404,6 +1404,12 @@ export type HandoffResult = {
    */
   contentLoss?: ContentLoss;
   /**
+   * 来源会话没收尾（见 `SourceUnfinished`）：有工具调用没有结果，或最后停在用户消息上。
+   * 与对应的两句中文 warnings 同一处判定；交接照常成功，接手的一侧看到的那一轮是做了一半的。
+   * 两种形状都没有时不输出。
+   */
+  sourceUnfinished?: SourceUnfinished;
+  /**
    * 这次到底有没有把链绑定 / 切换记录写进去：
    * - written：写成了；
    * - failed：尝试过但抛错（库只读、磁盘满、SQLITE_BUSY 等），`warnings` 里已有一条
@@ -2349,6 +2355,7 @@ export async function handoff(
       chainRecordState,
       ...unparsableLinesField(sourceBadScan, destBadScan),
       ...contentLossField(lossCounts),
+      ...sourceUnfinishedField(turns),
       warnings,
       findings,
     };
@@ -2460,6 +2467,7 @@ export async function handoff(
     ...driftFields,
     ...unparsableLinesField(sourceBadScan, destBadScan),
     ...contentLossField(lossCounts),
+    ...sourceUnfinishedField(turns),
     warnings,
     findings,
   };

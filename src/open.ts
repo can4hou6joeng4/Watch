@@ -1,7 +1,7 @@
 import { stat } from 'node:fs/promises';
 import { describeWriteFailureReason, type FileDigest } from './core/atomic.js';
 import { assertTargetUnchanged, describeVanishedTarget, blockedHint, describeSourceChangedDuringHandoff, diffTurns, HandoffBlockedError, snapshotSourceState, sourceChangeSince, sourceDriftFields, targetRecreatedField, type SourceChangeSince, type SourceDriftFields, type SourceStateSnapshot, type TargetRecreatedField } from './core/handoff.js';
-import { contentLossField, contentLossOf, countAttachmentLoss, countBashControlLoss, countTextEventLoss, countToolFailureLoss, type ContentLoss, type ContentLossField, describeAttachmentLoss, describeBashControlLoss, describeTextEventLoss, describeToolFailureLoss, describeDanglingToolCalls, describeUnansweredTail, describeResumeTargetUnfinished, dedupeCallEvents, findContextDisclosure, countPairedTurnsMissingEvents } from './core/rich.js';
+import { contentLossField, contentLossOf, sourceUnfinishedField, type SourceUnfinished, type SourceUnfinishedField, countAttachmentLoss, countBashControlLoss, countTextEventLoss, countToolFailureLoss, type ContentLoss, type ContentLossField, describeAttachmentLoss, describeBashControlLoss, describeTextEventLoss, describeToolFailureLoss, describeDanglingToolCalls, describeUnansweredTail, describeResumeTargetUnfinished, dedupeCallEvents, findContextDisclosure, countPairedTurnsMissingEvents } from './core/rich.js';
 import { Store, defaultDbPath, describeStoreErrorReason, describeStoreOpenFailure } from './core/store.js';
 import { clipCodePoints } from './core/display.js';
 import { IS_WIN, normalizePath, stripDevicePrefix } from './core/platform.js';
@@ -114,6 +114,13 @@ export type OpenSessionResult = {
    * warnings 同一处取数；`--check` 给的是「执行后会少什么」。四类都没有时不输出。
    */
   contentLoss?: ContentLoss;
+  /**
+   * 来源会话没收尾（与 switch 同字段）：`danglingToolCalls` 是没有结果的工具调用数，
+   * `unansweredTail` 表示最后停在用户消息上（`cancelled` / `error` 来自来源日志，`unknown` = 日志没标明）。
+   * 与对应的中文 warnings 同一处判定；并入 / 转入照常成功，接手的一侧看到的那一轮是做了一半的。
+   * 两种形状都没有时不输出。
+   */
+  sourceUnfinished?: SourceUnfinished;
   /** 来源会话在 --from 并入 / --to 转入期间被写入过（stat 字节数与方向），与 switch / prompt 同字段 */
   sourceDrift?: SourceChangeSince;
   /** 来源会话在期间「量不出来」有没有变化，附原因；与 sourceDrift 互斥 */
@@ -580,6 +587,7 @@ export async function openSession(
   let crossDirectory: { sourceCwd: string; targetCwd: string } | null = null;
   let badLines: UnparsableLinesField = {};
   let lossField: ContentLossField = {};
+  let unfinished: SourceUnfinishedField = {};
   let sourceUsage: TokenUsage | null = null;
   // 记录的目录可能已被移动 / 删除：会话内容照常可读、转入也能写成，但返回的 cd 会在第一步失败
   const cwdInspection = await sessionCwdInspection(target.found.ref.cwd);
@@ -768,6 +776,7 @@ export async function openSession(
         `来源会话 ${escapeControlChars(source.found.ref.sessionId)}（${source.adapter.displayName}）`,
         (msg) => warnings.push(msg),
       );
+      unfinished = sourceUnfinishedField(srcTurns);
       const dstBadScan = await scanUnparsableJsonLines(target.found.ref.filePath);
       badLines = unparsableLinesField(srcBadScan, dstBadScan);
       if (dstBadScan.count > 0) {
@@ -1044,6 +1053,7 @@ export async function openSession(
     ...recreated,
     ...badLines,
     ...lossField,
+    ...unfinished,
     ...srcDrift,
     // 与 status / new / chain 写操作同一字段：命令成功、命令已给出，但 cd 会在不可用目录上失败
     ...(cwdInspection.probe.state !== 'ok' ? { cwdState: cwdInspection.probe } : {}),
@@ -1120,6 +1130,8 @@ export type OpenPlan = {
   reuseScanGaps?: ReuseScanGap[];
   /** 来源 / 目标的坏行扫描（见 `unparsableLinesField`）；resume 快路径不扫，两侧干净时缺省 */
   unparsableLines?: UnparsableLines;
+  /** 来源会话没收尾（见 `sourceUnfinishedField`）；resume 快路径没有来源，已收尾时缺省 */
+  sourceUnfinished?: SourceUnfinished;
 };
 
 type PlannedOpen =
@@ -1380,6 +1392,7 @@ async function planOpenInProvider(
     `来源会话 ${escapeControlChars(sourceId)}（${source.adapter.displayName}）`,
     (msg) => diagnostics?.push(msg),
   );
+  const unfinished = sourceUnfinishedField(turns);
   if (outgoing.length === 0) {
     // 0 字节来源在这句话里曾是同一句「没有可转入的内容」：看不出内容已经丢了，也不说这次
     // 到底有没有写入（确实是零写入，但必须说出来），更不给下一步——而 handoff 那边的同一种
@@ -1474,6 +1487,7 @@ async function planOpenInProvider(
             merged: delta.length,
             snapshot: pairDigest,
             ...unparsableLinesField(badSourceScan, pairBadLines),
+            ...unfinished,
             note:
               delta.length === 0
                 ? `回到链上 ${target.displayName} 会话 ${escapeControlChars(chainPaired.sessionId)}，无需并入`
@@ -1606,6 +1620,7 @@ async function planOpenInProvider(
         merged: delta.length,
         snapshot,
         ...unparsableLinesField(badSourceScan, reuseBadLines),
+        ...unfinished,
         note:
           delta.length === 0
             ? `已在 ${target.displayName} 找到包含全部内容的既有会话 ${escapeControlChars(reuse.sessionId)}，直接打开，无需新建`
@@ -1644,6 +1659,7 @@ async function planOpenInProvider(
       snapshot: null,
       ...(reuseScanGaps.length ? { reuseScanGaps } : {}),
       ...unparsableLinesField(badSourceScan, null),
+      ...unfinished,
       note: `已把 ${source.adapter.displayName} 的 ${outgoing.length} 轮内容转入 ${target.displayName} 新会话`,
     },
   };
@@ -1838,6 +1854,7 @@ export async function openInProvider(
       plan: publicPlan(plan),
       ...recreated,
       ...(plan.unparsableLines ? { unparsableLines: plan.unparsableLines } : {}),
+      ...(plan.sourceUnfinished ? { sourceUnfinished: plan.sourceUnfinished } : {}),
       // 与上面四句损失警告同一批轮次（计划写入的内容）
       ...contentLossOf(plan.turns, target),
       ...planDrift,
@@ -1938,6 +1955,7 @@ export async function checkOpenInProvider(
     writable: true,
     plan: publicPlan(plan),
     ...(plan.unparsableLines ? { unparsableLines: plan.unparsableLines } : {}),
+    ...(plan.sourceUnfinished ? { sourceUnfinished: plan.sourceUnfinished } : {}),
   };
   // 空来源也会新建会话（Kimi 要真跑一次 CLI），所以 CLI 判定不能放在 turns===0 之后
   const cliBlock = await newSessionCliBlock(target, plan);
