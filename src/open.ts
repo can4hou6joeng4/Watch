@@ -1,7 +1,7 @@
 import { stat } from 'node:fs/promises';
 import { describeWriteFailureReason, type FileDigest } from './core/atomic.js';
 import { assertTargetUnchanged, describeVanishedTarget, blockedHint, describeSourceChangedDuringHandoff, diffTurns, HandoffBlockedError, snapshotSourceState, sourceChangeSince, sourceDriftFields, targetRecreatedField, type SourceChangeSince, type SourceDriftFields, type SourceStateSnapshot, type TargetRecreatedField } from './core/handoff.js';
-import { describeAttachmentLoss, describeBashControlLoss, describeTextEventLoss, describeToolFailureLoss, describeDanglingToolCalls, describeUnansweredTail, describeResumeTargetUnfinished, dedupeCallEvents, findContextDisclosure, countPairedTurnsMissingEvents } from './core/rich.js';
+import { contentLossField, contentLossOf, countAttachmentLoss, countBashControlLoss, countTextEventLoss, countToolFailureLoss, type ContentLoss, type ContentLossField, describeAttachmentLoss, describeBashControlLoss, describeTextEventLoss, describeToolFailureLoss, describeDanglingToolCalls, describeUnansweredTail, describeResumeTargetUnfinished, dedupeCallEvents, findContextDisclosure, countPairedTurnsMissingEvents } from './core/rich.js';
 import { Store, defaultDbPath, describeStoreErrorReason, describeStoreOpenFailure } from './core/store.js';
 import { clipCodePoints } from './core/display.js';
 import { IS_WIN, normalizePath, stripDevicePrefix } from './core/platform.js';
@@ -108,6 +108,12 @@ export type OpenSessionResult = {
    * `error` 存在时 `count` 只是下界。两侧都干净时不输出。
    */
   unparsableLines?: UnparsableLines;
+  /**
+   * 带不到目标的内容按类别计数（与 switch 同字段）：附件只剩占位文本、独立过程文本不保存、
+   * 工具失败标记不作为原生状态写入、Bash 的工作目录 / 超时 / 后台标记放不下。与对应的中文
+   * warnings 同一处取数；`--check` 给的是「执行后会少什么」。四类都没有时不输出。
+   */
+  contentLoss?: ContentLoss;
   /** 来源会话在 --from 并入 / --to 转入期间被写入过（stat 字节数与方向），与 switch / prompt 同字段 */
   sourceDrift?: SourceChangeSince;
   /** 来源会话在期间「量不出来」有没有变化，附原因；与 sourceDrift 互斥 */
@@ -573,6 +579,7 @@ export async function openSession(
   let recreated: TargetRecreatedField = {};
   let crossDirectory: { sourceCwd: string; targetCwd: string } | null = null;
   let badLines: UnparsableLinesField = {};
+  let lossField: ContentLossField = {};
   let sourceUsage: TokenUsage | null = null;
   // 记录的目录可能已被移动 / 删除：会话内容照常可读、转入也能写成，但返回的 cd 会在第一步失败
   const cwdInspection = await sessionCwdInspection(target.found.ref.cwd);
@@ -792,6 +799,12 @@ export async function openSession(
       if (attachmentLoss) warnings.push(attachmentLoss);
       const bashControlLoss = describeBashControlLoss(srcTurns, target.adapter);
       if (bashControlLoss) warnings.push(bashControlLoss);
+      // 与上面两句警告同一处取数；过程文本 / 失败标记要等真的写入后才补上
+      const sourceLoss = {
+        attachments: countAttachmentLoss(srcTurns, target.adapter),
+        bashControls: countBashControlLoss(srcTurns, target.adapter),
+      };
+      lossField = contentLossField(sourceLoss);
       // 目标就是这条即将 resume 的会话：它自己没收尾要说，与来源那一侧各说各的
       warnResumeTargetUnfinished(dstTurns, `目标会话 ${escapeControlChars(targetId)}（${target.adapter.displayName}）`, outgoing.length, (msg) =>
         warnings.push(msg),
@@ -821,6 +834,11 @@ export async function openSession(
           const newRef = await target.adapter.importTurns(dedup, target.found.ref.cwd, target.found.ref);
           if (textLoss) warnings.push(textLoss);
           if (failureLoss) warnings.push(failureLoss);
+          lossField = contentLossField({
+            ...sourceLoss,
+            textEvents: countTextEventLoss(dedup, target.adapter),
+            toolFailures: countToolFailureLoss(dedup, target.adapter),
+          });
           const vanished = describeVanishedTarget(target.found.ref, newRef, target.adapter.displayName);
           if (vanished) warnings.push(vanished);
           recreated = targetRecreatedField(target.found.ref, newRef);
@@ -1025,6 +1043,7 @@ export async function openSession(
     ...(crossDirectory ? { crossDirectory } : {}),
     ...recreated,
     ...badLines,
+    ...lossField,
     ...srcDrift,
     // 与 status / new / chain 写操作同一字段：命令成功、命令已给出，但 cd 会在不可用目录上失败
     ...(cwdInspection.probe.state !== 'ok' ? { cwdState: cwdInspection.probe } : {}),
@@ -1819,6 +1838,8 @@ export async function openInProvider(
       plan: publicPlan(plan),
       ...recreated,
       ...(plan.unparsableLines ? { unparsableLines: plan.unparsableLines } : {}),
+      // 与上面四句损失警告同一批轮次（计划写入的内容）
+      ...contentLossOf(plan.turns, target),
       ...planDrift,
       ...(cwdState ? { cwdState } : {}),
       ...(mapping ? {} : { storeAvailable: false as const }),
@@ -1952,5 +1973,5 @@ export async function checkOpenInProvider(
   if (textLoss) base.warnings = [...(base.warnings ?? []), textLoss];
   const failureLoss = describeToolFailureLoss(plan.turns, target);
   if (failureLoss) base.warnings = [...(base.warnings ?? []), failureLoss];
-  return base;
+  return { ...base, ...contentLossOf(plan.turns, target) };
 }

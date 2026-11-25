@@ -3,7 +3,7 @@ import { stat } from 'node:fs/promises';
 import type { SessionRef, TokenUsage, UnifiedTurn } from './types.js';
 import { chainsElsewhereHint, chainsSameDirectoryHint, describeStoreErrorReason, emptyChainBindHint } from './store.js';
 import type { Chain, ChainsElsewhere, Store, SwitchRecord } from './store.js';
-import { dedupeCallEvents, describeAttachmentLoss, describeBashControlLoss, describeTextEventLoss, describeToolFailureLoss, describeDanglingToolCalls, describeUnansweredTail, describeResumeTargetUnfinished, findContextDisclosure, mergeTurns, shouldReplacePairedSession, turnIdentityKey } from './rich.js';
+import { contentLossField, countAttachmentLoss, countBashControlLoss, countTextEventLoss, countToolFailureLoss, type ContentLoss, dedupeCallEvents, describeAttachmentLoss, describeBashControlLoss, describeTextEventLoss, describeToolFailureLoss, describeDanglingToolCalls, describeUnansweredTail, describeResumeTargetUnfinished, findContextDisclosure, mergeTurns, shouldReplacePairedSession, turnIdentityKey } from './rich.js';
 import { describeWriteFailureReason, type FileDigest } from './atomic.js';
 import { addFinding, type Finding } from './findings.js';
 import { describeInferredTimeWrite } from './time.js';
@@ -1398,6 +1398,12 @@ export type HandoffResult = {
    */
   unparsableLines?: UnparsableLines;
   /**
+   * 带不到目标的内容按类别计数（附件 / 过程文本 / 工具失败标记 / Bash 执行条件），与对应的
+   * 中文 warnings 同一处取数：附件与 Bash 执行条件按来源会话计，过程文本与失败标记按本次
+   * 实际写入的内容计。四类都没有时不输出。
+   */
+  contentLoss?: ContentLoss;
+  /**
    * 这次到底有没有把链绑定 / 切换记录写进去：
    * - written：写成了；
    * - failed：尝试过但抛错（库只读、磁盘满、SQLITE_BUSY 等），`warnings` 里已有一条
@@ -2121,6 +2127,13 @@ export async function handoff(
   // 命令本身照常写入，但这几项执行条件不会，主动披露避免下一跳把历史当成「没设过」。
   const bashControlLoss = describeBashControlLoss(turns, target);
   if (bashControlLoss) warnings.push(bashControlLoss);
+  // 与上面两句警告同一处取数；过程文本 / 失败标记要等真的写入后才知道（见 guardedWrite）
+  const lossCounts = {
+    attachments: countAttachmentLoss(turns, target),
+    bashControls: countBashControlLoss(turns, target),
+    textEvents: 0,
+    toolFailures: 0,
+  };
   // 目标级保护：传入即将写入的会话，Codex 据此检查 per-thread writer 锁（而非只看 Desktop 是否运行）
   await target.preflight?.({ ref: into, cwd });
   // 协作写锁：供应商支持时在写入期间独占原生锁，收窄与原生 writer 的竞态窗口
@@ -2139,6 +2152,8 @@ export async function handoff(
         const written = await target.importTurns(turnsToWrite, cwd, into, opts);
         if (textLoss) warnings.push(textLoss);
         if (failureLoss) warnings.push(failureLoss);
+        lossCounts.textEvents = countTextEventLoss(turnsToWrite, target);
+        lossCounts.toolFailures = countToolFailureLoss(turnsToWrite, target);
         return written;
       } catch (error) {
         // 写盘失败只有 Node 原文（`EACCES: permission denied, mkdir '…'`），cmdSwitch 会把它
@@ -2333,6 +2348,7 @@ export async function handoff(
       ...(notes.length ? { notes } : {}),
       chainRecordState,
       ...unparsableLinesField(sourceBadScan, destBadScan),
+      ...contentLossField(lossCounts),
       warnings,
       findings,
     };
@@ -2443,6 +2459,7 @@ export async function handoff(
     ...(vanished ? targetRecreatedField(into, newRef) : {}),
     ...driftFields,
     ...unparsableLinesField(sourceBadScan, destBadScan),
+    ...contentLossField(lossCounts),
     warnings,
     findings,
   };

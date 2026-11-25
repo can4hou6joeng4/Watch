@@ -877,6 +877,30 @@ export function assistantOnlyIncrementReason(turns: UnifiedTurn[]): string | nul
   );
 }
 
+/** 带不到目标的附件数（图片 / 文件类分开计）；`describeAttachmentLoss()` 与 `--json` 的 `contentLoss` 共用 */
+export type AttachmentLossCount = { images: number; files: number };
+
+export function countAttachmentLoss(
+  turns: UnifiedTurn[],
+  target: { attachmentSupport?: 'images' | 'user-images' | 'all' },
+): AttachmentLossCount {
+  const support = target.attachmentSupport ?? 'none';
+  const count: AttachmentLossCount = { images: 0, files: 0 };
+  if (support === 'all') return count;
+  for (const turn of turns) {
+    for (const event of turn.events ?? []) {
+      if (!event.attachment) continue;
+      const image = event.attachment.kind === 'image';
+      // `images` = 图片块能还原、文件类附件不能；`user-images` 再收窄到用户轮
+      if (support === 'images' && image) continue;
+      if (support === 'user-images' && turn.role === 'user' && image) continue;
+      if (image) count.images += 1;
+      else count.files += 1;
+    }
+  }
+  return count;
+}
+
 /**
  * 交接时附件能否跟着走。`assertRoundTrip` 只比 thinking / tool_call / tool_result，
  * `attachment` 挂在 text 事件上、不参与校验，于是「图片只留了占位文本」这条路径
@@ -890,19 +914,9 @@ export function describeAttachmentLoss(
   target: { displayName: string; attachmentSupport?: 'images' | 'user-images' | 'all' },
 ): string | null {
   const support = target.attachmentSupport ?? 'none';
-  if (support === 'all') return null;
-  const lost = turns.flatMap((t) =>
-    (t.events ?? []).filter((e) => {
-      if (!e.attachment) return false;
-      // `images` = 图片块能还原、文件类附件不能；`user-images` 再收窄到用户轮
-      if (support === 'images') return e.attachment.kind !== 'image';
-      if (support === 'user-images') return !(t.role === 'user' && e.attachment.kind === 'image');
-      return true;
-    }),
-  );
-  if (lost.length === 0) return null;
-  const images = lost.filter((e) => e.attachment?.kind === 'image').length;
-  const files = lost.length - images;
+  const { images, files } = countAttachmentLoss(turns, target);
+  const total = images + files;
+  if (total === 0) return null;
   const kinds = [images ? `${images} 张图片` : '', files ? `${files} 个文件附件` : ''].filter(Boolean).join('、');
   const keptNote =
     support === 'images'
@@ -911,9 +925,26 @@ export function describeAttachmentLoss(
         ? `${target.displayName} 只还原用户轮的图片块，助手轮图片与文件类附件只留占位文本`
         : `${target.displayName} 的写入侧不还原附件的原始数据，只留占位文本`;
   return (
-    `来源会话有 ${lost.length} 个附件（${kinds}）不会随这次交接保留：${keptNote}（如「[图片：image/png，1234B]」），` +
+    `来源会话有 ${total} 个附件（${kinds}）不会随这次交接保留：${keptNote}（如「[图片：image/png，1234B]」），` +
     `原始数据不落盘，也无法从目标会话里恢复；需要这些附件时先在来源里另存，或转到 OpenCode（图片与文件都能带）`
   );
+}
+
+/** 目标不保存的独立过程文本条数；`describeTextEventLoss()` 与 `--json` 的 `contentLoss` 共用 */
+export function countTextEventLoss(
+  turns: UnifiedTurn[],
+  target: { textEventSupport?: 'assistant' },
+): number {
+  let lost = 0;
+  for (const turn of turns) {
+    if (turn.role === 'assistant' && target.textEventSupport === 'assistant') continue;
+    for (const event of turn.events ?? []) {
+      if (event.kind !== 'text' || event.attachment || event.summary.startsWith(WATCH_CONTEXT_DISCLOSURE_PREFIX)) continue;
+      const text = (event.detail ?? event.summary).trim();
+      if (text && text !== turn.text.trim()) lost += 1;
+    }
+  }
+  return lost;
 }
 
 /**
@@ -924,15 +955,7 @@ export function describeTextEventLoss(
   turns: UnifiedTurn[],
   target: { displayName: string; textEventSupport?: 'assistant' },
 ): string | null {
-  let lost = 0;
-  for (const turn of turns) {
-    if (turn.role === 'assistant' && target.textEventSupport === 'assistant') continue;
-    for (const event of turn.events ?? []) {
-      if (event.kind !== 'text' || event.attachment || event.summary.startsWith(WATCH_CONTEXT_DISCLOSURE_PREFIX)) continue;
-      const text = (event.detail ?? event.summary).trim();
-      if (text && text !== turn.text.trim()) lost += 1;
-    }
-  }
+  const lost = countTextEventLoss(turns, target);
   if (lost === 0) return null;
   const reason = target.textEventSupport === 'assistant'
     ? `${target.displayName} 只保存助手侧的过程文本，这些用户侧记录不会写入`
@@ -940,11 +963,11 @@ export function describeTextEventLoss(
   return `来源会话有 ${lost} 条过程文本不会随这次交接保留：${reason}；这些中间说明或压缩摘要无法从目标会话恢复，需要时请在来源会话里核对，或用 watch prompt <来源会话 id> --profile full 查看`;
 }
 
-/** 失败标记不参与 round-trip 对账；按实际写入载荷披露，不复制结果正文或猜测错误文字。 */
-export function describeToolFailureLoss(
+/** 不会作为原生状态写入目标的工具失败标记条数；`describeToolFailureLoss()` 与 `contentLoss` 共用 */
+export function countToolFailureLoss(
   turns: UnifiedTurn[],
-  target: { displayName: string; toolFailureSupport?: 'assistant' },
-): string | null {
+  target: { toolFailureSupport?: 'assistant' },
+): number {
   let lost = 0;
   for (const turn of turns) {
     if (turn.role === 'assistant' && target.toolFailureSupport === 'assistant') continue;
@@ -952,6 +975,15 @@ export function describeToolFailureLoss(
       if (event.kind === 'tool_result' && event.failed === true) lost += 1;
     }
   }
+  return lost;
+}
+
+/** 失败标记不参与 round-trip 对账；按实际写入载荷披露，不复制结果正文或猜测错误文字。 */
+export function describeToolFailureLoss(
+  turns: UnifiedTurn[],
+  target: { displayName: string; toolFailureSupport?: 'assistant' },
+): string | null {
+  const lost = countToolFailureLoss(turns, target);
   if (lost === 0) return null;
   const name = escapeControlChars(target.displayName);
   const scope = target.toolFailureSupport === 'assistant' ? `。${name} 只保留助手轮工具结果的原生失败状态` : '';
@@ -983,11 +1015,13 @@ function hasBashTimeout(obj: Record<string, unknown>): boolean {
   });
 }
 
+export type BashControlLossCount = { workdirs: number; timeouts: number; backgrounds: number };
+
 /**
- * Bash 类工具调用的控制字段（工作目录 / 超时 / 后台运行）在目标格式里放不下时的披露。
+ * Bash 类工具调用的控制字段（工作目录 / 超时 / 后台运行）在目标格式里放不下时的计数与披露。
  *
  * 只有两种目标的写入侧会**重新派生** Bash 入参，其余（Pi / Kimi / Grok / OpenCode）原样保存
- * 结构化入参，字段自然不会损失，函数返回 null：
+ * 结构化入参，字段自然不会损失，计数全为 0、披露返回 null：
  * - Codex 的 `exec`：`codexToolInput()` 只留命令，`wrapExecInput()` 重建
  *   `tools.exec_command({cmd, workdir, …})` 脚本。它没有超时 / 后台字段（`yield_time_ms`
  *   是等待窗口，不是命令时限）；来源明确给出的绝对路径工作目录会写进 `workdir`，带不过去的才算损失。
@@ -997,15 +1031,15 @@ function hasBashTimeout(obj: Record<string, unknown>): boolean {
  *
  * 这些字段影响「这条命令当时是怎么跑的」，下一跳会照着历史判断，所以丢的时候必须说出来。
  */
-export function describeBashControlLoss(
+export function countBashControlLoss(
   turns: UnifiedTurn[],
-  target: { id?: string; displayName: string },
-): string | null {
+  target: { id?: string },
+): BashControlLossCount {
   const id = target.id ?? '';
-  if (id !== 'codex' && id !== 'claude') return null;
   let workdirs = 0;
   let timeouts = 0;
   let backgrounds = 0;
+  if (id !== 'codex' && id !== 'claude') return { workdirs, timeouts, backgrounds };
   for (const turn of turns) {
     for (const event of turn.events ?? []) {
       if (event.kind !== 'tool_call') continue;
@@ -1027,6 +1061,16 @@ export function describeBashControlLoss(
       }
     }
   }
+  return { workdirs, timeouts, backgrounds };
+}
+
+/** 上面那份计数的中文披露；`--json` 的 `contentLoss.bashControls` 用的是同一份计数 */
+export function describeBashControlLoss(
+  turns: UnifiedTurn[],
+  target: { id?: string; displayName: string },
+): string | null {
+  const id = target.id ?? '';
+  const { workdirs, timeouts, backgrounds } = countBashControlLoss(turns, target);
   const parts = [
     workdirs ? `${workdirs} 个工作目录` : '',
     timeouts ? `${timeouts} 个超时设置` : '',
@@ -1041,6 +1085,62 @@ export function describeBashControlLoss(
     `来源会话有 ${parts.join('、')}不会随这次交接写进目标：${reason}；` +
     `这些调用的命令本身照常写入，需要当时的执行条件时请回来源会话核对`
   );
+}
+
+/**
+ * 写入目标时带不过去的内容，按类别计数（`switch` / `open --from` / `open --to` 的 `--json` 共用）。
+ *
+ * 四类损失各自早有一句中文 warnings，但都不参与 round-trip 校验——目标照常可读、命令照常成功，
+ * 脚本读到的只是一次普通的「已交接 N 轮」。字段与警告同源于上面四个 `count*`，同一处取数：
+ * 警告出现时字段必出现，计数为 0 的类别不输出，四类都是 0 时整个字段不输出。
+ */
+export type ContentLoss = {
+  /** 原始数据带不过去、目标侧只剩占位文本的附件 */
+  attachments?: AttachmentLossCount;
+  /** 目标不保存的独立过程文本（中间说明 / 压缩摘要） */
+  textEvents?: number;
+  /** 不会作为原生失败状态写入目标的工具结果 */
+  toolFailures?: number;
+  /** Bash 类调用里目标放不下的执行条件（工作目录 / 超时 / 后台运行标记） */
+  bashControls?: BashControlLossCount;
+};
+export type ContentLossField = { contentLoss?: ContentLoss };
+
+export function contentLossField(counts: {
+  attachments?: AttachmentLossCount | null;
+  textEvents?: number | null;
+  toolFailures?: number | null;
+  bashControls?: BashControlLossCount | null;
+}): ContentLossField {
+  const loss: ContentLoss = {};
+  const a = counts.attachments;
+  if (a && a.images + a.files > 0) loss.attachments = { images: a.images, files: a.files };
+  if (counts.textEvents && counts.textEvents > 0) loss.textEvents = counts.textEvents;
+  if (counts.toolFailures && counts.toolFailures > 0) loss.toolFailures = counts.toolFailures;
+  const b = counts.bashControls;
+  if (b && b.workdirs + b.timeouts + b.backgrounds > 0) {
+    loss.bashControls = { workdirs: b.workdirs, timeouts: b.timeouts, backgrounds: b.backgrounds };
+  }
+  return Object.keys(loss).length ? { contentLoss: loss } : {};
+}
+
+/** 四类损失都按同一批轮次计数时的入口（`open --to` 的预检与执行：计划写入的就是这一批） */
+export function contentLossOf(
+  turns: UnifiedTurn[],
+  target: {
+    id?: string;
+    attachmentSupport?: 'images' | 'user-images' | 'all';
+    textEventSupport?: 'assistant';
+    toolFailureSupport?: 'assistant';
+  },
+): ContentLossField {
+  if (turns.length === 0) return {};
+  return contentLossField({
+    attachments: countAttachmentLoss(turns, target),
+    textEvents: countTextEventLoss(turns, target),
+    toolFailures: countToolFailureLoss(turns, target),
+    bashControls: countBashControlLoss(turns, target),
+  });
 }
 
 /**
