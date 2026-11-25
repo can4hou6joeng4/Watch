@@ -905,12 +905,19 @@ async function cmdSwitch(cwd: string, targetId: string, json: boolean, chain?: s
     if (result.alreadyAtTarget) {
       // 链记录里可能根本没有链尾（chain new 之后没切过），也可能读不出来：这时一律说
       // 「链尾已在 X」会让人以为链已经绑到 X，而 status 里还是空的
-      //
-      const parseFailureNote = result.resumeParseFailed
-        ? 'Watch 未能核对会话内容，恢复结果待确认（原因见上方警告）'
-        : null;
-      const emptyMark = '，但这条会话解析出 0 轮，打开的是空会话（原因见上方警告）';
-      const openAdvice = parseFailureNote ?? `可直接打开${result.resumeTargetEmpty ? emptyMark : ''}`;
+      let resumeContentNote: string | undefined;
+      if (result.resumeParseFailed) {
+        resumeContentNote = 'Watch 未能核对会话内容，恢复结果待确认（原因见上方警告）';
+      } else if (result.resumeTargetEmpty) {
+        const scan = result.unparsableLines?.target;
+        const detail = scan?.error
+          ? '坏行扫描未完成，恢复结果待确认'
+          : scan?.count
+            ? `文件有 ${scan.count} 行无法解析，请先核对会话文件`
+            : '打开的是空会话';
+        resumeContentNote = `这条会话解析出 0 轮，${detail}（原因见上方警告）`;
+      }
+      const openAdvice = resumeContentNote ?? '可直接打开';
       if (result.chainTipState === 'empty') {
         console.log('当前链还没有绑定任何会话（没有可交接的来源，本次未写入链记录）。');
         console.log(
@@ -924,7 +931,7 @@ async function cmdSwitch(cwd: string, targetId: string, json: boolean, chain?: s
         console.log(
           result.resumeUnreadable
             ? `链尾已在 ${targetId}，但这条会话的文件现在读不出来，直接打开会失败（原因见上方警告）。`
-            : `链尾已在 ${targetId}，${parseFailureNote ?? `直接打开即可${result.resumeTargetEmpty ? emptyMark : ''}`}。`,
+            : `链尾已在 ${targetId}，${resumeContentNote ?? '直接打开即可'}。`,
         );
       } else {
         console.log(
