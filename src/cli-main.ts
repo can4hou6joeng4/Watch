@@ -2024,8 +2024,16 @@ async function cmdPrompt(
     fail(json, `会话 ${id} 读取失败：${await describePromptSourceReadFailure(foundRef.filePath, error)}；未生成任何内容`);
   }
 
-  // 0 轮有两种完全不同的原因，`probeSessionReadable()` 是判据的唯一入口（与 open / switch 共用）。
-  // 文档里那句结论必须说清是哪一种：0 字节要从备份恢复，可读但 0 轮则要看是不是格式没认出来。
+  // 坏行被 `parse` 静默跳过：正文里的记录会缺一段，而读者看不出「少了」。文档要被复制走，
+  // 所以这一档既进 warnings（终端里立刻能看到）也进正文（`sourceBadLines`）。
+  // 先扫再判 0 轮：文件被截断时 parse 同样返回 0 轮，不能把「可读、只有系统事件 / 元数据」
+  // 当成结论——0 轮的原因要看坏行扫描，与 open / switch / doctor 用同一个判据。
+  const badSourceScan = await scanUnparsableJsonLines(foundRef.filePath, { allowMissing: false });
+  const badSourceLines = badSourceScan.count;
+
+  // 0 轮有三种完全不同的原因：`probeSessionReadable()` 管 0 字节 / 读不出来（与 open / switch 共用），
+  // 坏行扫描管「文件在、但内容被截断」，都没有才是合法空会话或格式没认出来。
+  // 文档里那句结论必须说清是哪一种：0 字节要从备份恢复，有坏行则先确认文件完整性。
   let emptySourceNote: string | undefined;
   if (turns.length === 0) {
     const emptyReason = await probeSessionReadable(foundRef.filePath);
@@ -2033,18 +2041,17 @@ async function cmdPrompt(
       warnings.push(`会话 ${id} 没有可交接的内容：${emptyReason}`);
       emptySourceNote = `${emptyReason}；需要完整内容请先恢复来源文件`;
     } else {
-      const note = '来源文件可读，但解析出 0 轮可交接内容（可能只有系统事件 / 元数据，或这一家的记录格式还没被识别）';
+      const hasBadLines = badSourceLines > 0 || Boolean(badSourceScan.error);
+      const note = describeZeroTurnReason(
+        badSourceScan,
+        '来源文件可读，但解析出 0 轮可交接内容（可能只有系统事件 / 元数据，或这一家的记录格式还没被识别）',
+        hasBadLines ? '需要完整内容请先恢复来源文件' : undefined,
+      );
       warnings.push(`会话 ${id}：${note}`);
       emptySourceNote = note;
     }
-  }
-
-  let sessionUsage: TokenUsage | null = null;
-  // 坏行被 `parse` 静默跳过：正文里的记录会缺一段，而读者看不出「少了」。文档要被复制走，
-  // 所以这一档既进 warnings（终端里立刻能看到）也进正文（`sourceBadLines`）。
-  const badSourceScan = await scanUnparsableJsonLines(foundRef.filePath, { allowMissing: false });
-  const badSourceLines = badSourceScan.count;
-  if (badSourceLines > 0) {
+  } else if (badSourceLines > 0) {
+    // 0 轮时上面那句已连同行数说过，这里不重复同一件事
     warnings.push(
       `来源会话 ${escapeControlChars(foundRef.sessionId)} 有 ${badSourceLines} 行无法解析（截断或损坏），已跳过；文档正文可能缺少这些记录`,
     );
@@ -2055,8 +2062,9 @@ async function cmdPrompt(
     `来源会话 ${escapeControlChars(foundRef.sessionId)}`,
     '正文是否缺少记录无法确认——先确认该文件可读，需要完整内容请先恢复来源文件',
   );
-  if (badSourceScanFailure) warnings.push(badSourceScanFailure);
+  if (badSourceScanFailure && turns.length > 0) warnings.push(badSourceScanFailure);
 
+  let sessionUsage: TokenUsage | null = null;
   // 用量这一行在「没有数字」之外还有两种来路，都必须写进文档：读不出来（`sessionUsage` 抛错），
   // 或用量数据源本身是空的（grok 的 `updates.jsonl` 被截成 0 字节，`sessionUsage` 安静返回 null）。
   // 只打在 stderr 不够——文档会被复制进别家助手，那里的读者会把「读不出来」当成「这家没有用量」。
