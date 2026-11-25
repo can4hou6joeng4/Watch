@@ -103,6 +103,12 @@ export type OpenSessionResult = {
    */
   crossDirectory?: { sourceCwd: string; targetCwd: string };
   /**
+   * 按 id 反查时「命中了文件却读不出来 / 没查全」的逐家结论（与文本第一句同源）。
+   * 失败结果只给中文 `error` 时，脚本无从知道 id 其实是对的、要修的是文件；
+   * `emptyFile: true` 另说明这一家是 0 字节、内容已丢失。没有这类 miss 时不输出。
+   */
+  lookupMisses?: LookupMiss[];
+  /**
    * 来源 / 目标会话文件里有无法解析的行（被 parse 跳过），或坏行扫描没完成（与 switch 同字段）：
    * 来源侧 = 并入 / 转入的内容可能不完整；目标侧 = 增量判定可能偏多、可能重复追加既有内容。
    * `error` 存在时 `count` 只是下界。两侧都干净时不输出。
@@ -266,7 +272,13 @@ function openMappingDb(warnings?: string[]): Store | null {
 }
 
 /** 反查里一家「没查成」的结构化结论：见 `SessionLookupFailureKind` */
-export type LookupMiss = { provider: string; kind: SessionLookupFailureKind; reason: string };
+export type LookupMiss = {
+  provider: string;
+  kind: SessionLookupFailureKind;
+  reason: string;
+  /** `found-unreadable` 且原因是 0 字节：内容已丢失，下一步是备份恢复而不是修权限 */
+  emptyFile?: true;
+};
 
 /**
  * 「未找到会话」这句结论只在**每家都确实没有这个 id** 时才成立。
@@ -422,7 +434,12 @@ export async function resolveById(
       // 同一份原因再记一条结构化结论：调用方要据它决定第一句说「未找到」还是「找到了但读不出来」。
       // 只认适配器显式抛出的 kind——裸 Error 分不出「按 id 命中了文件」与「目录没读成」。
       if (error instanceof SessionLookupFailureError) {
-        lookupMisses?.push({ provider: a.id, kind: error.kind, reason });
+        lookupMisses?.push({
+          provider: a.id,
+          kind: error.kind,
+          reason,
+          ...(isEmptySessionFileReason(reason) ? { emptyFile: true as const } : {}),
+        });
       }
       continue;
     }
@@ -489,15 +506,6 @@ async function describeParseFailure(
 }
 
 /**
- * 解析出 0 轮时再探一次文件：0 字节是内容已丢失，与「这条会话本来就没有内容」是两回事。
- *
- * 只有 cwd 不来自文件内容的适配器会带着一条 0 字节的文件走到 `open` 的这几条分支上
- * （grok 从目录名解出 cwd、kimi 从索引读），claude / codex / pi 在 `findById` 就因为读不出
- * cwd 抛 `found-unreadable` 了——于是同一个状态在 `open <id>` 上被讲成「没有可转入的内容」
- * 或干脆什么都不说，而 `sessions` / `status` / `switch` 从 275–284 轮起都会说「0 字节，内容已丢失」。
- * 判据仍只有一处（`probeSessionReadable()` + `isEmptySessionFileReason()`）。
- */
-/**
  * 「未找到会话」时能直接照着改的下一步：路径当成了 id、或者只抄了 id 的前半截。
  *
  * 这两种都是抄写问题，不是「会话没了」：给一句「确认 id 正确」等于让用户对着同一串东西
@@ -529,6 +537,15 @@ function idTypoHint(mapping: Store | null, raw: string): string | null {
   );
 }
 
+/**
+ * 解析出 0 轮时再探一次文件：0 字节是内容已丢失，与「这条会话本来就没有内容」是两回事。
+ *
+ * 只有 cwd 不来自文件内容的适配器会带着一条 0 字节的文件走到 `open` 的这几条分支上
+ * （grok 从目录名解出 cwd、kimi 从索引读），claude / codex / pi 在 `findById` 就因为读不出
+ * cwd 抛 `found-unreadable` 了——于是同一个状态在 `open <id>` 上被讲成「没有可转入的内容」
+ * 或干脆什么都不说，而 `sessions` / `status` / `switch` 从 275–284 轮起都会说「0 字节，内容已丢失」。
+ * 判据仍只有一处（`probeSessionReadable()` + `isEmptySessionFileReason()`）。
+ */
 async function zeroByteSessionReason(ref: SessionRef): Promise<string | null> {
   const reason = await probeSessionReadable(ref.filePath);
   return reason && isEmptySessionFileReason(reason) ? reason : null;
@@ -615,6 +632,7 @@ export async function openSession(
       return {
         ok: false,
         error: `${chainUse ? `${chainUse}；` : ''}${headline}${unchecked ? `。${unchecked}` : ''}${extra}`,
+        ...(misses.length ? { lookupMisses: misses } : {}),
       };
     }
     // 抄写问题（拿路径当 id、只抄了前缀）单独给下一步：这一档 id 确实不存在，
@@ -668,6 +686,7 @@ export async function openSession(
         return {
           ok: false,
           error: `${chainUse ? `${chainUse}；` : ''}${headline}${extra}；本次未写入任何内容`,
+          ...(srcMisses.length ? { lookupMisses: srcMisses } : {}),
         };
       }
       // 与目标侧同一套抄写提示：来源侧同样会拿到路径或半截 id
@@ -1260,8 +1279,8 @@ type PlannedOpen =
       cwdState?: CwdInspection;
       plan: OpenPlan;
     }
-  // 空来源的拒绝结果也携带已确认的空会话状态和坏行扫描结果。
-  | ({ ok: false; error: string } & Pick<OpenSessionResult, 'emptySessions' | 'unparsableLines'>);
+  // 空来源的拒绝结果也携带已确认的空会话状态和坏行扫描结果；反查失败时另带逐家结构化结论。
+  | ({ ok: false; error: string } & Pick<OpenSessionResult, 'emptySessions' | 'unparsableLines' | 'lookupMisses'>);
 
 /**
  * 会话没收尾的两种形状，`diffTurns` 与 round-trip 都查不出来——只能主动披露：
@@ -1373,7 +1392,11 @@ async function planOpenInProvider(
     // 是错的第一句：id 往往是对的，要修的是那个文件 / 那个目录
     const headline = lookupMissHeadline('来源会话', sourceId, misses);
     if (headline) {
-      return { ok: false, error: `${chainUse ? `${chainUse}；` : ''}${headline}；本次未写入任何内容` };
+      return {
+        ok: false,
+        error: `${chainUse ? `${chainUse}；` : ''}${headline}；本次未写入任何内容`,
+        ...(misses.length ? { lookupMisses: misses } : {}),
+      };
     }
     // 这是**来源**那一侧：命令还给了 --to <provider>，只说「未找到会话」看不出是哪一侧没找到，
     // 更看不出这次有没有已经往目标写进去（决策顺序里来源先解析，所以确实什么都没写）

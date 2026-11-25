@@ -1446,6 +1446,8 @@ async function cmdOpen(
         // 空来源的失败结果与预检给出同样的会话状态与坏行计数。
         ...(result.emptySessions ? { emptySessions: result.emptySessions } : {}),
         ...(result.unparsableLines ? { unparsableLines: result.unparsableLines } : {}),
+        // 反查命中却读不出来时，脚本要知道 id 没写错、哪一家是 0 字节；文本第一句同源
+        ...(result.lookupMisses ? { lookupMisses: result.lookupMisses } : {}),
       };
       if (!json) {
         for (const warning of result.warnings ?? []) console.error(`提示: ${escapeControlChars(warning)}`);
