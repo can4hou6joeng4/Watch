@@ -785,7 +785,7 @@ export const guides = [
             type: 'callout',
             tone: 'info',
             title: '核心判断依据',
-            body: 'resume（以及各家的原生恢复命令）只做一件事：打开指定的那条会话。它能不能接着聊，取决于那条会话文件里还有多少对话。文件在、读得出来，不等于有内容——这正是「看起来一切正常，打开什么也没有」的来源。Watch 从 v0.1.84 起在 open / switch / new / status 各入口分别披露这一档，两者要分开看。',
+            body: 'resume（以及各家的原生恢复命令）只做一件事：打开指定的那条会话。它能不能接着聊，取决于那条会话文件里还有多少对话。文件在、读得出来，不等于有内容——这正是「看起来一切正常，打开什么也没有」的来源。Watch 在 open / switch / new / status 各入口分别披露这一档，两者要分开看。',
           },
           {
             type: 'paragraph',
@@ -800,11 +800,11 @@ export const guides = [
             items: [
               {
                 title: '步骤 1：看 status 的链尾行',
-                body: '执行 watch status。链尾那一行在 v0.1.90 起会显示轮数，例如「← 链尾（12 轮）」；解析出 0 轮时写「（解析出 0 轮，原因见上方警告）」；文件读不出来或不存在时不给轮数。JSON 输出里对应 chainTipTurns 与 chainTipEmpty 两个字段，chainTipTurns 只在解析成功时存在。链尾 0 轮且扫描发现坏行时另有 chainTipBadLines（多条链时用 chain list --json 的 chains[].tip.badLines），给出 count，扫描未完成时还带 error；这类链尾在文本里写「文件有坏行」，干净空会话仍写「空会话」。doctor --json 的 store.emptyTips[] 条目也带同一份 badLines。多条链时 watch chain list 的链尾行同样带轮数（v0.1.93）；拿不准时 watch doctor 的 store.emptyTips 会列出解析出 0 轮的链尾（v0.1.92）。watch new 的 --json 也报实际解析出的轮数（v0.1.94）：claude / pi 会写出一条占位 user，所以显示 1 轮，codex / grok / opencode 是 0 轮。watch usage 从 v0.1.95 起把「解析出 0 轮的空会话」与「有内容却没记 usage」分档，新建的空链不会再被说成统计缺失；v0.1.96 起内容文件坏行与 Codex 压缩记录也不再冒充空会话；v0.1.97 起旁路用量仍可读时，内容文件被删掉也会明说对话已丢失；v0.1.98 起内容坏行会进入警告与字段，不再静默；v0.1.99 起已有轮次的内容坏行不再被说成「解析出 0 轮」；v0.1.100 起文本摘要按 0 轮与已读到用量分档，坏行扫描失败会说明数量未知；v0.1.101 起 0 轮摘要不再附带「用量已计入」，并更正 v0.1.98 的历史表述。',
+                body: '执行 watch status。链尾那一行会显示轮数，例如「← 链尾（12 轮）」；解析出 0 轮时写「（解析出 0 轮，原因见上方警告）」；文件读不出来或不存在时不给轮数。JSON 输出里对应 chainTipTurns 与 chainTipEmpty 两个字段，chainTipTurns 只在解析成功时存在。链尾 0 轮且扫描发现坏行时另有 chainTipBadLines（多条链时用 chain list --json 的 chains[].tip.badLines），给出 count，扫描未完成时还带 error；这类链尾在文本里写「文件有坏行」，干净空会话仍写「空会话」。doctor --json 的 store.emptyTips[] 条目也带同一份 badLines。多条链时 watch chain list 的链尾行同样带轮数；拿不准时 watch doctor 的 store.emptyTips 会列出解析出 0 轮的链尾。watch new 的 --json 也报实际解析出的轮数：claude / pi 会写出一条占位 user，所以显示 1 轮，codex / grok / opencode 是 0 轮。watch usage 把「解析出 0 轮的空会话」与「有内容却没记 usage」分档；内容文件坏行、Codex 压缩记录、旁路用量仍可读但内容文件被删、已有轮次的内容坏行都按各自原因披露；坏行扫描失败时说明数量未知，0 轮摘要不附带「用量已计入」。',
               },
               {
                 title: '步骤 2：按警告分档读原因',
-                body: '同一份结果里，警告会区分：0 字节（「会话文件是空的」）、可读 0 轮（「解析出 0 轮（没有可继续的对话）」）、文件读不出来（权限或内容问题）、文件不存在（被删或被移走）、内容解析失败（文件读得出来，但会话格式损坏或 OpenCode 库缺正文表等；v0.1.279 起警告写「内容解析失败，Watch 未能核对它的轮数与收尾状态」）。五档的下一步不同，不要只看到「空」就去换绑：文件不存在时先找文件，0 字节时先确认有没有备份；解析失败这一档连「是不是空」都不知道，不能当空会话处理，先用 watch switch 或 watch open 打开一次，让预检给出具体原因。',
+                body: '同一份结果里，警告会区分：0 字节（「会话文件是空的」）、可读 0 轮（「解析出 0 轮（没有可继续的对话）」）、文件读不出来（权限或内容问题）、文件不存在（被删或被移走）、内容解析失败（文件读得出来，但会话格式损坏或 OpenCode 库缺正文表等；警告写「内容解析失败，Watch 未能核对它的轮数与收尾状态」）。五档的下一步不同，不要只看到「空」就去换绑：文件不存在时先找文件，0 字节时先确认有没有备份；解析失败这一档连「是不是空」都不知道，不能当空会话处理，先用 watch switch 或 watch open 打开一次，让预检给出具体原因。',
               },
               {
                 title: '步骤 3：确认是不是刚建出来的空会话',
@@ -819,7 +819,7 @@ export const guides = [
           {
             type: 'code',
             language: 'sh',
-            code: '# 1. 看链尾轮数与警告（v0.1.90 起链尾行带轮数）\nnpm run watch -- status --json\n\n# 2. 链尾是空会话时的三条路\nnpm run watch -- adopt <provider> --session <another-session-id>   # 换绑到另一条会话\nnpm run watch -- chain new <new-chain-name>                       # 另起一条链\n# 3. 有备份时先恢复文件，再重试 resume\nnpm run watch -- switch <provider>',
+            code: '# 1. 看链尾轮数与警告（链尾行带轮数）\nnpm run watch -- status --json\n\n# 2. 链尾是空会话时的三条路\nnpm run watch -- adopt <provider> --session <another-session-id>   # 换绑到另一条会话\nnpm run watch -- chain new <new-chain-name>                       # 另起一条链\n# 3. 有备份时先恢复文件，再重试 resume\nnpm run watch -- switch <provider>',
           },
           {
             type: 'callout',
@@ -876,7 +876,7 @@ export const guides = [
             type: 'callout',
             tone: 'info',
             title: 'Key Distinction',
-            body: 'A resume command, and the native resume command of each client, does one thing: open the specified session. Whether it can continue depends on how many turns remain in that file. Existing and readable do not mean it has content, which is exactly how a resume opens into an empty session while everything looks fine. Since v0.1.84 Watch discloses this case separately in open, switch, new and status.',
+            body: 'A resume command, and the native resume command of each client, does one thing: open the specified session. Whether it can continue depends on how many turns remain in that file. Existing and readable do not mean it has content, which is exactly how a resume opens into an empty session while everything looks fine. Watch discloses this case separately in open, switch, new and status.',
           },
           {
             type: 'paragraph',
@@ -891,11 +891,11 @@ export const guides = [
             items: [
               {
                 title: 'Step 1: Read the chain-tip row in status',
-                body: 'Run watch status. Since v0.1.90 the chain-tip row shows its turn count, for example a chain tip with 12 turns; a 0-turn parse says it parsed 0 turns and points at the warning above; an unreadable or missing file carries no count. In JSON the fields are chainTipTurns and chainTipEmpty, and chainTipTurns exists only when the parse succeeds. When a 0-turn tip has unparsable lines, the same result also carries chainTipBadLines (or chains[].tip.badLines in chain list --json) with a count and, if the scan failed, an error; the text tip row says the file has bad lines instead of calling it an empty session. In doctor --json, a store.emptyTips[] entry with bad lines carries that same badLines field. With several chains, the tip row in watch chain list carries the same count (v0.1.93); when in doubt, store.emptyTips in watch doctor lists tips that parse to 0 turns (v0.1.92). watch new --json also reports the actual parsed turn count (v0.1.94): claude and pi write a placeholder user message, so it shows 1 turn, while codex, grok and opencode show 0. Since v0.1.95, watch usage separates a 0-turn empty session from a session that has content but no recorded usage, so a freshly created chain is no longer reported as a statistics gap. Since v0.1.96, unparsable content lines and Codex compaction records are no longer misreported as empty sessions. Since v0.1.97, a deleted content file is disclosed even when sidecar usage is still available. Since v0.1.98, bad content lines are disclosed in warnings and fields instead of staying silent; since v0.1.99, a bad content line with existing turns is no longer described as a 0-turn parse; since v0.1.100, the text summary separates 0-turn sessions from sessions with usage, and a failed scan says the bad-line count is unknown; since v0.1.101, the 0-turn summary no longer adds a usage-counted clause, and the v0.1.98 note describes a disclosure gap rather than lost usage.',
+                body: 'Run watch status. The chain-tip row shows its turn count, for example a chain tip with 12 turns; a 0-turn parse says it parsed 0 turns and points at the warning above; an unreadable or missing file carries no count. In JSON the fields are chainTipTurns and chainTipEmpty, and chainTipTurns exists only when the parse succeeds. When a 0-turn tip has unparsable lines, the same result also carries chainTipBadLines (or chains[].tip.badLines in chain list --json) with a count and, if the scan failed, an error; the text tip row says the file has bad lines instead of calling it an empty session. In doctor --json, a store.emptyTips[] entry with bad lines carries that same badLines field. With several chains, the tip row in watch chain list carries the same count; when in doubt, store.emptyTips in watch doctor lists tips that parse to 0 turns. watch new --json also reports the actual parsed turn count: claude and pi write a placeholder user message, so it shows 1 turn, while codex, grok and opencode show 0. watch usage separates a 0-turn empty session from a session that has content but no recorded usage. Unparsable content lines, Codex compaction records, a deleted content file with sidecar usage still readable, and bad lines beside existing turns are each disclosed with their own reason. A failed scan says the bad-line count is unknown, and a 0-turn summary does not add a usage-counted clause.',
               },
               {
                 title: 'Step 2: Read the five warning cases',
-                body: 'The same result separates zero bytes (the session file is empty), readable 0 turns (parsed 0 turns, nothing to continue), unreadable content (permissions or content), a missing file (deleted or moved), and a failed content parse (the file reads fine, but the session format is damaged or the OpenCode database is missing its message table; since v0.1.279 the warning says the content failed to parse and Watch could not verify the turn count or tail state). Each case has a different next step; do not rebind just because you saw the word empty. The last case does not even tell you whether the session is empty, so do not treat it as an empty session: run watch switch or watch open once and let the preflight report the specific reason.',
+                body: 'The same result separates zero bytes (the session file is empty), readable 0 turns (parsed 0 turns, nothing to continue), unreadable content (permissions or content), a missing file (deleted or moved), and a failed content parse (the file reads fine, but the session format is damaged or the OpenCode database is missing its message table; the warning says the content failed to parse and Watch could not verify the turn count or tail state). Each case has a different next step; do not rebind just because you saw the word empty. The last case does not even tell you whether the session is empty, so do not treat it as an empty session: run watch switch or watch open once and let the preflight report the specific reason.',
               },
               {
                 title: 'Step 3: Check whether it is a brand-new empty session',
@@ -910,7 +910,7 @@ export const guides = [
           {
             type: 'code',
             language: 'sh',
-            code: '# 1. Read the chain-tip turn count and warnings (since v0.1.90)\nnpm run watch -- status --json\n\n# 2. Three paths when the chain tip is an empty session\nnpm run watch -- adopt <provider> --session <another-session-id>   # rebind to another session\nnpm run watch -- chain new <new-chain-name>                       # start another chain\n# 3. Restore from backup first, then retry resume\nnpm run watch -- switch <provider>',
+            code: '# 1. Read the chain-tip turn count and warnings\nnpm run watch -- status --json\n\n# 2. Three paths when the chain tip is an empty session\nnpm run watch -- adopt <provider> --session <another-session-id>   # rebind to another session\nnpm run watch -- chain new <new-chain-name>                       # start another chain\n# 3. Restore from backup first, then retry resume\nnpm run watch -- switch <provider>',
           },
           {
             type: 'callout',
