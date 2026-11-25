@@ -1240,8 +1240,8 @@ type PlannedOpen =
       cwdState?: CwdInspection;
       plan: OpenPlan;
     }
-  // 来源是空会话而拒绝时带上 emptySessions：预检与执行都原样转给 `--json`
-  | { ok: false; error: string; emptySessions?: EmptySessions };
+  // 空来源的拒绝结果也携带已确认的空会话状态和坏行扫描结果。
+  | ({ ok: false; error: string } & Pick<OpenSessionResult, 'emptySessions' | 'unparsableLines'>);
 
 /**
  * 会话没收尾的两种形状，`diffTurns` 与 round-trip 都查不出来——只能主动披露：
@@ -1518,6 +1518,7 @@ async function planOpenInProvider(
       ok: false,
       // 与 lead 同一处判定：脚本不必解析这段中文才知道「失败是因为来源是空的」
       ...emptySessionsField(empty ? 'zero-byte' : 'zero-turns', null),
+      ...unparsableLinesField(badSourceScan, null),
       error:
         // 「请先另起一条链」在还没有链、或链尾不是这条 0 轮会话时都是错的下一步：
         // `watch new` 自己会建默认链，只有链尾正卡在这条 0 轮会话时才会撞上同一句拒绝（实测）
@@ -1836,13 +1837,7 @@ export async function openInProvider(
   const diagnostics: string[] = [];
   const mapping = store ?? openMappingDb(diagnostics);
   const planned = await planOpenInProvider(sourceId, providerId, mapping, diagnostics);
-  if (!planned.ok) {
-    return {
-      ok: false,
-      error: attachDiagnostics(planned.error, diagnostics),
-      ...(planned.emptySessions ? { emptySessions: planned.emptySessions } : {}),
-    };
-  }
+  if (!planned.ok) return { ...planned, error: attachDiagnostics(planned.error, diagnostics) };
   const { adapter: target, sourceRef, sourceProvider, cwd, plan, sourceSnapshot: srcSnapshot, cwdState } = planned;
   // 来源快照的基线在 `planOpenInProvider` 读取来源之前就取好了（见那里的注释）：
   // 这里只负责写完之后再比一次，期间（含规划阶段）被追加的话都能报出来
@@ -2093,13 +2088,7 @@ export async function checkOpenInProvider(
   const diagnostics: string[] = [];
   const mapping = store ?? openMappingDb(diagnostics);
   const planned = await planOpenInProvider(sourceId, providerId, mapping, diagnostics);
-  if (!planned.ok) {
-    return {
-      ok: false,
-      error: attachDiagnostics(planned.error, diagnostics),
-      ...(planned.emptySessions ? { emptySessions: planned.emptySessions } : {}),
-    };
-  }
+  if (!planned.ok) return { ...planned, error: attachDiagnostics(planned.error, diagnostics) };
   const { adapter: target, cwd, plan } = planned;
   const base: OpenSessionResult = {
     ok: true,
