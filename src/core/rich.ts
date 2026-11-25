@@ -183,6 +183,31 @@ export function sourceContextDisclosuresOnly(value?: ContextDisclosures): Contex
   return value?.source ? { contextDisclosures: { source: value.source } } : {};
 }
 
+/**
+ * 一条会话读到时是空的：`zero-byte` = 文件 0 字节（内容已丢失），`zero-turns` = 文件有内容、
+ * 却解析出 0 轮（刚建出来的空会话、内容被清空只剩占位头、或只剩坏行——这三种 Watch 分不出）。
+ */
+export type EmptySessionKind = 'zero-byte' | 'zero-turns';
+export type EmptySessions = { source?: EmptySessionKind; target?: EmptySessionKind };
+export type EmptySessionsField = { emptySessions?: EmptySessions };
+
+/**
+ * `open` 的 `--json` 里「哪一侧读到时是空会话」。此前只有中文 warnings / notes / error：
+ * `mergedTurns: 0` 在「来源是空的」与「内容已全部包含」两种情况下长得一样，单独打开一条
+ * 空会话也与一次普通的 resume 无法区分。两侧都有内容时不给字段。
+ */
+export function emptySessionsField(source?: EmptySessionKind | null, target?: EmptySessionKind | null): EmptySessionsField {
+  const value: EmptySessions = {};
+  if (source) value.source = source;
+  if (target) value.target = target;
+  return Object.keys(value).length ? { emptySessions: value } : {};
+}
+
+/** 目标是这次新建的会话时只留来源一侧：旧目标的状态不属于新会话 */
+export function sourceEmptySessionOnly(value?: EmptySessions): EmptySessionsField {
+  return value?.source ? { emptySessions: { source: value.source } } : {};
+}
+
 export function turnHasContent(t: UnifiedTurn): boolean {
   return t.text.trim() !== '' || (t.events?.length ?? 0) > 0;
 }

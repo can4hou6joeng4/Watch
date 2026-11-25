@@ -1,7 +1,7 @@
 import { stat } from 'node:fs/promises';
 import { describeWriteFailureReason, type FileDigest } from './core/atomic.js';
 import { assertTargetUnchanged, describeVanishedTarget, blockedHint, describeSourceChangedDuringHandoff, diffTurns, HandoffBlockedError, snapshotSourceState, sourceChangeSince, sourceDriftFields, targetRecreatedField, type SourceChangeSince, type SourceDriftFields, type SourceStateSnapshot, type TargetRecreatedField } from './core/handoff.js';
-import { contentLossField, contentLossOf, contextDisclosuresField, sourceContextDisclosuresOnly, type ContextDisclosures, type ContextDisclosuresField, sourceUnfinishedField, type SourceUnfinished, type SourceUnfinishedField, targetUnfinishedField, type TargetUnfinished, type TargetUnfinishedField, countAttachmentLoss, countBashControlLoss, countTextEventLoss, countToolFailureLoss, type ContentLoss, type ContentLossField, describeAttachmentLoss, describeBashControlLoss, describeTextEventLoss, describeToolFailureLoss, describeDanglingToolCalls, describeUnansweredTail, describeResumeTargetUnfinished, dedupeCallEvents, findContextDisclosure, countPairedTurnsMissingEvents } from './core/rich.js';
+import { contentLossField, contentLossOf, contextDisclosuresField, sourceContextDisclosuresOnly, type ContextDisclosures, type ContextDisclosuresField, emptySessionsField, sourceEmptySessionOnly, type EmptySessions, type EmptySessionsField, sourceUnfinishedField, type SourceUnfinished, type SourceUnfinishedField, targetUnfinishedField, type TargetUnfinished, type TargetUnfinishedField, countAttachmentLoss, countBashControlLoss, countTextEventLoss, countToolFailureLoss, type ContentLoss, type ContentLossField, describeAttachmentLoss, describeBashControlLoss, describeTextEventLoss, describeToolFailureLoss, describeDanglingToolCalls, describeUnansweredTail, describeResumeTargetUnfinished, dedupeCallEvents, findContextDisclosure, countPairedTurnsMissingEvents } from './core/rich.js';
 import { Store, defaultDbPath, describeStoreErrorReason, describeStoreOpenFailure } from './core/store.js';
 import { clipCodePoints } from './core/display.js';
 import { IS_WIN, normalizePath, stripDevicePrefix } from './core/platform.js';
@@ -135,6 +135,14 @@ export type OpenSessionResult = {
    * 与对应的 warnings 同一处取数；没有声明的一侧不输出，目标是这次新建的会话时不给 target。
    */
   contextDisclosures?: ContextDisclosures;
+  /**
+   * 读到时（写入之前）是空会话的一侧：`zero-byte` = 文件 0 字节（内容已丢失），`zero-turns` = 文件有内容
+   * 却解析出 0 轮。`source` 是被读取内容的一侧（`--from` 的来源、`--to` 的来源——后者此时 `ok:false`），
+   * `target` 是结果里那条 resume 指向的既有会话（单独 `open <id>`、`--from` 的目标、`--to` 的同家快路径）。
+   * 与对应的中文 warnings / error 同一处判定：`mergedTurns: 0` 分不出「来源是空的」与「内容已全部包含」，
+   * 这个字段能。两侧都有内容时不输出，目标是这次新建的会话时不给 target。
+   */
+  emptySessions?: EmptySessions;
   /** 来源会话在 --from 并入 / --to 转入期间被写入过（stat 字节数与方向），与 switch / prompt 同字段 */
   sourceDrift?: SourceChangeSince;
   /** 来源会话在期间「量不出来」有没有变化，附原因；与 sourceDrift 互斥 */
@@ -604,6 +612,7 @@ export async function openSession(
   let unfinished: SourceUnfinishedField = {};
   let targetUnfinished: TargetUnfinishedField = {};
   let contextField: ContextDisclosuresField = {};
+  let emptyField: EmptySessionsField = {};
   let sourceUsage: TokenUsage | null = null;
   // 记录的目录可能已被移动 / 删除：会话内容照常可读、转入也能写成，但返回的 cd 会在第一步失败
   const cwdInspection = await sessionCwdInspection(target.found.ref.cwd);
@@ -760,6 +769,11 @@ export async function openSession(
       // 「内容被清空、只剩占位头」两种形状都长这样。0 字节档从 283 轮起已有警告，这一档在
       // 零增量时却会被写成「内容已全部包含」——来源什么都没并入，与「来源 0 轮必须披露」相悖。
       const sourceZeroTurns = srcTurns.length === 0 && !sourceZeroByte;
+      // 与下面几句警告同一处判定：读到时（写入之前）哪一侧是空的
+      emptyField = emptySessionsField(
+        sourceZeroByte ? 'zero-byte' : sourceZeroTurns ? 'zero-turns' : null,
+        targetZeroByte ? 'zero-byte' : dstTurns.length === 0 ? 'zero-turns' : null,
+      );
       if (sourceZeroByte && targetZeroByte) {
         // 两条独立的「0 字节」警告会自相矛盾：一边说目标未被改动、没有可并入的内容，
         // 一边说「本次并入的只有来源的内容」——而来源同样是空的，实际什么都没写。
@@ -840,6 +854,14 @@ export async function openSession(
       );
       targetUnfinished = targetUnfinishedField(dstTurns, outgoing.length);
       if (outgoing.length === 0) {
+        // 目标自己解析出 0 轮（文件不是 0 字节）而这次又什么都没并入：结果里的 resume 打开的是一条
+        // 空会话。单独 `open <id>` 对同一条会话会说，这里以前只说来源那一侧——目标的状态无人提及。
+        if (dstTurns.length === 0 && !targetZeroByte) {
+          warnings.push(
+            `目标会话 ${escapeControlChars(targetId)}（${target.adapter.displayName}）解析出 0 轮（没有可继续的对话），这次也没有并入任何内容：` +
+              `下面这条 resume 命令打开的是空会话——如果它本该有历史，先在 ${target.adapter.displayName} 里打开它确认，或从备份恢复该文件（Watch 不会替你重建历史）`,
+          );
+        }
         notes.push(
           sourceZeroByte
             ? `${escapeControlChars(from)} 的会话文件是空的（内容已丢失），没有可并入的内容`
@@ -876,6 +898,7 @@ export async function openSession(
           if (recreated.targetRecreated) {
             targetUnfinished = {};
             contextField = sourceContextDisclosuresOnly(contextField.contextDisclosures);
+            emptyField = sourceEmptySessionOnly(emptyField.emptySessions);
           }
           merged = dedup.length;
           notes.push(
@@ -979,6 +1002,7 @@ export async function openSession(
       // 不探一次，`open` 就会对着一条内容已经丢了的会话打印一条看起来完全正常的 resume
       if (turns.length === 0) {
         const empty = await zeroByteSessionReason(target.found.ref);
+        emptyField = emptySessionsField(null, empty ? 'zero-byte' : 'zero-turns');
         if (empty) {
           warnings.push(
             `会话 ${escapeControlChars(target.found.ref.sessionId)}（${target.adapter.displayName}）的${empty}；` +
@@ -1085,6 +1109,7 @@ export async function openSession(
     ...unfinished,
     ...targetUnfinished,
     ...contextField,
+    ...emptyField,
     ...srcDrift,
     // 与 status / new / chain 写操作同一字段：命令成功、命令已给出，但 cd 会在不可用目录上失败
     ...(cwdInspection.probe.state !== 'ok' ? { cwdState: cwdInspection.probe } : {}),
@@ -1167,6 +1192,8 @@ export type OpenPlan = {
   targetUnfinished?: TargetUnfinished;
   /** 来源 / 既有目标的上下文完整性声明条数（见 `contextDisclosuresField`）；没有声明时缺省 */
   contextDisclosures?: ContextDisclosures;
+  /** resume 快路径要恢复的会话读到时是空的（见 `emptySessionsField`）；有内容时缺省 */
+  emptySessions?: EmptySessions;
 };
 
 type PlannedOpen =
@@ -1182,7 +1209,8 @@ type PlannedOpen =
       cwdState?: CwdInspection;
       plan: OpenPlan;
     }
-  | { ok: false; error: string };
+  // 来源是空会话而拒绝时带上 emptySessions：预检与执行都原样转给 `--json`
+  | { ok: false; error: string; emptySessions?: EmptySessions };
 
 /**
  * 会话没收尾的两种形状，`diffTurns` 与 round-trip 都查不出来——只能主动披露：
@@ -1336,6 +1364,7 @@ async function planOpenInProvider(
     let resumeCompressed: 'intact' | 'empty' | null = null;
     let resumeTargetUnfinished: TargetUnfinishedField = {};
     let resumeContext: ContextDisclosuresField = {};
+    let resumeEmpty: EmptySessionsField = {};
     try {
       const ownTurns = await source.adapter.parse(sourceRef);
       // 上下文完整性（被转入后台 / Pi context_edit / Codex compacted）是整份日志的差异，
@@ -1347,6 +1376,7 @@ async function planOpenInProvider(
       // 会得到「来源即目标，直接恢复原会话」而没有任何「内容已丢失」的说明
       if (ownTurns.length === 0) {
         const empty = await zeroByteSessionReason(sourceRef);
+        resumeEmpty = emptySessionsField(null, empty ? 'zero-byte' : 'zero-turns');
         if (empty) {
           diagnostics?.push(
             `目标会话 ${escapeControlChars(sourceRef.sessionId)}（${target.displayName}）的${empty}；` +
@@ -1392,6 +1422,7 @@ async function planOpenInProvider(
         ...(resumeCompressed ? { resumeCompressed } : {}),
         ...resumeTargetUnfinished,
         ...resumeContext,
+        ...resumeEmpty,
       },
     };
   }
@@ -1452,6 +1483,8 @@ async function planOpenInProvider(
         `如果这条会话本该有历史，先在 ${source.adapter.displayName} 里打开它确认，或从备份恢复该文件（Watch 不会替你重建历史）再重试`;
     return {
       ok: false,
+      // 与 lead 同一处判定：脚本不必解析这段中文才知道「失败是因为来源是空的」
+      ...emptySessionsField(empty ? 'zero-byte' : 'zero-turns', null),
       error:
         // 「请先另起一条链」在还没有链、或链尾不是这条 0 轮会话时都是错的下一步：
         // `watch new` 自己会建默认链，只有链尾正卡在这条 0 轮会话时才会撞上同一句拒绝（实测）
@@ -1747,7 +1780,13 @@ export async function openInProvider(
   const diagnostics: string[] = [];
   const mapping = store ?? openMappingDb(diagnostics);
   const planned = await planOpenInProvider(sourceId, providerId, mapping, diagnostics);
-  if (!planned.ok) return { ok: false, error: attachDiagnostics(planned.error, diagnostics) };
+  if (!planned.ok) {
+    return {
+      ok: false,
+      error: attachDiagnostics(planned.error, diagnostics),
+      ...(planned.emptySessions ? { emptySessions: planned.emptySessions } : {}),
+    };
+  }
   const { adapter: target, sourceRef, sourceProvider, cwd, plan, sourceSnapshot: srcSnapshot, cwdState } = planned;
   // 来源快照的基线在 `planOpenInProvider` 读取来源之前就取好了（见那里的注释）：
   // 这里只负责写完之后再比一次，期间（含规划阶段）被追加的话都能报出来
@@ -1787,6 +1826,7 @@ export async function openInProvider(
       plan: publicPlan(plan),
       ...(plan.targetUnfinished ? { targetUnfinished: plan.targetUnfinished } : {}),
       ...(plan.contextDisclosures ? { contextDisclosures: plan.contextDisclosures } : {}),
+      ...(plan.emptySessions ? { emptySessions: plan.emptySessions } : {}),
       // 记录目录不可用时命令仍成功，但返回的 cd 会失败：与 openSession 同一字段
       ...(cwdState ? { cwdState } : {}),
       ...(mapping ? {} : { storeAvailable: false as const }),
@@ -1994,7 +2034,13 @@ export async function checkOpenInProvider(
   const diagnostics: string[] = [];
   const mapping = store ?? openMappingDb(diagnostics);
   const planned = await planOpenInProvider(sourceId, providerId, mapping, diagnostics);
-  if (!planned.ok) return { ok: false, error: attachDiagnostics(planned.error, diagnostics) };
+  if (!planned.ok) {
+    return {
+      ok: false,
+      error: attachDiagnostics(planned.error, diagnostics),
+      ...(planned.emptySessions ? { emptySessions: planned.emptySessions } : {}),
+    };
+  }
   const { adapter: target, cwd, plan } = planned;
   const base: OpenSessionResult = {
     ok: true,
@@ -2013,6 +2059,7 @@ export async function checkOpenInProvider(
     ...(plan.sourceUnfinished ? { sourceUnfinished: plan.sourceUnfinished } : {}),
     ...(plan.targetUnfinished ? { targetUnfinished: plan.targetUnfinished } : {}),
     ...(plan.contextDisclosures ? { contextDisclosures: plan.contextDisclosures } : {}),
+    ...(plan.emptySessions ? { emptySessions: plan.emptySessions } : {}),
   };
   // 空来源也会新建会话（Kimi 要真跑一次 CLI），所以 CLI 判定不能放在 turns===0 之后
   const cliBlock = await newSessionCliBlock(target, plan);

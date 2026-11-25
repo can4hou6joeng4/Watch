@@ -1369,6 +1369,8 @@ async function cmdOpen(
       const extra: Record<string, unknown> = {
         ...(result.blocked ? { blocked: true, ...result.blocked } : {}),
         ...(result.warnings?.length ? { warnings: result.warnings } : {}),
+        // 来源是空会话而拒绝：与预检同字段，脚本不必解析 error 的中文
+        ...(result.emptySessions ? { emptySessions: result.emptySessions } : {}),
       };
       if (!json) {
         for (const warning of result.warnings ?? []) console.error(`提示: ${escapeControlChars(warning)}`);
