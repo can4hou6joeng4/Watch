@@ -144,7 +144,7 @@ import-codex  prepare|confirm|status|list|project-prepare|project-confirm|projec
 
 `watch --help`（`help` / `-h` 同义）把完整用法打到 stdout 并以 0 退出，可以直接接管道；`--json` 时回单行 `{ ok: true, help }`。参数写错时用法仍走 stderr、退出码 1。`import-codex --help` 同一约定。
 
-将 `--check` 与 `open ... --to <provider>` 一起使用，可预览目标和待写入的轮数，并检查当前能否转入。`--json` 的 `plan: { kind, turnCount }` 给出落点（`resume` 来源即目标、`chain` 链上配对会话、`reuse` 内容匹配到的既有会话、`new` 新建）；真正执行 `open --to` 的结果也带同一个字段，说明这次实际按哪种落点写入。落点是 `new` 但复用扫描没查全时，`plan.reuseScanIncomplete` 列出原因（`capped` 会话数达到列表上限、`candidates-unreadable` 有候选会话读不出来、`list-failed` 会话列表读取失败、`unattributable` 有不属于任何目录的会话文件被跳过）——此时新建不等于「确认没有可复用的」，项目里可能多出一份重复会话；扫描完整时不输出。预检不会改动原生会话，但可能创建 Watch 本地数据库，或新增、刷新其中的会话位置记录。
+将 `--check` 与 `open ... --to <provider>` 一起使用，可预览目标和待写入的轮数，并检查当前能否转入。`--json` 的 `plan: { kind, turnCount }` 给出落点（`resume` 来源即目标、`chain` 链上配对会话、`reuse` 内容匹配到的既有会话、`new` 新建）；真正执行 `open --to` 的结果也带同一个字段，说明这次实际按哪种落点写入。落点是 `new` 但复用扫描没查全时，`plan.reuseScanIncomplete` 列出原因（`capped` 会话数达到列表上限、`candidates-unreadable` 有候选会话读不出来、`list-failed` 会话列表读取失败、`unattributable` 有不属于任何目录的会话文件被跳过）——此时新建不等于「确认没有可复用的」，项目里可能多出一份重复会话；扫描完整时不输出。链上有一条目标工具的配对会话、这次却没有沿用它时，`plan.chainPairSkipped` 给出那条会话的 id 与原因（`zero-byte` 文件 0 字节、`zero-turns` 解析出 0 轮、`unreadable` 读不出来、`compressed` / `compressed-empty` 只剩压缩副本、`diverged` 它缺少来源一半或更多的轮次）——链绑定仍指向它，之后的 `switch` 还会落回那条会话；沿用了或链上没有配对时不输出。预检不会改动原生会话，但可能创建 Watch 本地数据库，或新增、刷新其中的会话位置记录。
 
 `inspect` 只对 JSONL 会话统计坏行。`--json` 中，`badLinesStatus` 为 `complete` 时，`badLines` 是完整扫描的计数。`incomplete` 表示扫描未完成，计数是已确认的下界，原因见 `warnings`。SQLite 等不适用的来源返回 `not-applicable`，`badLines` 为 `null`。用量数字同一判据：来源的用量数据源里有无法解析的行时，`--json` 带 `usageBadLines`，文本在数字后括注这只是下界；扫描失败时带 `usageBadLinesScanError`，表示合计可能偏少且无法确认程度。
 
