@@ -904,12 +904,20 @@ export async function createChainSession(
     // `sessions` 会说「open / switch 读这条会话时同样会失败」、`open` 会说「找到了，但读不出来」。
     const readProblem = await probeSessionReadable(tail.toRef.filePath);
     if (readProblem) {
+      // 0 字节不是权限问题：内容已经没了，让人去「修好这个文件」只会白查一遍权限
+      const emptyTip = isEmptySessionFileReason(readProblem);
       tipBlocked(
         'target_unreadable',
-        `链尾已是 ${providerId}，但链尾会话 ${escapeControlChars(tipId)} 的文件现在读不出来：${readProblem}；` +
-          `resume 会失败，本次没有新建会话——先修好这个文件（权限或内容）；` +
-          `若这个会话不再需要，用 watch chain new <新名字> 另起一条链后再 watch new ${providerId}`,
-        '本次未写入任何内容；先修好链尾文件的权限或内容，或另起一条链。',
+        emptyTip
+          ? `链尾已是 ${providerId}，但链尾会话 ${escapeControlChars(tipId)} 的文件是空的：${readProblem}；` +
+            `resume 没有内容可恢复，本次没有新建会话——先从备份恢复该文件（Watch 不会替你重建历史）；` +
+            `若这个会话不再需要，用 watch chain new <新名字> 另起一条链后再 watch new ${providerId}`
+          : `链尾已是 ${providerId}，但链尾会话 ${escapeControlChars(tipId)} 的文件现在读不出来：${readProblem}；` +
+            `resume 会失败，本次没有新建会话——先修好这个文件（权限或内容）；` +
+            `若这个会话不再需要，用 watch chain new <新名字> 另起一条链后再 watch new ${providerId}`,
+        emptyTip
+          ? '本次未写入任何内容；先从备份恢复链尾文件（Watch 不会替你重建历史），或另起一条链。'
+          : '本次未写入任何内容；先修好链尾文件的权限或内容，或另起一条链。',
       );
     }
     // 「直接 resume 即可」还隐含一个前提：这条会话本身是收尾的。同一条会话改用 `open <id>`
@@ -1388,6 +1396,14 @@ export type ProviderTip = {
    * `status` 会把一条 open / switch 必然失败的会话当成「最新原生会话」正常展示。
    */
   unreadable?: boolean;
+  /**
+   * `unreadable` 的其中一档：文件是 0 字节，内容已经丢失。
+   *
+   * `probeSessionReadable()` 对 0 字节同样返回非空原因（resume 已没有内容可恢复），但下一步与
+   * 权限 / I/O 失败相反——后者要修可读性，0 字节只能从备份恢复或另开一条会话。文本模式与
+   * `--json` 都要能区分这两种情况，不再从中文原因里猜。
+   */
+  emptyFile?: boolean;
 };
 
 /**
@@ -1736,10 +1752,17 @@ export async function chainStatus(
       const readProblem = await probeSessionReadable(last.toRef.filePath);
       if (readProblem) {
         chainTipUnusable = true;
+        // 0 字节与权限 / I/O 失败都会让 resume 失败，但下一步相反：修可读性救不回已经丢失的
+        // 内容，照着「先修好这个文件（权限或内容）」做只会白查一遍权限（与 doctor 的 emptyTips
+        // / sessions 的 pushPreviewErrorWarning 同一分档）。
         warnings.push(
-          `链尾会话文件读不出来：${last.toProvider} ${escapeControlChars(last.toRef.sessionId)}；${readProblem}；` +
-            `resume 与下一次 switch 都会失败——先修好这个文件（权限或内容），` +
-            `或 watch adopt ${last.toProvider} --session <另一个会话 id> 换绑，或用 watch chain new <新名字> 另起一条链`,
+          isEmptySessionFileReason(readProblem)
+            ? `链尾会话文件是空的：${last.toProvider} ${escapeControlChars(last.toRef.sessionId)}；${readProblem}；` +
+              `resume 已经没有任何内容可恢复，下一次 switch 也会失败——先从备份恢复该文件（Watch 不会替你重建历史），` +
+              `或 watch adopt ${last.toProvider} --session <另一个会话 id> 换绑，或用 watch chain new <新名字> 另起一条链`
+            : `链尾会话文件读不出来：${last.toProvider} ${escapeControlChars(last.toRef.sessionId)}；${readProblem}；` +
+              `resume 与下一次 switch 都会失败——先修好这个文件（权限或内容），` +
+              `或 watch adopt ${last.toProvider} --session <另一个会话 id> 换绑，或用 watch chain new <新名字> 另起一条链`,
         );
       } else {
         // 读得出来不等于有内容：0 轮（合法空会话 / 内容被清空只剩占位头）时下面那条
@@ -1805,16 +1828,22 @@ export async function chainStatus(
   const tips: ProviderTip[] = [];
   for (const t of allTips) {
     const readProblem = await probeSessionReadable(t.ref.filePath);
+    const emptyFile = Boolean(readProblem && isEmptySessionFileReason(readProblem));
     if (readProblem && !warnedFiles.has(t.ref.filePath)) {
+      // 0 字节与权限 / I/O 失败的下一步相反：内容已丢失，只能备份恢复或另开一条会话
       warnings.push(
-        `${t.provider} 的最新会话 ${escapeControlChars(t.ref.sessionId)} 的文件当前读不出来：${readProblem}；` +
-          'open / switch 读这条会话时同样会失败——先确认该文件可读（权限、路径）再重试',
+        emptyFile
+          ? `${t.provider} 的最新会话 ${escapeControlChars(t.ref.sessionId)} 的文件是空的：${readProblem}；` +
+            'open 会拒绝它，按它 resume 也没有内容可恢复——先从备份恢复该文件（Watch 不会替你重建历史），或在原生 CLI 里另开一个会话'
+          : `${t.provider} 的最新会话 ${escapeControlChars(t.ref.sessionId)} 的文件当前读不出来：${readProblem}；` +
+            'open / switch 读这条会话时同样会失败——先确认该文件可读（权限、路径）再重试',
       );
     }
     tips.push({
       ...t,
       onChain: boundIds.get(t.provider)?.has(t.ref.sessionId) ?? false,
       ...(readProblem ? { unreadable: true } : {}),
+      ...(emptyFile ? { emptyFile: true } : {}),
     });
   }
   return { tips, chainTip, chainTipUnusable, chainTipEmpty, chainTipTurns, ...(chainTipBadLines ? { chainTipBadLines } : {}), unreadable, history, historyFailed, ...(lineage ? { lineage } : {}), chain, chains, warnings };
@@ -2091,6 +2120,7 @@ export async function handoff(
       const resumeCompressed = resumeReadProblem
         ? compressedCopy(await sessionFilePresence(resumeRef.filePath))
         : null;
+      const resumeEmptyFile = Boolean(resumeReadProblem && isEmptySessionFileReason(resumeReadProblem));
       if (resumeReadProblem) {
         warnings.push(
           resumeCompressed
@@ -2098,7 +2128,11 @@ export async function handoff(
               (resumeCompressed.kind === 'empty'
                 ? `从备份恢复后再试，或 watch adopt ${targetId} --session <另一个会话 id> 换绑，或用 watch chain new <新名字> 另起一条链`
                 : `${resumeCompressed.advice}，再重试，或 watch adopt ${targetId} --session <另一个会话 id> 换绑，或用 watch chain new <新名字> 另起一条链`)
-            : `链尾会话 ${escapeControlChars(resumeRef.sessionId)}（${targetId}）的文件现在读不出来：${resumeReadProblem}；` +
+            : resumeEmptyFile
+              ? `链尾会话 ${escapeControlChars(resumeRef.sessionId)}（${targetId}）的文件是空的：${resumeReadProblem}；` +
+                `下面那条 resume 没有内容可恢复——先从备份恢复该文件（Watch 不会替你重建历史）再重试` +
+                `，或 watch adopt ${targetId} --session <另一个会话 id> 换绑，或用 watch chain new <新名字> 另起一条链`
+              : `链尾会话 ${escapeControlChars(resumeRef.sessionId)}（${targetId}）的文件现在读不出来：${resumeReadProblem}；` +
                 `下面那条 resume 命令一执行就会失败——先修好这个文件（权限或内容）再重试` +
                 `，或 watch adopt ${targetId} --session <另一个会话 id> 换绑，或用 watch chain new <新名字> 另起一条链`,
         );

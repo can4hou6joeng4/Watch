@@ -43,6 +43,13 @@ export type BrokenTip = {
    * 对同一状态都会披露，`doctor` 作为排障入口必须给出同一档结论。
    */
   unreadable?: boolean;
+  /**
+   * `unreadable` 的其中一档：0 字节，内容已丢失。
+   *
+   * 与权限 / I/O 失败分开：前者要修可读性，0 字节只能从备份恢复或重开会话。文本结论与
+   * `--json` 都靠它，不再从 `error` 的中文里猜。
+   */
+  emptyFile?: boolean;
 };
 
 /**
@@ -631,6 +638,8 @@ export async function doctorReport(cwd: string, deps: DoctorDeps): Promise<Docto
           const compressed = missing ? (tipPresence.compressed ?? tipPresence.emptyCompressed) : undefined;
           const compressedEmpty = missing && !!tipPresence.emptyCompressed;
           const error = missing ? tipPresence.code : tipPresence.reason;
+          // 0 字节与权限 / I/O 失败都进 unreadable，但下一步相反；结构化分开给文本与脚本
+          const emptyFile = unreadable && isEmptySessionFileReason(tipPresence.reason);
           brokenTips.push({
             chainId: chain.id,
             chainName: chain.name,
@@ -642,9 +651,10 @@ export async function doctorReport(cwd: string, deps: DoctorDeps): Promise<Docto
             ...(compressed ? { compressedPath: compressed } : {}),
             ...(compressedEmpty ? { compressedEmpty: true } : {}),
             ...(unreadable ? { unreadable: true } : {}),
+            ...(emptyFile ? { emptyFile: true } : {}),
           });
           failures.push(
-            `链「${escapeControlChars(chain.name)}」的链尾不可用（${copy ? (compressedEmpty ? '只剩 0 字节压缩副本（内容已丢失）' : '只剩压缩副本') : missing ? '文件已不存在' : unreadable ? '读不出来' : '文件状态无法确认'}）`,
+            `链「${escapeControlChars(chain.name)}」的链尾不可用（${copy ? (compressedEmpty ? '只剩 0 字节压缩副本（内容已丢失）' : '只剩压缩副本') : missing ? '文件已不存在' : unreadable ? (emptyFile ? '文件是空的（内容已丢失）' : '读不出来') : '文件状态无法确认'}）`,
           );
           if (copy) {
             warnings.push(
@@ -658,8 +668,11 @@ export async function doctorReport(cwd: string, deps: DoctorDeps): Promise<Docto
             // 「读不出来」既不是「文件丢了」也不是「无法确认它还在」：文件明明白白在，
             // 只是内容读不出来。说成「已不存在」会把人引去重新绑定，说成「状态无法确认」
             // 又会让人以为可能是路径问题——两处都修不好一个权限。
+            // 0 字节还要再分一档：内容已经没了，修权限救不回来，只能备份恢复。
             warnings.push(
-              `链「${escapeControlChars(chain.name)}」的链尾会话文件读不出来：${tip.filePath}（${tip.provider}）；${error}；resume 与下次切换都会失败——先修好这个文件（权限或内容），或 watch switch ${tip.provider} 重新绑定，或 watch chain new <新名字> 另起一条链`,
+              emptyFile
+                ? `链「${escapeControlChars(chain.name)}」的链尾会话文件是空的：${tip.filePath}（${tip.provider}）；${error}；resume 没有内容可恢复，下次切换也会失败——先从备份恢复该文件（Watch 不会替你重建历史），或 watch switch ${tip.provider} 重新绑定，或 watch chain new <新名字> 另起一条链`
+                : `链「${escapeControlChars(chain.name)}」的链尾会话文件读不出来：${tip.filePath}（${tip.provider}）；${error}；resume 与下次切换都会失败——先修好这个文件（权限或内容），或 watch switch ${tip.provider} 重新绑定，或 watch chain new <新名字> 另起一条链`,
             );
           } else {
             warnings.push(
@@ -726,8 +739,11 @@ export async function doctorReport(cwd: string, deps: DoctorDeps): Promise<Docto
         }
         // 来源会话读不出来：链尾没问题，但这一条链的内容对账做不成，来源侧也打不开
         if (fromPresence.state === 'unreadable') {
+          // 0 字节的来源没有可恢复的内容，下一步是备份恢复而不是查权限
           warnings.push(
-            `链「${escapeControlChars(chain.name)}」的来源会话文件读不出来：${from.filePath}（${from.provider}）；${fromPresence.reason}；本次未做内容对账——先修好这个文件（权限或内容），再重跑 watch doctor`,
+            isEmptySessionFileReason(fromPresence.reason)
+              ? `链「${escapeControlChars(chain.name)}」的来源会话文件是空的：${from.filePath}（${from.provider}）；${fromPresence.reason}；本次未做内容对账——内容已丢失，先从备份恢复该文件（Watch 不会替你重建历史），再重跑 watch doctor`
+              : `链「${escapeControlChars(chain.name)}」的来源会话文件读不出来：${from.filePath}（${from.provider}）；${fromPresence.reason}；本次未做内容对账——先修好这个文件（权限或内容），再重跑 watch doctor`,
           );
           continue;
         }

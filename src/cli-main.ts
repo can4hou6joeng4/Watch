@@ -815,8 +815,13 @@ async function cmdStatus(cwd: string, json: boolean, chain?: string): Promise<vo
           : '';
       const chainMark = tip.onChain ? ' 🔗' : '';
       // 文件读不出来时必须标在行上：这一行本身就是「最新原生会话」的推荐，读者不会去猜
-      // 一条看起来正常的 mtime 背后打不开（原因已由上方警告给出）
-      const readMark = tip.unreadable ? '（文件读不出来，原因见上方警告）' : '';
+      // 一条看起来正常的 mtime 背后打不开（原因已由上方警告给出）。
+      // 0 字节单列一档：不是权限问题，内容已经丢了，标成「读不出来」会引去查权限。
+      const readMark = tip.unreadable
+        ? tip.emptyFile
+          ? '（文件是空的，内容已丢失，原因见上方警告）'
+          : '（文件读不出来，原因见上方警告）'
+        : '';
       // 链尾这一行就是「你的链尾」的推荐：0 轮要说出空会话（原因在上方警告里），
       // 有内容时给出轮数，让「链尾还剩多少」在概览里看得见（`chainTipTurns` 只在 parse 成功时存在，
       // 读不出来 / 解析失败时保持沉默，由上面几档警告承担）
@@ -2826,7 +2831,9 @@ async function cmdDoctor(cwd: string, json: boolean, strict: boolean): Promise<v
             : b.missing
             ? `  链「${escapeControlChars(b.chainName)}」: ${escapeControlChars(b.provider)}:${escapeControlChars(b.sessionId)} 链尾文件已不存在（${escapeControlChars(b.filePath)}），${rebindHint(b.provider)}`
             : b.unreadable
-              ? `  链「${escapeControlChars(b.chainName)}」: ${escapeControlChars(b.provider)}:${escapeControlChars(b.sessionId)} 链尾文件读不出来（${escapeControlChars(b.filePath)}，${escapeControlChars(b.error)}）；resume 与下次切换都会失败——先修好这个文件（权限或内容），或 watch switch ${b.provider} 重新绑定`
+              ? b.emptyFile
+                ? `  链「${escapeControlChars(b.chainName)}」: ${escapeControlChars(b.provider)}:${escapeControlChars(b.sessionId)} 链尾文件是空的（${escapeControlChars(b.filePath)}，${escapeControlChars(b.error)}）；内容已丢失，resume 没有内容可恢复——先从备份恢复（Watch 不会替你重建历史），或${rebindHint(b.provider)}`
+                : `  链「${escapeControlChars(b.chainName)}」: ${escapeControlChars(b.provider)}:${escapeControlChars(b.sessionId)} 链尾文件读不出来（${escapeControlChars(b.filePath)}，${escapeControlChars(b.error)}）；resume 与下次切换都会失败——先修好这个文件（权限或内容），或 watch switch ${b.provider} 重新绑定`
               : `  链「${escapeControlChars(b.chainName)}」: ${escapeControlChars(b.provider)}:${escapeControlChars(b.sessionId)} 链尾文件状态无法确认（${escapeControlChars(b.filePath)}，${escapeControlChars(b.error)}）；先确认文件是否还在，再决定是否需要 adopt`,
         );
       }
@@ -3229,6 +3236,8 @@ async function cmdChain(cwd: string, json: boolean, action?: string, a?: string,
           compressedEmpty?: boolean;
           /** 文件在、但读不出来（`chmod 000` 之类）：`missing` 为假也不代表可用 */
           unreadable?: boolean;
+          /** `unreadable` 的其中一档：0 字节，内容已丢失，下一步是备份恢复而不是修权限 */
+          emptyFile?: boolean;
           /** 链尾解析出的轮数：只在 parse 成功时存在（undefined = 没解析 / 解析失败），不拿 0 冒充 */
           turns?: number;
           /** 0 轮链尾同一次坏行扫描的结果；干净文件不出现，`error` 在场时 `count` 是下界 */
@@ -3270,6 +3279,7 @@ async function cmdChain(cwd: string, json: boolean, action?: string, a?: string,
               : presence.state === 'present' && !presence.isFile
                 ? '该路径现在不是普通文件'
                 : null;
+        const emptyFile = Boolean(readProblem && isEmptySessionFileReason(readProblem));
         let turns: number | undefined;
         const tipAdapter =
           presence.state === 'present' && presence.isFile && !readProblem ? tipAdapters.get(last.toRef.provider) : undefined;
@@ -3302,6 +3312,7 @@ async function cmdChain(cwd: string, json: boolean, action?: string, a?: string,
           ...(tipError ? { error: tipError } : {}),
           ...(compressedEmpty ? { compressedEmpty: true } : {}),
           ...(readProblem ? { unreadable: true } : {}),
+          ...(emptyFile ? { emptyFile: true } : {}),
           ...(turns !== undefined ? { turns } : {}),
           ...(tipBadLines ? { badLines: tipBadLines } : {}),
         });
@@ -3312,10 +3323,14 @@ async function cmdChain(cwd: string, json: boolean, action?: string, a?: string,
               : `链「${escapeControlChars(c.name)}」的链尾会话文件已不存在（${last.toRef.provider}:${escapeControlChars(last.toRef.sessionId)}）：下次切换会失败，${rebindHint(last.toRef.provider)}`,
           );
         } else if (readProblem && c.status === 'active') {
-          // 读不出来 ≠ 文件没了：不标 missing，也不能当成「一切正常」而不出声
+          // 读不出来 ≠ 文件没了：不标 missing，也不能当成「一切正常」而不出声。
+          // 0 字节单列一档：内容已丢失，让人去「修好这个文件（权限或内容）」只会白查一遍权限
           warnings.push(
-            `链「${escapeControlChars(c.name)}」的链尾会话文件读不出来（${last.toRef.provider}:${escapeControlChars(last.toRef.sessionId)}）：${readProblem}；` +
-              `resume 与下次切换会失败——先修好这个文件（权限或内容），或 watch adopt ${last.toRef.provider} --session <另一个会话 id> 换绑`,
+            emptyFile
+              ? `链「${escapeControlChars(c.name)}」的链尾会话文件是空的（${last.toRef.provider}:${escapeControlChars(last.toRef.sessionId)}）：${readProblem}；` +
+                `resume 没有内容可恢复，下次切换也会失败——先从备份恢复该文件（Watch 不会替你重建历史），或 watch adopt ${last.toRef.provider} --session <另一个会话 id> 换绑`
+              : `链「${escapeControlChars(c.name)}」的链尾会话文件读不出来（${last.toRef.provider}:${escapeControlChars(last.toRef.sessionId)}）：${readProblem}；` +
+                `resume 与下次切换会失败——先修好这个文件（权限或内容），或 watch adopt ${last.toRef.provider} --session <另一个会话 id> 换绑`,
           );
         } else if (tipError && c.status === 'active') {
           // 读不出来 ≠ 文件没了：不标 missing，也不能当成「一切正常」而不出声
@@ -3391,7 +3406,9 @@ async function cmdChain(cwd: string, json: boolean, action?: string, a?: string,
                     : '（链尾只剩压缩副本）'
                   : '（链尾文件已不存在）'
                 : tip.unreadable
-                  ? '（链尾文件读不出来）'
+                  ? tip.emptyFile
+                    ? '（链尾文件是空的，内容已丢失）'
+                    : '（链尾文件读不出来）'
                   : tip.error
                     ? '（链尾文件状态无法确认）'
                     : tip.turns === 0
