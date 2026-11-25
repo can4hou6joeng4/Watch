@@ -114,7 +114,7 @@ npm run watch -- switch codex                   # 把链尾内容交接给 Codex
 npm run watch -- adopt claude                   # 把已有 Claude 会话接入链
 npm run watch -- new pi                         # 在链上新建另一侧会话（空链时直接起会话）
 npm run watch -- open <session-id> --json       # 反查 cwd 并输出可粘贴的打开命令
-npm run watch -- open <session-id> --to codex   # 直接把该会话内容转入 Codex 新会话
+npm run watch -- open <session-id> --to codex   # 把该会话内容转入 Codex
 npm run watch -- prompt <session-id> > seed.md  # 目标工具没有适配器时，导出「摘要交接」文档
 npm run watch -- prompt > seed.md               # 省略 id：取本目录按修改时间最新的可读会话
 ```
@@ -144,7 +144,21 @@ import-codex  prepare|confirm|status|list|project-prepare|project-confirm|projec
 
 `watch --help`（`help` / `-h` 同义）把完整用法打到 stdout 并以 0 退出，可以直接接管道；`--json` 时回单行 `{ ok: true, help }`。参数写错时用法仍走 stderr、退出码 1。`import-codex --help` 同一约定。
 
-将 `--check` 与 `open ... --to <provider>` 一起使用，可预览目标和待写入的轮数，并检查当前能否转入。`--json` 的 `plan: { kind, turnCount }` 给出落点（`resume` 来源即目标、`chain` 链上配对会话、`reuse` 内容匹配到的既有会话、`new` 新建）；真正执行 `open --to` 的结果也带同一个字段，说明这次实际按哪种落点写入。落点是 `new` 但复用扫描没查全时，`plan.reuseScanIncomplete` 列出原因（`capped` 会话数达到列表上限、`candidates-unreadable` 有候选会话读不出来、`list-failed` 会话列表读取失败、`unattributable` 有不属于任何目录的会话文件被跳过）——此时新建不等于「确认没有可复用的」，项目里可能多出一份重复会话；扫描完整时不输出。链上有一条目标工具的配对会话、这次却没有沿用它时，`plan.chainPairSkipped` 给出那条会话的 id 与原因（`zero-byte` 文件 0 字节、`zero-turns` 解析出 0 轮、`unreadable` 读不出来、`compressed` / `compressed-empty` 只剩压缩副本、`diverged` 它缺少来源一半或更多的轮次）——链绑定仍指向它，之后的 `switch` 还会落回那条会话；沿用了或链上没有配对时不输出。预检不会改动原生会话，但可能创建 Watch 本地数据库，或新增、刷新其中的会话位置记录。
+</details>
+
+<details>
+<summary>CLI 输出参考</summary>
+<br>
+
+**`open --to` 预检与计划**
+
+运行 `watch open <session-id> --to <provider> --check --json` 可预览目标与待写入的轮数。规划失败时返回 `ok: false`。规划完成但当前不允许写入时，结果包含 `ok: true`、`writable: false` 和 `blocked`，命令以 1 退出。预检可能创建 Watch 本地数据库或更新会话位置记录，原生会话保持原样。
+
+预检和实际执行的结果共用 `plan`。
+
+- `plan.kind` 表示目标选择方式。`resume` 恢复同一家工具的原会话，`chain` 使用链上配对会话，`reuse` 使用按内容匹配的既有会话，`new` 新建。`plan.turnCount` 是计划写入的轮数。
+- `plan.reuseScanIncomplete` 在计划新建且复用扫描不完整时列出原因。`capped` 表示达到列表上限，`candidates-unreadable` 表示有候选会话读不出来，`list-failed` 表示会话列表读取失败，`unattributable` 表示有会话文件因无法归属目录而被跳过。此时新建可能产生重复会话。
+- `plan.chainPairSkipped` 在跳过链上配对会话时给出该会话的 ID 和原因。`zero-byte` 表示文件 0 字节，`zero-turns` 表示解析出 0 轮，`unreadable` 表示读取失败，`compressed` / `compressed-empty` 表示只剩压缩副本，`diverged` 表示缺少来源一半或更多轮次。链记录仍指向原配对会话，之后的 `switch` 仍可能选中它。
 
 `inspect` 只对 JSONL 会话统计坏行。`--json` 中，`badLinesStatus` 为 `complete` 时，`badLines` 是完整扫描的计数。`incomplete` 表示扫描未完成，计数是已确认的下界，原因见 `warnings`。SQLite 等不适用的来源返回 `not-applicable`，`badLines` 为 `null`。用量数字同一判据：来源的用量数据源里有无法解析的行时，`--json` 带 `usageBadLines`，文本在数字后括注这只是下界；扫描失败时带 `usageBadLinesScanError`，表示合计可能偏少且无法确认程度。
 
@@ -167,7 +181,20 @@ import-codex  prepare|confirm|status|list|project-prepare|project-confirm|projec
 
 目标工具还没有适配器（或那家的格式刚漂移、写回有风险）时用 `prompt`：它只读，把会话渲染成一份 Markdown，正文开头就写明「这是摘要交接、不是目标助手的原生会话」；`--profile` 控制保留多少内容，`--last <n>` 则只保留最近 n 个用户轮（显式窗口，此时不再强制保留首轮，文档里会写明；`--json` 的 `stats.includedUserTurns` 给出实际保留的真实用户轮数，不含压缩摘要锚点，`stats.taskDescription` 取 `kept` / `omitted` / `summarized` / `absent`，与正文「首条任务描述…」同源；`absent` 表示来源本来没有用户轮，不是被裁掉）；`--since-compact` 从最近一次可识别的压缩摘要开始渲染（Claude Code、Pi、Kimi、OpenCode 的记录格式都认；Codex 的 compacted 记录与 OpenCode 2.x 的 provider 原生压缩只披露、不并入摘要）——摘要已概括更早的内容，不再重复带上摘要之前的原文（摘要本身标明由哪家生成、不是用户原话；来源没有可用摘要时不按它裁剪，并在正文写明未生效——另有 `--last` / 档位裁剪时也会如实说明还省略了多少轮；`--json` 的 `stats.sinceCompactResult` 取 `off` / `applied` / `unavailable` 区分「没请求 / 找到 / 没找到」，`stats.compactSource` 取 `claude-code` / `opencode` / `pi` / `kimi`，只在 applied 时出现）；任何被裁剪的部分都会进 `--json` 的 `findings` 并在 stderr 说明。省略会话 id 时，它在 `--cwd`（默认当前目录）里按修改时间挑最新的一条可读会话，`--provider` 可把范围收窄到一家；文档头部会标明「自动挑选」，`--json` 也会带 `autoPicked: true`——挑不到时不会输出半份文档，读不出来与确实没有会话分开说明。显式给出会话 id 时 `--cwd` 不参与（会话按 id 全局反查，正文来自会话自身记录），给了也会在 `warnings` 里说明这一点。头部的时间范围会注明两端各取什么（起点是首条记录，终点可能是文件修改时间；grok 的记录行内没有逐轮时间戳，逐轮时间由 `summary.json` 的创建时间按顺序推定，缺这份摘要时以会话文件的修改时间为锚点，头部括注会写明这一点——那个时间不是逐轮的真实时间；首条记录没有时间戳时，起点取后面第一条有时间戳的记录并照实写出，部分轮次缺时间戳时括注覆盖比例，如「2/3 轮有时间戳」）。`--json` 的 `timeRangeNote`（推定时间的来源）与 `timestampNote`（覆盖比例）和头部括注同源，缺时间戳的轮数另记 `findings` 的 `prompt_turns_without_timestamp`；用量读不出来或用量数据源已被清空时，那一行写的是原因并说明「这不代表来源会话没有用量」，不会一律落回「没有用量记录」；数据源里有无法解析的行时，数字照印但会括注它只是下界；源文件本身有坏行时，正文会另起一行说明「可能缺少这些记录」；来源解析出 0 轮时，正文会说清是 0 字节（需要从备份恢复）还是文件可读但没有可交接的记录。文档头还会给出工作目录当前状态、工作树类型与当前分支；仓库子目录会向上找到最近的仓库根并把位置写出。工作目录不可用时，`--json` 另有 `sourceCwd: { state }`（`missing` / `not-directory` / `denied` / `unknown`，后者附 `reason`），健康目录不输出该字段。`--json` 另有结构化 `sourceBranch`（普通仓库根为 `{ branch, repoRoot }`，detached 为 `{ detached: true, repoRoot }`），链接工作树为 `sourceWorktree: { mainWorktree, branch }`；工作树探测失败时给 `sourceWorktreeUnknown: <原因>` 与 `prompt_source_worktree_unreadable` finding，缺省的 `sourceWorktree` 不能读成「不是链接工作树」。读取前后来源文件的大小或修改时间有变化时，`--json` 返回 `sourceDrift: { from, to, growth }`；量不出来（stat 失败）时另给 `sourceDriftUnknown: <原因>`——没有 `sourceDrift` 可能是没变化，也可能是没能确认，脚本不能把它当成「没变化」。它描述字节数和增长方向，仅凭这个字段无法确认正文包含了哪些记录。明确标记失败的工具调用另有 `failedAttempts`（工具、路径或命令、次数；不复制工具输出），正文也保留「失败与中断」一节；没有失败标记时不输出。正文还会列出会话里写过 / 编辑过的文件与运行过的命令（「改动概览」，不受档位裁剪影响），并对照生成那一刻的磁盘：确定已不在的标注「本次生成时磁盘上已不在」，相对路径没找到或读不出来标注「无法确认」，被补丁删除 / 移走的标注「本次会话里被补丁删除或移走」，会话目录之外的路径只计数、不核对；会话目录不可用或没有记录时，正文直接写明「本次没有核对」，不与「都还在」长得一样。`--json` 的 `manifest.files[].disk` 取值为 `missing` / `unverified` / `removed`（缺省既可能是「都还在」也可能是「没核对」），`manifestDisk: { checked, missing, unverified, outside, removed }` 给出计数，只有会话目录可用、且清单里有文件时才出现。这份文档是要复制给另一个助手的，所以会话里**格式固定**的密钥 / 令牌（常见厂商的 API 密钥，GitHub / GitLab / Slack / npm / Hugging Face 令牌，AWS 访问密钥 ID，JWT，PEM / PGP 私钥块），以及四种位置固定的值（`postgres://user:口令@host` 这类连接串里的口令、`X-Api-Key` / `X-Auth-Token` 这类密钥头的值、`Cookie` / `Set-Cookie` 头与 `curl --cookie` 里的 `name=value` 值（保留后续命令参数；请求头或带引号的参数里前一项是变量引用时，也会继续检查后面的 Cookie）、`Authorization` 头的 Bearer / Token / Basic 值）在进入文档前会换成 `[已隐去：种类]`，头部写明种类与个数，`--json` 另给 `credentialsMasked: { total, kinds }`（只有种类与个数）；来源文件不改，原文仍在那里。只认固定格式与固定位置：单独出现的口令、内部地址与没有固定前缀的密钥不会被识别，没有这一行不代表文档里没有敏感内容，转交前仍需自行检查。这一处理只在 `prompt` 生效，`open --to` 等写入原生会话的路径按原记录转入；来源逐轮时间是推定值时（当前仅 Grok），`switch`、`open --from` 与 `open --to` 真的写入内容后会在结果说明里写明这一点、来源如何推定以及按原值写入了几轮；零增量但为修复格式整份重写目标时，也按来源轮数披露。`--check` 与同家 resume 没有写入，不带这条说明。
 
-交接写完之后还会再比一次来源会话文件：你在原生 CLI 里继续对话、或另一条命令正往那条会话追加时，写进去的只是开始读取那一刻的内容——结果里的 `warnings` 会说明来源在这次交接期间变过（改前 / 改后字节数），并给出下一步：再执行一次同一条命令会把新增部分作为增量补上（改写 / 截短的那档不会——先确认文件没坏）。`--json` 同时给 `sourceDrift: { from, to, growth }`（`switch` / `open --from` / `open --to` 与 `prompt` 同字段同形状）；量不出来时给 `sourceDriftUnknown: <原因>`——两个字段都没出现可能是没变化，脚本不能当成「这次的内容已是最新」。目标会话在写入前被移走或删除时，Watch 改为新建会话并在 `warnings` 说明原目标的旧历史没有并入；`--json` 同时给 `targetRecreated: { previousSessionId }`（`switch` / `open --from` / `open --to` 同字段），此时结果里的会话 id 是新会话、只含这次写入的内容。`open <目标> --from <来源>` 真的并入了内容、而两个会话记录的工作目录不同时，`warnings` 会说明这批内容来自另一个目录；`--json` 同时给 `crossDirectory: { sourceCwd, targetCwd }`（路径保留原值）——目录改过名时这是对的，但更常见的成因是会话 id 抄错，脚本应在这里停下核对而不是当成一次普通并入。来源或目标会话文件里有无法解析的行（截断或损坏，读取时被跳过）时，`switch` / `open --from` / `open --to`（含 `--check`）的 `--json` 给 `unparsableLines: { source?, target? }`，每侧是 `{ count, error? }`：来源侧有坏行说明写过去的内容可能缺一段，目标侧有坏行说明增量可能判多、既有内容可能被重复追加；`error` 出现表示坏行没数完，`count` 只是下界。两侧都干净时不输出。目标格式放不下的内容同样有结构化出口：`contentLoss` 按类别计数——`attachments: { images, files }`（原始数据带不过去，目标只剩占位文本）、`textEvents`（目标不保存的独立过程文本）、`toolFailures`（不会作为原生失败状态写入的工具结果）、`bashControls: { workdirs, timeouts, backgrounds }`（Bash 调用里放不下的执行条件）。它与对应的 `warnings` 同一处取数，`--check` 给的是「执行后会少什么」；计数为 0 的类别不输出，四类都没有时整个字段不出现。来源会话没收尾时给 `sourceUnfinished`：`danglingToolCalls` 是没有结果的工具调用数，`unansweredTail` 表示最后停在用户消息上（`cancelled` / `error` 取自来源日志，日志没标明时为 `unknown`）；与对应的 `warnings` 同一处判定、与 `prompt --json` 的 `stats` 同名，两种形状都没有时不输出。结果里那条 resume 指向的会话自己没收尾时给同样两个键的 `targetUnfinished`（单独 `open <id>`、`--from` 的目标、`--to` 复用或链上配对的既有会话、`switch` 的目标）：工具调用没有结果一直算，最后停在用户消息上只在这次没并入内容时算；目标是这次新建的会话时不输出。解析器对会话做了上下文完整性声明（压缩记录、转入后台、未识别的记录类型、失败的请求等）时给 `contextDisclosures: { source?, target? }`，值是去重后的声明条数，文字仍在 `warnings` 里；没有声明的一侧不输出。`open` 读到空会话时带 `emptySessions`（`source` / `target`，值为 `zero-byte` 文件 0 字节、内容已丢失，或 `zero-turns` 文件有内容却解析出 0 轮）：`mergedTurns: 0` 分不出「来源是空的」与「内容已全部包含」，这个字段能；`--to` 因来源是空会话而拒绝时，失败结果里也有它。目标里已有与来源同文本的回复、却没有来源那份过程事件（思考、过程文本、工具调用）时，`open` 给 `pairedTurnsMissingEvents`（轮数）：这些轮次按文本对齐算作已包含，过程事件不会写进目标，`mergedTurns` 看不出这一点；为 0 时不输出。`prompt` 也做同样的复查，但说法不同：它不写文件，没有「增量补齐」，所以来源在渲染期间变过时，**文档正文**里会出现一行「生成期间有变化」，说明正文只代表开始读取那一刻、以及重新生成会重渲染一份新文档（这份不会被修正）——stderr 不跟着文档走，这条只能进正文。
+**交接结果**
+
+- `sourceDrift: { from, to, growth }` 记录交接期间来源文件有变化时的改前、改后字节数与变化方向。写入交接中来源被追加时，再执行同一条命令可补齐增量。来源被改写或截短时，先确认文件完整性。`sourceDriftUnknown` 给出无法确认的原因。要核对当前内容，以原生会话里的最新记录为准。`switch`、`open --from`、`open --to` 和 `prompt` 共用这些字段。
+- `targetRecreated: { previousSessionId }` 表示写入前原目标被移走或删除，结果中的会话 ID 指向只包含本次写入内容的新会话。`switch`、`open --from` 和 `open --to` 共用该字段。
+- `crossDirectory: { sourceCwd, targetCwd }` 表示 `open --from` 从记录目录不同的来源实际并入了内容，路径保留原值。用这两个路径核对目录改名或会话 ID 选错的情况。
+- `unparsableLines: { source?, target? }` 用于 `switch`、`open --from` 和 `open --to`（含 `--check`），每侧为 `{ count, error? }`。来源坏行可能造成交接内容缺失，目标坏行可能让已有内容被重复追加。有 `error` 时，`count` 是已确认的下界。只报告有坏行或扫描失败的一侧。
+- `contentLoss` 统计目标格式无法保留的内容。`attachments: { images, files }` 对应只保留占位文本的附件，`textEvents` 对应独立过程文本，`toolFailures` 对应工具结果的原生失败标记，`bashControls: { workdirs, timeouts, backgrounds }` 对应 Bash 调用的执行条件。计数与 `warnings` 同源。`--check` 给出预计结果，只列出非零的类别。
+- `sourceUnfinished` 记录来源未完成的部分。`danglingToolCalls` 是没有结果的工具调用数。`unansweredTail` 表示最后一条用户消息还没有回复，取值为来源日志标记的 `cancelled` 或 `error`，无法确认时为 `unknown`。
+- `targetUnfinished` 使用同样的键，描述恢复命令指向的既有会话，适用于单独 `open <id>`、`open --from`、`open --to` 的同家恢复、链上配对和复用，以及 `switch`。没有结果的调用始终计入，悬空用户消息只在本次没有并入内容时计入。
+- `contextDisclosures: { source?, target? }` 分别统计来源与目标去重后的上下文声明，比如压缩记录、转入后台、未识别的记录类型或失败请求。`warnings` 包含对应的文字说明。只列出有声明的一侧。
+- `emptySessions: { source?, target? }` 表示 `open` 读取时的空会话。`zero-byte` 表示会话文件 0 字节，`zero-turns` 表示解析出 0 轮。即使 `mergedTurns` 同为 0，也可通过该字段识别空来源。`open --to` 因来源为空而拒绝时，失败结果也包含该字段。
+- `pairedTurnsMissingEvents` 统计既有目标中已有同文本回复却缺少可保留来源过程事件的轮数。适用于 `open --from` 及 `open --to` 的链上配对和内容复用。这些轮次按已包含处理。计数为 0 或使用新建目标时省略。
+
+`prompt` 生成期间检测到来源变化时，会在文档正文中写明内容以开始读取时的记录为准。重新运行会生成一份新文档。
 
 </details>
 
