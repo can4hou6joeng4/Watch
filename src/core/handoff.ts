@@ -8,7 +8,7 @@ import { describeWriteFailureReason, type FileDigest } from './atomic.js';
 import { addFinding, type Finding } from './findings.js';
 import { describeInferredTimeWrite } from './time.js';
 import { escapeControlChars } from './display.js';
-import { describeBadLinesScanFailure, lineageFromHistory, scanUnparsableJsonLines, type BadLinesScan, type LineageGraph } from './jsonl.js';
+import { describeBadLinesScanFailure, lineageFromHistory, scanUnparsableJsonLines, unparsableLinesField, type BadLinesScan, type LineageGraph, type UnparsableLines } from './jsonl.js';
 import { usageBadLinesDetail, usageContentBadLinesDetail, usageContentFileProblem, usageSidecarProblem } from './usage-integrity.js';
 import { cwdAliasHint, splitElsewhereByDirectory } from './cwd.js';
 import { compressedCopy, compressedRetryAdvice, describePathReadFailureReason, describeReadFailureOrSelf, emptySessionFileReasonFromStat, isEmptySessionFileReason, isMissingPathError, probeSessionReadable, sessionFilePresence, type CompressedCopyNote } from './read-text.js';
@@ -1393,6 +1393,11 @@ export type HandoffResult = {
   /** 来源会话在交接期间「量不出来」有没有变化，附原因；与 sourceDrift 互斥 */
   sourceDriftUnknown?: string;
   /**
+   * 来源 / 目标会话文件里有无法解析的行（被 parse 跳过），或坏行扫描没完成：来源侧 = 交接内容
+   * 可能不完整，目标侧 = 增量判定可能偏多、重复追加。两侧都干净时不输出。
+   */
+  unparsableLines?: UnparsableLines;
+  /**
    * 这次到底有没有把链绑定 / 切换记录写进去：
    * - written：写成了；
    * - failed：尝试过但抛错（库只读、磁盘满、SQLITE_BUSY 等），`warnings` 里已有一条
@@ -2327,6 +2332,7 @@ export async function handoff(
       zeroIncrementReason: turns.length === 0 ? 'source-empty' : 'up-to-date',
       ...(notes.length ? { notes } : {}),
       chainRecordState,
+      ...unparsableLinesField(sourceBadScan, destBadScan),
       warnings,
       findings,
     };
@@ -2436,6 +2442,7 @@ export async function handoff(
     chainRecordState,
     ...(vanished ? targetRecreatedField(into, newRef) : {}),
     ...driftFields,
+    ...unparsableLinesField(sourceBadScan, destBadScan),
     warnings,
     findings,
   };

@@ -11,7 +11,7 @@ import type { ProviderAdapter } from './providers/adapter.js';
 import { cliDetectFailedBlock, cliMissingBlock, PreflightBlockedError, SessionLookupFailureError } from './providers/adapter.js';
 import type { SessionLookupFailureKind } from './providers/adapter.js';
 import { getAdapter, listAdapters, unknownProviderMessage } from './providers/registry.js';
-import { describeBadLinesScanFailure, describeZeroTurnReason, scanUnparsableJsonLines } from './core/jsonl.js';
+import { describeBadLinesScanFailure, describeZeroTurnReason, scanUnparsableJsonLines, unparsableLinesField, type BadLinesScan, type UnparsableLines, type UnparsableLinesField } from './core/jsonl.js';
 import { describeInferredTimeWrite } from './core/time.js';
 import { usageBadLinesReason, usageSidecarProblem } from './core/usage-integrity.js';
 import { collectUnattributable, unattributablePickWarning } from './core/session-coverage.js';
@@ -102,6 +102,12 @@ export type OpenSessionResult = {
    * 只有中文 warnings 时脚本看到的只是一次普通的「已并入 N 轮」。路径保留原值。
    */
   crossDirectory?: { sourceCwd: string; targetCwd: string };
+  /**
+   * 来源 / 目标会话文件里有无法解析的行（被 parse 跳过），或坏行扫描没完成（与 switch 同字段）：
+   * 来源侧 = 并入 / 转入的内容可能不完整；目标侧 = 增量判定可能偏多、可能重复追加既有内容。
+   * `error` 存在时 `count` 只是下界。两侧都干净时不输出。
+   */
+  unparsableLines?: UnparsableLines;
   /** 来源会话在 --from 并入 / --to 转入期间被写入过（stat 字节数与方向），与 switch / prompt 同字段 */
   sourceDrift?: SourceChangeSince;
   /** 来源会话在期间「量不出来」有没有变化，附原因；与 sourceDrift 互斥 */
@@ -566,6 +572,7 @@ export async function openSession(
   let srcDrift: SourceDriftFields = {};
   let recreated: TargetRecreatedField = {};
   let crossDirectory: { sourceCwd: string; targetCwd: string } | null = null;
+  let badLines: UnparsableLinesField = {};
   let sourceUsage: TokenUsage | null = null;
   // 记录的目录可能已被移动 / 删除：会话内容照常可读、转入也能写成，但返回的 cd 会在第一步失败
   const cwdInspection = await sessionCwdInspection(target.found.ref.cwd);
@@ -668,6 +675,8 @@ export async function openSession(
       const contextDisclosure = findContextDisclosure(srcTurns);
       if (contextDisclosure) warnings.push(contextDisclosure.summary);
       const srcBadScan = await scanUnparsableJsonLines(source.found.ref.filePath);
+      // 目标那一侧还没扫：先记来源，后面读目标失败时这一半也不会丢
+      badLines = unparsableLinesField(srcBadScan, null);
       if (srcBadScan.count > 0) {
         warnings.push(
           `来源会话 ${escapeControlChars(source.found.ref.sessionId)} 有 ${srcBadScan.count} 行无法解析（截断或损坏），已跳过；并入内容可能不完整`,
@@ -753,6 +762,7 @@ export async function openSession(
         (msg) => warnings.push(msg),
       );
       const dstBadScan = await scanUnparsableJsonLines(target.found.ref.filePath);
+      badLines = unparsableLinesField(srcBadScan, dstBadScan);
       if (dstBadScan.count > 0) {
         warnings.push(
           `目标会话 ${escapeControlChars(target.found.ref.sessionId)} 有 ${dstBadScan.count} 行无法解析（截断或损坏）：增量判定可能偏多，可能重复追加既有内容`,
@@ -1014,6 +1024,7 @@ export async function openSession(
     notes,
     ...(crossDirectory ? { crossDirectory } : {}),
     ...recreated,
+    ...badLines,
     ...srcDrift,
     // 与 status / new / chain 写操作同一字段：命令成功、命令已给出，但 cd 会在不可用目录上失败
     ...(cwdInspection.probe.state !== 'ok' ? { cwdState: cwdInspection.probe } : {}),
@@ -1088,6 +1099,8 @@ export type OpenPlan = {
   resumeCompressed?: 'intact' | 'empty';
   /** new 时：复用扫描没查全的原因（见 `ReuseScanGap`）；查全了为空或缺省 */
   reuseScanGaps?: ReuseScanGap[];
+  /** 来源 / 目标的坏行扫描（见 `unparsableLinesField`）；resume 快路径不扫，两侧干净时缺省 */
+  unparsableLines?: UnparsableLines;
 };
 
 type PlannedOpen =
@@ -1146,7 +1159,7 @@ async function warnTargetBadLines(
   ref: SessionRef,
   target: ProviderAdapter,
   diagnostics?: string[],
-): Promise<void> {
+): Promise<BadLinesScan> {
   const scan = await scanUnparsableJsonLines(ref.filePath);
   if (scan.count > 0) {
     diagnostics?.push(
@@ -1159,6 +1172,7 @@ async function warnTargetBadLines(
     '增量判定是否偏多无法确认——先确认该文件可读再重试',
   );
   if (scanFailure) diagnostics?.push(scanFailure);
+  return scan;
 }
 
 /** 链上/复用配对后，提示目标会话同文本轮次里未携带的来源过程事件（与 `--from` 口径一致） */
@@ -1421,7 +1435,7 @@ async function planOpenInProvider(
     if (pairTurns) {
       const delta = dedupeCallEvents(diffTurns(turns, pairTurns));
       if (delta.length < turns.length / 2) {
-        await warnTargetBadLines(chainPaired, target, diagnostics);
+        const pairBadLines = await warnTargetBadLines(chainPaired, target, diagnostics);
         warnPairedMissingEvents(turns, pairTurns, chainPaired, target, sourceId, diagnostics);
         // 复用后 resume 的就是这条会话：它自己的断点要披露，与来源那一侧分开说
         warnResumeTargetUnfinished(
@@ -1440,6 +1454,7 @@ async function planOpenInProvider(
             turns: delta,
             merged: delta.length,
             snapshot: pairDigest,
+            ...unparsableLinesField(badSourceScan, pairBadLines),
             note:
               delta.length === 0
                 ? `回到链上 ${target.displayName} 会话 ${escapeControlChars(chainPaired.sessionId)}，无需并入`
@@ -1552,7 +1567,7 @@ async function planOpenInProvider(
           (detail.next ? `——${detail.next}` : ''),
       };
     }
-    await warnTargetBadLines(reuse, target, diagnostics);
+    const reuseBadLines = await warnTargetBadLines(reuse, target, diagnostics);
     warnPairedMissingEvents(turns, destinationTurns, reuse, target, sourceId, diagnostics);
     const delta = dedupeCallEvents(diffTurns(turns, destinationTurns));
     // 复用后 resume 的就是这条会话：目标自己的上下文差异（OpenCode 回退标记等）不属于增量，
@@ -1571,6 +1586,7 @@ async function planOpenInProvider(
         turns: delta,
         merged: delta.length,
         snapshot,
+        ...unparsableLinesField(badSourceScan, reuseBadLines),
         note:
           delta.length === 0
             ? `已在 ${target.displayName} 找到包含全部内容的既有会话 ${escapeControlChars(reuse.sessionId)}，直接打开，无需新建`
@@ -1608,6 +1624,7 @@ async function planOpenInProvider(
       merged: outgoing.length,
       snapshot: null,
       ...(reuseScanGaps.length ? { reuseScanGaps } : {}),
+      ...unparsableLinesField(badSourceScan, null),
       note: `已把 ${source.adapter.displayName} 的 ${outgoing.length} 轮内容转入 ${target.displayName} 新会话`,
     },
   };
@@ -1801,6 +1818,7 @@ export async function openInProvider(
       // 预检说「会落到哪」，执行也得说「落到了哪」：只有 notes 的话分不出复用既有会话与新建
       plan: publicPlan(plan),
       ...recreated,
+      ...(plan.unparsableLines ? { unparsableLines: plan.unparsableLines } : {}),
       ...planDrift,
       ...(cwdState ? { cwdState } : {}),
       ...(mapping ? {} : { storeAvailable: false as const }),
@@ -1898,6 +1916,7 @@ export async function checkOpenInProvider(
     ...(diagnostics.length ? { warnings: [...diagnostics] } : {}),
     writable: true,
     plan: publicPlan(plan),
+    ...(plan.unparsableLines ? { unparsableLines: plan.unparsableLines } : {}),
   };
   // 空来源也会新建会话（Kimi 要真跑一次 CLI），所以 CLI 判定不能放在 turns===0 之后
   const cliBlock = await newSessionCliBlock(target, plan);

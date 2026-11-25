@@ -76,6 +76,32 @@ export async function scanUnparsableJsonLines(
   }
 }
 
+/** 写路径 `--json` 的坏行出口：来源 / 目标各自的已确认坏行数，以及扫描没完成时的原因 */
+export type UnparsableLines = { source?: BadLinesScan; target?: BadLinesScan };
+export type UnparsableLinesField = { unparsableLines?: UnparsableLines };
+
+/**
+ * 把来源 / 目标两侧的坏行扫描收成一个结构化字段（`switch` / `open --from` / `open --to` 共用）。
+ *
+ * 坏行被各家 `parse` 静默跳过：来源侧意味着写过去的内容可能缺一段，目标侧意味着增量判定
+ * 可能偏多、重复追加。两句中文 warnings 早就有，但脚本读到的只是一次普通的成功。
+ * 只在有坏行（`count > 0`）或扫描没完成（`error`）时输出对应一侧；两侧都干净时不输出——
+ * 所以字段缺席只在扫描完成时才等于「没有坏行」，`error` 存在时 `count` 是下界。
+ */
+export function unparsableLinesField(
+  source?: BadLinesScan | null,
+  target?: BadLinesScan | null,
+): UnparsableLinesField {
+  const pick = (scan?: BadLinesScan | null): BadLinesScan | null =>
+    scan && (scan.count > 0 || scan.error)
+      ? { count: scan.count, ...(scan.error ? { error: scan.error } : {}) }
+      : null;
+  const s = pick(source);
+  const t = pick(target);
+  if (!s && !t) return {};
+  return { unparsableLines: { ...(s ? { source: s } : {}), ...(t ? { target: t } : {}) } };
+}
+
 /**
  * `scanUnparsableJsonLines()` 的严格版本：读失败直接抛错。
  *
