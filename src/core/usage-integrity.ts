@@ -141,7 +141,7 @@ export async function usageContentBadLinesDetail(
   const usagePath = adapter.sessionUsagePath?.(ref);
   if (!usagePath || usagePath === ref.filePath) return null;
   const zeroTurn = options.zeroTurn === true;
-  const scan = await scanUnparsableJsonLines(ref.filePath);
+  const scan = await scanUnparsableJsonLines(ref.filePath, { allowMissing: false });
   const description = escapeControlChars(ref.filePath);
   if (scan.error) {
     return {
