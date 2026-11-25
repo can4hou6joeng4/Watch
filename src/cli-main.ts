@@ -197,7 +197,8 @@ function failBlocked(error: HandoffBlockedError | PreflightBlockedError, json: b
     error: error.message,
     blocked: true,
     code,
-    sessionId: block?.sessionId,
+    sessionId:
+      error instanceof HandoffBlockedError ? (error.sessionId ?? block?.sessionId) : block?.sessionId,
     holders: block?.holders,
     hint,
   };

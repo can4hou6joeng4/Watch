@@ -25,6 +25,8 @@ export class HandoffBlockedError extends Error {
      * 「只剩压缩副本（完好 / 0 字节）」的下一步相反，凭 code 分不出来。
      */
     public hint?: string,
+    /** 被阻断时已经确认的会话 id（`new` 的链尾不可用等），供 `--json` 直接指认是哪一条 */
+    public sessionId?: string,
   ) {
     super(message);
     this.name = 'HandoffBlockedError';
@@ -809,16 +811,26 @@ export async function createChainSession(
   if (tail.toProvider === providerId) {
     // 「直接 resume 即可」只在链尾文件真的还在时成立。文件被删 / 被同名目录占住 / 读不出来时
     // 照旧这么说，用户会在原生 CLI 里撞一个更含糊的错误；同一条链上 `switch` 早就分三档说清了。
+    // `new` 在链尾已是同一家时并未写盘，但文件不可用与「健康、可直接 resume」是两种结论；
+    // 前四档沿用 blocked 通道，让 --json 的 blocked / code / sessionId 与 switch 同口径。
+    const tipId = tail.toRef.sessionId;
+    const tipBlocked = (code: string, message: string, hint: string): never => {
+      throw new HandoffBlockedError(code, message, hint, tipId);
+    };
     const tipPresence = await sessionFilePresence(tail.toRef.filePath);
     const compressedTip = compressedCopy(tipPresence);
     if (compressedTip) {
       // 0 字节副本不能沿用「重新开一次会话再重试」：链尾仍指向这条副本，重试会再次撞上同一处；
       // 只能备份恢复后再试，或另起一条链。完好副本则先让原生展开。
-      throw new Error(
-        `链尾已是 ${providerId}，但链尾会话 ${escapeControlChars(tail.toRef.sessionId)} 的文件${compressedTip.note}；` +
+      tipBlocked(
+        'target_missing',
+        `链尾已是 ${providerId}，但链尾会话 ${escapeControlChars(tipId)} 的文件${compressedTip.note}；` +
           (compressedTip.kind === 'empty'
             ? `本次无法交接也无法 resume——从备份恢复后再试，或用 watch chain new <新名字> 另起一条链`
             : `本次无法交接也无法 resume——${compressedTip.advice}，再重试，或用 watch chain new <新名字> 另起一条链`),
+        compressedTip.kind === 'empty'
+          ? '本次未写入任何内容；0 字节压缩副本无法恢复内容，从备份恢复或另起一条链。'
+          : '本次未写入任何内容；先让原生客户端重新展开该会话，再重试同一条命令。',
       );
     }
     const broken =
@@ -830,9 +842,13 @@ export async function createChainSession(
             ? '的路径现在不是普通文件（被同名目录或设备文件占住了）'
             : null;
     if (broken) {
-      throw new Error(
-        `链尾已是 ${providerId}，但链尾会话 ${escapeControlChars(tail.toRef.sessionId)} ${broken}：${escapeControlChars(tail.toRef.filePath)}；` +
+      tipBlocked(
+        tipPresence.state === 'missing' ? 'target_missing' : 'target_unreadable',
+        `链尾已是 ${providerId}，但链尾会话 ${escapeControlChars(tipId)} ${broken}：${escapeControlChars(tail.toRef.filePath)}；` +
           `本次无法交接也无法 resume——可先恢复该文件，或用 watch chain new <新名字> 另起一条链`,
+        tipPresence.state === 'missing'
+          ? '本次未写入任何内容；文件不在了，可先 watch switch <另一侧> 重新绑定，或 watch chain new <新名字> 另起一条链。'
+          : '本次未写入任何内容；先恢复该路径（权限或同名目录占位），或 watch chain new <新名字> 另起一条链。',
       );
     }
     // `stat` 成功不等于读得出来：`chmod 000` 的文件 `stat` 照常返回，上面三档全过，
@@ -840,10 +856,12 @@ export async function createChainSession(
     // `sessions` 会说「open / switch 读这条会话时同样会失败」、`open` 会说「找到了，但读不出来」。
     const readProblem = await probeSessionReadable(tail.toRef.filePath);
     if (readProblem) {
-      throw new Error(
-        `链尾已是 ${providerId}，但链尾会话 ${escapeControlChars(tail.toRef.sessionId)} 的文件现在读不出来：${readProblem}；` +
+      tipBlocked(
+        'target_unreadable',
+        `链尾已是 ${providerId}，但链尾会话 ${escapeControlChars(tipId)} 的文件现在读不出来：${readProblem}；` +
           `resume 会失败，本次没有新建会话——先修好这个文件（权限或内容）；` +
           `若这个会话不再需要，用 watch chain new <新名字> 另起一条链后再 watch new ${providerId}`,
+        '本次未写入任何内容；先修好链尾文件的权限或内容，或另起一条链。',
       );
     }
     // 「直接 resume 即可」还隐含一个前提：这条会话本身是收尾的。同一条会话改用 `open <id>`
