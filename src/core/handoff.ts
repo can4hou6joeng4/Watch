@@ -1086,6 +1086,11 @@ export async function chainUsage(
     /** 用量来自旁路文件、已计入合计，但 `parse()` 读的内容文件已空 / 不可用 */
     contentProblem?: string;
     /**
+     * 主文件是 0 字节：内容已丢失。与权限 / I/O 读取失败相反，下一步是备份恢复
+     * （Watch 不会替用户重建历史），脚本不必解析中文 `error` 来分档。
+     */
+    emptyFile?: true;
+    /**
      * 内容解析抛错、因而不确定是不是空会话（同时计入 `totalExcluded`，`error` 里是同一句话）。
      *
      * 与「用量读完、但内容文件已空 / 缺失 / 不可用」的 `contentProblem` 不是一回事：那档有数字，丢的是内容本身；
@@ -1155,6 +1160,11 @@ export async function chainUsage(
     zeroTurnProblem?: string;
     /** 用量来自旁路文件、已计入合计，但 `parse()` 读的内容文件已空 / 不可用 */
     contentProblem?: string;
+    /**
+     * 主文件是 0 字节：内容已丢失。与权限 / I/O 读取失败相反，下一步是备份恢复
+     * （Watch 不会替用户重建历史），脚本不必解析中文 `error` 来分档。
+     */
+    emptyFile?: true;
     /**
      * 内容解析抛错、因而不确定是不是空会话（同时计入 `totalExcluded`，`error` 里是同一句话）。
      *
@@ -1238,7 +1248,7 @@ export async function chainUsage(
           `${emptied}；这条会话的历史与用量都已经没了——如果它本该有内容，先从备份恢复该文件再重试` +
           `（Watch 不会替你重建历史）`;
         warnings.push(`${adapter.id} 用量读取失败：${msg}`);
-        byProvider.push({ provider: adapter.id, sessionId: ref.sessionId, usage: null, error: msg });
+        byProvider.push({ provider: adapter.id, sessionId: ref.sessionId, usage: null, error: msg, emptyFile: true });
         totalExcluded += 1;
         continue;
       }
