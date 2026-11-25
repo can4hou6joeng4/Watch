@@ -3201,7 +3201,9 @@ async function cmdChain(cwd: string, json: boolean, action?: string, a?: string,
           }
         }
         // 0 轮时与那条警告共用一次扫描：--json 也拿到同一份计数 / 扫描错误，不用解析中文
-        const tipBadScan = turns === 0 ? await scanUnparsableJsonLines(last.toRef.filePath) : null;
+        const tipBadScan = turns === 0
+          ? await scanUnparsableJsonLines(last.toRef.filePath, { allowMissing: false })
+          : null;
         const tipBadLines = unparsableLinesField(null, tipBadScan).unparsableLines?.target;
         tips.set(c.id, {
           provider: last.toRef.provider,
@@ -3241,13 +3243,18 @@ async function cmdChain(cwd: string, json: boolean, action?: string, a?: string,
             subject,
             '是否真的只有 0 轮无法确认——先确认该文件可读再重试',
           );
-          const reason = badScan.count > 0
+          const confirmedBadLines = badScan.count > 0
             ? `文件里有 ${badScan.count} 行无法解析（截断或损坏），这些内容已被跳过——更可能是文件被截断或损坏，不能当成「刚建出来的空会话」`
-            : badFailure ?? '可能刚建出来还没聊过，也可能内容已被清空';
-          warnings.push(
-            `${subject} 解析出 0 轮（没有可继续的对话）：${reason}；` +
-              `resume 打开就是空会话——如果它本该有历史，先确认文件是否需要从备份恢复（Watch 不会替你重建历史）`,
-          );
+            : null;
+          if (badFailure) {
+            warnings.push([`${subject} 解析出 0 轮`, confirmedBadLines, badFailure].filter(Boolean).join('；'));
+          } else {
+            const reason = confirmedBadLines ?? '可能刚建出来还没聊过，也可能内容已被清空';
+            warnings.push(
+              `${subject} 解析出 0 轮（没有可继续的对话）：${reason}；` +
+                `resume 打开就是空会话——如果它本该有历史，先确认文件是否需要从备份恢复（Watch 不会替你重建历史）`,
+            );
+          }
         }
       }
       if (json) {
@@ -3298,12 +3305,11 @@ async function cmdChain(cwd: string, json: boolean, action?: string, a?: string,
                   : tip.error
                     ? '（链尾文件状态无法确认）'
                     : tip.turns === 0
-                      // 与 status 同一措辞：0 轮不写成「（0 轮）」那种像正常计数的写法。
-                      // 坏行时说「文件有坏行」而不是「空会话」：上一行 warnings 已经说明损坏，
-                      // 这里再说空会话会让同一屏出现两种相反的结论
-                      ? tip.badLines
-                        ? '（解析出 0 轮，文件有坏行）'
-                        : '（解析出 0 轮，空会话）'
+                      ? tip.badLines?.error
+                        ? '（解析出 0 轮，坏行扫描未完成）'
+                        : tip.badLines
+                          ? '（解析出 0 轮，文件有坏行）'
+                          : '（解析出 0 轮，空会话）'
                       : tip.turns !== undefined
                         ? `（${tip.turns} 轮）`
                         : ''
