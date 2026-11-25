@@ -2495,21 +2495,32 @@ async function cmdInspect(
     fail(json, `会话 ${id} 读取失败：${await describePromptSourceReadFailure(foundRef.filePath, error)}；未生成任何内容`);
   }
 
-  if (turns.length === 0) {
-    // 0 轮也有两种来路（与 prompt / open 同一判据）：0 字节要恢复来源，可读 0 轮要查格式是否被识别。
-    const emptyReason = await probeSessionReadable(foundRef.filePath);
-    warnings.push(
-      emptyReason
-        ? `会话 ${id} 没有可展示的内容：${emptyReason}`
-        : `来源文件可读，但解析出 0 轮内容（可能只有系统事件 / 元数据，或这一家的记录格式还没被识别）`,
-    );
-  }
-
   // OpenCode 的数据库可通过环境变量指定任意文件名，格式不能只靠后缀判断。
+  // 先扫描再判 0 轮：文件被截断时 parse 同样返回 0 轮，不能把「可读、只有系统事件 / 元数据」
+  // 当成结论——与 prompt / open / switch 用同一个判据（describeZeroTurnReason）。
   const badScan = !sharedDatabase && foundRef.filePath.endsWith('.jsonl')
     ? await scanUnparsableJsonLines(foundRef.filePath, { allowMissing: false })
     : null;
-  if (badScan) {
+
+  if (turns.length === 0) {
+    // 0 轮有三种来路（与 prompt / open 同一判据）：0 字节要恢复来源，可读 0 轮要看是有坏行
+    // 还是格式没被识别。`badScan` 为 null（opencode / 非 JSONL）时只说格式。
+    const emptyReason = await probeSessionReadable(foundRef.filePath);
+    if (emptyReason) {
+      warnings.push(`会话 ${id} 没有可展示的内容：${emptyReason}`);
+    } else if (badScan) {
+      warnings.push(
+        `会话 ${id}：${describeZeroTurnReason(
+          badScan,
+          '来源文件可读，但解析出 0 轮内容（可能只有系统事件 / 元数据，或这一家的记录格式还没被识别）',
+          badScan.count > 0 || badScan.error ? '需要完整内容请先恢复来源文件' : undefined,
+        )}`,
+      );
+    } else {
+      warnings.push('来源文件可读，但解析出 0 轮内容（可能只有系统事件 / 元数据，或这一家的记录格式还没被识别）');
+    }
+  } else if (badScan) {
+    // 0 轮时上面那句已连同行数说过，这里不重复同一件事
     if (badScan.count > 0) {
       warnings.push(`来源会话 ${id} 有 ${badScan.count} 行无法解析（截断或损坏），结构计数不含这些记录`);
     }
