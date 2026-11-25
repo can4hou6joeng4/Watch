@@ -44,7 +44,7 @@ import { collectUnattributable, emptiedJson, emptiedSearchNote, emptiedSessionsW
 import type { EmptiedSession } from './core/session-coverage.js';
 import { describeSpawnFailure } from './core/platform.js';
 import { usageBadLinesDetail, usageSidecarProblem } from './core/usage-integrity.js';
-import { describeBadLinesScanFailure, scanUnparsableJsonLines, unparsableLinesField, type BadLinesScan } from './core/jsonl.js';
+import { describeBadLinesScanFailure, describeZeroTurnReason, scanUnparsableJsonLines, unparsableLinesField, type BadLinesScan } from './core/jsonl.js';
 import { readWatchVersion } from './core/watch-version.js';
 import { CAPABILITY_VERIFICATION_NOTE, describeCapabilities, formatCapabilities } from './core/capabilities.js';
 import { formatToolCounts, summarizeSessionStructure } from './core/inspect.js';
@@ -1198,23 +1198,21 @@ async function cmdAdopt(
         // （0 字节那一档已由上面的空文件警告说清，这里不重复）。
         if (adoptedTurns.length === 0) {
           const subject = `会话 ${escapeControlChars(result.adoptedRef.sessionId)}（${adoptedAdapter.displayName}）`;
-          const badScan = await scanUnparsableJsonLines(result.adoptedRef.filePath);
+          const badScan = await scanUnparsableJsonLines(result.adoptedRef.filePath, { allowMissing: false });
           // 与 warning 同一次扫描：脚本不必解析中文才知道 0 轮背后还有几行坏数据
           result.unparsableLines = unparsableLinesField(null, badScan).unparsableLines;
           result.emptySessions = emptySessionsField(null, 'zero-turns').emptySessions;
-          const badFailure = describeBadLinesScanFailure(
-            badScan,
-            subject,
-            '是否真的只有 0 轮无法确认——先确认该文件可读再重试',
-          );
-          const reason = badScan.count > 0
-            ? `文件里有 ${badScan.count} 行无法解析（截断或损坏），这些内容已被跳过——更可能是文件被截断或损坏，不能当成「刚建出来的空会话」`
-            : badFailure ?? `可能是刚建出来的空会话，也可能内容已被清空`;
           result.warnings.push(
-            `${subject} 解析出 0 轮（没有可继续的对话）：${reason}` +
-              `${badFailure ? `；${badFailure}` : ''}；${chainWriteNote}，本次没有改动会话文件——resume 打开的是空会话；` +
-              `如果它本该有历史，先在 ${adoptedAdapter.displayName} 里打开它确认，或从备份恢复该文件（Watch 不会替你重建历史）；` +
-              `如果挑错了会话，用 watch adopt ${result.adoptedRef.provider} --session <另一个会话 id> 换绑`,
+            `${subject} 解析出 0 轮（没有可继续的对话）：` +
+              describeZeroTurnReason(
+                badScan,
+                `可能是刚建出来的空会话，也可能内容已被清空`,
+                badScan.error
+                  ? ''
+                  : `${chainWriteNote}，本次没有改动会话文件——resume 打开的是空会话；` +
+                    `如果它本该有历史，先在 ${adoptedAdapter.displayName} 里打开它确认，或从备份恢复该文件（Watch 不会替你重建历史）；` +
+                    `如果挑错了会话，用 watch adopt ${result.adoptedRef.provider} --session <另一个会话 id> 换绑`,
+              ),
           );
         }
       } catch (error) {

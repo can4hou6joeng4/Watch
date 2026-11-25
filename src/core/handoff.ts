@@ -8,7 +8,7 @@ import { describeWriteFailureReason, type FileDigest } from './atomic.js';
 import { addFinding, type Finding } from './findings.js';
 import { describeInferredTimeWrite } from './time.js';
 import { escapeControlChars } from './display.js';
-import { describeBadLinesScanFailure, lineageFromHistory, scanUnparsableJsonLines, unparsableLinesField, type BadLinesScan, type LineageGraph, type UnparsableLines } from './jsonl.js';
+import { describeBadLinesScanFailure, describeZeroTurnReason, lineageFromHistory, scanUnparsableJsonLines, unparsableLinesField, type BadLinesScan, type LineageGraph, type UnparsableLines } from './jsonl.js';
 import { usageBadLinesDetail, usageContentBadLinesDetail, usageContentFileProblem, usageSidecarProblem } from './usage-integrity.js';
 import { cwdAliasHint, splitElsewhereByDirectory } from './cwd.js';
 import { compressedCopy, compressedRetryAdvice, describePathReadFailureReason, describeReadFailureOrSelf, emptySessionFileReasonFromStat, isEmptySessionFileReason, isMissingPathError, probeSessionReadable, sessionFilePresence, type CompressedCopyNote } from './read-text.js';
@@ -875,22 +875,15 @@ export async function createChainSession(
     // resume——用户打开进去什么也没有，而 `open <同一个 id>` / `switch <同一家>` 从 v0.1.84/86
     // 起都已在说这件事。解析失败（读不出内容）走下面的 tipUnfinished，不猜轮数。
     let tipEmpty = false;
-    let tipEmptyBadLines = 0;
-    let tipEmptyScanFailure: string | null = null;
+    let tipEmptyScan: BadLinesScan | null = null;
     if (tipAdapter) {
       try {
         const tipTurns = await tipAdapter.parse(tail.toRef);
         tipEmpty = tipTurns.length === 0;
         if (tipEmpty) {
-          // 与 status / chain list / doctor 同档：parse 跳过坏行，0 轮也可能是文件截断。
-          const badScan = await scanUnparsableJsonLines(tail.toRef.filePath);
-          const badFailure = describeBadLinesScanFailure(
-            badScan,
-            `链尾会话 ${escapeControlChars(tail.toRef.sessionId)}`,
-            '是否真的只有 0 轮无法确认——先确认该文件可读再重试',
-          );
-          tipEmptyBadLines = badScan.count;
-          tipEmptyScanFailure = badFailure;
+          // 与 status / chain list / doctor 同档：parse 跳过坏行，0 轮也可能是文件截断；
+          // parse 后文件消失也必须报「扫描未完成」，不能当合法空会话。
+          tipEmptyScan = await scanUnparsableJsonLines(tail.toRef.filePath, { allowMissing: false });
         }
         tipUnfinished = describeResumeTargetUnfinished(
           tipTurns,
@@ -915,13 +908,17 @@ export async function createChainSession(
       `链尾已是 ${providerId}：会话 ${escapeControlChars(tail.toRef.sessionId)}（${resume}），` +
         (tipEmpty
           ? (() => {
-              const reason = tipEmptyBadLines > 0
-                ? `文件里有 ${tipEmptyBadLines} 行无法解析（截断或损坏），这些内容已被跳过——更可能是文件被截断或损坏，不能当成「刚建出来的空会话」`
-                : tipEmptyScanFailure ?? `可能是刚建出来的空会话，也可能内容已被清空`;
-              const scanNote = tipEmptyScanFailure ? `；${tipEmptyScanFailure}` : '';
-              return `但这条会话解析出 0 轮（没有可继续的对话）：${reason}${scanNote}；` +
-                `直接 resume 打开的是空会话。如果它本该有内容，先在 ${display} 里打开它确认，或从备份恢复该文件` +
-                `（Watch 不会替你重建历史）；要开新对话请先切到另一侧`;
+              const scan = tipEmptyScan ?? { count: 0 };
+              const reason = describeZeroTurnReason(
+                scan,
+                '可能是刚建出来的空会话，也可能内容已被清空',
+                // 扫描没扫完时不能断言打开的是空会话；失败原因本身已给出下一步
+                scan.error
+                  ? ''
+                  : `直接 resume 打开的是空会话。如果它本该有内容，先在 ${display} 里打开它确认，或从备份恢复该文件` +
+                    `（Watch 不会替你重建历史）；要开新对话请先切到另一侧`,
+              );
+              return `但这条会话解析出 0 轮（没有可继续的对话）：${reason}`;
             })()
           : `直接 resume 即可；要开新对话请先切到另一侧`) +
         (tipUnfinished.length ? `。注意：${tipUnfinished.join('；')}` : ''),
@@ -1700,22 +1697,20 @@ export async function chainStatus(
               // 与合法空会话同形。先说清有没有坏行，避免把「文件坏了」讲成
               // 「刚建出来还没聊过 / 内容被清空」。
               const subject = `链尾会话 ${last.toProvider} ${escapeControlChars(last.toRef.sessionId)}`;
-              const badScan = await scanUnparsableJsonLines(last.toRef.filePath);
+              const badScan = await scanUnparsableJsonLines(last.toRef.filePath, { allowMissing: false });
               // 与 warnings 同一次扫描：坏行数和扫描失败原因都按 `unparsableLinesField` 的
               // 同一口径输出，干净文件不给出字段（0 轮不等于文件损坏）
               chainTipBadLines = unparsableLinesField(null, badScan).unparsableLines?.target;
-              const badFailure = describeBadLinesScanFailure(
-                badScan,
-                subject,
-                '是否真的只有 0 轮无法确认——先确认该文件可读再重试',
-              );
-              const reason = badScan.count > 0
-                ? `文件里有 ${badScan.count} 行无法解析（截断或损坏），这些内容已被跳过——更可能是文件被截断或损坏，不能当成「刚建出来的空会话」`
-                : badFailure ?? '可能是刚建出来的空会话，也可能内容已被清空';
               warnings.push(
-                `${subject} 解析出 0 轮（没有可继续的对话）：${reason}；` +
-                  `按这个链尾 resume 打开的是空会话——` +
-                  `如果它本该有历史，先在 ${tipAdapter.displayName} 里打开它确认，或从备份恢复该文件（Watch 不会替你重建历史）`,
+                `${subject} 解析出 0 轮（没有可继续的对话）：` +
+                  describeZeroTurnReason(
+                    badScan,
+                    '可能是刚建出来的空会话，也可能内容已被清空',
+                    badScan.error
+                      ? ''
+                      : `按这个链尾 resume 打开的是空会话——` +
+                        `如果它本该有历史，先在 ${tipAdapter.displayName} 里打开它确认，或从备份恢复该文件（Watch 不会替你重建历史）`,
+                  ),
               );
             }
           } catch {
@@ -2054,21 +2049,19 @@ export async function handoff(
       if (resumeTargetReadableEmpty) {
         // 与 status / chain list / doctor / new 同档：parse 跳过坏行，0 轮也可能是截断文件。
         const subject = `目标会话 ${escapeControlChars(resumeRef.sessionId)}（${target.displayName}）`;
-        const badScan = await scanUnparsableJsonLines(resumeRef.filePath);
+        const badScan = await scanUnparsableJsonLines(resumeRef.filePath, { allowMissing: false });
         resumeTargetBadLines = unparsableLinesField(null, badScan).unparsableLines;
-        const badFailure = describeBadLinesScanFailure(
-          badScan,
-          subject,
-          '是否真的只有 0 轮无法确认——先确认该文件可读再重试',
-        );
-        const reason = badScan.count > 0
-          ? `文件里有 ${badScan.count} 行无法解析（截断或损坏），这些内容已被跳过——更可能是文件被截断或损坏，不能当成「刚建出来的空会话」`
-          : badFailure ?? `可能是刚建出来的空会话，也可能内容已被清空`;
         warnings.push(
-          `${subject} 解析出 0 轮（没有可继续的对话）：${reason}` +
-            `${badFailure ? `；${badFailure}` : ''}；下面这条 resume 打开的是空会话——` +
-            `如果它本该有历史，先在 ${target.displayName} 里打开它确认，或从备份恢复该文件（Watch 不会替你重建历史）；` +
-            `如果挑错了会话，用 watch adopt ${targetId} --session <另一个会话 id> 换绑`,
+          `${subject} 解析出 0 轮（没有可继续的对话）：` +
+            describeZeroTurnReason(
+              badScan,
+              `可能是刚建出来的空会话，也可能内容已被清空`,
+              badScan.error
+                ? ''
+                : `下面这条 resume 打开的是空会话——` +
+                  `如果它本该有历史，先在 ${target.displayName} 里打开它确认，或从备份恢复该文件（Watch 不会替你重建历史）；` +
+                  `如果挑错了会话，用 watch adopt ${targetId} --session <另一个会话 id> 换绑`,
+            ),
         );
       }
       return {
