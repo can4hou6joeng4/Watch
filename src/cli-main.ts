@@ -960,15 +960,25 @@ async function cmdSwitch(cwd: string, targetId: string, json: boolean, chain?: s
           ? `来源会话文件有 ${sourceScan.count} 行无法解析${sourceScan.error ? '且扫描未完成' : ''}，内容可能被截断`
           : '来源会话坏行扫描未完成，内容是否完整无法确认'
         : null;
-      console.log(
-        sourceEmptyDetail
-          ? chainTailFailed
-            ? `本次未写入会话文件（${sourceEmptyDetail}）；但链尾未更新（${tailFailure}）`
-            : `已切到 ${targetId}（链尾已更新；${sourceEmptyDetail}，本次未写入会话文件）`
-          : chainTailFailed
-            ? `内容已就位：来源会话没有可交接的内容，本次未写入会话文件；但链尾未更新（${tailFailure}）`
-            : `已切到 ${targetId}（链尾已更新；来源会话没有可交接的内容，本次未写入会话文件）`,
-      );
+      // 0 字节来源是另一种事实：内容已经没了，下一步是备份恢复，不能与「本来就没内容」共用一句。
+      // 以前这层分档只在 stderr 警告里，stdout 的结论仍说「没有可交接的内容」。
+      if (result.emptySessions?.source === 'zero-byte') {
+        console.log(
+          chainTailFailed
+            ? `本次未写入会话文件（来源会话的文件是空的，内容已丢失，需要从备份恢复）；但链尾未更新（${tailFailure}）`
+            : `已切到 ${targetId}（链尾已更新；来源会话的文件是空的（内容已丢失），本次未写入会话文件——如果这条会话本该有内容，先从备份恢复该文件）`,
+        );
+      } else {
+        console.log(
+          sourceEmptyDetail
+            ? chainTailFailed
+              ? `本次未写入会话文件（${sourceEmptyDetail}）；但链尾未更新（${tailFailure}）`
+              : `已切到 ${targetId}（链尾已更新；${sourceEmptyDetail}，本次未写入会话文件）`
+            : chainTailFailed
+              ? `内容已就位：来源会话没有可交接的内容，本次未写入会话文件；但链尾未更新（${tailFailure}）`
+              : `已切到 ${targetId}（链尾已更新；来源会话没有可交接的内容，本次未写入会话文件）`,
+        );
+      }
     } else if (result.turnCount === 0 && result.zeroIncrementReason === 'up-to-date') {
       const contentResult = result.findings?.some(({ code }) => code === 'handoff.rewrite_only')
         ? '本次重写了目标会话，未追加新轮次'

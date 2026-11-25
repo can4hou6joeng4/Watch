@@ -3,7 +3,7 @@ import { stat } from 'node:fs/promises';
 import type { SessionRef, TokenUsage, UnifiedTurn } from './types.js';
 import { chainsElsewhereHint, chainsSameDirectoryHint, describeStoreErrorReason, emptyChainBindHint } from './store.js';
 import type { Chain, ChainsElsewhere, Store, SwitchRecord } from './store.js';
-import { contentLossField, contextDisclosuresField, type ContextDisclosures, type ContextDisclosuresField, sourceUnfinishedField, type SourceUnfinished, targetUnfinishedField, type TargetUnfinished, type TargetUnfinishedField, countAttachmentLoss, countBashControlLoss, countTextEventLoss, countToolFailureLoss, type ContentLoss, dedupeCallEvents, describeAttachmentLoss, describeBashControlLoss, describeTextEventLoss, describeToolFailureLoss, describeDanglingToolCalls, describeUnansweredTail, describeResumeTargetUnfinished, findContextDisclosure, mergeTurns, shouldReplacePairedSession, turnIdentityKey, type EmptySessions } from './rich.js';
+import { contentLossField, contextDisclosuresField, type ContextDisclosures, type ContextDisclosuresField, emptySessionsField, sourceUnfinishedField, type SourceUnfinished, targetUnfinishedField, type TargetUnfinished, type TargetUnfinishedField, countAttachmentLoss, countBashControlLoss, countTextEventLoss, countToolFailureLoss, type ContentLoss, dedupeCallEvents, describeAttachmentLoss, describeBashControlLoss, describeTextEventLoss, describeToolFailureLoss, describeDanglingToolCalls, describeUnansweredTail, describeResumeTargetUnfinished, findContextDisclosure, mergeTurns, shouldReplacePairedSession, turnIdentityKey, type EmptySessions } from './rich.js';
 import { describeWriteFailureReason, type FileDigest } from './atomic.js';
 import { addFinding, type Finding } from './findings.js';
 import { describeInferredTimeWrite } from './time.js';
@@ -1478,6 +1478,13 @@ export type HandoffResult = {
    */
   zeroIncrementReason?: 'source-empty' | 'up-to-date';
   /**
+   * 零增量时来源会话本身是空的：`zero-byte` = 文件 0 字节（内容已丢失），
+   * `zero-turns` = 可读但解析出 0 轮（合法空会话或只剩占位头）。与对应警告同一处判定；
+   * 有内容（含「目标已包含全部内容」）时不输出。文本模式据此把「没有可交接的内容」
+   * 换成 0 字节的恢复指引；`open` / `adopt` 的同名字段同一口径。
+   */
+  emptySessions?: EmptySessions;
+  /**
    * 结果说明（与 `warnings` 的降级原因分开，同 `open` 的 notes / warnings 分法）。
    *
    * 目前只有一条：目标会话解析出 0 轮（可读、不是 0 字节）时说明「本次并入的 N 轮
@@ -2412,6 +2419,8 @@ export async function handoff(
       fromProvider: sourceTip?.provider ?? targetId,
       turnCount: 0,
       zeroIncrementReason: turns.length === 0 ? 'source-empty' : 'up-to-date',
+      // 只报来源一侧：目标是否有内容不影响这次零增量的结论，且这里没有对目标做 0 字节探测
+      ...emptySessionsField(turns.length === 0 ? (emptiedSourceFile ? 'zero-byte' : 'zero-turns') : null, null),
       ...(notes.length ? { notes } : {}),
       chainRecordState,
       ...unparsableLinesField(sourceBadScan, destBadScan),
