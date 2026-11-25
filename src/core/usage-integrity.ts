@@ -49,8 +49,12 @@ export async function usageBadLinesDetail(
   label: string,
   { knownScan }: { knownScan?: BadLinesScan } = {},
 ): Promise<{ count: number; reason: string; scanFailed?: boolean; scanError?: string } | null> {
-  const filePath = adapter.sessionUsagePath?.(ref) ?? ref.filePath;
-  const scan = knownScan && filePath === ref.filePath ? knownScan : await scanUnparsableJsonLines(filePath);
+  const usagePath = adapter.sessionUsagePath?.(ref);
+  const filePath = usagePath ?? ref.filePath;
+  // 旁路用量文件（Grok 的 updates.jsonl）可以缺失，缺失 = 没有用量记录；
+  // 会话自己的文件是本轮刚 parse 过的，缺了就必须报告，不能当成「没有坏行」。
+  const allowMissing = usagePath !== undefined && usagePath !== ref.filePath;
+  const scan = knownScan && filePath === ref.filePath ? knownScan : await scanUnparsableJsonLines(filePath, { allowMissing });
   if (scan.error) {
     return {
       count: scan.count,

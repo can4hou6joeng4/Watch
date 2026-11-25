@@ -152,7 +152,7 @@ export async function reindexCwd(
         const turns = await adapter.parse(s.ref);
         // `parse` 成功不代表内容齐全：半行 / 坏行被逐行跳过，这些轮次不进索引，搜不到。
         // 判据与 `prompt` / `usage` 同源（`scanUnparsableJsonLines()`；opencode 是 SQLite，返回 0）
-        const badScan = await scanUnparsableJsonLines(s.ref.filePath);
+        const badScan = await scanUnparsableJsonLines(s.ref.filePath, { allowMissing: false });
         // 扫描读失败时 `badScan.count` 只是出错前已确认的部分：「内容完整」没有依据。
         // 与 parse 失败同一处置——本轮不写游标、下轮重试；照常写索引会把「未知」缓存成
         // `bad_lines = 0`，之后文件不变就再也不会重新披露，等于把「没扫成」永久讲成「没有坏行」。

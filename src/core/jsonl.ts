@@ -109,7 +109,7 @@ export function unparsableLinesField(
  * warnings / findings 里披露 `error`——辅助扫描不该因为一个文件读不出来就终止整条命令。
  */
 export async function countUnparsableJsonLines(filePath: string): Promise<number> {
-  const scan = await scanUnparsableJsonLines(filePath);
+  const scan = await scanUnparsableJsonLines(filePath, { allowMissing: false });
   if (scan.error) {
     throw new Error(`无法统计 ${escapeControlChars(filePath)} 的坏行：${scan.error}`);
   }
