@@ -96,6 +96,12 @@ export type OpenSessionResult = {
    * 原 id 在这里；新会话只有这次写入的内容，原目标的旧历史没有并入。
    */
   targetRecreated?: { previousSessionId: string };
+  /**
+   * `open --from` 真的并入了内容、而两个会话记录的工作目录不同：内容来自另一个项目，
+   * resume 后会在 `targetCwd` 里继续。目录被移动 / 改名时这是对的，但更常见的成因是 id 抄错；
+   * 只有中文 warnings 时脚本看到的只是一次普通的「已并入 N 轮」。路径保留原值。
+   */
+  crossDirectory?: { sourceCwd: string; targetCwd: string };
   /** 来源会话在 --from 并入 / --to 转入期间被写入过（stat 字节数与方向），与 switch / prompt 同字段 */
   sourceDrift?: SourceChangeSince;
   /** 来源会话在期间「量不出来」有没有变化，附原因；与 sourceDrift 互斥 */
@@ -559,6 +565,7 @@ export async function openSession(
   let merged = 0;
   let srcDrift: SourceDriftFields = {};
   let recreated: TargetRecreatedField = {};
+  let crossDirectory: { sourceCwd: string; targetCwd: string } | null = null;
   let sourceUsage: TokenUsage | null = null;
   // 记录的目录可能已被移动 / 删除：会话内容照常可读、转入也能写成，但返回的 cd 会在第一步失败
   const cwdInspection = await sessionCwdInspection(target.found.ref.cwd);
@@ -835,6 +842,7 @@ export async function openSession(
           // 项目目录被移动 / 改名时这是对的（旧记录里的 cwd 已失效），但更常见的成因是 id 抄错。
           // 以前这里零披露——`--json` 连 warnings 都没有，用户不会发现自己刚把别处的项目并了进来。
           if (normalizePath(sourceCwd) !== normalizePath(targetCwd)) {
+            crossDirectory = { sourceCwd, targetCwd };
             warnings.push(
               `来源会话 ${escapeControlChars(from)}（${source.adapter.displayName}）记录的工作目录是 ${escapeControlChars(sourceCwd)}，与目标会话 ${escapeControlChars(targetId)} 的 ${escapeControlChars(targetCwd)} 不同：这 ${merged} 轮内容现在在目标那一侧，resume 后会在 ${escapeControlChars(targetCwd)} 里继续` +
                 `；若只是抄错了会话 id，先核对来源会话是否本来就该并进来——要把某个会话带到它自己那个目录继续，用 watch open <会话 id> --to <provider>（目标会在来源目录里新建）`,
@@ -1004,6 +1012,7 @@ export async function openSession(
     usage,
     summary,
     notes,
+    ...(crossDirectory ? { crossDirectory } : {}),
     ...recreated,
     ...srcDrift,
     // 与 status / new / chain 写操作同一字段：命令成功、命令已给出，但 cd 会在不可用目录上失败
