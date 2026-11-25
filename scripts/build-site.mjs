@@ -25,8 +25,8 @@ const localeDir = path.join(root, 'scripts/lib/site-locales');
 const authoredLocales = new Set(['zh', 'en']);
 // 默认发布的语言清单来自 site-content.mjs（测试共用同一份）；WATCH_ALL_LOCALES=1 才会把已登记的全都纳入判定。
 const activeLocaleList = process.env.WATCH_ALL_LOCALES ? Object.keys(locales) : defaultLocaleList;
-// 默认发布的翻译语言缺键时必须让构建失败：跳过只会让线上悄悄少掉一门语言，
-// 而站点产物、sitemap 照常生成，发布流程不会有人察觉。WATCH_ALL_LOCALES=1 只用于预览，仍按跳过处理。
+// 默认发布的翻译语言缺文件或缺键时，停止构建以免发布不完整的站点。
+// WATCH_ALL_LOCALES=1 用于预览，允许跳过缺失的语言。
 const strictLocales = new Set(process.env.WATCH_ALL_LOCALES ? [] : defaultLocaleList.filter((locale) => !authoredLocales.has(locale)));
 const english = collectEnglishStrings(content.en, authoredGuides);
 // 用户指南写当前行为，逐版本说明只进 Releases；否则每次发版都要回头改旧文案，
@@ -43,9 +43,20 @@ const skippedLocales = [];
 const publishedLocales = Object.fromEntries(Object.entries(locales).filter(([locale]) => {
   if (!activeLocaleList.includes(locale)) return false;
   if (authoredLocales.has(locale)) return true;
-  const file = path.join(localeDir, `${locale}.json`);
-  if (!fs.existsSync(file)) return false;
-  const dictionary = loadLocaleDictionary(file);
+  const filename = `${locale}.json`;
+  let dictionary;
+  try {
+    dictionary = loadLocaleDictionary(path.join(localeDir, filename));
+  } catch (error) {
+    if (error.code !== 'ENOENT') throw error;
+    if (strictLocales.has(locale)) {
+      throw new Error(`[site-build] 默认发布语言 ${locale} 缺少语言包 ${filename}，请恢复该文件后再构建`);
+    }
+    if (defaultLocaleList.includes(locale)) {
+      console.warn(`[site-build] 跳过 ${locale}：缺少语言包 ${filename}`);
+    }
+    return false;
+  }
   const { missing } = localeGaps(dictionary, english);
   if (missing.length) {
     if (strictLocales.has(locale)) {

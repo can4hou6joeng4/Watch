@@ -2,10 +2,8 @@
 /**
  * 语言包完整性核对（只读）。
  *
- * `WATCH_ALL_LOCALES=1 npm run site:build` 只在某个语言包缺键时才失败，而且一次只报第一条；
- * 源文案改过、语言包没跟上的「孤儿键」则完全不报——翻译占着位置却再也不会被用到。
- * 这个脚本把两边都列出来：每个语言包缺哪些英文源串（构建会失败的原因），
- * 以及哪些键在英文源里已经不存在（说明某处文案改过而译文没跟上）。
+ * 默认构建遇到缺文件或缺键的默认语言时停止，预览模式可以跳过它们。
+ * 这个脚本列出缺失的默认语言包、各语言包缺少的英文源串和已经没有对应源串的孤儿键。
  *
  * 不做翻译，也不改文件。全部齐全时 exit 0；任一语言包不齐全时 exit 1。
  */
@@ -51,8 +49,7 @@ for (const file of files) {
 const handWritten = new Set(['zh', 'en']);
 const missingPacks = defaultLocaleList.filter((locale) => !handWritten.has(locale) && !present.has(locale));
 if (missingPacks.length) {
-  incomplete += missingPacks.length;
-  console.log(`\n默认发布清单里的 ${missingPacks.join('、')} 没有语言包：构建会因默认语言缺键直接失败，请先补齐或暂时移出 defaultLocaleList。`);
+  console.log(`\n缺少默认发布语言的语言包：${missingPacks.join('、')}。请恢复对应的 JSON 文件后再构建。`);
 }
 
 // 已登记到 locales 但既没有语言包、也不在默认清单里的语言：构建时整轮跳过，这里明确列出来，
@@ -78,5 +75,5 @@ if (tokenProblem) {
 if (versionHistory.length) {
   console.log(`\n${versionHistory.length} 处指南版本流水会让站点正文随发版陈旧：改成当前行为描述，版本历史只进 Releases。`);
 }
-if (incomplete || tokenProblem || versionHistory.length) process.exit(1);
+if (missingPacks.length || incomplete || tokenProblem || versionHistory.length) process.exit(1);
 console.log(`\n全部 ${files.length} 个语言包与英文源一致。`);
