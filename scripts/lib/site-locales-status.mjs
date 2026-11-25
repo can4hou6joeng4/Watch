@@ -46,6 +46,25 @@ export function collectEnglishStrings(contentEn, guideList) {
 }
 
 /**
+ * 用户指南里写「从 v0.1.x 起……」会把逐版本流水带进长期文档；版本一变，读者看到的仍是历史。
+ * 只查手写指南的 zh / en 正文（不是首页的版本展示位，也不是 docs/evidence 的验收记录）。
+ */
+export function guideVersionHistoryIssues(guideList) {
+  const issues = [];
+  for (const guide of guideList) {
+    for (const [locale, value] of Object.entries(guide.locales ?? {})) {
+      const strings = new Set();
+      collectStrings(value, strings);
+      for (const text of strings) {
+        const token = text.match(/\bv0\.1\.\d+\b/i)?.[0];
+        if (token) issues.push({ guide: guide.id, locale, token, text: text.slice(0, 120) });
+      }
+    }
+  }
+  return issues;
+}
+
+/**
  * 英文源串里不该被翻译的记号：CLI 参数（`--flag`）与环境变量名（全大写加下划线）。
  * 译文必须让每个源记号原样出现，也不能出现源串里没有的同形记号——2026-11-23 的核对抓到
  * 德语把 `--json` 拼进 `--json-findings`、把 `--desktop-project` 拼进 `--desktop-project-Pfad`，

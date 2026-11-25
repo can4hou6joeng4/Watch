@@ -14,12 +14,19 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { content, defaultLocaleList, locales } from './lib/site-content.mjs';
 import { guides } from './lib/site-guides.mjs';
-import { collectEnglishStrings, localeGaps, localeTokenIssues } from './lib/site-locales-status.mjs';
+import { collectEnglishStrings, guideVersionHistoryIssues, localeGaps, localeTokenIssues } from './lib/site-locales-status.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const localeDir = path.join(root, 'scripts/lib/site-locales');
 const sampleLimit = Number(process.env.LOCALE_SAMPLE_LIMIT ?? 5);
 const english = collectEnglishStrings(content.en, guides);
+const versionHistory = guideVersionHistoryIssues(guides);
+if (versionHistory.length) {
+  console.log(`指南正文含 ${versionHistory.length} 处 v0.1.x 版本流水：逐版本说明只进 Releases。`);
+  for (const issue of versionHistory.slice(0, sampleLimit)) {
+    console.log(`  ⚠ ${issue.guide}/${issue.locale} ${issue.token} ← ${JSON.stringify(issue.text.slice(0, 90))}`);
+  }
+}
 
 const files = fs.readdirSync(localeDir).filter((name) => name.endsWith('.json')).sort();
 const present = new Set(files.map((name) => name.slice(0, -'.json'.length)));
@@ -68,5 +75,8 @@ if (incomplete) {
 if (tokenProblem) {
   console.log(`\n${tokenProblem} 个语言包有记号差异：默认清单里的语言会让 site:build 直接失败，其余语言只在构建日志里警告。`);
 }
-if (incomplete || tokenProblem) process.exit(1);
+if (versionHistory.length) {
+  console.log(`\n${versionHistory.length} 处指南版本流水会让站点正文随发版陈旧：改成当前行为描述，版本历史只进 Releases。`);
+}
+if (incomplete || tokenProblem || versionHistory.length) process.exit(1);
 console.log(`\n全部 ${files.length} 个语言包与英文源一致。`);

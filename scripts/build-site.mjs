@@ -6,7 +6,7 @@ import { agents, content, defaultLocale, defaultLocaleList, evidence, locales, m
 import { alternatePagesFor, buildAllPageManifest, buildHomePageManifest, renderSitemap, siteBuildDate, validatePageManifest } from './lib/site-pages.mjs';
 import { guides as authoredGuides } from './lib/site-guides.mjs';
 import { chromeText, loadLocaleDictionary, translateContent, translateGuideLocale } from './lib/apply-site-locale.mjs';
-import { collectEnglishStrings, localeGaps, localeTokenIssues } from './lib/site-locales-status.mjs';
+import { collectEnglishStrings, guideVersionHistoryIssues, localeGaps, localeTokenIssues } from './lib/site-locales-status.mjs';
 import { verifyOgImages } from './lib/site-og.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -29,6 +29,13 @@ const activeLocaleList = process.env.WATCH_ALL_LOCALES ? Object.keys(locales) : 
 // 而站点产物、sitemap 照常生成，发布流程不会有人察觉。WATCH_ALL_LOCALES=1 只用于预览，仍按跳过处理。
 const strictLocales = new Set(process.env.WATCH_ALL_LOCALES ? [] : defaultLocaleList.filter((locale) => !authoredLocales.has(locale)));
 const english = collectEnglishStrings(content.en, authoredGuides);
+// 用户指南写当前行为，逐版本说明只进 Releases；否则每次发版都要回头改旧文案，
+// 漏改的「从 v0.1.x 起」会长期留在站点上。构建时直接拦住，语言包 completeness 检查也共用同一判据。
+const versionHistory = guideVersionHistoryIssues(authoredGuides);
+if (versionHistory.length) {
+  const sample = versionHistory.slice(0, 3).map((issue) => `${issue.guide}/${issue.locale}: ${issue.token}`).join('；');
+  throw new Error(`[site-build] 指南正文含 ${versionHistory.length} 处 v0.1.x 版本流水（${sample}）：版本历史只进 Releases，正文写当前行为`);
+}
 // 语言包缺键时 translateContent() 会在第一条就抛错，整轮构建连 zh / en 页面都出不来。
 // 这里先判定：齐全的语言参与构建；默认发布的翻译语言缺键直接报错（见 strictLocales），
 // 其余不齐全的跳过并逐条打印缺口数（构建日志里可见，不是静默丢弃）。
