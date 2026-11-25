@@ -133,6 +133,13 @@ export const WATCH_CONTEXT_DISCLOSURE_PREFIX = '[Watch 交接披露：';
 
 /** 汇总各轮独立的上下文披露；转存的旧声明不能遮住来源后来新增的声明。 */
 export function findContextDisclosure(turns: UnifiedTurn[]): ProcessEvent | null {
+  const { messages, last } = collectContextDisclosures(turns);
+  if (!last) return null;
+  const text = [...messages].join('\n');
+  return { ...last, summary: text, detail: text };
+}
+
+function collectContextDisclosures(turns: readonly UnifiedTurn[]): { messages: Set<string>; last: ProcessEvent | null } {
   const messages = new Set<string>();
   let last: ProcessEvent | null = null;
   for (const turn of turns) {
@@ -143,9 +150,37 @@ export function findContextDisclosure(turns: UnifiedTurn[]): ProcessEvent | null
       for (const message of text.split(/\n(?=\[Watch 交接披露：)/)) messages.add(message);
     }
   }
-  if (!last) return null;
-  const text = [...messages].join('\n');
-  return { ...last, summary: text, detail: text };
+  return { messages, last };
+}
+
+/** 去重后的独立声明条数；与 `findContextDisclosure()` 汇总进 warnings 的那一段同源。 */
+export function countContextDisclosures(turns: readonly UnifiedTurn[]): number {
+  return collectContextDisclosures(turns).messages.size;
+}
+
+/**
+ * 「解析器对这条会话做了上下文完整性声明」的结构化形式：值是去重后的声明条数。
+ * 声明的种类很多（压缩记录、转入后台、未识别的记录类型、失败的请求、无法配对的工具结果…），
+ * 文字留在 warnings 里；这个字段只回答「有没有、有几条」，让脚本不必匹配文案前缀。
+ * `source` 是被读取内容的那一侧，`target` 是结果里那条 resume 指向的既有会话；
+ * 没有声明的一侧不输出，两侧都没有时整个字段不出现。
+ */
+export type ContextDisclosures = { source?: number; target?: number };
+export type ContextDisclosuresField = { contextDisclosures?: ContextDisclosures };
+
+export function contextDisclosuresField(
+  source?: readonly UnifiedTurn[] | null,
+  target?: readonly UnifiedTurn[] | null,
+): ContextDisclosuresField {
+  const s = source ? countContextDisclosures(source) : 0;
+  const t = target ? countContextDisclosures(target) : 0;
+  if (s === 0 && t === 0) return {};
+  return { contextDisclosures: { ...(s > 0 ? { source: s } : {}), ...(t > 0 ? { target: t } : {}) } };
+}
+
+/** 目标是这次新建的会话时只留来源那一侧：新会话里只有本次写入的内容。 */
+export function sourceContextDisclosuresOnly(value?: ContextDisclosures): ContextDisclosuresField {
+  return value?.source ? { contextDisclosures: { source: value.source } } : {};
 }
 
 export function turnHasContent(t: UnifiedTurn): boolean {

@@ -3,7 +3,7 @@ import { stat } from 'node:fs/promises';
 import type { SessionRef, TokenUsage, UnifiedTurn } from './types.js';
 import { chainsElsewhereHint, chainsSameDirectoryHint, describeStoreErrorReason, emptyChainBindHint } from './store.js';
 import type { Chain, ChainsElsewhere, Store, SwitchRecord } from './store.js';
-import { contentLossField, sourceUnfinishedField, type SourceUnfinished, targetUnfinishedField, type TargetUnfinished, type TargetUnfinishedField, countAttachmentLoss, countBashControlLoss, countTextEventLoss, countToolFailureLoss, type ContentLoss, dedupeCallEvents, describeAttachmentLoss, describeBashControlLoss, describeTextEventLoss, describeToolFailureLoss, describeDanglingToolCalls, describeUnansweredTail, describeResumeTargetUnfinished, findContextDisclosure, mergeTurns, shouldReplacePairedSession, turnIdentityKey } from './rich.js';
+import { contentLossField, contextDisclosuresField, type ContextDisclosures, type ContextDisclosuresField, sourceUnfinishedField, type SourceUnfinished, targetUnfinishedField, type TargetUnfinished, type TargetUnfinishedField, countAttachmentLoss, countBashControlLoss, countTextEventLoss, countToolFailureLoss, type ContentLoss, dedupeCallEvents, describeAttachmentLoss, describeBashControlLoss, describeTextEventLoss, describeToolFailureLoss, describeDanglingToolCalls, describeUnansweredTail, describeResumeTargetUnfinished, findContextDisclosure, mergeTurns, shouldReplacePairedSession, turnIdentityKey } from './rich.js';
 import { describeWriteFailureReason, type FileDigest } from './atomic.js';
 import { addFinding, type Finding } from './findings.js';
 import { describeInferredTimeWrite } from './time.js';
@@ -1416,6 +1416,12 @@ export type HandoffResult = {
    */
   targetUnfinished?: TargetUnfinished;
   /**
+   * 解析器对来源 / 目标会话做的上下文完整性声明条数（见 `ContextDisclosures`），与对应的
+   * warnings 同一处取数：来源一侧在读出来源后给；目标一侧目前只在链尾已停在目标
+   * （alreadyAtTarget）时读取并披露。没有声明时不输出。
+   */
+  contextDisclosures?: ContextDisclosures;
+  /**
    * 这次到底有没有把链绑定 / 切换记录写进去：
    * - written：写成了；
    * - failed：尝试过但抛错（库只读、磁盘满、SQLITE_BUSY 等），`warnings` 里已有一条
@@ -1862,6 +1868,7 @@ export async function handoff(
 
   // 与 `describeResumeTargetUnfinished()` 的三处警告同一处赋值
   let targetUnfinished: TargetUnfinishedField = {};
+  let resumeTargetContext: ContextDisclosuresField = {};
 
   // 文件可打开后仍需解析正文，才能确认是空会话、存在对话，还是内容无法核对。
   const checkResumeTarget = async (
@@ -1898,6 +1905,7 @@ export async function handoff(
     // 用户复制的是这条 resume 命令，而这份日志的差异不会出现在链记录或 resume 命令里。
     const context = findContextDisclosure(resumeTurns);
     if (context) warnings.push(context.summary);
+    resumeTargetContext = contextDisclosuresField(null, resumeTurns);
     return resumeTurns.length === 0 ? 'empty' : 'parsed';
   };
 
@@ -2033,6 +2041,7 @@ export async function handoff(
         ...(resumeParseFailed ? { resumeParseFailed: true } : {}),
         ...(resumeTargetReadableEmpty ? { resumeTargetEmpty: true } : {}),
         ...targetUnfinished,
+        ...resumeTargetContext,
         warnings,
         findings,
       };
@@ -2369,6 +2378,7 @@ export async function handoff(
       ...contentLossField(lossCounts),
       ...sourceUnfinishedField(turns),
       ...targetUnfinished,
+      ...contextDisclosuresField(turns, null),
       warnings,
       findings,
     };
@@ -2483,6 +2493,7 @@ export async function handoff(
     ...contentLossField(lossCounts),
     ...sourceUnfinishedField(turns),
     ...targetUnfinished,
+    ...contextDisclosuresField(turns, null),
     warnings,
     findings,
   };

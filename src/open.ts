@@ -1,7 +1,7 @@
 import { stat } from 'node:fs/promises';
 import { describeWriteFailureReason, type FileDigest } from './core/atomic.js';
 import { assertTargetUnchanged, describeVanishedTarget, blockedHint, describeSourceChangedDuringHandoff, diffTurns, HandoffBlockedError, snapshotSourceState, sourceChangeSince, sourceDriftFields, targetRecreatedField, type SourceChangeSince, type SourceDriftFields, type SourceStateSnapshot, type TargetRecreatedField } from './core/handoff.js';
-import { contentLossField, contentLossOf, sourceUnfinishedField, type SourceUnfinished, type SourceUnfinishedField, targetUnfinishedField, type TargetUnfinished, type TargetUnfinishedField, countAttachmentLoss, countBashControlLoss, countTextEventLoss, countToolFailureLoss, type ContentLoss, type ContentLossField, describeAttachmentLoss, describeBashControlLoss, describeTextEventLoss, describeToolFailureLoss, describeDanglingToolCalls, describeUnansweredTail, describeResumeTargetUnfinished, dedupeCallEvents, findContextDisclosure, countPairedTurnsMissingEvents } from './core/rich.js';
+import { contentLossField, contentLossOf, contextDisclosuresField, sourceContextDisclosuresOnly, type ContextDisclosures, type ContextDisclosuresField, sourceUnfinishedField, type SourceUnfinished, type SourceUnfinishedField, targetUnfinishedField, type TargetUnfinished, type TargetUnfinishedField, countAttachmentLoss, countBashControlLoss, countTextEventLoss, countToolFailureLoss, type ContentLoss, type ContentLossField, describeAttachmentLoss, describeBashControlLoss, describeTextEventLoss, describeToolFailureLoss, describeDanglingToolCalls, describeUnansweredTail, describeResumeTargetUnfinished, dedupeCallEvents, findContextDisclosure, countPairedTurnsMissingEvents } from './core/rich.js';
 import { Store, defaultDbPath, describeStoreErrorReason, describeStoreOpenFailure } from './core/store.js';
 import { clipCodePoints } from './core/display.js';
 import { IS_WIN, normalizePath, stripDevicePrefix } from './core/platform.js';
@@ -128,6 +128,13 @@ export type OpenSessionResult = {
    * 同一处判定；`--to` 新建时没有既有目标，不输出。
    */
   targetUnfinished?: TargetUnfinished;
+  /**
+   * 解析器对来源 / 目标会话做的上下文完整性声明条数（与 switch 同字段）：压缩记录、转入后台、
+   * 未识别的记录类型、失败的请求等，文字在 warnings 里。`source` 是被读取内容的一侧，
+   * `target` 是结果里那条 resume 指向的既有会话（单独 `open <id>` 只有 target）。
+   * 与对应的 warnings 同一处取数；没有声明的一侧不输出，目标是这次新建的会话时不给 target。
+   */
+  contextDisclosures?: ContextDisclosures;
   /** 来源会话在 --from 并入 / --to 转入期间被写入过（stat 字节数与方向），与 switch / prompt 同字段 */
   sourceDrift?: SourceChangeSince;
   /** 来源会话在期间「量不出来」有没有变化，附原因；与 sourceDrift 互斥 */
@@ -596,6 +603,7 @@ export async function openSession(
   let lossField: ContentLossField = {};
   let unfinished: SourceUnfinishedField = {};
   let targetUnfinished: TargetUnfinishedField = {};
+  let contextField: ContextDisclosuresField = {};
   let sourceUsage: TokenUsage | null = null;
   // 记录的目录可能已被移动 / 删除：会话内容照常可读、转入也能写成，但返回的 cd 会在第一步失败
   const cwdInspection = await sessionCwdInspection(target.found.ref.cwd);
@@ -697,6 +705,8 @@ export async function openSession(
       // 整份来源的上下文差异不随增量裁剪；即使没有新轮次，也不能丢掉这条声明。
       const contextDisclosure = findContextDisclosure(srcTurns);
       if (contextDisclosure) warnings.push(contextDisclosure.summary);
+      // 目标那一侧还没读：先记来源，后面读目标失败时这一半也不会丢
+      contextField = contextDisclosuresField(srcTurns, null);
       const srcBadScan = await scanUnparsableJsonLines(source.found.ref.filePath);
       // 目标那一侧还没扫：先记来源，后面读目标失败时这一半也不会丢
       badLines = unparsableLinesField(srcBadScan, null);
@@ -739,6 +749,8 @@ export async function openSession(
       if (targetContextDisclosure && !warnings.includes(targetContextDisclosure.summary)) {
         warnings.push(targetContextDisclosure.summary);
       }
+      // 两侧同文时 warnings 只留一条，字段仍各记各的：它说的是「哪一侧有声明」
+      contextField = contextDisclosuresField(srcTurns, dstTurns);
       // 解析出 0 轮不代表「这条会话本来就没有内容」：grok / kimi 这类 cwd 不来自文件内容的
       // 适配器会带着一条 0 字节的文件一路走到这里。以前 0 字节来源只得到一句「内容已全部包含在
       // 目标中，无需并入」——看着像一次真的并入，实际来源的历史早就没了。
@@ -861,7 +873,10 @@ export async function openSession(
           if (vanished) warnings.push(vanished);
           recreated = targetRecreatedField(target.found.ref, newRef);
           // 旧目标被移走、这次落在新建的会话上：里面只有本次写入的内容，旧目标的断点不属于它
-          if (recreated.targetRecreated) targetUnfinished = {};
+          if (recreated.targetRecreated) {
+            targetUnfinished = {};
+            contextField = sourceContextDisclosuresOnly(contextField.contextDisclosures);
+          }
           merged = dedup.length;
           notes.push(
             `已把 ${escapeControlChars(from)} 的 ${merged} 轮新内容${vanished ? '写入' : '并入'} ` +
@@ -959,6 +974,7 @@ export async function openSession(
       // 纯打开也会返回 resume 命令，必须携带未完成或上下文差异的完整声明。
       const contextDisclosure = findContextDisclosure(turns);
       if (contextDisclosure) warnings.push(contextDisclosure.summary);
+      contextField = contextDisclosuresField(null, turns);
       // 0 轮不一定是「这条会话本来就没内容」（grok / kimi 的 cwd 不来自文件内容，0 字节也能走到这里）：
       // 不探一次，`open` 就会对着一条内容已经丢了的会话打印一条看起来完全正常的 resume
       if (turns.length === 0) {
@@ -1068,6 +1084,7 @@ export async function openSession(
     ...lossField,
     ...unfinished,
     ...targetUnfinished,
+    ...contextField,
     ...srcDrift,
     // 与 status / new / chain 写操作同一字段：命令成功、命令已给出，但 cd 会在不可用目录上失败
     ...(cwdInspection.probe.state !== 'ok' ? { cwdState: cwdInspection.probe } : {}),
@@ -1148,6 +1165,8 @@ export type OpenPlan = {
   sourceUnfinished?: SourceUnfinished;
   /** 即将 resume 的既有目标会话没收尾（见 `targetUnfinishedField`）；new 没有既有目标 */
   targetUnfinished?: TargetUnfinished;
+  /** 来源 / 既有目标的上下文完整性声明条数（见 `contextDisclosuresField`）；没有声明时缺省 */
+  contextDisclosures?: ContextDisclosures;
 };
 
 type PlannedOpen =
@@ -1316,12 +1335,14 @@ async function planOpenInProvider(
     let resumeUnreadable: string | null = null;
     let resumeCompressed: 'intact' | 'empty' | null = null;
     let resumeTargetUnfinished: TargetUnfinishedField = {};
+    let resumeContext: ContextDisclosuresField = {};
     try {
       const ownTurns = await source.adapter.parse(sourceRef);
       // 上下文完整性（被转入后台 / Pi context_edit / Codex compacted）是整份日志的差异，
       // 单开 `open <id>` 会披露，这条「来源即目标」的快路径同样不能省——resume 的就是它。
       const ownContext = findContextDisclosure(ownTurns);
       if (ownContext) diagnostics?.push(ownContext.summary);
+      resumeContext = contextDisclosuresField(null, ownTurns);
       // 这条快路径要 resume 的就是来源会话自己：0 轮时同样探一次，否则一条 0 字节的会话
       // 会得到「来源即目标，直接恢复原会话」而没有任何「内容已丢失」的说明
       if (ownTurns.length === 0) {
@@ -1370,6 +1391,7 @@ async function planOpenInProvider(
         ...(resumeUnreadable ? { resumeUnreadable } : {}),
         ...(resumeCompressed ? { resumeCompressed } : {}),
         ...resumeTargetUnfinished,
+        ...resumeContext,
       },
     };
   }
@@ -1508,6 +1530,7 @@ async function planOpenInProvider(
             ...unparsableLinesField(badSourceScan, pairBadLines),
             ...unfinished,
             ...targetUnfinishedField(pairTurns, delta.length),
+            ...contextDisclosuresField(turns, pairTurns),
             note:
               delta.length === 0
                 ? `回到链上 ${target.displayName} 会话 ${escapeControlChars(chainPaired.sessionId)}，无需并入`
@@ -1642,6 +1665,7 @@ async function planOpenInProvider(
         ...unparsableLinesField(badSourceScan, reuseBadLines),
         ...unfinished,
         ...targetUnfinishedField(destinationTurns, delta.length),
+        ...contextDisclosuresField(turns, destinationTurns),
         note:
           delta.length === 0
             ? `已在 ${target.displayName} 找到包含全部内容的既有会话 ${escapeControlChars(reuse.sessionId)}，直接打开，无需新建`
@@ -1681,6 +1705,7 @@ async function planOpenInProvider(
       ...(reuseScanGaps.length ? { reuseScanGaps } : {}),
       ...unparsableLinesField(badSourceScan, null),
       ...unfinished,
+      ...contextDisclosuresField(turns, null),
       note: `已把 ${source.adapter.displayName} 的 ${outgoing.length} 轮内容转入 ${target.displayName} 新会话`,
     },
   };
@@ -1761,6 +1786,7 @@ export async function openInProvider(
       // 与 --check 同字段：脚本不必解析 notes 才知道这次没有转入
       plan: publicPlan(plan),
       ...(plan.targetUnfinished ? { targetUnfinished: plan.targetUnfinished } : {}),
+      ...(plan.contextDisclosures ? { contextDisclosures: plan.contextDisclosures } : {}),
       // 记录目录不可用时命令仍成功，但返回的 cd 会失败：与 openSession 同一字段
       ...(cwdState ? { cwdState } : {}),
       ...(mapping ? {} : { storeAvailable: false as const }),
@@ -1879,6 +1905,11 @@ export async function openInProvider(
       ...(plan.sourceUnfinished ? { sourceUnfinished: plan.sourceUnfinished } : {}),
       // 旧目标被移走而改为新建时不给：新会话里只有本次写入的内容（见 targetRecreated）
       ...(plan.targetUnfinished && !recreated.targetRecreated ? { targetUnfinished: plan.targetUnfinished } : {}),
+      ...(recreated.targetRecreated
+        ? sourceContextDisclosuresOnly(plan.contextDisclosures)
+        : plan.contextDisclosures
+          ? { contextDisclosures: plan.contextDisclosures }
+          : {}),
       // 与上面四句损失警告同一批轮次（计划写入的内容）
       ...contentLossOf(plan.turns, target),
       ...planDrift,
@@ -1981,6 +2012,7 @@ export async function checkOpenInProvider(
     ...(plan.unparsableLines ? { unparsableLines: plan.unparsableLines } : {}),
     ...(plan.sourceUnfinished ? { sourceUnfinished: plan.sourceUnfinished } : {}),
     ...(plan.targetUnfinished ? { targetUnfinished: plan.targetUnfinished } : {}),
+    ...(plan.contextDisclosures ? { contextDisclosures: plan.contextDisclosures } : {}),
   };
   // 空来源也会新建会话（Kimi 要真跑一次 CLI），所以 CLI 判定不能放在 turns===0 之后
   const cliBlock = await newSessionCliBlock(target, plan);
