@@ -10,7 +10,7 @@ import type { SessionRef } from './types.js';
 import { readWatchVersion } from './watch-version.js';
 import { describeCwdProblem, inspectCwd, splitElsewhereByDirectory, type CwdInspection } from './cwd.js';
 import { clipCodePoints, escapeControlChars } from './display.js';
-import { describeBadLinesScanFailure, scanUnparsableJsonLines, unparsableLinesField, type BadLinesScan } from './jsonl.js';
+import { describeBadLinesScanFailure, scanUnparsableJsonLines, unparsableLinesField, zeroTurnResumeClaim, type BadLinesScan } from './jsonl.js';
 import { compressedCopy, compressedRetryAdvice, describeSessionReadFailureReason, isEmptySessionFileReason, isFileSystemErrorCode, probeSessionReadable, sessionFilePresence } from './read-text.js';
 import { collectUnattributable, unattributableWarning } from './session-coverage.js';
 import { CLAUDE_DEFAULT_CLEANUP_DAYS, hasHigherPrecedenceClaudeRetentionSetting, probeClaudeProjectRetention, probeClaudeRetention, resolveEffectiveClaudeRetention, type ClaudeProjectRetentionProbe, type ClaudeRetentionProbe } from '../providers/claude/retention.js';
@@ -797,7 +797,8 @@ export async function doctorReport(cwd: string, deps: DoctorDeps): Promise<Docto
               const reason = confirmedBadLines ?? '如果刚 watch new 建出来还没聊过属正常，先在该会话里继续';
               warnings.push(
                 `${subject} 是空的（解析出 0 轮，没有可继续的对话）：${reason}；` +
-                  `下次切换会「成功」，但打开的是空会话——若它本该有历史，先从备份恢复该文件（不属正常新建），` +
+                  zeroTurnResumeClaim(toBadScan, `下次切换会「成功」，但打开的是空会话——`) +
+                  `若它本该有历史，先从备份恢复该文件（不属正常新建），` +
                   `或 watch switch ${to.provider} 重新绑定，或 watch chain new <新名字> 另起一条链`,
               );
             }
@@ -882,7 +883,8 @@ export async function doctorReport(cwd: string, deps: DoctorDeps): Promise<Docto
                 const reason = confirmedBadLines ?? '如果刚 watch new 建出来还没聊过属正常，先在该会话里继续';
                 warnings.push(
                   `${subject} 是空的（解析出 0 轮，没有可继续的对话）：${reason}；` +
-                    `resume 打开就是空会话——若它本该有历史，先从备份恢复该文件（不属正常新建），` +
+                    zeroTurnResumeClaim(badScan, `resume 打开就是空会话——`) +
+                    `若它本该有历史，先从备份恢复该文件（不属正常新建），` +
                     `或 watch switch ${tip.provider} 重新绑定，或 watch chain new <新名字> 另起一条链`,
                 );
               }

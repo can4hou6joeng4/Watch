@@ -11,7 +11,7 @@ import type { ProviderAdapter } from './providers/adapter.js';
 import { cliDetectFailedBlock, cliMissingBlock, PreflightBlockedError, SessionLookupFailureError } from './providers/adapter.js';
 import type { SessionLookupFailureKind } from './providers/adapter.js';
 import { getAdapter, listAdapters, unknownProviderMessage } from './providers/registry.js';
-import { describeBadLinesScanFailure, describeZeroTurnReason, scanUnparsableJsonLines, unparsableLinesField, type BadLinesScan, type UnparsableLines, type UnparsableLinesField } from './core/jsonl.js';
+import { describeBadLinesScanFailure, describeZeroTurnReason, scanUnparsableJsonLines, unparsableLinesField, zeroTurnResumeClaim, type BadLinesScan, type UnparsableLines, type UnparsableLinesField } from './core/jsonl.js';
 import { describeInferredTimeWrite } from './core/time.js';
 import { usageBadLinesReason, usageSidecarProblem } from './core/usage-integrity.js';
 import { collectUnattributable, unattributablePickWarning } from './core/session-coverage.js';
@@ -882,7 +882,9 @@ export async function openSession(
         // 目标自己解析出 0 轮（文件不是 0 字节）而这次又什么都没并入：结果里的 resume 打开的是一条
         // 空会话。单独 `open <id>` 对同一条会话会说，这里以前只说来源那一侧——目标的状态无人提及。
         if (dstTurns.length === 0 && !targetZeroByte) {
-          const dstZeroConsequence = `下面这条 resume 命令打开的是空会话——如果它本该有历史，先在 ${target.adapter.displayName} 里打开它确认，或从备份恢复该文件（Watch 不会替你重建历史）`;
+          const dstZeroConsequence =
+            zeroTurnResumeClaim(dstBadScan, `下面这条 resume 命令打开的是空会话——`) +
+            `如果它本该有历史，先在 ${target.adapter.displayName} 里打开它确认，或从备份恢复该文件（Watch 不会替你重建历史）`;
           warnings.push(
             `目标会话 ${escapeControlChars(targetId)}（${target.adapter.displayName}）解析出 0 轮（没有可继续的对话），这次也没有并入任何内容：` +
               // 干净的空目标保留原口径；只有坏行或扫描失败时才改说文件事实，避免把「没扫完」讲成合法空会话
@@ -1054,7 +1056,8 @@ export async function openSession(
                 '可能是刚建出来的空会话，也可能内容已被清空',
                 zeroScan.error
                   ? ''
-                  : `下面这条 resume 命令打开的是空会话——如果它本该有历史，先在 ${target.adapter.displayName} 里打开它确认，或从备份恢复该文件（Watch 不会替你重建历史）`,
+                  : zeroTurnResumeClaim(zeroScan, `下面这条 resume 命令打开的是空会话——`) +
+                    `如果它本该有历史，先在 ${target.adapter.displayName} 里打开它确认，或从备份恢复该文件（Watch 不会替你重建历史）`,
               ),
           );
         }

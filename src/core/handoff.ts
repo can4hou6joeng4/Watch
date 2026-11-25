@@ -8,7 +8,7 @@ import { describeWriteFailureReason, type FileDigest } from './atomic.js';
 import { addFinding, type Finding } from './findings.js';
 import { describeInferredTimeWrite } from './time.js';
 import { escapeControlChars } from './display.js';
-import { describeBadLinesScanFailure, describeZeroTurnReason, lineageFromHistory, scanUnparsableJsonLines, unparsableLinesField, type BadLinesScan, type LineageGraph, type UnparsableLines } from './jsonl.js';
+import { describeBadLinesScanFailure, describeZeroTurnReason, lineageFromHistory, scanUnparsableJsonLines, unparsableLinesField, zeroTurnResumeClaim, type BadLinesScan, type LineageGraph, type UnparsableLines } from './jsonl.js';
 import { usageBadLinesDetail, usageContentBadLinesDetail, usageContentFileProblem, usageSidecarProblem } from './usage-integrity.js';
 import { cwdAliasHint, splitElsewhereByDirectory } from './cwd.js';
 import { compressedCopy, compressedRetryAdvice, describePathReadFailureReason, describeReadFailureOrSelf, emptySessionFileReasonFromStat, isEmptySessionFileReason, isMissingPathError, probeSessionReadable, sessionFilePresence, type CompressedCopyNote } from './read-text.js';
@@ -912,11 +912,13 @@ export async function createChainSession(
               const reason = describeZeroTurnReason(
                 scan,
                 '可能是刚建出来的空会话，也可能内容已被清空',
-                // 扫描没扫完时不能断言打开的是空会话；失败原因本身已给出下一步
-                scan.error
-                  ? ''
-                  : `直接 resume 打开的是空会话。如果它本该有内容，先在 ${display} 里打开它确认，或从备份恢复该文件` +
-                    `（Watch 不会替你重建历史）；要开新对话请先切到另一侧`,
+                // 扫描没扫完时不能断言打开的是空会话；失败原因本身已给出下一步。
+                // 有坏行时同理：文件被截断仍可能解析出 0 轮，只保留恢复建议
+                zeroTurnResumeClaim(scan, '直接 resume 打开的是空会话。') +
+                  (scan.error
+                    ? ''
+                    : `如果它本该有内容，先在 ${display} 里打开它确认，或从备份恢复该文件` +
+                      `（Watch 不会替你重建历史）；要开新对话请先切到另一侧`),
               );
               return `但这条会话解析出 0 轮（没有可继续的对话）：${reason}`;
             })()
@@ -1708,7 +1710,7 @@ export async function chainStatus(
                     '可能是刚建出来的空会话，也可能内容已被清空',
                     badScan.error
                       ? ''
-                      : `按这个链尾 resume 打开的是空会话——` +
+                      : zeroTurnResumeClaim(badScan, `按这个链尾 resume 打开的是空会话——`) +
                         `如果它本该有历史，先在 ${tipAdapter.displayName} 里打开它确认，或从备份恢复该文件（Watch 不会替你重建历史）`,
                   ),
               );

@@ -1216,7 +1216,9 @@ async function cmdAdopt(
                 `可能是刚建出来的空会话，也可能内容已被清空`,
                 badScan.error
                   ? ''
-                  : `${chainWriteNote}，本次没有改动会话文件——resume 打开的是空会话；` +
+                  : (badScan.count === 0
+                      ? `${chainWriteNote}，本次没有改动会话文件——resume 打开的是空会话；`
+                      : `${chainWriteNote}，本次没有改动会话文件；`) +
                     `如果它本该有历史，先在 ${adoptedAdapter.displayName} 里打开它确认，或从备份恢复该文件（Watch 不会替你重建历史）；` +
                     `如果挑错了会话，用 watch adopt ${result.adoptedRef.provider} --session <另一个会话 id> 换绑`,
               ),
@@ -2780,16 +2782,17 @@ async function cmdDoctor(cwd: string, json: boolean, strict: boolean): Promise<v
       for (const e of report.store.emptyTips) {
         // 与同一份 doctor 的 warnings 同档：有坏行时不能再说「没聊过属正常」，
         // 更不能把截断文件说成刚建出来的空会话——两者下一步相反
-        const detail = e.badLines && (e.badLines.count > 0 || e.badLines.error)
+        const damaged = Boolean(e.badLines && (e.badLines.count > 0 || e.badLines.error));
+        const detail = e.badLines && damaged
           ? e.badLines.error && !e.badLines.count
             ? '（解析出 0 轮，坏行扫描未完成）'
             : `（解析出 0 轮，文件有 ${e.badLines.count} 行无法解析）`
           : '（解析出 0 轮）';
-        const next = e.badLines && (e.badLines.count > 0 || e.badLines.error)
+        const next = damaged
           ? '更可能是文件被截断或损坏，先从备份恢复该文件，或'
           : '如果在原生客户端里还没聊过属正常，否则从备份恢复该文件，或';
         console.log(
-          `  链「${escapeControlChars(e.chainName)}」: ${escapeControlChars(e.provider)}:${escapeControlChars(e.sessionId)} 链尾是空的${detail}；resume 打开就是空会话——${next} watch switch ${e.provider} 重新绑定，或 watch chain new <新名字> 另起一条链`,
+          `  链「${escapeControlChars(e.chainName)}」: ${escapeControlChars(e.provider)}:${escapeControlChars(e.sessionId)} 链尾是空的${detail}；${damaged ? 'resume 打开的内容可能不完整' : 'resume 打开就是空会话'}——${next} watch switch ${e.provider} 重新绑定，或 watch chain new <新名字> 另起一条链`,
         );
       }
     } else {
@@ -3276,7 +3279,8 @@ async function cmdChain(cwd: string, json: boolean, action?: string, a?: string,
             const reason = confirmedBadLines ?? '可能刚建出来还没聊过，也可能内容已被清空';
             warnings.push(
               `${subject} 解析出 0 轮（没有可继续的对话）：${reason}；` +
-                `resume 打开就是空会话——如果它本该有历史，先确认文件是否需要从备份恢复（Watch 不会替你重建历史）`,
+                (badScan.count === 0 ? 'resume 打开就是空会话——' : '') +
+                `如果它本该有历史，先确认文件是否需要从备份恢复（Watch 不会替你重建历史）`,
             );
           }
         }

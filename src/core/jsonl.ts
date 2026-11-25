@@ -143,6 +143,18 @@ export function describeZeroTurnReason(
   return `${emptyFallback}${consequence ? `；${consequence}` : ''}`;
 }
 
+/**
+ * 0 轮结论里「打开的是空会话」只对确认干净的空会话成立。
+ *
+ * parse 跳过坏行后，截断 / 损坏的文件同样解析出 0 轮：此时正文已按 `describeZeroTurnReason`
+ * 说过「不能当成刚建出来的空会话」，再补一句「resume 打开的是空会话」就自相矛盾；
+ * 扫描没完成时连 0 轮本身都无法确认。这里只在 `count === 0` 且无 `error` 时返回 `claim`，
+ * 调用方把「下一步」等其余事实留在 `claim` 之外，仍可照常披露。
+ */
+export function zeroTurnResumeClaim(scan: BadLinesScan, claim: string): string {
+  return scan.count === 0 && !scan.error ? claim : '';
+}
+
 /** 以不透明的 `key` 连接边与节点。`provider` 和 `sessionId` 保留库里的原值。 */
 export type LineageNode = { key: string; provider: string; sessionId: string };
 
