@@ -44,7 +44,7 @@ import { collectUnattributable, emptiedJson, emptiedSearchNote, emptiedSessionsW
 import type { EmptiedSession } from './core/session-coverage.js';
 import { describeSpawnFailure } from './core/platform.js';
 import { usageBadLinesDetail, usageSidecarProblem } from './core/usage-integrity.js';
-import { describeBadLinesScanFailure, scanUnparsableJsonLines, unparsableLinesField } from './core/jsonl.js';
+import { describeBadLinesScanFailure, scanUnparsableJsonLines, unparsableLinesField, type BadLinesScan } from './core/jsonl.js';
 import { readWatchVersion } from './core/watch-version.js';
 import { CAPABILITY_VERIFICATION_NOTE, describeCapabilities, formatCapabilities } from './core/capabilities.js';
 import { formatToolCounts, summarizeSessionStructure } from './core/inspect.js';
@@ -3131,6 +3131,8 @@ async function cmdChain(cwd: string, json: boolean, action?: string, a?: string,
           unreadable?: boolean;
           /** 链尾解析出的轮数：只在 parse 成功时存在（undefined = 没解析 / 解析失败），不拿 0 冒充 */
           turns?: number;
+          /** 0 轮链尾同一次坏行扫描的结果；干净文件不出现，`error` 在场时 `count` 是下界 */
+          badLines?: BadLinesScan;
         }
       >();
       // 与 status / doctor 同一口径：链尾文件在、读得出来时再 parse 一次，给出轮数。
@@ -3187,6 +3189,9 @@ async function cmdChain(cwd: string, json: boolean, action?: string, a?: string,
             }
           }
         }
+        // 0 轮时与那条警告共用一次扫描：--json 也拿到同一份计数 / 扫描错误，不用解析中文
+        const tipBadScan = turns === 0 ? await scanUnparsableJsonLines(last.toRef.filePath) : null;
+        const tipBadLines = unparsableLinesField(null, tipBadScan).unparsableLines?.target;
         tips.set(c.id, {
           provider: last.toRef.provider,
           sessionId: last.toRef.sessionId,
@@ -3196,6 +3201,7 @@ async function cmdChain(cwd: string, json: boolean, action?: string, a?: string,
           ...(compressedEmpty ? { compressedEmpty: true } : {}),
           ...(readProblem ? { unreadable: true } : {}),
           ...(turns !== undefined ? { turns } : {}),
+          ...(tipBadLines ? { badLines: tipBadLines } : {}),
         });
         if (missing && c.status === 'active') {
           warnings.push(
@@ -3218,7 +3224,7 @@ async function cmdChain(cwd: string, json: boolean, action?: string, a?: string,
           // 与 status 的 chainTipEmpty 同档：parse 跳过坏行，0 轮也可能来自截断 / 损坏，
           // 先把「坏行」与「合法空会话」分开，再决定要不要让人去原生客户端继续聊。
           const subject = `链「${escapeControlChars(c.name)}」的链尾会话 ${last.toRef.provider} ${escapeControlChars(last.toRef.sessionId)}`;
-          const badScan = await scanUnparsableJsonLines(last.toRef.filePath);
+          const badScan = tipBadScan!;
           const badFailure = describeBadLinesScanFailure(
             badScan,
             subject,
