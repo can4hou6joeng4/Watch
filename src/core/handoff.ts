@@ -743,7 +743,11 @@ export async function adoptIntoChain(
   // 用 `pairedRef()`：它按整条历史取最后一次出现，正好等于链上这一家的当前绑定。
   // 不能改成「历史上出现过就算」——`adopt <provider> --session <更早的会话>` 正是
   // `new` 的报错里给出的换绑办法，那条更早的会话通常以 `fromRef` 出现过。
-  const bound = pairedRef(history, providerId)?.sessionId === found.ref.sessionId;
+  const currentBinding = pairedRef(history, providerId);
+  const bound = currentBinding?.sessionId === found.ref.sessionId;
+  // cmdAdopt 会为实际返回的会话生成恢复命令；拒绝须早于建链、改绑和写切换记录。
+  // 自动挑到另一条会话时会保留原绑定，因此校验返回的绑定，不按被放弃的候选误拒绝。
+  assertCommandSessionId((autoPicked && currentBinding ? currentBinding : found.ref).sessionId);
   if (bound) {
     // 目标状态本来就成立（这家已经绑着这个会话）——这是空操作，不是失败。以前一律抛
     // 「该会话已在链上，无需接入」让 cmdAdopt 以 exit 1 结束：脚本会把空操作当接入失败，
@@ -776,7 +780,7 @@ export async function adoptIntoChain(
     };
   }
 
-  let replaced: SessionRef | null = pairedRef(history, providerId);
+  let replaced: SessionRef | null = currentBinding;
   // 没指定 --session、而链上这一家已经绑着另一个会话：这是**静默改绑**，不能做。
   // 同目录另一条链刚聊过的会话更新时，`adopt claude --chain 默认` 会把默认链的绑定换成
   // 别条链的会话（2026-11-08 实测 `chain list` 里两条链从此指向同一个 id），而输出只说
