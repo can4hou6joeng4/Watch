@@ -14,7 +14,7 @@ import { cwdAliasHint, splitElsewhereByDirectory } from './cwd.js';
 import { compressedCopy, compressedRetryAdvice, describePathReadFailureReason, describeReadFailureOrSelf, emptySessionFileReasonFromStat, isEmptySessionFileReason, isMissingPathError, probeSessionReadable, sessionFilePresence, type CompressedCopyNote } from './read-text.js';
 import { noSessionHint, unknownProviderMessage } from '../providers/registry.js';
 import { collectUnattributable, unattributableNoPickMessage, unattributablePickWarning } from './session-coverage.js';
-import { assertCommandSessionId, sessionIdCommandProblem } from './shell-quote.js';
+import { sessionIdCommandProblem } from './shell-quote.js';
 
 /** 写回被阻断（如 TOCTOU 检测到目标被外部修改）：一票否决，不产生部分写 */
 export class HandoffBlockedError extends Error {
@@ -765,7 +765,18 @@ export async function adoptIntoChain(
   const bound = currentBinding?.sessionId === found.ref.sessionId;
   // cmdAdopt 会为实际返回的会话生成恢复命令；拒绝须早于建链、改绑和写切换记录。
   // 自动挑到另一条会话时会保留原绑定，因此校验返回的绑定，不按被放弃的候选误拒绝。
-  assertCommandSessionId((autoPicked && currentBinding ? currentBinding : found.ref).sessionId);
+  // 拒绝时不能只抛适配器守卫的短句：这里还没有任何副作用，要说清「没有写入」与换绑路径
+  //（与 `watch new` / `watch switch` 的只读分支同一口径，第 608 轮）。
+  const adoptTarget = autoPicked && currentBinding ? currentBinding : found.ref;
+  const adoptProblem = sessionIdCommandProblem(adoptTarget.sessionId);
+  if (adoptProblem) {
+    throw new Error(
+      `无法接入 ${providerId} 的会话 ${escapeControlChars(adoptTarget.sessionId)}：${adoptProblem}；` +
+        `本次未写入任何内容（会话文件与链记录都没有改动）——` +
+        (autoPicked ? '这次未指定 --session，是自动挑到了它；' : '') +
+        `用 watch sessions 查看可接入的会话，再用 watch adopt ${providerId} --session <会话 id> 显式指定`,
+    );
+  }
   if (bound) {
     // 目标状态本来就成立（这家已经绑着这个会话）——这是空操作，不是失败。以前一律抛
     // 「该会话已在链上，无需接入」让 cmdAdopt 以 exit 1 结束：脚本会把空操作当接入失败，
@@ -2275,7 +2286,19 @@ export async function handoff(
   // 只校验最终沿用的既有目标，不拦只读来源；放在解析失败的兜底 catch 外，拒绝不能退成新建。
   // 零增量也可能重写目标或只改链尾，必须早于这些副作用，不能等末端 resumeCommand 才拒绝。
   // 新目标的 ID 由 provider 写入时生成，仍由适配器的末端守卫校验。
-  if (into) assertCommandSessionId(into.sessionId);
+  // 拒绝时链记录与目标文件都没有动过：守卫短句要带上这两条事实，用户才知道不用回查链
+  //（与上面 `new` 的只读分支同一口径，第 608 轮）。目标可能来自链绑定，也可能是按
+  // 修改时间挑中的会话，文案不假定它是哪一种。
+  if (into) {
+    const intoProblem = sessionIdCommandProblem(into.sessionId);
+    if (intoProblem) {
+      throw new Error(
+        `要切换到 ${targetId} 需要复用会话 ${escapeControlChars(into.sessionId)}，但它无法生成恢复命令：${intoProblem}；` +
+          `本次未写入任何内容（会话文件与链记录都没有改动）——用 watch adopt ${targetId} --session <另一个会话 id> 换绑，` +
+          '或从 watch sessions 里挑一条不以 \'-\' 开头的会话',
+      );
+    }
+  }
 
   // 目标侧的坏行同样会让 diffTurns 把「已有但解析不出」的内容当缺失、重复追加一遍
   let destBadScan: BadLinesScan = { count: 0 };
