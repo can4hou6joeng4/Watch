@@ -298,13 +298,14 @@ export async function sessionCwdProblem(cwd: string): Promise<string | null> {
  * 这个目录是不是一个 **git 链接工作树**（`git worktree add` 建出来的那个）。
  *
  * 判据只看文件布局、不调 `git` 二进制、不写任何东西：
- * - 普通仓库根：`<cwd>/.git` 是**目录** → `other`
- * - 链接工作树：`<cwd>/.git` 是**文件**，内容 `gitdir: <主仓库>/.git/worktrees/<名>`，
+ * - 普通仓库根：`.git` 是**目录** → `other`
+ * - 链接工作树：`.git` 是**文件**，内容 `gitdir: <主仓库>/.git/worktrees/<名>`，
  *   且该 gitdir 下有 `commondir`（`../..`）→ `worktree`；主工作树 = commondir 解析后的父目录
  * - 子模块的 `.git` 也是文件（指向 `.git/modules/…`），但**没有** `commondir`——据此不把它
  *   误报成 worktree，归入 `other`
- * - 没有 `.git`（含 cwd 只是仓库里某个子目录）：`other`。不向上找：这里只对「cwd 自己是不是
- *   工作树根」做**正面断言**，`other` 不代表「不是任何仓库的一部分」
+ * - 没有 `.git` 时向上找最近的祖先：会话常在链接工作树的项目子目录里启动，只看 cwd 会把
+ *   独立工作树讲成普通目录；遇到 `.git` 目录（普通仓库根）或 `.git` 文件但不是链接工作树
+ *   （子模块）就停，`other` 仍不代表「不在任何仓库里」
  * - `.git` 存在但读不出来 / 内容不是 `gitdir:` 行：`unknown`，不能讲成「不是 worktree」
  */
 export type WorktreeInspection =
@@ -318,11 +319,36 @@ export type WorktreeInspection =
       branchState: 'branch' | 'detached' | 'unknown';
       branchUnknownReason?: string;
       mainWorktree: string | null;
+      /** 工作树根不在会话记录的 cwd 时给出它的位置，读者才能从子目录走回正确的工作树。 */
+      worktreeRoot?: string;
     }
   | { state: 'other' }
   | { state: 'unknown'; reason: string };
 
+/** 从 cwd 向上找链接工作树根；只读、不启动 git，遇到普通仓库根 / 子模块即停止。 */
 export async function inspectWorktree(cwd: string): Promise<WorktreeInspection> {
+  const start = resolve(cwd);
+  let dir = start;
+  while (true) {
+    try {
+      await stat(join(dir, '.git'));
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code === 'ENOENT' || code === 'ENOTDIR') {
+        const parent = dirname(dir);
+        if (parent === dir) return { state: 'other' };
+        dir = parent;
+        continue;
+      }
+      // 探测本身失败交给 inspectWorktreeAt 给出带原因的 unknown，不在这里吞掉
+    }
+    const probe = await inspectWorktreeAt(dir);
+    if (probe.state === 'worktree' && dir !== start) return { ...probe, worktreeRoot: dir };
+    return probe;
+  }
+}
+
+async function inspectWorktreeAt(cwd: string): Promise<WorktreeInspection> {
   const dotGit = join(cwd, '.git');
   let entry;
   try {
@@ -507,6 +533,7 @@ export function describeWorktreeNote(probe: WorktreeInspection): string | null {
       const where = probe.mainWorktree
         ? `主工作树在 ${showPathInMessage(probe.mainWorktree)}`
         : '主工作树位置没能从 .git 里确认';
+      const root = probe.worktreeRoot ? `，工作树根在 ${showPathInMessage(probe.worktreeRoot)}` : '';
       const branch = probe.branch
         ? `，当前分支 ${escapeControlChars(probe.branch)}`
         : probe.branchState === 'detached'
@@ -514,7 +541,7 @@ export function describeWorktreeNote(probe: WorktreeInspection): string | null {
           : probe.branchState === 'unknown'
             ? `，无法确认分支（${escapeControlChars(probe.branchUnknownReason ?? 'HEAD 读取失败')}）`
             : '';
-      return `这是一个 git 链接工作树（${where}${branch}）；这里的改动属于该工作树自己的分支，不要切到主工作树去改同一个文件`;
+      return `这是一个 git 链接工作树（${where}${root}${branch}）；这里的改动属于该工作树自己的分支，不要切到主工作树去改同一个文件`;
     }
   }
 }

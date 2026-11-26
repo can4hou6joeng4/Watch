@@ -2214,6 +2214,7 @@ async function cmdPrompt(
         branch: string | null;
         detached?: true;
         branchUnknown?: string;
+        worktreeRoot?: string;
       }
     | undefined;
   // 链接工作树的分支已在「工作目录类型」一行里；普通仓库根再补一行当前分支，
@@ -2249,6 +2250,7 @@ async function cmdPrompt(
             ...(worktreeProbe.branchState === 'unknown'
               ? { branchUnknown: worktreeProbe.branchUnknownReason ?? 'HEAD 读取失败' }
               : {}),
+            ...(worktreeProbe.worktreeRoot ? { worktreeRoot: worktreeProbe.worktreeRoot } : {}),
           };
           if (worktreeProbe.branchState === 'unknown') sourceBranchUnreadable = true;
         }
