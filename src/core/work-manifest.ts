@@ -314,12 +314,12 @@ export function extractPatchPaths(command: string): string[] {
 }
 
 /**
- * 命令正文里普通 heredoc 的内容只是数据，不是要执行的补丁。按分隔符整段去掉这类正文，
- * 但保留真正调用 `apply_patch` 的 heredoc——`sudo apply_patch`、子 shell、`bash -c`、
- * Windows 路径等合法形式不能靠「行首必须裸调用 apply_patch」去猜（第 571 轮复核）。
+ * 先按 heredoc 分隔符去掉正文，得到「真正会被执行的命令骨架」。
+ * 分隔符允许 `-` / `.` 等字符（如 `EOF-1`、`PATCH.1`），否则捕获到的短 tag 永远等不到结束行，
+ * 会把后面的真实补丁一起吞掉（第 571 轮二次复核）。
  */
-function stripNonPatchHeredocs(command: string): string {
-  const delimiter = /<<-?\s*(?:\\?['"])?([A-Za-z_][A-Za-z0-9_]*)/g;
+function stripHeredocBodies(command: string): string {
+  const delimiter = /<<-?\s*(?:\\?['"])?([^\s'"\\<>|&;]+)/g;
   const lines = command.split('\n');
   const out: string[] = [];
   let pending: string[] = [];
@@ -327,14 +327,23 @@ function stripNonPatchHeredocs(command: string): string {
     if (pending.length === 0) {
       out.push(line);
       const tags = [...line.matchAll(delimiter)].map((match) => match[1]!);
-      // 引入这些 heredoc 的命令没调用 apply_patch：正文里的补丁标记只是文本。
-      if (tags.length > 0 && !/\bapply_patch\b/i.test(line)) pending = tags;
+      if (tags.length > 0) pending = tags;
       continue;
     }
     if (line.trim() === pending[0]) pending.shift();
     out.push('');
   }
   return out.join('\n');
+}
+
+/**
+ * 普通 heredoc 的正文只是数据，不是要执行的补丁。若去掉正文后的命令骨架里仍有 `apply_patch`
+ * （sudo、子 shell、bash -c、Windows 路径、别名、或先写临时补丁再 `apply_patch < file`），
+ * 就保留原文继续按补丁扫描；骨架没有才认定正文里的标记是数据。注释里的词不算调用。
+ */
+function stripNonPatchHeredocs(command: string): string {
+  const skeleton = stripHeredocBodies(command).replace(/#[^\n]*/g, '');
+  return /\bapply_patch\b/i.test(skeleton) ? command : stripHeredocBodies(command);
 }
 
 /** 单条工具调用的归类结果。`null` = 这条调用不是文件写入也不是命令（搜索 / TODO / 子代理…）。 */
