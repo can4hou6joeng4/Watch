@@ -24,15 +24,22 @@ import type { ProcessEvent } from './types.js';
  */
 type ReplaceCredential = (match: string, cut?: boolean) => string;
 
-/** String.replace 回调用的最后两个参数是 offset 与原文；紧跟省略号说明这是被上游截断的残片。 */
+/**
+ * 上游截断的省略号在**字段末尾**（或紧跟 JSON 收尾字符）；正文里的说明性省略号
+ * （`完整值…（这是完整值）`）不是截断信号，不能把一个完整凭据误归为残片。
+ */
 function isTruncatedMatch(match: string, args: unknown[]): boolean {
   const whole = args[args.length - 1];
   const offset = args[args.length - 2];
-  return typeof whole === 'string' && typeof offset === 'number' && whole.startsWith('…', offset + match.length);
+  if (typeof whole !== 'string' || typeof offset !== 'number') return false;
+  const after = offset + match.length;
+  if (whole[after] !== '…') return false;
+  const next = whole[after + 1];
+  return next === undefined || /["'\\})\]},;\s]/.test(next);
 }
 
 type CredentialKind = { label: string } & (
-  | { pattern: RegExp; cut?: RegExp }
+  | { pattern: RegExp; cut?: RegExp; residual?: (match: string) => boolean }
   | { mask: (text: string, replace: ReplaceCredential) => string }
 );
 
@@ -125,6 +132,8 @@ const KINDS: readonly CredentialKind[] = [
     // `\\n` 覆盖 JSON 字符串里的字面换行。
     pattern:
       /-----BEGIN ((?:[A-Z0-9]+ )*)PRIVATE KEY-----(?:[\s\S]{0,8192}?-----END \1PRIVATE KEY-----|(?:(?:\r?\n|\\r\\n|\\n)[ \t]*[A-Za-z0-9+/=]{16,})*(?:(?:\r?\n|\\r\\n|\\n)[ \t]*[A-Za-z0-9+/=]*(?=…))?)/g,
+    // summarize() 只取首行时没有 `…`：只有 BEGIN 头、没有 END 的匹配也是上游截断残片。
+    residual: (match) => !match.includes('-----END '),
   },
   {
     label: 'Anthropic API 密钥',
@@ -236,7 +245,7 @@ const KINDS: readonly CredentialKind[] = [
     // 不会在每个位置都向前扫一遍（把前瞻放进后行断言里会让长串无数字文本退化成平方级）。
     pattern:
       /(?<=Authorization\\?["']?\s*[:=]\s*\\?["']?(?:Bearer|Token)\s+)(?=[A-Za-z0-9._~+/=-]*[0-9])[A-Za-z0-9._~+/=-]{20,}|(?<=Authorization\\?["']?\s*[:=]\s*\\?["']?Basic\s+)[A-Za-z0-9+/=]{16,}/gi,
-    cut: /(?<=Authorization\\?["']?\s*[:=]\s*\\?["']?(?:Bearer|Token|Basic)\s+)(?=[A-Za-z0-9._~+/=-]*[0-9])[A-Za-z0-9._~+/=-]{8,}(?=…)/gi,
+    cut: /(?<=Authorization\\?["']?\s*[:=]\s*\\?["']?(?:Bearer|Token)\s+)(?=[A-Za-z0-9._~+/=-]*[0-9])[A-Za-z0-9._~+/=-]{8,}(?=…)|(?<=Authorization\\?["']?\s*[:=]\s*\\?["']?Basic\s+)[A-Za-z0-9+/=]{8,}(?=…)/gi,
   },
 ];
 
@@ -274,8 +283,12 @@ export function maskCredentials(text: string, collector: CredentialCollector): s
         seen = { values: new Set(), cuts: new Set() };
         collector.set(kind.label, seen);
       }
-      (cut ? seen.cuts : seen.values).add(match);
-      return `${CREDENTIAL_PLACEHOLDER_PREFIX}${kind.label}]`;
+      // 尾随空白不属于凭据原文；同一键值对在续扫里带 TAB 时仍要归并到同一个值。
+      const value = match.replace(/[ \t]+$/, '');
+      const trailing = match.slice(value.length);
+      const residual = 'residual' in kind && kind.residual?.(value) === true;
+      (cut || residual ? seen.cuts : seen.values).add(value);
+      return `${CREDENTIAL_PLACEHOLDER_PREFIX}${kind.label}]${trailing}`;
     };
     if ('mask' in kind) {
       out = kind.mask(out, replace);
