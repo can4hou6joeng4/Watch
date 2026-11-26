@@ -6,7 +6,7 @@ import { chainsElsewhereHint, chainsSameDirectoryHint, isStoreError, SEARCH_MAX_
 import type { Chain, SearchElsewhere } from './core/store.js';
 import { aliasChainGroupWarning, chainNamesOf, chainsElsewhereOf, newChainName, splitChainsElsewhere } from './core/chain-alias.js';
 import { describeFindings } from './core/findings.js';
-import { adoptedParseFailureWarning, adoptedSessionReadProblemWarning, adoptIntoChain, blockedHint, chainStatus, chainUsage, collectTips, createChainSession, currentChainShiftNote, describeSourceChangedDuringPrompt, emptyChainBindHint, handoff, HandoffBlockedError, HandoffEmptySourceError, HandoffSourceReadError, notCurrentChainWarning, pickLatestTip, rebindHint, snapshotSourceState, sourceChangeSince, sourceDriftFields, storeUnavailableWarning } from './core/handoff.js';
+import { adoptedParseFailureWarning, adoptedSessionReadProblemWarning, adoptIntoChain, blockedHint, chainStatus, chainUsage, collectTips, createChainSession, currentChainShiftNote, describeCreatedSessionWithoutCommand, describeSourceChangedDuringPrompt, emptyChainBindHint, handoff, HandoffBlockedError, HandoffEmptySourceError, HandoffSourceReadError, notCurrentChainWarning, pickLatestTip, rebindHint, snapshotSourceState, sourceChangeSince, sourceDriftFields, storeUnavailableWarning } from './core/handoff.js';
 import { reindexCwd, type SearchCoverage } from './core/search.js';
 import type { SessionRef } from './core/types.js';
 import type { TokenUsage } from './core/types.js';
@@ -24,6 +24,7 @@ import { getAdapter, listAdapters, listProviders, noSessionHint, unknownProvider
 import { checkOpenInProvider, LOOKUP_NEXT_STEP, lookupMissHeadline, openInProvider, openSession, resolveById } from './open.js';
 import type { LookupMiss } from './open.js';
 import { PreflightBlockedError } from './providers/adapter.js';
+import { sessionIdCommandProblem } from './core/shell-quote.js';
 import type { ProviderAdapter } from './providers/adapter.js';
 import { runImportCodex } from './import-codex.js';
 import { ImportJobs } from './core/import-jobs.js';
@@ -3123,6 +3124,23 @@ async function cmdNew(cwd: string, providerId: string, json: boolean, chain?: st
       if (cwdWriteIssue) warnings.push(newSessionCwdWarning(cwdWriteIssue, ref.filePath));
       // 链行写成（无论切换记录是否写成）：同一个目录的另一种写法下若已有链，说明会有两组（见 helper）
       if (chainGroupWritten) await aliasWarnings();
+      // provider 在创建会话时生成 ID，它同样必须能拼进恢复命令。此时会话文件已经写入、
+      // 链记录也可能已写，不能退成普通失败：先输出已累积的降级警告，再说明写入已经发生。
+      const refCommandProblem = sessionIdCommandProblem(ref.sessionId);
+      if (refCommandProblem) {
+        for (const warning of warnings) console.error(`警告: ${escapeControlChars(warning)}`);
+        fail(
+          json,
+          describeCreatedSessionWithoutCommand(ref.sessionId, refCommandProblem, chainRecordState),
+          {
+            sessionId: ref.sessionId,
+            filePath: ref.filePath,
+            provider: providerId,
+            chainRecordState,
+            ...(warnings.length ? { warnings } : {}),
+          },
+        );
+      }
       const resumeCommand = adapter.resumeCommand(ref);
       warnings.push(...commandControlWarnings(resumeCommand));
       // 空链分支同样会 touchChain（getOrCreateChainSession 在建会话之后就跑过）

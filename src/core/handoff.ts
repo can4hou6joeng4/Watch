@@ -311,6 +311,24 @@ export function targetRecreatedField(into: SessionRef | null | undefined, writte
 }
 
 /**
+ * `watch new` 空链分支：provider 创建会话时生成的新 ID 无法拼进恢复命令。
+ * 此时会话文件已经写入、链记录也可能已写，结果必须说明「写入已经发生」，
+ * 不能退成普通的创建失败（用户会以为没有留下任何东西）。
+ */
+export function describeCreatedSessionWithoutCommand(
+  sessionId: string,
+  problem: string,
+  chainRecordState: 'written' | 'failed' | 'not-attempted',
+): string {
+  const chainState =
+    chainRecordState === 'written' ? '已写入' : chainRecordState === 'failed' ? '写入失败' : '未尝试';
+  return (
+    `会话已创建 ${escapeControlChars(sessionId)}，但没有生成恢复命令：${problem}；` +
+    `这次写入已经发生（链记录${chainState}）——请用 watch sessions 查看该会话`
+  );
+}
+
+/**
  * 写前 TOCTOU 校验：目标会话指纹与快照不一致（被外部写入）则拒绝。
  * `action` 只影响错误文案（“已中止本次<action>”）。open / switch 两条写入路径共用。
  */
