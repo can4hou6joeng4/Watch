@@ -38,7 +38,7 @@ function isTruncatedMatch(match: string, args: unknown[]): boolean {
   return next === undefined || /["'\\})\]},;\s]/.test(next);
 }
 
-type CredentialKind = { label: string } & (
+type CredentialKind = { label: string; normalize?: (match: string) => string } & (
   | { pattern: RegExp; cut?: RegExp; residual?: (match: string) => boolean }
   | { mask: (text: string, replace: ReplaceCredential) => string }
 );
@@ -55,11 +55,14 @@ const bareCookieOption = /(?<=(?<![\w-])--cookie(?:=|[ \t]+))/;
 const cookiePairName = /[^\s="'`\\…\[\]{}$<>;|&()]+=/;
 const cookieHeaderValue = /[^"'`\\…\[\]{}$<>;\r\n]/;
 const bareCookieValue = /[^\s"'`\\…\[\]{}$<>;|&()]/;
+const cookieQuote = /\\?"/;
 
 function cookieValuePattern(minLength: number, end: string): RegExp {
+  // Cookie 自身的双引号只包裹值，JSON 序列化后会多一层反斜杠；截断分支可以没有闭合引号。
+  const quoted = `${cookieQuote.source}${cookieHeaderValue.source}{${minLength},}${end ? '' : cookieQuote.source}`;
   // 先跳过空白，避免在每个空白字符上重复执行后行断言。
   return new RegExp(
-    `(?=\\S)(?:(?:${cookieHeader}|${quotedCookieOption.source})${cookiePairName.source}${cookieHeaderValue.source}{${minLength},}` +
+    `(?=\\S)(?:(?:${cookieHeader}|${quotedCookieOption.source})${cookiePairName.source}(?:${quoted}|${cookieHeaderValue.source}{${minLength},})` +
       `|${bareCookieOption.source}${cookiePairName.source}${bareCookieValue.source}{${minLength},})${end}`,
     'gi',
   );
@@ -67,7 +70,8 @@ function cookieValuePattern(minLength: number, end: string): RegExp {
 
 const cookieValue = cookieValuePattern(8, '');
 const cutCookieValue = cookieValuePattern(3, '(?=…)');
-const cookieListValue = /[^"'`\\\r\n]+/;
+// 仅在等号后接收 Cookie 自身成对的双引号；外层 shell / JSON 引号仍是列表边界。
+const cookieListValue = /(?:[^"'`\\\r\n]+|(?<==)\\?"[^"\\;\r\n]*(?:\\?"|(?<=…)(?=$|[\r\n])))+/;
 const requestCookieList = new RegExp(`(?=\\S)(?:${requestCookieHeader}|${quotedCookieOption.source})${cookieListValue.source}`, 'gi');
 const responseCookieList = new RegExp(`(?=\\S)(?:${responseCookieHeader})${cookieListValue.source}`, 'gi');
 
@@ -79,8 +83,8 @@ function cookiePairPattern(minLength: number, cutLength: number, response: boole
     : '';
   // 第三个捕获组区分「完整长度」与「紧跟省略号的残片」：残片单独计数，不能和完整值混在一起。
   return new RegExp(
-    `^([ \\t]*)${guard}(${cookiePairName.source}(?:${cookieHeaderValue.source}{${minLength},}` +
-      `|(${cookieHeaderValue.source}{${cutLength},})(?=…)))`,
+    `^([ \\t]*)${guard}(${cookiePairName.source}(?:${cookieQuote.source}${cookieHeaderValue.source}{${minLength},}${cookieQuote.source}` +
+      `|${cookieHeaderValue.source}{${minLength},}|((?:${cookieQuote.source})?${cookieHeaderValue.source}{${cutLength},})(?=…)))`,
     'gi',
   );
 }
@@ -134,6 +138,8 @@ const KINDS: readonly CredentialKind[] = [
       /-----BEGIN ((?:[A-Z0-9]+ )*)PRIVATE KEY-----(?:[\s\S]{0,8192}?-----END \1PRIVATE KEY-----|(?:(?:\r?\n|\\r\\n|\\n)[ \t]*[A-Za-z0-9+/=]{16,})*(?:(?:\r?\n|\\r\\n|\\n)[ \t]*[A-Za-z0-9+/=]*(?=…))?)/g,
     // summarize() 只取首行时没有 `…`：只有 BEGIN 头、没有 END 的匹配也是上游截断残片。
     residual: (match) => !match.includes('-----END '),
+    // 事件详情经 JSON.stringify，结构化 input 保留原换行；去重与残片归属使用同一种换行表示。
+    normalize: (match) => match.replace(/\\r\\n|\\n|\\r|\r\n?/g, '\n'),
   },
   {
     label: 'Anthropic API 密钥',
@@ -235,6 +241,8 @@ const KINDS: readonly CredentialKind[] = [
     // 引号和反斜杠标记文本边界，方括号、`$` 和模板括号保护已隐去的值及变量引用。
     label: 'Cookie 头的值',
     mask: maskCookie,
+    // 同一键值对的裸值、双引号和 JSON 转义引号共用去重键；截断值可缺少闭合引号。
+    normalize: (match) => match.replace(/=\\?"([^"\\]*)(?:\\?")?$/, '=$1'),
   },
   {
     // `Authorization: Bearer <值>`（也认 JSON 里的 `"Authorization":"Bearer …"` 与转义引号）。
@@ -287,7 +295,7 @@ export function maskCredentials(text: string, collector: CredentialCollector): s
       const value = match.replace(/[ \t]+$/, '');
       const trailing = match.slice(value.length);
       const residual = 'residual' in kind && kind.residual?.(value) === true;
-      (cut || residual ? seen.cuts : seen.values).add(value);
+      (cut || residual ? seen.cuts : seen.values).add(kind.normalize?.(value) ?? value);
       return `${CREDENTIAL_PLACEHOLDER_PREFIX}${kind.label}]${trailing}`;
     };
     if ('mask' in kind) {
