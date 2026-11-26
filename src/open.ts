@@ -952,6 +952,16 @@ export async function openSession(
           const newRef = await target.adapter.importTurns(dedup, target.found.ref.cwd, target.found.ref);
           if (textLoss) warnings.push(textLoss);
           if (failureLoss) warnings.push(failureLoss);
+          // provider 生成的新 ID 只有写入后才知道；不能等到末端 resumeCommand 才拒绝。
+          // 目标文件已经写入，结果必须说明这一点，不能退成普通「并入新内容失败」。
+          const newRefProblem = sessionIdCommandProblem(newRef.sessionId);
+          if (newRefProblem) {
+            return {
+              ok: false,
+              error: `目标会话已写入 ${escapeControlChars(newRef.sessionId)}，但没有生成恢复命令：${newRefProblem}；这次写入已经发生，请用 watch sessions 查看该会话`,
+              ...(warnings.length || lookup.length ? { warnings: [...warnings, ...lookup] } : {}),
+            };
+          }
           lossField = contentLossField({
             ...sourceLoss,
             textEvents: countTextEventLoss(dedup, target.adapter),
@@ -2000,6 +2010,16 @@ export async function openInProvider(
       return {
         ok: false,
         error: '转入目标会话失败: 未获得可用的目标会话引用',
+        ...(warnings.length ? { warnings } : {}),
+      };
+    }
+    // provider 生成的新 ID 只有写入后才知道，它同样要能拼进恢复命令。此时目标会话已经写入，
+    // 不能等到 resumeCommand 抛错再由外层报成普通「转入失败」——那会让用户以为没有发生任何写入。
+    const newRefProblem = sessionIdCommandProblem(newRef.sessionId);
+    if (newRefProblem) {
+      return {
+        ok: false,
+        error: `目标会话已写入 ${escapeControlChars(newRef.sessionId)}，但没有生成恢复命令：${newRefProblem}；这次写入已经发生，本地映射未记录该会话`,
         ...(warnings.length ? { warnings } : {}),
       };
     }
