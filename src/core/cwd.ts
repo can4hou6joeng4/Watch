@@ -412,7 +412,11 @@ export async function inspectRepoBranch(cwd: string): Promise<RepoBranchInspecti
         ? { state: 'branch', branch, repoRoot: dir }
         : { state: 'unknown', reason: 'HEAD 的分支名为空' };
     }
-    return { state: 'detached', repoRoot: dir };
+    // HEAD 只有两种合法形状：refs/heads/... 的分支引用，或直接写出的提交号。
+    // 其它内容（refs/tags/...、残缺引用、任意文本）不是 detached 的证据，只能说读不出来；
+    // 把它讲成 detached 会让接手者去切分支，反而盖住仓库本身已经损坏这件事。
+    if (/^[0-9a-f]{7,40}$/i.test(head)) return { state: 'detached', repoRoot: dir };
+    return { state: 'unknown', reason: 'HEAD 既不是分支引用也不是提交号' };
   }
 }
 
