@@ -2207,7 +2207,15 @@ async function cmdPrompt(
   // 探测失败的结构化结论：缺省的 sourceWorktree 不能同时表示「不是工作树」与「没确认」。
   let sourceWorktreeUnknown: string | undefined;
   // 结构化 worktree 字段同样给脚本用；主工作树或分支读不出来时保留 null，不编造。
-  let sourceWorktree: { mainWorktree: string | null; branch: string | null } | undefined;
+  // detached 与 HEAD 读不出用独立字段区分，避免脚本把「没读成」读成「detached」。
+  let sourceWorktree:
+    | {
+        mainWorktree: string | null;
+        branch: string | null;
+        detached?: true;
+        branchUnknown?: string;
+      }
+    | undefined;
   // 链接工作树的分支已在「工作目录类型」一行里；普通仓库根再补一行当前分支，
   // 文档离开原机后读者能先核对分支再动手（baton / bb-plugin-handoff 同样带分支信息）。
   let sourceBranchNote: string | undefined;
@@ -2234,7 +2242,15 @@ async function cmdPrompt(
         sourceWorktreeNote = worktreeNote;
         if (worktreeProbe.state === 'unknown') sourceWorktreeUnknown = worktreeProbe.reason;
         if (worktreeProbe.state === 'worktree') {
-          sourceWorktree = { mainWorktree: worktreeProbe.mainWorktree, branch: worktreeProbe.branch };
+          sourceWorktree = {
+            mainWorktree: worktreeProbe.mainWorktree,
+            branch: worktreeProbe.branch,
+            ...(worktreeProbe.branchState === 'detached' ? { detached: true as const } : {}),
+            ...(worktreeProbe.branchState === 'unknown'
+              ? { branchUnknown: worktreeProbe.branchUnknownReason ?? 'HEAD 读取失败' }
+              : {}),
+          };
+          if (worktreeProbe.branchState === 'unknown') sourceBranchUnreadable = true;
         }
       } else {
         const branchProbe = await inspectRepoBranch(foundRef.cwd);

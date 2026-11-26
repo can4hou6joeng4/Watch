@@ -308,7 +308,17 @@ export async function sessionCwdProblem(cwd: string): Promise<string | null> {
  * - `.git` 存在但读不出来 / 内容不是 `gitdir:` 行：`unknown`，不能讲成「不是 worktree」
  */
 export type WorktreeInspection =
-  | { state: 'worktree'; branch: string | null; mainWorktree: string | null }
+  | {
+      state: 'worktree';
+      branch: string | null;
+      /**
+       * 链接工作树的 HEAD 探测状态：区分「在分支上」「detached（提交号）」与「读不出来 / 坏 HEAD」。
+       * 此前仅用 `branch: null` 同时表示 detached 与读取失败，后者会静默消失。
+       */
+      branchState: 'branch' | 'detached' | 'unknown';
+      branchUnknownReason?: string;
+      mainWorktree: string | null;
+    }
   | { state: 'other' }
   | { state: 'unknown'; reason: string };
 
@@ -347,18 +357,54 @@ export async function inspectWorktree(cwd: string): Promise<WorktreeInspection> 
   if (!commondirRaw) return { state: 'unknown', reason: 'commondir 文件为空' };
   const mainGitDir = resolve(gitDir, commondirRaw);
   const mainWorktree = basename(mainGitDir) === '.git' ? dirname(mainGitDir) : null;
-  return { state: 'worktree', branch: await readHeadBranch(gitDir), mainWorktree };
+  const head = await inspectGitHead(gitDir);
+  if (head.state === 'branch') {
+    return { state: 'worktree', branch: head.branch, branchState: 'branch', mainWorktree };
+  }
+  if (head.state === 'detached') {
+    return { state: 'worktree', branch: null, branchState: 'detached', mainWorktree };
+  }
+  return {
+    state: 'worktree',
+    branch: null,
+    branchState: 'unknown',
+    branchUnknownReason: head.reason,
+    mainWorktree,
+  };
 }
 
-/** `<gitDir>/HEAD` 里的 `ref: refs/heads/<分支>`；detached HEAD 或读不出来时 null（不猜）。 */
-async function readHeadBranch(gitDir: string): Promise<string | null> {
+type HeadInspection =
+  | { state: 'branch'; branch: string }
+  | { state: 'detached' }
+  | { state: 'unknown'; reason: string };
+
+/**
+ * 读取 `<gitDir>/HEAD` 并区分分支引用、detached（7–40 位提交号）与读不出来 / 坏内容。
+ * 普通仓库根（`inspectRepoBranch`）与链接工作树（`inspectWorktree`）共用同一判据：
+ * `refs/tags/...`、空文件、残缺引用或读错都不能当成 detached 或静默忽略。
+ */
+async function inspectGitHead(gitDir: string): Promise<HeadInspection> {
+  let head: string;
   try {
-    const head = (await readFile(join(gitDir, 'HEAD'), 'utf8')).trim();
-    const match = /^ref:\s*refs\/heads\/(.+)$/.exec(head);
-    return match ? match[1]!.trim() || null : null;
-  } catch {
-    return null;
+    head = (await readFile(join(gitDir, 'HEAD'), 'utf8')).trim();
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === 'ENOENT' || code === 'ENOTDIR') return { state: 'unknown', reason: '.git 目录里没有 HEAD' };
+    return { state: 'unknown', reason: errnoReason(error) };
   }
+  if (!head) return { state: 'unknown', reason: 'HEAD 为空' };
+  const match = /^ref:\s*refs\/heads\/(.+)$/.exec(head);
+  if (match) {
+    const branch = match[1]!.trim();
+    return branch
+      ? { state: 'branch', branch }
+      : { state: 'unknown', reason: 'HEAD 的分支名为空' };
+  }
+  // HEAD 只有两种合法形状：refs/heads/... 的分支引用，或直接写出的提交号。
+  // 其它内容（refs/tags/...、残缺引用、任意文本）不是 detached 的证据，只能说读不出来；
+  // 把它讲成 detached 会让接手者去切分支，反而盖住仓库本身已经损坏这件事。
+  if (/^[0-9a-f]{7,40}$/i.test(head)) return { state: 'detached' };
+  return { state: 'unknown', reason: 'HEAD 既不是分支引用也不是提交号' };
 }
 
 /**
@@ -396,27 +442,10 @@ export async function inspectRepoBranch(cwd: string): Promise<RepoBranchInspecti
     }
     // 文件形式的 .git 属于链接工作树 / 子模块：那里的分支由工作树说明负责，这里不重复也不猜
     if (!entry.isDirectory()) return { state: 'not-repo' };
-    let head: string;
-    try {
-      head = (await readFile(join(dotGit, 'HEAD'), 'utf8')).trim();
-    } catch (error) {
-      const code = (error as NodeJS.ErrnoException).code;
-      if (code === 'ENOENT' || code === 'ENOTDIR') return { state: 'unknown', reason: '.git 目录里没有 HEAD' };
-      return { state: 'unknown', reason: errnoReason(error) };
-    }
-    if (!head) return { state: 'unknown', reason: 'HEAD 为空' };
-    const match = /^ref:\s*refs\/heads\/(.+)$/.exec(head);
-    if (match) {
-      const branch = match[1]!.trim();
-      return branch
-        ? { state: 'branch', branch, repoRoot: dir }
-        : { state: 'unknown', reason: 'HEAD 的分支名为空' };
-    }
-    // HEAD 只有两种合法形状：refs/heads/... 的分支引用，或直接写出的提交号。
-    // 其它内容（refs/tags/...、残缺引用、任意文本）不是 detached 的证据，只能说读不出来；
-    // 把它讲成 detached 会让接手者去切分支，反而盖住仓库本身已经损坏这件事。
-    if (/^[0-9a-f]{7,40}$/i.test(head)) return { state: 'detached', repoRoot: dir };
-    return { state: 'unknown', reason: 'HEAD 既不是分支引用也不是提交号' };
+    const head = await inspectGitHead(dotGit);
+    if (head.state === 'branch') return { state: 'branch', branch: head.branch, repoRoot: dir };
+    if (head.state === 'detached') return { state: 'detached', repoRoot: dir };
+    return { state: 'unknown', reason: head.reason };
   }
 }
 
@@ -478,7 +507,13 @@ export function describeWorktreeNote(probe: WorktreeInspection): string | null {
       const where = probe.mainWorktree
         ? `主工作树在 ${showPathInMessage(probe.mainWorktree)}`
         : '主工作树位置没能从 .git 里确认';
-      const branch = probe.branch ? `，当前分支 ${escapeControlChars(probe.branch)}` : '';
+      const branch = probe.branch
+        ? `，当前分支 ${escapeControlChars(probe.branch)}`
+        : probe.branchState === 'detached'
+          ? '，当前是 detached HEAD'
+          : probe.branchState === 'unknown'
+            ? `，无法确认分支（${escapeControlChars(probe.branchUnknownReason ?? 'HEAD 读取失败')}）`
+            : '';
       return `这是一个 git 链接工作树（${where}${branch}）；这里的改动属于该工作树自己的分支，不要切到主工作树去改同一个文件`;
     }
   }

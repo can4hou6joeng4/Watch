@@ -1095,9 +1095,11 @@ export function buildHandoffPrompt(
   if (meta.sourceWorktreeNote) {
     lines.push(`- 工作目录类型：${headerLine(meta.sourceWorktreeNote)}`);
   }
+  // 普通仓库根与链接工作树的分支读取失败共用同一个降级 finding：工作树 HEAD 缺或损坏时，
+  // 原因已写在「工作目录类型」一行里，没有单独的 sourceBranchNote，但 findings 仍须记账。
+  if (meta.sourceBranchUnreadable) addFinding(findings, 'prompt_source_branch_unreadable', 'degraded', 1);
   // 普通仓库根的分支：工作树说明已经带了分支时不会同时出现；detached 与读不出来都如实写。
   if (meta.sourceBranchNote) {
-    if (meta.sourceBranchUnreadable) addFinding(findings, 'prompt_source_branch_unreadable', 'degraded', 1);
     lines.push(`- 工作目录分支：${headerLine(meta.sourceBranchNote)}`);
   }
   // 来源记录的上下文与来源 CLI 当前发给模型的不一致（目前由 Pi parse 写入）：这个事件在
