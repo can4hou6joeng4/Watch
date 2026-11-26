@@ -8,8 +8,26 @@
  * 执行第二条命令，而 `open` 正是唯一会直接印出 resume 命令的地方（它说的每条结论都要有对应披露）。
  */
 
+import { escapeControlChars } from './display.js';
+
 /** 两种 shell 共用的保守字符集；PowerShell 的 @、逗号等也必须引用。 */
 const SAFE = /^[A-Za-z0-9_.:/-]+$/;
+
+/**
+ * shell 引用只挡分词，挡不住原生 CLI 把以 `-` 开头的会话 ID 当成选项。
+ * 桌面端的 YOLO 参数拼在命令末尾时，伪造的 ID 还可以自己带上免确认开关。
+ * 这里在拼命令前拒绝；错误文案里的 ID 先转义，不在终端回显原始控制字符。
+ */
+export function sessionIdCommandProblem(sessionId: string): string | null {
+  return sessionId.startsWith('-')
+    ? `会话 ID 以 '-' 开头，原生 CLI 可能把它当成选项（包括免确认参数）；已停止生成恢复命令，请改用不以 '-' 开头的会话 ID：${escapeControlChars(sessionId)}`
+    : null;
+}
+
+export function assertCommandSessionId(sessionId: string): void {
+  const problem = sessionIdCommandProblem(sessionId);
+  if (problem) throw new Error(problem);
+}
 
 /** 不需要引号就原样输出；否则按目标终端引用。Windows 使用 PowerShell。 */
 export function quoteCommandArg(value: string, windows = process.platform === 'win32'): string {

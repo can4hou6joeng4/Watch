@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process';
-import { quoteCommandArg } from '../../core/shell-quote.js';
+import { assertCommandSessionId, quoteCommandArg } from '../../core/shell-quote.js';
 import { describeDetectFailure, isCommandMissing, resolveCli } from '../../core/platform.js';
 import { PreflightBlockedError, type PreflightContext, type ProviderAdapter, type WriteLimit } from '../adapter.js';
 import type { ProcessEvent, SessionRef, TokenUsage, UnifiedTurn } from '../../core/types.js';
@@ -252,6 +252,7 @@ export const opencodeAdapter: ProviderAdapter = {
   },
 
   resumeCommand(ref: SessionRef, windows?: boolean): string {
+    assertCommandSessionId(ref.sessionId);
     return `opencode -s ${quoteCommandArg(ref.sessionId, windows)}`;
   },
 };

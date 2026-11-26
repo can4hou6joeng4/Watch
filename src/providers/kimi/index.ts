@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process';
-import { quoteCommandArg } from '../../core/shell-quote.js';
+import { assertCommandSessionId, quoteCommandArg } from '../../core/shell-quote.js';
 import { describeBrokenCommandStart, describeDetectFailure, isCommandMissing, resolveCli } from '../../core/platform.js';
 import { readFile, stat } from 'node:fs/promises';
 import { promisify } from 'node:util';
@@ -418,6 +418,7 @@ export const kimiAdapter: ProviderAdapter = {
   },
 
   resumeCommand(ref: SessionRef, windows?: boolean): string {
+    assertCommandSessionId(ref.sessionId);
     return `kimi -r ${quoteCommandArg(ref.sessionId, windows)}`;
   },
 

@@ -1,12 +1,14 @@
 // 仅依赖纯函数，可在 Vite 与隔离测试中复用核心显示 / 交付规则。
 export { escapeControlChars } from '../../src/core/display.js';
 export { assertTerminalTextSafe, terminalTextProblem } from '../../src/core/terminal-command.js';
+import { assertCommandSessionId, sessionIdCommandProblem } from '../../src/core/shell-quote.js';
 
 // 会话 id 来自文件名 / 索引等原生字符串，拼进命令前按目标终端引用一次。
 // 与 CLI 侧 `src/core/shell-quote.ts` 的 quoteCommandArg() 同规则。
-const quote = (value: string, windows: boolean): string => (
-  /^[A-Za-z0-9_.:/-]+$/.test(value) ? value : windows ? powershellQuote(value) : shellQuote(value)
-);
+const quote = (value: string, windows: boolean): string => {
+  assertCommandSessionId(value);
+  return /^[A-Za-z0-9_.:/-]+$/.test(value) ? value : windows ? powershellQuote(value) : shellQuote(value);
+};
 
 export const AGENTS = [
   { id: 'claude', label: 'Claude Code', command: (id: string, windows = false) => `claude --resume ${quote(id, windows)}`, yolo: '--dangerously-skip-permissions' },
@@ -277,6 +279,16 @@ export function recentStateLoading<T = never>(): RecentState<T> {
 export function shellQuote(value: string) { return `'${value.replace(/'/g, `'\\''`)}'`; }
 // PowerShell 也识别 U+2018–U+201B 弯单引号；与 CLI 的 psQuote() 同规则。
 export function powershellQuote(value: string) { return `'${value.replace(/['\u2018-\u201b]/g, (quote) => quote + quote)}'`; }
+/**
+ * 渲染路径不能因为非法 ID 抛错把整页打挂；先返回可读原因，按钮与交付都据此停住。
+ * 与 CLI 的 `assertCommandSessionId()` 同源，避免桌面生成的命令与适配器不一致。
+ */
+export function buildCommandView(agent: Agent, id: string, cwd: string | undefined, yolo: boolean, windows = false) {
+  const problem = sessionIdCommandProblem(id);
+  if (problem) return { command: '', problem };
+  return { command: buildCommand(agent, id, cwd, yolo, windows), problem: null };
+}
+
 export function buildCommand(agent: Agent, id: string, cwd: string | undefined, yolo: boolean, windows = false) {
   // 卡片命令接收原始 id；这里先引用再传入会把引号本身变成参数内容。
   let command = agent.command(id, windows);

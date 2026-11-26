@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process';
-import { quoteCommandArg } from '../../core/shell-quote.js';
+import { assertCommandSessionId, quoteCommandArg } from '../../core/shell-quote.js';
 import { describeDetectFailure, isCommandMissing, resolveCli } from '../../core/platform.js';
 import { readdir, stat } from 'node:fs/promises';
 import path from 'node:path';
@@ -351,6 +351,7 @@ export const piAdapter: ProviderAdapter = {
   },
 
   resumeCommand(ref: SessionRef, windows?: boolean): string {
+    assertCommandSessionId(ref.sessionId);
     return `pi --session ${quoteCommandArg(ref.sessionId, windows)}`;
   },
 

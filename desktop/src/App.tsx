@@ -3,7 +3,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { readText, writeText } from '@tauri-apps/plugin-clipboard-manager';
 import { ArrowDownLeft, ArrowRight, ArrowUpRight, Check, ChevronDown, ClipboardPaste, Copy, FileText, Folder, History, Info, LoaderCircle, Monitor, Moon, RefreshCw, Search, Settings2, ShieldCheck, Sun, SunMoon, Terminal, Workflow, X } from 'lucide-react';
 import { assertSameCodexImportPlan, beginCodexOpen, completeCodexOpen, failCodexOpen, importedCodexThreadId, parseCodexImportResult, viewForCodexImportResult, type CodexImportResult, type CodexImportView } from './codex-import.js';
-import { AGENTS, assertTerminalTextSafe, blockedHeading, buildCommand, escapeControlChars, handoffRoute, historyView, lineageSummary, parsePrecheckBlocked, parseThemePreference, providerDetectFailures, recentStateFromError, recentStateFromView, recentStateLoading, recentView, resolveTheme, sourceWarnings, terminalTextProblem, THEME_OPTIONS, usableTerminals, type LineageSummary, type ProviderDetectFailure, type PrecheckResponse, type RecentState, type ThemePreference } from './handoff-ui.js';
+import { AGENTS, assertTerminalTextSafe, blockedHeading, buildCommandView, escapeControlChars, handoffRoute, historyView, lineageSummary, parsePrecheckBlocked, parseThemePreference, providerDetectFailures, recentStateFromError, recentStateFromView, recentStateLoading, recentView, resolveTheme, sourceWarnings, terminalTextProblem, THEME_OPTIONS, usableTerminals, type LineageSummary, type ProviderDetectFailure, type PrecheckResponse, type RecentState, type ThemePreference } from './handoff-ui.js';
 import { version as appVersion } from '../package.json';
 import './App.css';
 
@@ -92,11 +92,13 @@ export default function App() {
   const activeTransfer = transfers[target] ?? null;
   const failureHere = failureNotice && failureNotice.provider === target && failureNotice.sourceId === id ? failureNotice : null;
   function setTransfer(value: Transfer) { setTransfers((saved) => ({ ...saved, [value.provider]: value })); }
-  const command = activeTransfer ? buildCommand(agent, activeTransfer.sessionId, activeTransfer.cwd, yolo, windows) : route === 'resume' ? buildCommand(agent, id, source?.cwd, yolo, windows) : '';
-  const commandProblem = terminalTextProblem(command);
+  const commandView = activeTransfer ? buildCommandView(agent, activeTransfer.sessionId, activeTransfer.cwd, yolo, windows) : route === 'resume' ? buildCommandView(agent, id, source?.cwd, yolo, windows) : { command: '', problem: null };
+  const command = commandView.command;
+  const commandProblem = commandView.problem ?? terminalTextProblem(command);
   const sourceTextProblem = source ? terminalTextProblem(source.sessionId ?? id, source.cwd) : null;
-  const importedCommand = result && importedCodexThreadId(result) ? buildCommand(agent, importedCodexThreadId(result)!, result.plan.source.cwd, false, windows) : '';
-  const importedCommandProblem = terminalTextProblem(importedCommand);
+  const importedView = result && importedCodexThreadId(result) ? buildCommandView(agent, importedCodexThreadId(result)!, result.plan.source.cwd, false, windows) : { command: '', problem: null };
+  const importedCommand = importedView.command;
+  const importedCommandProblem = importedView.problem ?? terminalTextProblem(importedCommand);
   function toast(text: string, type: 'ok' | 'error' = 'ok') { window.clearTimeout(toastTimer.current); setNotice({ type, text }); toastTimer.current = window.setTimeout(() => setNotice(null), 6000); }
   useEffect(() => () => window.clearTimeout(toastTimer.current), []);
   async function loadRecents() {
@@ -225,7 +227,9 @@ export default function App() {
     finally { if (version === request.current) setBusy(null); }
   }
   async function deliver(current: Transfer) {
-    const cmd = buildCommand(AGENTS.find((entry) => entry.id === current.provider)!, current.sessionId, current.cwd, yolo, windows);
+    const view = buildCommandView(AGENTS.find((entry) => entry.id === current.provider)!, current.sessionId, current.cwd, yolo, windows);
+    if (view.problem) throw new Error(view.problem);
+    const cmd = view.command;
     assertTerminalTextSafe(cmd, current.cwd ?? '');
     if (demo) { setTransfer({ ...current, delivery: 'copied', error: undefined }); toast('演示：未写入会话或启动终端'); return; }
     if (mode !== 'copy' && native()) {

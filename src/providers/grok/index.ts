@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process';
-import { quoteCommandArg } from '../../core/shell-quote.js';
+import { assertCommandSessionId, quoteCommandArg } from '../../core/shell-quote.js';
 import { describeDetectFailure, isCommandMissing, resolveCli } from '../../core/platform.js';
 import { promisify } from 'node:util';
 import { digestFile } from '../../core/atomic.js';
@@ -79,6 +79,7 @@ export const grokAdapter: ProviderAdapter = {
   unattributable: () => grokUnattributableGroups(),
 
   resumeCommand(ref: SessionRef, windows?: boolean): string {
+    assertCommandSessionId(ref.sessionId);
     return `grok -r ${quoteCommandArg(ref.sessionId, windows)}`;
   },
 
