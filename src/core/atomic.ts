@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { constants } from 'node:fs';
-import { chmod, copyFile, mkdir, open, readFile, rename, rm, stat } from 'node:fs/promises';
+import { chmod, copyFile, lstat, mkdir, open, readFile, rename, rm, stat } from 'node:fs/promises';
 import path from 'node:path';
 import { escapeControlChars } from './display.js';
 import { isFileSystemErrorCode } from './read-text.js';
@@ -22,29 +22,41 @@ export function describeWriteFailureReason(error: unknown): string | null {
   if (!isFileSystemErrorCode(code)) return null;
   const rawPath = (error as NodeJS.ErrnoException).path;
   const where = rawPath ? `：${escapeControlChars(rawPath)}` : '';
+  let reason: string;
   switch (code) {
     case 'EACCES':
     case 'EPERM':
-      return `无权写入${where}（权限问题，不是路径写错；确认该目录可写、且不属于其它用户）`;
+      reason = `无权写入${where}（权限问题，不是路径写错；确认该目录可写、且不属于其它用户）`;
+      break;
     case 'EROFS':
-      return `目标位于只读文件系统${where}；换一个可写的 HOME / 数据目录后重试`;
+      reason = `目标位于只读文件系统${where}；换一个可写的 HOME / 数据目录后重试`;
+      break;
     case 'ENOSPC':
     case 'EDQUOT':
-      return `磁盘空间不足或超出配额${where}；清理空间后重试（本次未写入任何内容）`;
+      reason = `磁盘空间不足或超出配额${where}；清理空间后重试（本次未写入任何内容）`;
+      break;
     case 'EMFILE':
     case 'ENFILE':
-      return `打开的文件过多${where}；关掉其它程序或稍后重试（本次未写入任何内容）`;
+      reason = `打开的文件过多${where}；关掉其它程序或稍后重试（本次未写入任何内容）`;
+      break;
     case 'EISDIR':
-      return `目标是目录而不是文件${where}；先把它挪走再重试（本次未写入任何内容）`;
+      reason = `目标是目录而不是文件${where}；先把它挪走再重试（本次未写入任何内容）`;
+      break;
     case 'ENOTDIR':
-      return `路径上的某一级不是目录${where}（被同名文件占住了？）；恢复该路径后重试`;
+      reason = `路径上的某一级不是目录${where}（被同名文件占住了？）；恢复该路径后重试`;
+      break;
     case 'ENOENT':
-      return `目标路径的上级目录不存在${where}（可能在写入过程中被移动或删除）；确认目录还在再重试`;
+      reason = `目标路径的上级目录不存在${where}（可能在写入过程中被移动或删除）；确认目录还在再重试`;
+      break;
     case 'EBUSY':
-      return `目标文件正被占用${where}；退出可能正在写它的程序后重试（本次未写入任何内容）`;
+      reason = `目标文件正被占用${where}；退出可能正在写它的程序后重试（本次未写入任何内容）`;
+      break;
     default:
-      return `写入失败（${code}）${where}；本次未写入任何内容，可据上面的路径排查`;
+      reason = `写入失败（${code}）${where}；本次未写入任何内容，可据上面的路径排查`;
   }
+  // 备份回滚失败时，主文件仍然没动，但上一代 .bak 可能已被覆盖，不能只报发布失败。
+  const rollback = (error as { watchRollbackFailure?: string }).watchRollbackFailure;
+  return rollback ? `${reason}；${rollback}` : reason;
 }
 
 /** 文件内容指纹；文件不存在返回 null（TOCTOU 检测用） */
@@ -88,9 +100,64 @@ async function backupFileAtomic(filePath: string): Promise<void> {
   }
 }
 
+type BackupRollback = {
+  path: string;
+  restore: () => Promise<void>;
+  discard: () => Promise<void>;
+};
+
+/**
+ * 覆盖 `.bak` 前先把上一代备份挪到同目录暂名。主文件最终 rename 失败时，
+ * 必须能把 `.bak` 恢复成原样——此前先把新备份发布、再写主文件，失败会让唯一的旧备份被覆盖。
+ * `rename` 本身就替换目录项，不沿 `.bak` 的符号链接写别处。
+ */
+async function stageBackupRollback(filePath: string): Promise<BackupRollback | null> {
+  const backupPath = `${filePath}.bak`;
+  const rollbackPath = `${backupPath}.watch-rollback-${randomUUID()}`;
+  let existing;
+  try {
+    existing = await lstat(backupPath);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null; // 还没有旧备份
+    throw error;
+  }
+  // 目录 / 设备文件不能当作单代备份挪走再丢弃：先拒绝，保留原来的失败语义。
+  // 符号链接可以暂存，backupFileAtomic 仍会用新文件替换链接本身而不沿链接写别处。
+  if (!existing.isFile() && !existing.isSymbolicLink()) {
+    throw Object.assign(new Error(`备份路径不是普通文件：${escapeControlChars(backupPath)}`), {
+      code: 'EISDIR',
+      path: backupPath,
+    });
+  }
+  try {
+    await rename(backupPath, rollbackPath);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
+    throw error;
+  }
+  return {
+    path: rollbackPath,
+    restore: () => rename(rollbackPath, backupPath),
+    discard: () => rm(rollbackPath, { force: true }),
+  };
+}
+
+function annotateRollbackFailure(error: unknown, restoreError: unknown, rollbackPath: string): unknown {
+  if (!(error instanceof Error)) return error;
+  const reason =
+    describeWriteFailureReason(restoreError) ??
+    escapeControlChars(restoreError instanceof Error ? restoreError.message : String(restoreError));
+  return Object.assign(error, {
+    watchRollbackFailure:
+      `旧备份恢复失败（${reason}）：${escapeControlChars(rollbackPath)}；` +
+      `原会话未改动，但上一代备份可能已被覆盖`,
+  });
+}
+
 /**
  * 原子写文件：写同目录 tmp → fsync → verify 回调 → 可选 backup → rename。
- * 任一步失败都会清理 tmp 并重抛，原文件从未被触碰。
+ * 任一步失败都会清理 tmp 并重抛，原文件与既有 `.bak` 逐字节不变；
+ * backup 阶段失败时旧备份先回滚，回滚自身失败会写进错误说明。
  * - `backup`：rename 前把原文件复制为 `<file>.bak`（单代，覆盖上一代）
  * - `verify`：tmp 落盘后、rename 前回调（round-trip 自校验）；抛错则零写盘
  */
@@ -118,9 +185,37 @@ export async function writeFileAtomic(
       await handle.close();
     }
     if (opts?.verify) await opts.verify(tmpPath);
-    if (opts?.backup) await backupFileAtomic(filePath);
-    if (mode !== undefined) await chmod(tmpPath, mode);
-    await rename(tmpPath, filePath);
+    let rollback: BackupRollback | null = null;
+    if (opts?.backup) {
+      rollback = await stageBackupRollback(filePath);
+      try {
+        await backupFileAtomic(filePath);
+      } catch (error) {
+        if (rollback) {
+          try {
+            await rollback.restore();
+          } catch (restoreError) {
+            throw annotateRollbackFailure(error, restoreError, rollback.path);
+          }
+        }
+        throw error;
+      }
+    }
+    try {
+      if (mode !== undefined) await chmod(tmpPath, mode);
+      await rename(tmpPath, filePath);
+    } catch (error) {
+      if (rollback) {
+        try {
+          await rollback.restore();
+        } catch (restoreError) {
+          throw annotateRollbackFailure(error, restoreError, rollback.path);
+        }
+      }
+      throw error;
+    }
+    // 主文件已发布，回滚副本只是暂名，清理失败不改变会话内容；不能把成功报成失败。
+    if (rollback) await rollback.discard().catch(() => {});
   } catch (error) {
     await rm(tmpPath, { force: true }).catch(() => {});
     throw error;
@@ -129,7 +224,8 @@ export async function writeFileAtomic(
 
 /**
  * 原子追加文件：将原文件复制到同目录 tmp（若原文件不存在则新建 tmp）→ append extraContent → fsync → verify 回调 → 可选 backup → rename。
- * 任一步失败都会清理 tmp 并重抛，原文件从未被触碰。
+ * 任一步失败都会清理 tmp 并重抛，原文件与既有 `.bak` 逐字节不变；
+ * backup 阶段失败时旧备份先回滚，回滚自身失败会写进错误说明。
  * - `backup`：rename 前把原文件复制为 `<file>.bak`（单代，覆盖上一代）
  * - `verify`：tmp 落盘后、rename 前回调；抛错则零写盘
  */
@@ -200,9 +296,37 @@ export async function appendFileAtomic(
     }
 
     if (opts?.verify) await opts.verify(tmpPath);
-    if (mode !== undefined) await chmod(tmpPath, mode);
-    if (opts?.backup && originalExists) await backupFileAtomic(filePath);
-    await rename(tmpPath, filePath);
+    let rollback: BackupRollback | null = null;
+    if (opts?.backup && originalExists) {
+      rollback = await stageBackupRollback(filePath);
+      try {
+        await backupFileAtomic(filePath);
+      } catch (error) {
+        if (rollback) {
+          try {
+            await rollback.restore();
+          } catch (restoreError) {
+            throw annotateRollbackFailure(error, restoreError, rollback.path);
+          }
+        }
+        throw error;
+      }
+    }
+    try {
+      if (mode !== undefined) await chmod(tmpPath, mode);
+      await rename(tmpPath, filePath);
+    } catch (error) {
+      if (rollback) {
+        try {
+          await rollback.restore();
+        } catch (restoreError) {
+          throw annotateRollbackFailure(error, restoreError, rollback.path);
+        }
+      }
+      throw error;
+    }
+    // 同上：发布成功后清理暂名失败不改写会话内容，不回滚已完成的写入。
+    if (rollback) await rollback.discard().catch(() => {});
   } catch (error) {
     await rm(tmpPath, { force: true }).catch(() => {});
     throw error;
