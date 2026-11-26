@@ -777,7 +777,7 @@ export function buildHandoffPrompt(
     credentialsMasked: 0,
   };
   // 凭据隐去（第 329 轮）：这份文档就是用来复制给另一个助手的，会话里出现过的密钥不能跟着走。
-  // 只处理**会进文档的**会话内容（正文、展开的过程记录、清单），且一律在截断之前——先截断会把
+  // 只处理**会进文档的**内容（正文、展开的过程记录、清单与元信息），且一律在截断之前——先截断会把
   // 一个密钥切成认不出来的半截留在文档里。同一个值多处出现只算一个。
   const credentials = createCredentialCollector();
 
@@ -1036,7 +1036,8 @@ export function buildHandoffPrompt(
   // 坏行扫描错误）同样可能带换行，落在头部会伪造 `## 小节` 或清单条目——一律折成单行（第 276 轮）。
   // 转义同样要计数：输出被改写了，读者必须能从 findings 里知道这不是原文。
   const headerLine = (text: string): string => {
-    const sanitized = sanitizeBody(text);
+    // 路径、分支与诊断也可能带固定格式凭据；只处理实际显示的值，先遮蔽再转义。
+    const sanitized = sanitizeBody(maskCredentials(text, credentials));
     const single = singleLineText(sanitized.text);
     // 折行同样是改写：换行是 C0 控制字符，单行上下文里它只能以字面 `\n` 出现。旧实现只计
     // `sanitizeBody()` 的转义，`第一行\n第二行` 被折成单行却报「没有转义」——文档被复制走
@@ -1105,9 +1106,8 @@ export function buildHandoffPrompt(
   const contextDisclosure = findContextDisclosure(turns);
   if (contextDisclosure) {
     addFinding(findings, 'prompt_context_disclosure', 'degraded', 1);
-    // 这一行来自 parse 写入的披露摘要（里面可能带未识别记录的类型名），与正文同一条规则：
-    // 先隐去凭据再转义。它不在事件正文里，别处的 maskEventCredentials 覆盖不到（第 343 轮）。
-    lines.push(`- 上下文完整性：${headerLine(maskCredentials(contextDisclosure.summary, credentials))}`);
+    // parse 写入的披露摘要不在事件正文里，由 headerLine 与其它元信息统一先遮蔽再转义。
+    lines.push(`- 上下文完整性：${headerLine(contextDisclosure.summary)}`);
   }
   // 有调用、没有结果的工具调用：默认档位不展开过程记录，读者自己数不出来；「失败与中断」只统计
   // 明确失败，也不含它们。和上一行一样在裁剪之前按整条会话统计——接手者最需要知道的正是
@@ -1175,7 +1175,7 @@ export function buildHandoffPrompt(
       }
       return metaNote ?? range.note;
     })();
-    const rangeNotes = [rangeNote, timestampNote].filter(Boolean);
+    const rangeNotes = [rangeNote, timestampNote].flatMap((note) => note ? [headerLine(note)] : []);
     lines.push(`- 时间范围：${range.text}${rangeNotes.length ? `（${rangeNotes.join('；')}）` : ''}`);
   }
   lines.push(`- 轮次：${stats.turns} 轮（用户 ${stats.userTurns} / 助手 ${stats.assistantTurns}）`);
@@ -1237,17 +1237,6 @@ export function buildHandoffPrompt(
   // 目标助手与用户看到的只剩正文。只写「可能被裁剪」不足以让人判断还能不能接着干。
   // 位置先占住，内容等下面的 drift note 渲染完再算——它的转义计数同样属于这份 stats（第 344 轮）。
   const omittedIndex = lines.length;
-  // 隐去是对原文的改写，必须进正文与 findings；同时要把识别范围说死——「隐去了 N 个」不能
-  // 读起来像「文档里没有敏感内容」。一个都没识别到时不写这一行：那不是结论，只是没认出来。
-  const masked = credentialMaskReport(credentials);
-  stats.credentialsMasked = masked.total;
-  if (masked.total > 0) {
-    addFinding(findings, 'prompt_credentials_masked', 'degraded', masked.total);
-    lines.push(
-      `- 凭据：识别并隐去了 ${masked.total} 个密钥 / 令牌（按固定格式或固定位置识别：${masked.kinds.map((kind) => `${kind.label} ${kind.count}`).join('、')}），` +
-        '在正文里出现的地方以「[已隐去：种类]」标出（被截断或未展开的部分不会出现占位符），原文仍在源文件里；只认固定格式与固定位置——单独出现的口令、内部地址与其它形式的敏感内容不会被识别，转交前请自行检查',
-    );
-  }
   // 来源在渲染期间变化过：上面这几行（轮次 / 时间范围 / 用量）都是读取那一刻的数字，
   // 这句话必须跟在后面，否则文档被复制走之后没人知道它只代表那一瞬间
   if (meta.sourceDriftNote) {
@@ -1258,6 +1247,21 @@ export function buildHandoffPrompt(
     // 「量不出来」不是「有变化」：同一件事的第三种结论要有自己的标签与 finding code
     addFinding(findings, 'prompt_source_drift_unverifiable', 'degraded', 1);
     lines.push(`- 生成期间无法核对：${headerLine(meta.sourceDriftUnknownNote)}`);
+  }
+  // 空来源说明也来自上游；提前处理实际要显示的内容，让遮蔽与转义计数覆盖整份文档。
+  const emptyBodyText = body.length ? '' : headerLine(
+    meta.emptySourceNote ?? '（这条会话没有可展示的正文：可能是 0 字节文件、内容已丢失，或所有轮次都被裁掉。）',
+  );
+  // 所有来源内容均已处理，再生成统一报告；来源变化与空来源说明不能漏在统计之外。
+  // 一个都没识别到时不写这一行：那不是「没有敏感内容」的结论，只是没认出来。
+  const masked = credentialMaskReport(credentials);
+  stats.credentialsMasked = masked.total;
+  if (masked.total > 0) {
+    addFinding(findings, 'prompt_credentials_masked', 'degraded', masked.total);
+    lines.push(
+      `- 凭据：识别并隐去了 ${masked.total} 个密钥 / 令牌（按固定格式或固定位置识别：${masked.kinds.map((kind) => `${kind.label} ${kind.count}`).join('、')}），` +
+        '在正文里出现的地方以「[已隐去：种类]」标出（被截断或未展开的部分不会出现占位符），原文仍在源文件里；只认固定格式与固定位置——单独出现的口令、内部地址与其它形式的敏感内容不会被识别，转交前请自行检查',
+    );
   }
   const omittedParts: string[] = [];
   if (stats.omittedTurns > 0) omittedParts.push(`${stats.omittedTurns} 轮对话`);
@@ -1276,7 +1280,7 @@ export function buildHandoffPrompt(
   lines.push('## 会话记录');
   lines.push('');
   if (!body.length) {
-    lines.push(meta.emptySourceNote ?? '（这条会话没有可展示的正文：可能是 0 字节文件、内容已丢失，或所有轮次都被裁掉。）');
+    lines.push(emptyBodyText);
     lines.push('');
   } else {
     lines.push(...closeOpenBlocks(body));

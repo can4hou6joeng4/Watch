@@ -252,6 +252,8 @@ import-codex  prepare|confirm|status|list|project-prepare|project-confirm|projec
 
 这份文档是要复制给另一个助手的，所以会话里**格式固定**的密钥 / 令牌（常见厂商的 API 密钥，GitHub / GitLab / Slack / npm / Hugging Face 令牌，AWS 访问密钥 ID，JWT，PEM / PGP 私钥块），以及四种位置固定的值（`postgres://user:口令@host` 这类连接串里的口令、`X-Api-Key` / `X-Auth-Token` 这类密钥头的值、`Cookie` / `Set-Cookie` 头与 `curl --cookie` 里的 `name=value` 值（保留后续命令参数；请求头或带引号的参数里前一项是变量引用时，也会继续检查后面的 Cookie）、`Authorization` 头的 Bearer / Token / Basic 值）在进入文档前会换成 `[已隐去：种类]`，头部写明种类与个数，`--json` 另给 `credentialsMasked: { total, kinds }`（只有种类与个数）；来源文件不改，原文仍在那里。只认固定格式与固定位置：单独出现的口令、内部地址与没有固定前缀的密钥不会被识别，没有这一行不代表文档里没有敏感内容，转交前仍需自行检查。这一处理只在 `prompt` 生效，`open --to` 等写入原生会话的路径按原记录转入。
 
+遮蔽覆盖 Markdown 中实际展示的正文、过程记录、改动清单和元信息（包括路径、分支、诊断与空来源说明），计数按整份文档汇总。`--json` 的 `markdown` 使用同一份文档；用于本机定位的 `cwd`、`sourceBranch` 等结构化字段仍保留原值，完整 JSON（包括诊断字段）不属于上述遮蔽范围，转交时请取 `markdown`。
+
 </details>
 
 桌面端提供**会话接力 / 接力记录 / 支持路径 / 设置**四个视图，支持亮色、暗色与跟随系统三种外观。浏览器预览不读取本地 Agent 记录；「载入演示」使用合成样本，不写入会话、不启动客户端、不调用模型。
