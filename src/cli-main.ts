@@ -3843,6 +3843,17 @@ async function cmdUsage(cwd: string, json: boolean, chain?: string): Promise<voi
   try {
     const result = await chainUsage(cwd, listAdapters(), store, chain, lastStoreError ?? undefined);
     if (cwdIssue) result.warnings.push(cwdIssue);
+    // `--cwd` 不可用时 chainUsage 那句「没有可用的当前链（还没建链，或现有链都已归档）」是假结论：
+    // 链按 cwd 字符串精确匹配，目录进不去 / 拼错都不代表库里没有链，更不代表用户没建过链。
+    // 与 status / sessions / recent 同一分法：把结论换成「无法确认」；别处的链线索也不加——
+    // 搜索的 `!cwdIssue` 已是同一约定，且那句线索自带「本目录没有链」，会和「不代表任何真实项目」打架。
+    // 库打不开时不改：那时 notes 本来为空，原因在 warnings。
+    // 必须放在 `:memory:` 分支之前——那一支会按「还没建链」过滤原 notes，先改会被它当普通说明留下。
+    if (store && cwdIssue && !result.chain && !result.byProvider.length) {
+      const conclusion = cwdUnusableConclusion('无用量可统计', '链按路径精确匹配，本次结果不代表任何真实项目');
+      const rewritten = (result.notes ?? []).map((note) => (note.includes('没有可用的当前链') ? conclusion : note));
+      result.notes = rewritten.length ? rewritten : [conclusion];
+    }
     // `:memory:` 下 notes 那句「还没建链，或现有链都已归档」是假结论：这条命令拿到的是全新的
     // 空库，上一条命令里建的链早就随那个进程消失了。warning 讲库的性质，notes 讲这份报告
     // 为什么是空的——两者都改，否则同一份输出里既说「还没建链」又说「记录已随进程消失」
