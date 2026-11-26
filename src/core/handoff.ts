@@ -14,6 +14,7 @@ import { cwdAliasHint, splitElsewhereByDirectory } from './cwd.js';
 import { compressedCopy, compressedRetryAdvice, describePathReadFailureReason, describeReadFailureOrSelf, emptySessionFileReasonFromStat, isEmptySessionFileReason, isMissingPathError, probeSessionReadable, sessionFilePresence, type CompressedCopyNote } from './read-text.js';
 import { noSessionHint, unknownProviderMessage } from '../providers/registry.js';
 import { collectUnattributable, unattributableNoPickMessage, unattributablePickWarning } from './session-coverage.js';
+import { assertCommandSessionId } from './shell-quote.js';
 
 /** 写回被阻断（如 TOCTOU 检测到目标被外部修改）：一票否决，不产生部分写 */
 export class HandoffBlockedError extends Error {
@@ -2132,6 +2133,7 @@ export async function handoff(
       // provider 会话时打开到非链尾会话（用户看到的就会是“没有历史”）。
       const boundTarget = pairedRef(history, targetId);
       const resumeRef = boundTarget ?? mtimeTip.ref;
+      assertCommandSessionId(resumeRef.sessionId);
       // 这条分支以前只回「直接打开即可」+ resume，而它和 status 一样只读元数据：
       // `stat` 对 chmod 000 的文件照常成功，于是同一份文件 new 明确拒绝、status 警告、
       // chain list 标 unreadable、doctor 报失败，只有 switch 替它宣称可用——用户复制的那条
@@ -2226,6 +2228,11 @@ export async function handoff(
       }
     }
   }
+
+  // 只校验最终沿用的既有目标，不拦只读来源；放在解析失败的兜底 catch 外，拒绝不能退成新建。
+  // 零增量也可能重写目标或只改链尾，必须早于这些副作用，不能等末端 resumeCommand 才拒绝。
+  // 新目标的 ID 由 provider 写入时生成，仍由适配器的末端守卫校验。
+  if (into) assertCommandSessionId(into.sessionId);
 
   // 目标侧的坏行同样会让 diffTurns 把「已有但解析不出」的内容当缺失、重复追加一遍
   let destBadScan: BadLinesScan = { count: 0 };
