@@ -2,7 +2,7 @@
 // 路径字符串精确比较，路径错了只会安静返回 0，看起来像「这个目录没有会话」。查询类命令与
 // `watch doctor` 统一用这里的说明做披露，避免同一个坑每处各写一份文案。
 import { realpathSync } from 'node:fs';
-import { readFile, realpath, stat } from 'node:fs/promises';
+import { lstat, readFile, realpath, stat } from 'node:fs/promises';
 import { basename, dirname, join, resolve } from 'node:path';
 import { escapeControlChars, hasControlChars } from './display.js';
 import { normalizePath } from './platform.js';
@@ -330,11 +330,16 @@ export async function inspectWorktree(cwd: string): Promise<WorktreeInspection> 
   const start = resolve(cwd);
   let dir = start;
   while (true) {
+    const dotGit = join(dir, '.git');
     try {
-      await stat(join(dir, '.git'));
+      await stat(dotGit);
     } catch (error) {
       const code = (error as NodeJS.ErrnoException).code;
       if (code === 'ENOENT' || code === 'ENOTDIR') {
+        // 悬空符号链接：stat 跟着目标报 ENOENT，但 `.git` 条目确实在，不能讲成「这一级没有 .git」
+        if (await danglingDotGit(dotGit)) {
+          return { state: 'unknown', reason: `${showPathInMessage(dotGit)} 的 .git 是悬空链接，目标读不出来` };
+        }
         const parent = dirname(dir);
         if (parent === dir) return { state: 'other' };
         dir = parent;
@@ -370,6 +375,17 @@ async function inspectWorktreeAt(cwd: string): Promise<WorktreeInspection> {
   const match = /^\s*gitdir:\s*(.+?)\s*$/m.exec(raw);
   if (!match) return { state: 'unknown', reason: '.git 文件里没有 gitdir 行' };
   const gitDir = resolve(cwd, unquoteGitPath(match[1]!));
+  // 先确认 gitdir 目标本身在不在：它不在时下面的 ENOENT 不能读成「没有 commondir，所以不是工作树」。
+  // 主仓库被移走、交接稿从另一台机器复制过来时都会这样，必须说无法确认。
+  let gitDirEntry;
+  try {
+    gitDirEntry = await stat(gitDir);
+  } catch (error) {
+    return { state: 'unknown', reason: `gitdir 目标无法访问（${errnoReason(error)}）：${showPathInMessage(gitDir)}` };
+  }
+  if (!gitDirEntry.isDirectory()) {
+    return { state: 'unknown', reason: `gitdir 目标不是目录：${showPathInMessage(gitDir)}` };
+  }
 
   let commondirRaw: string;
   try {
@@ -461,6 +477,9 @@ export async function inspectRepoBranch(cwd: string): Promise<RepoBranchInspecti
       if (code !== 'ENOENT' && code !== 'ENOTDIR') {
         return { state: 'unknown', reason: `${showPathInMessage(dir)}：${errnoReason(error)}` };
       }
+      if (await danglingDotGit(dotGit)) {
+        return { state: 'unknown', reason: `${showPathInMessage(dotGit)} 是悬空链接，目标读不出来` };
+      }
       const parent = dirname(dir);
       if (parent === dir) return { state: 'not-repo' };
       dir = parent;
@@ -513,6 +532,16 @@ function unquoteGitPath(value: string): string {
 function errnoReason(error: unknown): string {
   const code = (error as NodeJS.ErrnoException).code;
   return code ?? (error instanceof Error ? error.message : String(error));
+}
+
+/** `stat` 因目标不存在而失败时，区分「这一级没有 .git」与「.git 是悬空链接」。 */
+async function danglingDotGit(dotGit: string): Promise<boolean> {
+  try {
+    await lstat(dotGit);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 /**
