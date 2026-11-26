@@ -53,7 +53,10 @@ const responseCookieHeader = `(?<=(?<![\\w-])Set-Cookie${cookieHeaderSeparator.s
 const quotedCookieOption = /(?<=(?<![\w-])--cookie(?:=|[ \t]+)\\?["'])/;
 const bareCookieOption = /(?<=(?<![\w-])--cookie(?:=|[ \t]+))/;
 const cookiePairName = /[^\s="'`\\…\[\]{}$<>;|&()]+=/;
+// 带引号的值可以有空格和逗号；裸值到 RFC 6265 的分隔符为止。此前头字段误用宽字符类，
+// 把 `Cookie: sid=abcdefgh1234, 说明` 的后续正文整个吞进占位符，计数也少算一个键值对。
 const cookieHeaderValue = /[^"'`\\…\[\]{}$<>;\r\n]/;
+const bareCookieHeaderValue = /[^\s"'`\\…\[\]{}$<>;,]/;
 const bareCookieValue = /[^\s"'`\\…\[\]{}$<>;|&()]/;
 const cookieQuote = /\\?"/;
 
@@ -62,7 +65,7 @@ function cookieValuePattern(minLength: number, end: string): RegExp {
   const quoted = `${cookieQuote.source}${cookieHeaderValue.source}{${minLength},}${end ? '' : cookieQuote.source}`;
   // 先跳过空白，避免在每个空白字符上重复执行后行断言。
   return new RegExp(
-    `(?=\\S)(?:(?:${cookieHeader}|${quotedCookieOption.source})${cookiePairName.source}(?:${quoted}|${cookieHeaderValue.source}{${minLength},})` +
+    `(?=\\S)(?:(?:${cookieHeader}|${quotedCookieOption.source})${cookiePairName.source}(?:${quoted}|${bareCookieHeaderValue.source}{${minLength},})` +
       `|${bareCookieOption.source}${cookiePairName.source}${bareCookieValue.source}{${minLength},})${end}`,
     'gi',
   );
@@ -74,6 +77,20 @@ const cutCookieValue = cookieValuePattern(3, '(?=…)');
 const cookieListValue = /(?:[^"'`\\\r\n]+|(?<==)\\?"[^"\\;\r\n]*(?:\\?"|(?<=…)(?=$|[\r\n])))+/;
 const requestCookieList = new RegExp(`(?=\\S)(?:${requestCookieHeader}|${quotedCookieOption.source})${cookieListValue.source}`, 'gi');
 const responseCookieList = new RegExp(`(?=\\S)(?:${responseCookieHeader})${cookieListValue.source}`, 'gi');
+// 第一遍只认识头名后的第一对；`Cookie: sid=… token=…` 这种同一行空格分隔的后续对
+// 由这一步接上。锚在头名后且要求从占位符 / 键值对开始，后面 `explanation: sid=…`
+// 这类说明文字不会被当成 Cookie 续扫命中。
+const cookiePlaceholder = /\[已隐去：[^\]\r\n]+\]/;
+const inlineCookiePairChain = new RegExp(
+  `(?:${cookieHeader}|${quotedCookieOption.source}|${bareCookieOption.source})` +
+    `(?:${cookiePlaceholder.source}|${cookiePairName.source}${bareCookieHeaderValue.source}{8,})` +
+    `(?:[ \\t]+${cookiePairName.source}${bareCookieHeaderValue.source}{8,})+`,
+  'gi',
+);
+const laterInlineCookiePair = new RegExp(
+  `(^|[ \\t])(${cookiePairName.source}${bareCookieHeaderValue.source}{8,})`,
+  'gi',
+);
 
 function cookiePairPattern(minLength: number, cutLength: number, response: boolean): RegExp {
   // 请求 Cookie 与 `--cookie` 参数里 `Path` / `Domain` 是合法的键名；只有 Set-Cookie 响应头
@@ -84,7 +101,7 @@ function cookiePairPattern(minLength: number, cutLength: number, response: boole
   // 第三个捕获组区分「完整长度」与「紧跟省略号的残片」：残片单独计数，不能和完整值混在一起。
   return new RegExp(
     `^([ \\t]*)${guard}(${cookiePairName.source}(?:${cookieQuote.source}${cookieHeaderValue.source}{${minLength},}${cookieQuote.source}` +
-      `|${cookieHeaderValue.source}{${minLength},}|((?:${cookieQuote.source})?${cookieHeaderValue.source}{${cutLength},})(?=…)))`,
+      `|${bareCookieHeaderValue.source}{${minLength},}|((?:${cookieQuote.source})?${cookieHeaderValue.source}{${cutLength},})(?=…)))`,
     'gi',
   );
 }
@@ -97,24 +114,28 @@ function continueCookiePairs(
   pairPattern: RegExp,
   replace: ReplaceCredential,
 ): string {
-  const pairs = list.split(';');
-  for (let i = 1; i < pairs.length; i++) {
-    pairs[i] = pairs[i].replace(pairPattern, (match: string, ...args: unknown[]) => {
+  // 第一遍已处理头名后的第一对；续扫从第二对开始。分隔符按捕获组保留，逗号 / 空白后跟
+  // `name=value` 时也要分别遮蔽与计数，而不是把后续说明文字吞进第一对的占位符。
+  const pairs = list.split(/([;,])/);
+  for (let i = 2; i < pairs.length; i += 2) {
+    pairs[i] = pairs[i]!.replace(pairPattern, (match: string, ...args: unknown[]) => {
       const space = typeof args[0] === 'string' ? args[0] : '';
       const pair = typeof args[1] === 'string' ? args[1] : match;
       return space + replace(pair, args[2] !== undefined || isTruncatedMatch(match, args));
     });
   }
-  return pairs.join(';');
+  return pairs.join('');
 }
 
 function maskCookie(text: string, replace: ReplaceCredential): string {
   const out = text
     .replace(cookieValue, (match: string, ...args: unknown[]) => replace(match, isTruncatedMatch(match, args)))
-    .replace(cutCookieValue, (match) => replace(match, true));
-  if (!out.includes(';')) return out;
-
-  // 变量引用或已隐去标记会截断整段匹配。请求头 / 带引号的选项与 Set-Cookie 用不同的续扫口径。
+    .replace(cutCookieValue, (match) => replace(match, true))
+    .replace(inlineCookiePairChain, (chain) =>
+      chain.replace(laterInlineCookiePair, (_whole, space: string, pair: string) => space + replace(pair)),
+    );
+  // 变量引用或已隐去标记会截断整段匹配；逗号 / 分号后的键值对同样要续扫。
+  // 请求头 / 带引号的选项与 Set-Cookie 用不同的续扫口径。
   return out
     .replace(responseCookieList, (list) => continueCookiePairs(list, nextSetCookiePair, replace))
     .replace(requestCookieList, (list) => continueCookiePairs(list, nextCookiePair, replace));
