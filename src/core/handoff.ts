@@ -655,14 +655,18 @@ export async function adoptIntoChain(
       const kinds = new Set(hiddenStats.flatMap((st) => st.kinds ?? []));
       const compressed = kinds.has('compressed');
       const compressedEmpty = kinds.has('compressed-empty');
+      const empty = kinds.has('empty');
       const damaged = kinds.has('damaged');
+      // 0 字节未压缩 / 压缩副本的内容都已丢，下一步同样是备份恢复（或另开新会话），
+      // 不能沿用坏首行那种「先确认是否截断、修好后接入」的说法。
+      const lost = compressedEmpty || empty;
       // 0 字节压缩副本内容已丢：能做的只有从备份恢复（或放弃它、另开新会话），
       // 不能沿用「展开后」——展开一个 0 字节副本拿不回任何内容。
       const recovery = compressed
-        ? damaged || compressedEmpty
+        ? damaged || lost
           ? '恢复或展开后'
           : '展开后'
-        : compressedEmpty
+        : lost
           ? damaged
             ? '恢复或重开会话后'
             : '从备份恢复后'

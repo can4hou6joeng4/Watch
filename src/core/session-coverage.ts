@@ -1,4 +1,4 @@
-import type { ProviderAdapter } from '../providers/adapter.js';
+import type { ProviderAdapter, UnattributableKind } from '../providers/adapter.js';
 import { escapeControlChars } from './display.js';
 
 /**
@@ -24,7 +24,7 @@ export type UnattributableStat = {
   /** 覆盖默认的「可能是被截断，能从备份恢复就别直接删」建议；压缩副本不是损坏，不能沿用 */
   advice?: string;
   /** 这一档的原因分类，供写路径给分档的下一步（见 `ProviderAdapter.unattributable`） */
-  kinds?: ('damaged' | 'compressed' | 'compressed-empty')[];
+  kinds?: UnattributableKind[];
   /**
    * 读不出来的容器位置（如 Kimi 的工作区分组目录）。
    * `count` 只数会话文件；一个分组里可能有 0 到几十条会话，混进同一个数字会少报，
@@ -143,13 +143,18 @@ export function unattributableEmptyNote(stats: readonly UnattributableStat[]): s
   );
 }
 
-/** `--json` 用的结构化形状：脚本不必解析中文文案 */
+/** `--json` 用的结构化形状：脚本不必解析中文文案；`kinds` 让它能分清「展开」与「备份恢复」 */
 export function unattributableJson(
   stats: readonly UnattributableStat[],
-): { provider: string; count: number; locations?: number }[] {
+): { provider: string; count: number; kinds?: UnattributableKind[]; locations?: number }[] {
   return stats.map((s) => {
     const locations = locationCount(s);
-    return { provider: s.provider, count: s.count, ...(locations ? { locations } : {}) };
+    return {
+      provider: s.provider,
+      count: s.count,
+      ...(s.kinds?.length ? { kinds: [...s.kinds] } : {}),
+      ...(locations ? { locations } : {}),
+    };
   });
 }
 

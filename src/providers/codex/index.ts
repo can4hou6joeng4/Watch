@@ -12,7 +12,7 @@ import { digestFile } from '../../core/atomic.js';
 import type { FileDigest } from '../../core/atomic.js';
 import { asJsonObject, parseJsonObject } from '../../core/jsonl.js';
 import { describePathReadFailureReason, isMissingPathError, iterateFileLines } from '../../core/read-text.js';
-import type { ProviderAdapter, PreflightContext, WriteLimit } from '../adapter.js';
+import type { ProviderAdapter, PreflightContext, UnattributableKind, WriteLimit } from '../adapter.js';
 import { PreflightBlockedError, SessionLookupFailureError } from '../adapter.js';
 import { acquireThreadWriterLock, probeThreadWriterHolders, threadWriterLockPath, writerLockPathForRef, WriterLockDirError, type WriterLockGuard } from './writer-lock.js';
 export { threadWriterLockPath };
@@ -322,18 +322,28 @@ export async function codexUnattributableRollouts(
   summary: string;
   cause?: string;
   advice?: string;
-  kinds?: ('damaged' | 'compressed' | 'compressed-empty')[];
+  kinds?: UnattributableKind[];
 }> {
   const root = sessionsRoot ?? path.join(codexDir(), 'sessions');
   const compressed: string[] = [];
   const files = await collectRecentRolloutFiles(root, undefined, compressed);
   const samples: string[] = [];
   let count = 0;
+  let damaged = 0;
+  const emptyRollouts: string[] = [];
   for (const f of files) {
-    const { cwd: metaCwd, error, code } = await rolloutCwdDetail(f.filePath);
+    const { cwd: metaCwd, error, code, emptyFile } = await rolloutCwdDetail(f.filePath);
     if (metaCwd || code) continue;
     count += 1;
-    if (samples.length < 3) samples.push(`${escapeControlChars(f.filePath)}（${error ?? '原因未知'}）`);
+    if (samples.length < 3) {
+      samples.push(
+        emptyFile
+          ? `${escapeControlChars(f.filePath)}（0 字节，内容已丢失）`
+          : `${escapeControlChars(f.filePath)}（${error ?? '原因未知'}）`,
+      );
+    }
+    if (emptyFile) emptyRollouts.push(f.filePath);
+    else damaged += 1;
   }
   // summary 直接点名那一行：共用文案不写死 provider 名，但用户需要知道「修的是首行」
   const summary = 'session_meta 首行';
@@ -351,11 +361,39 @@ export async function codexUnattributableRollouts(
     }
     (empty ? compressedEmpty : compressedIntact).push(file);
   }
-  const kinds: ('damaged' | 'compressed' | 'compressed-empty')[] = [];
-  if (count > 0) kinds.push('damaged');
+  const kinds: UnattributableKind[] = [];
+  if (damaged) kinds.push('damaged');
+  // 0 字节未压缩 rollout 连首行都没有，不是「首行可能只是被截断」；它与 0 字节压缩副本
+  // 的下一步相同（备份恢复 / 重开会话），但文件形状不同，分别给脚本一个稳定的分类。
+  if (emptyRollouts.length) kinds.push('empty');
   if (compressedIntact.length) kinds.push('compressed');
   if (compressedEmpty.length) kinds.push('compressed-empty');
-  if (!compressed.length) return { count, samples, summary, kinds };
+  // 未压缩与压缩两类都要分档，否则只有 0 字节 rollout 时会落回「首行缺失或损坏，可能
+  // 被截断」的默认文案，把「内容已丢」讲成「先查文件完整性」。
+  const uncompressedSummary = [
+    damaged ? `${damaged} 个 .jsonl 的 session_meta 首行缺失或损坏` : '',
+    emptyRollouts.length ? `${emptyRollouts.length} 个 .jsonl 是 0 字节（内容已丢失）` : '',
+  ]
+    .filter(Boolean)
+    .join('、');
+  const uncompressedAdvice = [
+    damaged ? `坏首行的那 ${damaged} 个先把内容确认清楚（可能是被截断），能从备份恢复就别直接删` : '',
+    emptyRollouts.length
+      ? `${emptyRollouts.length} 个 0 字节 .jsonl 的内容已经没了，只能从备份恢复该文件；不要试图修复首行`
+      : '',
+  ]
+    .filter(Boolean)
+    .join('；');
+  const compressedSummary = [
+    compressedIntact.length ? `${compressedIntact.length} 个只剩完好的 .jsonl.zst 压缩副本` : '',
+    compressedEmpty.length ? `${compressedEmpty.length} 个只剩 0 字节 .jsonl.zst 副本（内容已丢失）` : '',
+  ]
+    .filter(Boolean)
+    .join('、');
+  if (!compressed.length) {
+    if (!emptyRollouts.length) return { count, samples, summary, kinds };
+    return { count, samples, summary, kinds, cause: uncompressedSummary, advice: uncompressedAdvice };
+  }
   // 压缩副本是另一种原因：文件没有损坏，只是本版不读 `.jsonl.zst`。混用「可能是被截断」会把用户
   // 引去反复查文件内容，必须换掉原因与建议两句话。
   // 混合计数时 advice 要分开说：压缩副本「文件是完好的」，而坏首行那部分可能真的被截断了——
@@ -371,29 +409,35 @@ export async function codexUnattributableRollouts(
   ]
     .filter(Boolean)
     .join('；');
-  const compressedSummary = [
-    compressedIntact.length ? `${compressedIntact.length} 个只剩完好的 .jsonl.zst 压缩副本` : '',
-    compressedEmpty.length ? `${compressedEmpty.length} 个只剩 0 字节 .jsonl.zst 副本（内容已丢失）` : '',
-  ]
-    .filter(Boolean)
-    .join('、');
   const compressedSamples = [
     ...compressedIntact.map((f) => `${escapeControlChars(f)}（只有 .jsonl.zst 压缩副本）`),
     ...compressedEmpty.map((f) => `${escapeControlChars(f)}（只有 0 字节 .jsonl.zst 副本，内容已丢失）`),
   ];
+  const compressedCause = compressedEmpty.length && !compressedIntact.length
+    ? `这些文件只剩压缩副本：${compressedSummary}`
+    : `${compressedSummary}，本版 Watch 只读取未压缩的 .jsonl`;
+  const legacyCause = count > 0
+    ? `${summary}缺失或损坏，另有 ${compressedCount} 个已被 Codex 压缩为 .jsonl.zst${compressedEmpty.length ? `（其中 ${compressedEmpty.length} 个副本是 0 字节、内容已丢失）` : ''}，本版 Watch 只读取未压缩的 .jsonl`
+    : compressedEmpty.length
+      ? `这些文件只剩压缩副本：${compressedSummary}。本版 Watch 只读取未压缩的 .jsonl`
+      : '这些文件已被 Codex 压缩为 .jsonl.zst，本版 Watch 只读取未压缩的 .jsonl';
+  const cause = emptyRollouts.length
+    ? [uncompressedSummary, compressedEmpty.length || compressedIntact.length ? compressedCause : '']
+        .filter(Boolean)
+        .join('；')
+    : legacyCause;
+  const advice = emptyRollouts.length
+    ? [uncompressedAdvice, compressedAdvice].filter(Boolean).join('；')
+    : count > 0
+      ? `坏首行的那 ${count} 个先把内容确认清楚（可能是被截断），能从备份恢复就别直接删；${compressedAdvice}`
+      : compressedAdvice;
   return {
     count: count + compressedCount,
     samples: [...samples, ...compressedSamples.slice(0, Math.max(0, 3 - samples.length))],
     summary,
     kinds,
-    cause: count > 0
-      ? `${summary}缺失或损坏，另有 ${compressedCount} 个已被 Codex 压缩为 .jsonl.zst${compressedEmpty.length ? `（其中 ${compressedEmpty.length} 个副本是 0 字节、内容已丢失）` : ''}，本版 Watch 只读取未压缩的 .jsonl`
-      : compressedEmpty.length
-        ? `这些文件只剩压缩副本：${compressedSummary}。本版 Watch 只读取未压缩的 .jsonl`
-        : '这些文件已被 Codex 压缩为 .jsonl.zst，本版 Watch 只读取未压缩的 .jsonl',
-    advice: count > 0
-      ? `坏首行的那 ${count} 个先把内容确认清楚（可能是被截断），能从备份恢复就别直接删；${compressedAdvice}`
-      : compressedAdvice,
+    cause,
+    advice,
   };
 }
 

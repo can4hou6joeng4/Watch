@@ -1,5 +1,5 @@
 import { realpath, stat } from 'node:fs/promises';
-import type { ProviderAdapter, WriteLimit } from '../providers/adapter.js';
+import type { ProviderAdapter, UnattributableKind, WriteLimit } from '../providers/adapter.js';
 import { listAdapters, listProviders } from '../providers/registry.js';
 import type { ProviderInfo } from './types.js';
 import type { Chain, ChainsElsewhere } from './store.js';
@@ -137,6 +137,11 @@ export type StorageProbe = {
    * `sessions` / `recent` 里根本不会出现，四条通道都不说话，用户会以为它从来没存在过。
    */
   unattributable?: number;
+  /**
+   * `unattributable` 的原因分类（`damaged` / `compressed` / `compressed-empty` / `empty`）。
+   * 只有条数时，0 字节会话与完好压缩副本看起来一样，脚本无法选「备份恢复」还是「让原生展开」。
+   */
+  unattributableKinds?: UnattributableKind[];
   /**
    * 读不出来的容器位置数（如 Kimi 的工作区分组）。
    *
@@ -583,6 +588,7 @@ export async function doctorReport(cwd: string, deps: DoctorDeps): Promise<Docto
       }
       const unattributableStat = unattributableStats.find((s) => s.provider === adapter.id);
       const unattributable = unattributableStat?.count;
+      const unattributableKinds = unattributableStat?.kinds ?? [];
       const unattributableLocations = (unattributableStat?.locations ?? []).reduce((n, l) => n + l.count, 0);
       storage.push({
         provider: adapter.id,
@@ -590,6 +596,7 @@ export async function doctorReport(cwd: string, deps: DoctorDeps): Promise<Docto
         ...(capped ? { capped: true } : {}),
         ...(unreadable.length ? { unreadable: unreadable.length } : {}),
         ...(unattributable ? { unattributable } : {}),
+        ...(unattributableKinds.length ? { unattributableKinds } : {}),
         ...(unattributableLocations ? { unattributableLocations } : {}),
         ...writeState,
       });

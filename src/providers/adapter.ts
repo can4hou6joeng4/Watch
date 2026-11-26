@@ -126,6 +126,13 @@ export class SessionLookupFailureError extends Error {
 }
 
 /**
+ * `unattributable()` 的原因分类，脚本据此选下一步，不必解析中文原因。
+ * `empty` 是 0 字节未压缩会话文件（首行都没有），与 `compressed-empty` 一样内容已丢，
+ * 而 `damaged` 的首行坏掉可能只是被截断，不能给同一句建议。
+ */
+export type UnattributableKind = 'damaged' | 'compressed' | 'compressed-empty' | 'empty';
+
+/**
  * Provider 适配器：每家 CLI 一个实现。
  * 新增 Provider = 新增 providers/<name>/ 目录 + registry 注册一行。
  */
@@ -232,10 +239,12 @@ export interface ProviderAdapter {
     /**
      * 这一档的原因分类：`damaged` 是归属元数据坏掉（可能要恢复），`compressed` 是只剩
      * 本版不读的完好压缩副本（让原生重新展开即可），`compressed-empty` 是只剩 0 字节压缩副本
-     * （文件还在、内容已丢，只能备份恢复或重开会话）。消费方（`adopt` 零结果）据此给不同的
-     * 下一步，**不能靠匹配 `advice` 文案**——文案改一个字就会把建议分错档。
+     * （文件还在、内容已丢，只能备份恢复或重开会话），`empty` 是 0 字节未压缩会话文件
+     * （首行都没有，内容已丢，同样只能备份恢复或重开会话）。消费方（`adopt` 零结果、
+     * 列表与 doctor 的 JSON）据此给不同的下一步，**不能靠匹配 `advice` 文案**——文案改一个字
+     * 就会把建议分错档。
      */
-    kinds?: ('damaged' | 'compressed' | 'compressed-empty')[];
+    kinds?: UnattributableKind[];
     locations?: { description: string; count: number; samples: string[] }[];
   }>;
 
