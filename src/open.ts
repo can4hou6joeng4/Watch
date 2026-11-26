@@ -30,7 +30,7 @@ import {
 import { sessionCwdInspection, type CwdInspection } from './core/cwd.js';
 import { escapeControlChars } from './core/display.js';
 import { commandControlWarnings } from './core/terminal-command.js';
-import { psQuote, shellQuote } from './core/shell-quote.js';
+import { psQuote, sessionIdCommandProblem, shellQuote } from './core/shell-quote.js';
 export { psQuote, shellQuote };
 
 /**
@@ -645,6 +645,12 @@ export async function openSession(
       ok: false,
       error: `${chainUse ? `${chainUse}；` : ''}未找到会话: ${escapeControlChars(targetId)}${provider ? `（provider=${provider}）` : ''}。${typo ? `${typo}。` : ''}请确认 id 正确且对应 CLI 已安装登录。${LOOKUP_NEXT_STEP}${unchecked ? `。${unchecked}` : ''}${detail}`,
     };
+  }
+  // 恢复命令最后才输出，但非法目标必须在 --from 写入之前拒绝。
+  const commandProblem = sessionIdCommandProblem(target.found.ref.sessionId);
+  if (commandProblem) {
+    warnings.push(...lookup);
+    return { ok: false, error: commandProblem, ...(warnings.length ? { warnings } : {}) };
   }
   const notes: string[] = [];
   let merged = 0;
@@ -1892,6 +1898,11 @@ export async function openInProvider(
   const mapping = store ?? openMappingDb(diagnostics);
   const planned = await planOpenInProvider(sourceId, providerId, mapping, diagnostics);
   if (!planned.ok) return { ...planned, error: attachDiagnostics(planned.error, diagnostics) };
+  // 校验实际选中的恢复目标；来源只读转入合法新目标时不按来源 ID 拒绝。
+  const commandProblem = planned.plan.targetRef ? sessionIdCommandProblem(planned.plan.targetRef.sessionId) : null;
+  if (commandProblem) {
+    return { ok: false, error: attachDiagnostics(commandProblem, diagnostics), ...(diagnostics.length ? { warnings: diagnostics } : {}) };
+  }
   const { adapter: target, sourceRef, sourceProvider, cwd, plan, sourceSnapshot: srcSnapshot, cwdState } = planned;
   // 来源快照的基线在 `planOpenInProvider` 读取来源之前就取好了（见那里的注释）：
   // 这里只负责写完之后再比一次，期间（含规划阶段）被追加的话都能报出来
@@ -2144,6 +2155,11 @@ export async function checkOpenInProvider(
   const mapping = store ?? openMappingDb(diagnostics);
   const planned = await planOpenInProvider(sourceId, providerId, mapping, diagnostics);
   if (!planned.ok) return { ...planned, error: attachDiagnostics(planned.error, diagnostics) };
+  // 校验实际选中的恢复目标；来源只读转入合法新目标时不按来源 ID 拒绝。
+  const commandProblem = planned.plan.targetRef ? sessionIdCommandProblem(planned.plan.targetRef.sessionId) : null;
+  if (commandProblem) {
+    return { ok: false, error: attachDiagnostics(commandProblem, diagnostics), ...(diagnostics.length ? { warnings: diagnostics } : {}) };
+  }
   const { adapter: target, cwd, plan } = planned;
   const base: OpenSessionResult = {
     ok: true,
