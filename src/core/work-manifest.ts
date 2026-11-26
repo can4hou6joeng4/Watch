@@ -906,15 +906,19 @@ export function renderWorkManifest(
     );
     lines.push('');
   }
-  // 「没有记录」只适用于上面确实什么都没披露的情况：有截断、读不出路径或失败写入时，
-  // 上面几行已经说明了发生过什么，再说一句「没有记录到」会把它们盖掉。
+  // 「没有记录」只适用于上面确实什么都没披露的情况：有截断、读不出路径、失败写入或失败调用时，
+  // 上面几行与后面的「失败与中断」已经说明了发生过什么，再说一句「没有记录到」会把它们盖掉。
+  // 失败调用不进 `files` / `commands`，但可能已经改了工作树，不能说成「这次会话什么都没做」。
   if (
     !manifest.files.length &&
     !manifest.commands.length &&
     manifest.omittedFiles === 0 &&
     manifest.omittedCommands === 0 &&
     manifest.unreadableWrites === 0 &&
-    manifest.failedFileWrites === 0
+    manifest.failedFileWrites === 0 &&
+    manifest.failedAttemptCalls === 0 &&
+    manifest.unclassifiedFailures === 0 &&
+    manifest.omittedFailedAttemptCalls === 0
   ) {
     lines.push('这次会话没有记录到文件改动或命令（或来源工具的入参形状尚未被识别）。');
     lines.push('');
