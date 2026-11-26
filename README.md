@@ -228,7 +228,7 @@ import-codex  prepare|confirm|status|list|project-prepare|project-confirm|projec
 
 **工作目录与分支**
 
-文档头还会给出工作目录当前状态、工作树类型与当前分支；仓库子目录会向上找到最近的仓库根并把位置写出。工作目录不可用时，`--json` 另有 `sourceCwd: { state }`（`missing` / `not-directory` / `denied` / `unknown`，后者附 `reason`），健康目录不输出该字段。`--json` 另有结构化 `sourceBranch`（普通仓库根为 `{ branch, repoRoot }`，detached 为 `{ detached: true, repoRoot }`），链接工作树为 `sourceWorktree: { mainWorktree, branch }`（detached 时带 `detached: true`，`HEAD` 读不出或损坏时带 `branchUnknown: <原因>` 并记入 `prompt_source_branch_unreadable` finding）；工作树探测失败时给 `sourceWorktreeUnknown: <原因>` 与 `prompt_source_worktree_unreadable` finding，缺省的 `sourceWorktree` 不能读成「不是链接工作树」。普通仓库与链接工作树的 `HEAD` 不是分支引用或提交号时都只说无法确认当前分支，不标成 detached。
+文档头还会给出工作目录当前状态、工作树类型与当前分支；仓库子目录会向上找到最近的仓库根并把位置写出。工作目录不可用时，`--json` 另有 `sourceCwd: { state }`（`missing` / `not-directory` / `denied` / `unknown`，后者附 `reason`），健康目录不输出该字段。`--json` 另有结构化 `sourceBranch`（普通仓库根为 `{ branch, repoRoot }`，detached 为 `{ detached: true, repoRoot }`），链接工作树为 `sourceWorktree: { mainWorktree, branch }`（会话目录在工作树子目录时也向上认出工作树，另带 `worktreeRoot: <工作树根>`，正文同样写明；detached 时带 `detached: true`，`HEAD` 读不出或损坏时带 `branchUnknown: <原因>` 并记入 `prompt_source_branch_unreadable` finding）；工作树探测失败时给 `sourceWorktreeUnknown: <原因>` 与 `prompt_source_worktree_unreadable` finding，缺省的 `sourceWorktree` 不能读成「不是链接工作树」。普通仓库与链接工作树的 `HEAD` 不是分支引用或提交号时都只说无法确认当前分支，不标成 detached。
 
 **生成期间的来源变化**
 
