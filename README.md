@@ -248,6 +248,8 @@ import-codex  prepare|confirm|status|list|project-prepare|project-confirm|projec
 
 正文还会列出会话里写过 / 编辑过的文件与运行过的命令（「改动概览」，不受档位裁剪影响），并对照生成那一刻的磁盘：确定已不在的标注「本次生成时磁盘上已不在」，相对路径没找到或读不出来标注「无法确认」，被补丁删除 / 移走的标注「本次会话里被补丁删除或移走」，会话目录之外的路径只计数、不核对；会话目录不可用或没有记录时，正文直接写明「本次没有核对」，不与「都还在」长得一样。`--json` 的 `manifest.files[].disk` 取值为 `missing` / `unverified` / `removed`（缺省既可能是「都还在」也可能是「没核对」），`manifestDisk: { checked, missing, unverified, outside, removed }` 给出计数，只有会话目录可用、且清单里有文件时才出现。
 
+清单把 cwd 内的绝对路径写成相对路径，但工具参数里的首尾空格按原样保留——它们可能是真实的文件名或目录名，不能把 `notes.txt ` 与 `notes.txt` 当成同一个文件。
+
 **凭据遮盖**
 
 这份文档是要复制给另一个助手的，所以会话里**格式固定**的密钥 / 令牌（常见厂商的 API 密钥，GitHub / GitLab / Slack / npm / Hugging Face 令牌，AWS 访问密钥 ID，JWT，PEM / PGP 私钥块），以及四种位置固定的值（`postgres://user:口令@host` 这类连接串里的口令、`X-Api-Key` / `X-Auth-Token` 这类密钥头的值、`Cookie` / `Set-Cookie` 头与 `curl --cookie` 里的 `name=value` 值（保留后续命令参数；请求头或带引号的参数里前一项是变量引用时，也会继续检查后面的 Cookie）、`Authorization` 头的 Bearer / Token / Basic 值）在进入文档前会换成 `[已隐去：种类]`，头部写明种类与个数，`--json` 另给 `credentialsMasked: { total, kinds }`（只有种类与个数）；来源文件不改，原文仍在那里。只认固定格式与固定位置：单独出现的口令、内部地址与没有固定前缀的密钥不会被识别，没有这一行不代表文档里没有敏感内容，转交前仍需自行检查。这一处理只在 `prompt` 生效，`open --to` 等写入原生会话的路径按原记录转入。

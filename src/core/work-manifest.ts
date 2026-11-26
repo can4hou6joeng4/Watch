@@ -231,26 +231,28 @@ function inputRecord(event: ProcessEvent): Record<string, unknown> | null {
 function firstString(obj: Record<string, unknown>, keys: readonly string[]): string | undefined {
   for (const key of keys) {
     const value = obj[key];
-    if (typeof value === 'string' && value.trim()) return value.trim();
+    // 路径、命令与 workdir 是明确的工具参数：末尾空格可能是真实文件名或目录名的一部分。
+    // 只把「空白串」视为没值，不 trim；归一在 normalizeManifestPath() 里单独处理分隔符。
+    if (typeof value === 'string' && value.trim()) return value;
   }
   return undefined;
 }
 
 /** 把路径归一成「相对会话 cwd」的形式；cwd 之外保持绝对路径。 */
 export function normalizeManifestPath(raw: string, cwd: string): string {
-  const trimmed = raw.trim();
-  if (!trimmed) return trimmed;
-  // 相对路径也要折叠 `./` 与中间的 `..`：直接改文件的工具用绝对路径，补丁标记用相对路径，
+  if (!raw.trim()) return raw;
+  // 折叠 `./` 与中间的 `..`：直接改文件的工具用绝对路径，补丁标记用相对路径，
   // 同一文件两种写法并存时（`./src/a.ts` 与 `/proj/src/a.ts`）不折叠就会被记成两条改动。
-  if (!path.isAbsolute(trimmed)) {
-    const normalized = path.normalize(trimmed);
-    return normalized || trimmed;
+  // 首尾空格是文件名的一部分，path.normalize() 不会删掉它们。
+  if (!path.isAbsolute(raw)) {
+    const normalized = path.normalize(raw);
+    return normalized || raw;
   }
-  if (!cwd || !path.isAbsolute(cwd)) return trimmed;
-  const rel = path.relative(cwd, trimmed);
+  if (!cwd || !path.isAbsolute(cwd)) return raw;
+  const rel = path.relative(cwd, raw);
   // `path.relative` 在外面前缀不同（Windows 跨盘）时返回绝对路径，这种原样保留。
   // 只有真正的父目录段才表示 cwd 之外：文件名本身可以以 `..` 开头（如 `..foo`）。
-  if (!rel || rel === '..' || rel.startsWith(`..${path.sep}`) || path.isAbsolute(rel)) return trimmed;
+  if (!rel || rel === '..' || rel.startsWith(`..${path.sep}`) || path.isAbsolute(rel)) return raw;
   return rel;
 }
 
@@ -286,23 +288,22 @@ export function extractPatchEntries(command: string): PatchEntry[] {
     if (line.startsWith('*** ')) inHunk = false;
     if (inHunk) continue;
     const trimmed = line.trim();
-    for (const marker of PATCH_MARKERS) {
-      if (!trimmed.startsWith(marker)) continue;
-      const target = trimmed.slice(marker.length).trim();
-      if (!target) break;
-      if (marker === '*** Delete File: ') {
-        entries.push({ path: target, removed: true });
-        lastUpdate = null;
-      } else if (marker === '*** Move to: ') {
-        if (lastUpdate) lastUpdate.removed = true;
-        entries.push({ path: target, removed: false });
-        lastUpdate = null;
-      } else {
-        const entry: PatchEntry = { path: target, removed: false };
-        entries.push(entry);
-        lastUpdate = marker === '*** Update File: ' ? entry : null;
-      }
-      break;
+    const marker = PATCH_MARKERS.find((candidate) => trimmed.startsWith(candidate));
+    if (!marker) continue;
+    // 固定标记前的缩进不算目标名的一部分；标记后的空白属于路径（文件名可以以空格开头 / 结尾）。
+    const target = line.slice(line.indexOf(marker) + marker.length);
+    if (!target.trim()) break;
+    if (marker === '*** Delete File: ') {
+      entries.push({ path: target, removed: true });
+      lastUpdate = null;
+    } else if (marker === '*** Move to: ') {
+      if (lastUpdate) lastUpdate.removed = true;
+      entries.push({ path: target, removed: false });
+      lastUpdate = null;
+    } else {
+      const entry: PatchEntry = { path: target, removed: false };
+      entries.push(entry);
+      lastUpdate = marker === '*** Update File: ' ? entry : null;
     }
   }
   return entries;
@@ -458,7 +459,7 @@ function classify(event: ProcessEvent): Classified {
 
   const command = firstString(obj, COMMAND_KEYS);
   if (command) {
-    const workdir = typeof obj.workdir === 'string' && obj.workdir.trim() ? obj.workdir.trim() : undefined;
+    const workdir = typeof obj.workdir === 'string' && obj.workdir.trim() ? obj.workdir : undefined;
     return { kind: 'command', command, ...(workdir ? { workdir } : {}) };
   }
   // 旧版 Codex shell（rust-v0.20.0 的 create_shell_tool）把 command 记成 argv 数组；
@@ -466,7 +467,7 @@ function classify(event: ProcessEvent): Classified {
   if (name.toLowerCase() === 'shell') {
     const argv = commandArgv(obj.command);
     if (argv) {
-      const workdir = typeof obj.workdir === 'string' && obj.workdir.trim() ? obj.workdir.trim() : undefined;
+      const workdir = typeof obj.workdir === 'string' && obj.workdir.trim() ? obj.workdir : undefined;
       // 官方 maybe_parse_apply_patch：argv 恰好 [apply_patch, 补丁正文] 时它是补丁，不是 shell 命令。
       if (isPatchArgv(argv)) {
         const entries = extractPatchEntries(argv[1]!);
