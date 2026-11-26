@@ -337,13 +337,31 @@ function stripHeredocBodies(command: string): string {
 }
 
 /**
+ * 引号里的文字是数据，不是命令。`echo "*** Delete File: …"` 或 PowerShell here-string 里的
+ * 补丁标记不能被当成真实改动；`bash -c 'apply_patch …'` 这类把命令放进引号的包装要保留原文。
+ */
+function stripQuotedData(text: string, keepShellWrappers: boolean): string {
+  const shellWrapper =
+    /\b(?:bash|sh|zsh|fish)\s+-c\b|\bcmd\s+\/c\b|\bpowershell(?:-preview)?\b[^\n]*-Command\b/i.test(text);
+  if (keepShellWrappers && shellWrapper) return text;
+  return text.replace(/"[\s\S]*?"|'[\s\S]*?'/g, '');
+}
+
+/**
  * 普通 heredoc 的正文只是数据，不是要执行的补丁。若去掉正文后的命令骨架里仍有 `apply_patch`
  * （sudo、子 shell、bash -c、Windows 路径、别名、或先写临时补丁再 `apply_patch < file`），
  * 就保留原文继续按补丁扫描；骨架没有才认定正文里的标记是数据。注释里的词不算调用。
  */
 function stripNonPatchHeredocs(command: string): string {
-  const skeleton = stripHeredocBodies(command).replace(/#[^\n]*/g, '');
-  return /\bapply_patch\b/i.test(skeleton) ? command : stripHeredocBodies(command);
+  const base = stripHeredocBodies(command);
+  const noComments = base.replace(/#[^\n]*/g, '');
+  const shellWrapper =
+    /\b(?:bash|sh|zsh|fish)\s+-c\b|\bcmd\s+\/c\b|\bpowershell(?:-preview)?\b[^\n]*-Command\b/i.test(noComments);
+  const skeleton = stripQuotedData(noComments, true);
+  if (/\bapply_patch\b/i.test(skeleton) || (shellWrapper && /\bapply_patch\b/i.test(noComments))) {
+    return command;
+  }
+  return stripQuotedData(base, false);
 }
 
 /** 单条工具调用的归类结果。`null` = 这条调用不是文件写入也不是命令（搜索 / TODO / 子代理…）。 */

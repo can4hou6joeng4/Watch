@@ -37,7 +37,7 @@ const responseCookieHeader = `(?<=(?<![\\w-])Set-Cookie${cookieHeaderSeparator.s
 const quotedCookieOption = /(?<=(?<![\w-])--cookie(?:=|[ \t]+)\\?["'])/;
 const bareCookieOption = /(?<=(?<![\w-])--cookie(?:=|[ \t]+))/;
 const cookiePairName = /[^\s="'`\\…\[\]{}$<>;|&()]+=/;
-const cookieHeaderValue = /[^"'`\\…\[\]{}$<>\r\n]/;
+const cookieHeaderValue = /[^"'`\\…\[\]{}$<>;\r\n]/;
 const bareCookieValue = /[^\s"'`\\…\[\]{}$<>;|&()]/;
 
 function cookieValuePattern(minLength: number, end: string): RegExp {
