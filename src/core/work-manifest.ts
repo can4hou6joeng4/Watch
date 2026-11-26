@@ -409,17 +409,20 @@ function classify(event: ProcessEvent): Classified {
   if (event.kind !== 'tool_call') return null;
   const name = (event.name ?? '').trim();
   const obj = inputRecord(event);
-  const rawInput = typeof event.input === 'string' ? event.input.trim() : '';
+  // 不能对整段入参做 trim()：补丁可能以 `*** Delete File: x.ts  ` 这样的标记行结尾，
+  // 尾部空格是文件名的一部分。空串判断另用 trim()，实际解析与展示都保留原值。
+  const rawInput = typeof event.input === 'string' ? event.input : '';
+  const hasRawInput = Boolean(rawInput.trim());
 
   // Codex 的 freeform apply_patch 直接传补丁字符串；它不是 shell 命令。
   if (!obj) {
-    if (rawInput && name.toLowerCase() === 'apply_patch') {
+    if (hasRawInput && name.toLowerCase() === 'apply_patch') {
       const entries = extractPatchEntries(rawInput);
       if (entries.length > 0) return { kind: 'patch', entries };
     }
-    if (rawInput && EXEC_NAME.test(name)) return { kind: 'command', command: rawInput };
+    if (hasRawInput && EXEC_NAME.test(name)) return { kind: 'command', command: rawInput };
     // 入参整个缺失（旧记录、被裁剪的参数）时也要披露：工具名属于已知写入类，
-    // 拿不到路径不等于「没写」；`rawInput` 为空不能成为静默跳过的理由。
+    // 拿不到路径不等于「没写」；`hasRawInput` 为空不能成为静默跳过的理由。
     if (isKnownFileWriter(name)) return { kind: 'unreadable-write' };
     return null;
   }
