@@ -629,7 +629,9 @@ export function collectWorkManifest(
     // 旁证看**原始**参数，不看归一化后的 key：`/proj/src/a.ts` 归一成 `src/a.ts` 之后，
     // 就看不出这条路径原本是绝对的，磁盘对照也就分不清「确定不在」与「无法确认」。
     const probe = probes.get(key) ?? { absolute: false, removed: false };
-    if (path.isAbsolute(rawPath.trim())) probe.absolute = true;
+    // 起始空格是文件名的一部分：` /proj/a.ts` 不是绝对路径，不能用 trim 后的形状把它当绝对路径，
+    // 否则相对路径找不到时会被误判成「确定不在磁盘上」。末尾空格不影响 path.isAbsolute。
+    if (path.isAbsolute(rawPath)) probe.absolute = true;
     // **按最后一次操作覆盖**：先 `*** Delete File: a` 再 `Write a`（或反过来）时，只有最后
     // 一次决定它现在该不该在磁盘上。只置位不清除会把「删除后又重建」的文件永久跳过核对，
     // 还会让「按补丁已被删除」这句出现在一个刚重建的文件上。
