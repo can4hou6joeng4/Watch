@@ -841,6 +841,8 @@ export function buildHandoffPrompt(
   }
 
   const body: string[] = [];
+  // 逐轮省略的事件在这里累加；循环之后按 stats 补上整轮裁掉的差额，保证 findings 与正文同一口径。
+  let eventsOmittedInKeptTurns = 0;
   for (const [index, turn] of kept.entries()) {
     // 首轮与尾部窗口之间若跳过了整段（见 selectTurns 的 joinNeedsMarker），在拼接处留一行标记：
     // 紧随其后的助手回复回答的是被省略的提问，不是上一轮。
@@ -904,12 +906,17 @@ export function buildHandoffPrompt(
       stats.includedEvents += compactEvents.length;
     }
     if (limits.eventsPerTurn === 0) {
-      if (procEvents.length) addFinding(findings, 'prompt_events_omitted', 'skipped', procEvents.length);
+      if (procEvents.length) {
+        eventsOmittedInKeptTurns += procEvents.length;
+        addFinding(findings, 'prompt_events_omitted', 'skipped', procEvents.length);
+      }
       continue;
     }
     const shown = limits.eventsPerTurn === null ? procEvents : procEvents.slice(0, limits.eventsPerTurn);
     if (shown.length < procEvents.length) {
-      addFinding(findings, 'prompt_events_omitted', 'skipped', procEvents.length - shown.length);
+      const omittedHere = procEvents.length - shown.length;
+      eventsOmittedInKeptTurns += omittedHere;
+      addFinding(findings, 'prompt_events_omitted', 'skipped', omittedHere);
     }
     if (shown.length) {
       // 只有过程记录、没有正文的轮次（工具轮 / 被中断的轮 / 失败披露载体轮）没有标题时，
@@ -934,6 +941,12 @@ export function buildHandoffPrompt(
   // 事件都不会出现在正文里。统一按「总数 − 进正文的」算省略，避免逐处增量漏加
   // （此前只数保留轮里被档位丢掉的事件，`events = includedEvents + omittedEvents` 不成立）。
   stats.omittedEvents = stats.events - stats.includedEvents;
+  // 逐轮已记的只是「保留轮里被档位丢掉的过程记录」。整轮裁掉的事件、只在头部渲染的披露事件
+  // 也进 stats.omittedEvents 与正文那行，finding 必须补到同一总数，不能让脚本只读 findings 时漏掉。
+  const omittedOutsideKeptTurns = stats.omittedEvents - eventsOmittedInKeptTurns;
+  if (omittedOutsideKeptTurns > 0) {
+    addFinding(findings, 'prompt_events_omitted', 'skipped', omittedOutsideKeptTurns);
+  }
   if (stats.omittedTurns > 0) addFinding(findings, 'prompt_turns_trimmed_to_profile', 'degraded', stats.omittedTurns);
   if (stats.truncatedTexts > 0) addFinding(findings, 'prompt_text_truncated', 'degraded', stats.truncatedTexts);
 

@@ -22,9 +22,18 @@ import type { ProcessEvent } from './types.js';
  * 完整的令牌留在了文档里。只在紧跟 `…` 时才认，且要求前缀之后至少还有 8 个字符：
  * `ghp_xxxx…`、`sk-ant-…` 这类人手写的占位写法不动。
  */
+type ReplaceCredential = (match: string, cut?: boolean) => string;
+
+/** String.replace 回调用的最后两个参数是 offset 与原文；紧跟省略号说明这是被上游截断的残片。 */
+function isTruncatedMatch(match: string, args: unknown[]): boolean {
+  const whole = args[args.length - 1];
+  const offset = args[args.length - 2];
+  return typeof whole === 'string' && typeof offset === 'number' && whole.startsWith('…', offset + match.length);
+}
+
 type CredentialKind = { label: string } & (
   | { pattern: RegExp; cut?: RegExp }
-  | { mask: (text: string, replace: (match: string) => string) => string }
+  | { mask: (text: string, replace: ReplaceCredential) => string }
 );
 
 // Cookie 头与带引号的 --cookie 参数可包含空格和多个键值对。无引号的参数到下一个 shell 分隔符为止。
@@ -61,9 +70,10 @@ function cookiePairPattern(minLength: number, cutLength: number, response: boole
   const guard = response
     ? '(?!(?:Path|Domain|Expires|Max-Age|SameSite|Secure|HttpOnly|Priority|Partitioned|MaxAge)\\s*=)'
     : '';
+  // 第三个捕获组区分「完整长度」与「紧跟省略号的残片」：残片单独计数，不能和完整值混在一起。
   return new RegExp(
     `^([ \\t]*)${guard}(${cookiePairName.source}(?:${cookieHeaderValue.source}{${minLength},}` +
-      `|${cookieHeaderValue.source}{${cutLength},}(?=…)))`,
+      `|(${cookieHeaderValue.source}{${cutLength},})(?=…)))`,
     'gi',
   );
 }
@@ -74,17 +84,23 @@ const nextSetCookiePair = cookiePairPattern(16, 8, true);
 function continueCookiePairs(
   list: string,
   pairPattern: RegExp,
-  replace: (match: string) => string,
+  replace: ReplaceCredential,
 ): string {
   const pairs = list.split(';');
   for (let i = 1; i < pairs.length; i++) {
-    pairs[i] = pairs[i].replace(pairPattern, (_, space: string, pair: string) => space + replace(pair));
+    pairs[i] = pairs[i].replace(pairPattern, (match: string, ...args: unknown[]) => {
+      const space = typeof args[0] === 'string' ? args[0] : '';
+      const pair = typeof args[1] === 'string' ? args[1] : match;
+      return space + replace(pair, args[2] !== undefined || isTruncatedMatch(match, args));
+    });
   }
   return pairs.join(';');
 }
 
-function maskCookie(text: string, replace: (match: string) => string): string {
-  const out = text.replace(cookieValue, replace).replace(cutCookieValue, replace);
+function maskCookie(text: string, replace: ReplaceCredential): string {
+  const out = text
+    .replace(cookieValue, (match: string, ...args: unknown[]) => replace(match, isTruncatedMatch(match, args)))
+    .replace(cutCookieValue, (match) => replace(match, true));
   if (!out.includes(';')) return out;
 
   // 变量引用或已隐去标记会截断整段匹配。请求头 / 带引号的选项与 Set-Cookie 用不同的续扫口径。
@@ -229,8 +245,9 @@ const KINDS: readonly CredentialKind[] = [
 // PGP 头，以及被截断的连接串（只剩 `scheme://user:` 与 `…`，没有 `@`）；第 341 轮补上裸 `apikey`。
 const QUICK_CHECK = /sk-|gh[pousr]_|github_pat_|gl(?:pat|rt|dt)-|AKIA|ASIA|AIza|xox[abcdeprs]-|xapp-|_live_|whsec_|npm_|hf_|eyJ|PRIVATE KEY-----|PGP PRIVATE KEY BLOCK|:\/\/[^\s/]*[:@]|uthorization|api-key|apikey|auth-key|auth-token|vault-token|cookie/i;
 
-/** 一次渲染内的收集器：按种类记下**不同的**凭据原文，用于去重计数。 */
-export type CredentialCollector = Map<string, Set<string>>;
+/** 一次渲染内的收集器：按种类记下完整值与被截断的残片，避免把两个独立密钥误合并。 */
+type CollectedKind = { values: Set<string>; cuts: Set<string> };
+export type CredentialCollector = Map<string, CollectedKind>;
 
 export type CredentialMaskReport = {
   /** 被隐去的**不同**凭据个数（同一个值出现多处只算一个） */
@@ -251,22 +268,24 @@ export function maskCredentials(text: string, collector: CredentialCollector): s
   if (!text || !QUICK_CHECK.test(text)) return text;
   let out = text;
   for (const kind of KINDS) {
-    const replace = (match: string): string => {
+    const replace: ReplaceCredential = (match, cut = false) => {
       let seen = collector.get(kind.label);
       if (!seen) {
-        seen = new Set();
+        seen = { values: new Set(), cuts: new Set() };
         collector.set(kind.label, seen);
       }
-      seen.add(match);
+      (cut ? seen.cuts : seen.values).add(match);
       return `${CREDENTIAL_PLACEHOLDER_PREFIX}${kind.label}]`;
     };
     if ('mask' in kind) {
       out = kind.mask(out, replace);
       continue;
     }
-    out = out.replace(kind.pattern, replace);
+    out = out.replace(kind.pattern, (match: string, ...args: unknown[]) =>
+      replace(match, isTruncatedMatch(match, args)),
+    );
     // 截断的那一截排在整条之后：够长的已经被上一行换掉，这里只剩长度不够、紧跟 `…` 的。
-    if (kind.cut) out = out.replace(kind.cut, replace);
+    if (kind.cut) out = out.replace(kind.cut, (match) => replace(match, true));
   }
   return out;
 }
@@ -298,16 +317,26 @@ export function maskEventCredentials(event: ProcessEvent, collector: CredentialC
 }
 
 /**
- * 各家 parser 的事件摘要本身是截断过的（如 Claude 取入参 JSON 首行的前一段），同一个密钥会以
- * 「完整值」和「被截断的前缀」两种样子出现：前缀只算进它所属的那个完整值，不另计一个。
+ * 完整值与截断残片分开去重（第 573 轮）：
+ * - 两个**完整**凭据即使一个是另一个的前缀，也必须是两个（两个不同的口令恰好共用前缀）；
+ * - 残片若是某个完整值的前缀，则归属那个完整值，不另计一个；
+ * - 没有对应完整值的残片之间仍按前缀去重（同一条令牌被截到不同长度）。
  */
-function countDistinct(values: Set<string>): number {
-  const list = [...values];
-  return list.filter((value) => !list.some((other) => other !== value && other.startsWith(value))).length;
+function countDistinct(collected: CollectedKind): number {
+  const values = [...collected.values];
+  const cuts = [...collected.cuts];
+  const independentCuts = cuts.filter((cut) => !values.some((value) => value.startsWith(cut)));
+  const distinctCuts = independentCuts.filter(
+    (cut) => !independentCuts.some((other) => other !== cut && other.startsWith(cut)),
+  );
+  return values.length + distinctCuts.length;
 }
 
 export function credentialMaskReport(collector: CredentialCollector): CredentialMaskReport {
-  const kinds = KINDS.filter((kind) => (collector.get(kind.label)?.size ?? 0) > 0).map((kind) => ({
+  const kinds = KINDS.filter((kind) => {
+    const seen = collector.get(kind.label);
+    return seen !== undefined && (seen.values.size > 0 || seen.cuts.size > 0);
+  }).map((kind) => ({
     label: kind.label,
     count: countDistinct(collector.get(kind.label)!),
   }));
