@@ -30,10 +30,10 @@ type CredentialKind = { label: string } & (
 // Cookie 头与带引号的 --cookie 参数可包含空格和多个键值对。无引号的参数到下一个 shell 分隔符为止。
 const cookieHeaderSeparator = /(?:\\?["'])?[ \t]*[:=][ \t]*(?:\\?["'])?/;
 const cookieHeader = `(?<=(?<![\\w-])(?:Set-)?Cookie${cookieHeaderSeparator.source})`;
-// 分号续扫要覆盖 `Set-Cookie` 的后续键值对：变量引用 / 已隐去标记会截断第一遍整段匹配，
-// 而 `(?<![\w-])Cookie` 会被 `Set-` 里的 `-` 卡住，密钥原样留在交接文档里。
-// 断言放在可选 `Set-` 之前，既不把 `X-Cookie` 当请求头，也不把 `--cookie` 参数放宽。
-const requestCookieHeader = `(?<=(?<![\\w-])(?:Set-)?Cookie${cookieHeaderSeparator.source})`;
+const requestCookieHeader = `(?<=(?<![\\w-])Cookie${cookieHeaderSeparator.source})`;
+const responseCookieHeader = `(?<=(?<![\\w-])Set-Cookie${cookieHeaderSeparator.source})`;
+// 续扫要覆盖 `Set-Cookie` 的后续键值对：变量引用 / 已隐去标记会截断第一遍整段匹配。
+// 断言放在 `Set-` 前卡住边界，既不把 `X-Cookie` 当请求头，也不把 `--cookie` 参数放宽。
 const quotedCookieOption = /(?<=(?<![\w-])--cookie(?:=|[ \t]+)\\?["'])/;
 const bareCookieOption = /(?<=(?<![\w-])--cookie(?:=|[ \t]+))/;
 const cookiePairName = /[^\s="'`\\…\[\]{}$<>;|&()]+=/;
@@ -52,27 +52,45 @@ function cookieValuePattern(minLength: number, end: string): RegExp {
 const cookieValue = cookieValuePattern(8, '');
 const cutCookieValue = cookieValuePattern(3, '(?=…)');
 const cookieListValue = /[^"'`\\\r\n]+/;
-const cookieList = new RegExp(`(?=\\S)(?:${requestCookieHeader}|${quotedCookieOption.source})${cookieListValue.source}`, 'gi');
-const nextCookiePair = new RegExp(
-  // `Set-Cookie` 的续扫不能把 `Path=/products` 这类响应属性当成Cookie值；属性名是固定集合，
-  // 明确排除后再要求 `name=value`，既不漏真实令牌，也不把 HTTP 属性写进隐去计数。
-  `^([ \\t]*)(?!(?:Path|Domain|Expires|Max-Age|SameSite|Secure|HttpOnly|Priority|Partitioned|MaxAge)\\s*=)` +
-    `(${cookiePairName.source}(?:${cookieHeaderValue.source}{8,}|${cookieHeaderValue.source}{3,}(?=…)))`,
-  'gi',
-);
+const requestCookieList = new RegExp(`(?=\\S)(?:${requestCookieHeader}|${quotedCookieOption.source})${cookieListValue.source}`, 'gi');
+const responseCookieList = new RegExp(`(?=\\S)(?:${responseCookieHeader})${cookieListValue.source}`, 'gi');
+
+function cookiePairPattern(minLength: number, cutLength: number, response: boolean): RegExp {
+  // 请求 Cookie 与 `--cookie` 参数里 `Path` / `Domain` 是合法的键名；只有 Set-Cookie 响应头
+  // 才排除固定属性，并要求更长的值，避免把 `tenant=production123` 这类未知属性当凭据隐去。
+  const guard = response
+    ? '(?!(?:Path|Domain|Expires|Max-Age|SameSite|Secure|HttpOnly|Priority|Partitioned|MaxAge)\\s*=)'
+    : '';
+  return new RegExp(
+    `^([ \\t]*)${guard}(${cookiePairName.source}(?:${cookieHeaderValue.source}{${minLength},}` +
+      `|${cookieHeaderValue.source}{${cutLength},}(?=…)))`,
+    'gi',
+  );
+}
+
+const nextCookiePair = cookiePairPattern(8, 3, false);
+const nextSetCookiePair = cookiePairPattern(16, 8, true);
+
+function continueCookiePairs(
+  list: string,
+  pairPattern: RegExp,
+  replace: (match: string) => string,
+): string {
+  const pairs = list.split(';');
+  for (let i = 1; i < pairs.length; i++) {
+    pairs[i] = pairs[i].replace(pairPattern, (_, space: string, pair: string) => space + replace(pair));
+  }
+  return pairs.join(';');
+}
 
 function maskCookie(text: string, replace: (match: string) => string): string {
   const out = text.replace(cookieValue, replace).replace(cutCookieValue, replace);
   if (!out.includes(';')) return out;
 
-  // 变量引用或已隐去标记会截断整段匹配。仅请求头和带引号的选项才允许用分号继续找 Cookie。
-  return out.replace(cookieList, (list) => {
-    const pairs = list.split(';');
-    for (let i = 1; i < pairs.length; i++) {
-      pairs[i] = pairs[i].replace(nextCookiePair, (_, space: string, pair: string) => space + replace(pair));
-    }
-    return pairs.join(';');
-  });
+  // 变量引用或已隐去标记会截断整段匹配。请求头 / 带引号的选项与 Set-Cookie 用不同的续扫口径。
+  return out
+    .replace(responseCookieList, (list) => continueCookiePairs(list, nextSetCookiePair, replace))
+    .replace(requestCookieList, (list) => continueCookiePairs(list, nextCookiePair, replace));
 }
 
 // 顺序即优先级：PEM 块最先（块里可能含形似其它种类的片段），带厂商前缀的先于通用 `sk-`。

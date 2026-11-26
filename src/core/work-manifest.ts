@@ -314,16 +314,27 @@ export function extractPatchPaths(command: string): string[] {
 }
 
 /**
- * 字符串命令是否真的会执行补丁。普通 `cat <<'EOF'` / `echo` 的正文里也可能有
- * `*** Delete File:`，扫它就会把磁盘上仍存在的文件标成「补丁已删」，跳过核对、给出确定性的
- * 假结论（第 571 轮）。只有明确调用 `apply_patch`、或命令本身就是补丁信封时才扫描标记。
+ * 命令正文里普通 heredoc 的内容只是数据，不是要执行的补丁。按分隔符整段去掉这类正文，
+ * 但保留真正调用 `apply_patch` 的 heredoc——`sudo apply_patch`、子 shell、`bash -c`、
+ * Windows 路径等合法形式不能靠「行首必须裸调用 apply_patch」去猜（第 571 轮复核）。
  */
-function invokesApplyPatch(command: string): boolean {
-  if (/^\s*\*\*\* Begin Patch/m.test(command)) return true;
-  return (
-    /(?:^|[\n;&|])\s*(?:[^\s;&|/]+\/)*apply_patch(?=\s|<<|\\?['"]|$)/m.test(command) ||
-    /\btools\.apply_patch\s*\(/.test(command)
-  );
+function stripNonPatchHeredocs(command: string): string {
+  const delimiter = /<<-?\s*(?:\\?['"])?([A-Za-z_][A-Za-z0-9_]*)/g;
+  const lines = command.split('\n');
+  const out: string[] = [];
+  let pending: string[] = [];
+  for (const line of lines) {
+    if (pending.length === 0) {
+      out.push(line);
+      const tags = [...line.matchAll(delimiter)].map((match) => match[1]!);
+      // 引入这些 heredoc 的命令没调用 apply_patch：正文里的补丁标记只是文本。
+      if (tags.length > 0 && !/\bapply_patch\b/i.test(line)) pending = tags;
+      continue;
+    }
+    if (line.trim() === pending[0]) pending.shift();
+    out.push('');
+  }
+  return out.join('\n');
 }
 
 /** 单条工具调用的归类结果。`null` = 这条调用不是文件写入也不是命令（搜索 / TODO / 子代理…）。 */
@@ -397,12 +408,7 @@ function classify(event: ProcessEvent): Classified {
   const command = firstString(obj, COMMAND_KEYS);
   if (command) {
     const workdir = typeof obj.workdir === 'string' && obj.workdir.trim() ? obj.workdir.trim() : undefined;
-    return {
-      kind: 'command',
-      command,
-      ...(workdir ? { workdir } : {}),
-      ...(invokesApplyPatch(command) ? {} : { scanPatch: false as const }),
-    };
+    return { kind: 'command', command, ...(workdir ? { workdir } : {}) };
   }
   // 旧版 Codex shell（rust-v0.20.0 的 create_shell_tool）把 command 记成 argv 数组；
   // 只认精确名 `shell`，MCP / 其他工具的同名参数不猜。字符串命令键优先（上面已返回）。
@@ -628,7 +634,7 @@ export function collectWorkManifest(
       addCommand(classified.command, classified.workdir);
       if (classified.scanPatch === false) continue;
       // 展示用完整 argv 与可扫描脚本不同时，只扫描脚本：尾随参数里的标记只是数据。
-      const patchEntries = extractPatchEntries(classified.patchSource ?? classified.command);
+      const patchEntries = extractPatchEntries(stripNonPatchHeredocs(classified.patchSource ?? classified.command));
       if (failed && patchEntries.length > 0) failedFileWrites += 1;
       else for (const entry of patchEntries) addFile(entry.path, 'edit', entry.removed);
     }
