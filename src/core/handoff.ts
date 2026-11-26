@@ -985,7 +985,15 @@ export async function createChainSession(
         ];
       }
     }
-    const resume = tipAdapter ? tipAdapter.resumeCommand(tail.toRef) : `resume 会话 ${escapeControlChars(tail.toRef.sessionId)}`;
+    // 链尾 ID 来自链记录（可能是旧版本 adopt 写入的文件名 / 索引 ID），不保证能拼进恢复命令。
+    // 这是只读分支：拒绝生成命令是对的，但不能让适配器守卫的短句取代下面这条完整结论
+    //（「直接 resume 即可」/ 0 轮 / 未完成都依赖同一句事实），所以就地降级成说明。
+    const resumeProblem = sessionIdCommandProblem(tail.toRef.sessionId);
+    const resume = resumeProblem
+      ? `无法生成恢复命令：${resumeProblem}`
+      : tipAdapter
+        ? tipAdapter.resumeCommand(tail.toRef)
+        : `resume 会话 ${escapeControlChars(tail.toRef.sessionId)}`;
     const display = tipAdapter?.displayName ?? providerId;
     throw new Error(
       `链尾已是 ${providerId}：会话 ${escapeControlChars(tail.toRef.sessionId)}（${resume}），` +
@@ -1006,7 +1014,10 @@ export async function createChainSession(
               return `但这条会话解析出 0 轮（没有可继续的对话）：${reason}`;
             })()
           : `直接 resume 即可；要开新对话请先切到另一侧`) +
-        (tipUnfinished.length ? `。注意：${tipUnfinished.join('；')}` : ''),
+        (tipUnfinished.length ? `。注意：${tipUnfinished.join('；')}` : '') +
+        // 这条分支从不写会话文件也不写链记录；tipEmpty 分支已在正文说过「本次没有新建会话」，
+        // 非空分支原来只说「直接 resume 即可」，用户看不出这次 new 有没有留下东西。
+        (tipEmpty ? '' : '；本次未写入任何内容'),
     );
   }
   const paired = pairedRef(history, providerId);
@@ -2155,7 +2166,17 @@ export async function handoff(
       // provider 会话时打开到非链尾会话（用户看到的就会是“没有历史”）。
       const boundTarget = pairedRef(history, targetId);
       const resumeRef = boundTarget ?? mtimeTip.ref;
-      assertCommandSessionId(resumeRef.sessionId);
+      // 这条分支从不写会话文件或链记录，拒绝生成命令是对的；但适配器守卫的短句会取代
+      // 「链尾已是目标 / 文件能不能读 / 是不是空会话」这些已经查到的事实，所以就地降级成完整结论
+      //（与 `watch new <同家>` 的只读分支同一口径，第 605 轮）。
+      const resumeRefProblem = sessionIdCommandProblem(resumeRef.sessionId);
+      if (resumeRefProblem) {
+        throw new Error(
+          `链尾已是 ${targetId}：会话 ${escapeControlChars(resumeRef.sessionId)} 无法生成恢复命令：${resumeRefProblem}；` +
+            `本次未写入任何内容——请用 watch sessions 查看该会话，` +
+            `如果挑错了会话，用 watch adopt ${targetId} --session <另一个会话 id> 换绑`,
+        );
+      }
       // 这条分支以前只回「直接打开即可」+ resume，而它和 status 一样只读元数据：
       // `stat` 对 chmod 000 的文件照常成功，于是同一份文件 new 明确拒绝、status 警告、
       // chain list 标 unreadable、doctor 报失败，只有 switch 替它宣称可用——用户复制的那条
