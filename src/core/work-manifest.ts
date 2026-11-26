@@ -340,28 +340,52 @@ function stripHeredocBodies(command: string): string {
  * 引号里的文字是数据，不是命令。`echo "*** Delete File: …"` 或 PowerShell here-string 里的
  * 补丁标记不能被当成真实改动；`bash -c 'apply_patch …'` 这类把命令放进引号的包装要保留原文。
  */
-function stripQuotedData(text: string, keepShellWrappers: boolean): string {
-  const shellWrapper =
-    /\b(?:bash|sh|zsh|fish)\s+-c\b|\bcmd\s+\/c\b|\bpowershell(?:-preview)?\b[^\n]*-Command\b/i.test(text);
-  if (keepShellWrappers && shellWrapper) return text;
+function stripQuotedData(text: string): string {
   return text.replace(/"[\s\S]*?"|'[\s\S]*?'/g, '');
 }
 
+/** `apply_patch` 必须处在命令位置；`echo apply_patch 用法` 或说明文字不算调用。 */
+function invokesApplyPatchSkeleton(text: string): boolean {
+  const commandPosition =
+    /(?:^|[\n;&|()]|(?:then|do)\s+)\s*(?:(?:sudo|env|command|exec)\s+)*(?:[^\s;&|/]+\/)*apply_patch(?:\.exe)?(?=\s|<<|<|$|[);|&])/im.test(text);
+  const quotedPath =
+    /(?:^|[\n;&|()])\s*["'][^"'\n]*apply_patch(?:\.exe)?["'](?=\s|<<|<|$|[);|&])/im.test(text);
+  return (
+    commandPosition ||
+    quotedPath ||
+    /\balias\s+[^\s=]+\s*=\s*\\?["']?apply_patch\b/i.test(text) ||
+    /\btools\.apply_patch\s*\(/.test(text)
+  );
+}
+
+/** shell wrapper 只解析 `-c` / `/c` / `-Command` 的脚本参数，不对整行放宽。 */
+function wrapperInvokesApplyPatch(noComments: string): boolean {
+  const pattern =
+    /(?:\b(?:bash|sh|zsh|fish)\s+-c\b|\bcmd\s+\/c\b|\bpowershell(?:-preview)?\b[^\n]*-Command\b)([^\n]*)/i;
+  for (const line of noComments.split('\n')) {
+    const script = line.match(pattern)?.[1]?.trim().replace(/^["']|["']$/g, '');
+    if (script && invokesApplyPatchSkeleton(script)) return true;
+  }
+  return false;
+}
+
 /**
- * 普通 heredoc 的正文只是数据，不是要执行的补丁。若去掉正文后的命令骨架里仍有 `apply_patch`
- * （sudo、子 shell、bash -c、Windows 路径、别名、或先写临时补丁再 `apply_patch < file`），
- * 就保留原文继续按补丁扫描；骨架没有才认定正文里的标记是数据。注释里的词不算调用。
+ * 普通 heredoc 的正文只是数据，不是要执行的补丁。若去掉正文后的命令骨架里确实调用了
+ * `apply_patch`（sudo、子 shell、bash -c、Windows 路径、别名、或先写临时补丁再调用），
+ * 就保留原文继续按补丁扫描；骨架没有才认定正文里的标记是数据。注释与引号不算调用。
  */
 function stripNonPatchHeredocs(command: string): string {
   const base = stripHeredocBodies(command);
   const noComments = base.replace(/#[^\n]*/g, '');
-  const shellWrapper =
-    /\b(?:bash|sh|zsh|fish)\s+-c\b|\bcmd\s+\/c\b|\bpowershell(?:-preview)?\b[^\n]*-Command\b/i.test(noComments);
-  const skeleton = stripQuotedData(noComments, true);
-  if (/\bapply_patch\b/i.test(skeleton) || (shellWrapper && /\bapply_patch\b/i.test(noComments))) {
+  const skeleton = stripQuotedData(noComments);
+  if (
+    invokesApplyPatchSkeleton(noComments) ||
+    invokesApplyPatchSkeleton(skeleton) ||
+    wrapperInvokesApplyPatch(noComments)
+  ) {
     return command;
   }
-  return stripQuotedData(base, false);
+  return stripQuotedData(base);
 }
 
 /** 单条工具调用的归类结果。`null` = 这条调用不是文件写入也不是命令（搜索 / TODO / 子代理…）。 */
