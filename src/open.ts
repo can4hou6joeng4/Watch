@@ -577,6 +577,23 @@ const buildCd = (cwd: string): string => buildCdFor(cwd, IS_WIN);
 const buildCommand = (cd: string, resumeCommand: string): string => buildCommandFor(cd, resumeCommand, IS_WIN);
 
 /**
+ * 恢复目标无法拼进命令时，`open` 三条路径（打开 / 转入 / 预检）共用的拒绝文案。
+ *
+ * 这些位置都还没有写会话文件或链记录（`--from` 的并入、`open --to` 的写入都在守卫之后），
+ * 但此前只回适配器守卫的短句：用户看不出「这次什么都没写」，也不知道去哪儿换一条会话
+ *（与 `watch adopt` / `watch switch` 的写前守卫同一口径，第 609 轮）。
+ * 本地映射库可能在反查阶段更新过，所以只承诺「会话文件与链记录」没动，不说「没碰过磁盘」。
+ */
+function uncommandableTargetMessage(ref: SessionRef, problem: string, providerId?: string): string {
+  return (
+    `无法${providerId ? '转入' : '打开'} ${escapeControlChars(ref.sessionId)}：${problem}；` +
+    `本次未写入任何内容（会话文件与链记录都没有改动）——` +
+    `用 watch sessions 换一条不以 '-' 开头的会话 id` +
+    (providerId ? `，或用 watch adopt ${providerId} --session <会话 id> 换绑` : '')
+  );
+}
+
+/**
  * 反查 session id 出 cwd 与打开命令；opts.from 指定来源会话时，先把来源增量并入目标会话再输出。
  * 不抛异常，失败以 { ok:false, error } 返回。
  */
@@ -650,7 +667,11 @@ export async function openSession(
   const commandProblem = sessionIdCommandProblem(target.found.ref.sessionId);
   if (commandProblem) {
     warnings.push(...lookup);
-    return { ok: false, error: commandProblem, ...(warnings.length ? { warnings } : {}) };
+    return {
+      ok: false,
+      error: uncommandableTargetMessage(target.found.ref, commandProblem),
+      ...(warnings.length ? { warnings } : {}),
+    };
   }
   const notes: string[] = [];
   let merged = 0;
@@ -1909,9 +1930,14 @@ export async function openInProvider(
   const planned = await planOpenInProvider(sourceId, providerId, mapping, diagnostics);
   if (!planned.ok) return { ...planned, error: attachDiagnostics(planned.error, diagnostics) };
   // 校验实际选中的恢复目标；来源只读转入合法新目标时不按来源 ID 拒绝。
-  const commandProblem = planned.plan.targetRef ? sessionIdCommandProblem(planned.plan.targetRef.sessionId) : null;
-  if (commandProblem) {
-    return { ok: false, error: attachDiagnostics(commandProblem, diagnostics), ...(diagnostics.length ? { warnings: diagnostics } : {}) };
+  const plannedRef = planned.plan.targetRef;
+  const commandProblem = plannedRef ? sessionIdCommandProblem(plannedRef.sessionId) : null;
+  if (plannedRef && commandProblem) {
+    return {
+      ok: false,
+      error: attachDiagnostics(uncommandableTargetMessage(plannedRef, commandProblem, providerId), diagnostics),
+      ...(diagnostics.length ? { warnings: diagnostics } : {}),
+    };
   }
   const { adapter: target, sourceRef, sourceProvider, cwd, plan, sourceSnapshot: srcSnapshot, cwdState } = planned;
   // 来源快照的基线在 `planOpenInProvider` 读取来源之前就取好了（见那里的注释）：
@@ -2176,9 +2202,14 @@ export async function checkOpenInProvider(
   const planned = await planOpenInProvider(sourceId, providerId, mapping, diagnostics);
   if (!planned.ok) return { ...planned, error: attachDiagnostics(planned.error, diagnostics) };
   // 校验实际选中的恢复目标；来源只读转入合法新目标时不按来源 ID 拒绝。
-  const commandProblem = planned.plan.targetRef ? sessionIdCommandProblem(planned.plan.targetRef.sessionId) : null;
-  if (commandProblem) {
-    return { ok: false, error: attachDiagnostics(commandProblem, diagnostics), ...(diagnostics.length ? { warnings: diagnostics } : {}) };
+  const plannedRef = planned.plan.targetRef;
+  const commandProblem = plannedRef ? sessionIdCommandProblem(plannedRef.sessionId) : null;
+  if (plannedRef && commandProblem) {
+    return {
+      ok: false,
+      error: attachDiagnostics(uncommandableTargetMessage(plannedRef, commandProblem, providerId), diagnostics),
+      ...(diagnostics.length ? { warnings: diagnostics } : {}),
+    };
   }
   const { adapter: target, cwd, plan } = planned;
   const base: OpenSessionResult = {
