@@ -1315,12 +1315,19 @@ export function buildHandoffPrompt(
     );
   } else if (
     stats.turns > 0 &&
-    (manifest.commands.length > 0 || manifest.omittedCommands > 0 || manifest.unreadableWrites > 0 || manifest.failedFileWrites > 0)
+    (manifest.commands.length > 0 ||
+      manifest.omittedCommands > 0 ||
+      manifest.unreadableWrites > 0 ||
+      manifest.failedFileWrites > 0 ||
+      manifest.failedAttemptCalls > 0 ||
+      manifest.unclassifiedFailures > 0 ||
+      manifest.omittedFailedAttemptCalls > 0)
   ) {
-    // 只跑过命令也有工作树被改动的风险（重定向、生成器、git 命令）。第 582 轮的归属提醒
-    // 不能只在列出文件时出现，否则「清单里没有文件」会被读成「工作树一定干净」。
+    // 只跑过命令、失败过或读不出路径的写入也有工作树被改动的风险（重定向、生成器、git 命令、
+    // 执行一半就报错的脚本）。第 582 轮的归属提醒不能只在列出文件时出现，否则「清单里没有文件」
+    // 会被读成「工作树一定干净」；失败调用同样不能当成「一定没有落盘」。
     lines.push(
-      '这条会话没有列出具体文件，但记录过命令或读不出路径的写入；工作树里已有的未提交改动不一定来自这条会话，' +
+      '这条会话没有列出具体文件，但记录过命令、失败调用或读不出路径的写入；工作树里已有的未提交改动不一定来自这条会话，' +
         '动手前先看 `git status` 与 `git diff`，不要替用户提交、回退或覆盖它们。',
     );
   }
