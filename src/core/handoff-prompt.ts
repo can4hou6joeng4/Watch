@@ -1313,6 +1313,16 @@ export function buildHandoffPrompt(
         '（工作目录是 git 仓库时先看 `git status` 与 `git diff`），已经落盘的改动不要重做，对不上的地方先向用户确认；' +
         '工作树里已有的未提交改动不一定来自这条会话，不要替用户提交、回退或覆盖它们。',
     );
+  } else if (
+    stats.turns > 0 &&
+    (manifest.commands.length > 0 || manifest.omittedCommands > 0 || manifest.unreadableWrites > 0 || manifest.failedFileWrites > 0)
+  ) {
+    // 只跑过命令也有工作树被改动的风险（重定向、生成器、git 命令）。第 582 轮的归属提醒
+    // 不能只在列出文件时出现，否则「清单里没有文件」会被读成「工作树一定干净」。
+    lines.push(
+      '这条会话没有列出具体文件，但记录过命令或读不出路径的写入；工作树里已有的未提交改动不一定来自这条会话，' +
+        '动手前先看 `git status` 与 `git diff`，不要替用户提交、回退或覆盖它们。',
+    );
   }
   // 没有结果的调用两头都不能假设：既不能当它做完了，也不能当它没做（重做一条已经执行的
   // 迁移 / 部署命令比漏做更糟）。这句话放在「继续工作」里，因为目标助手照着做的是这一段。
