@@ -313,6 +313,19 @@ export function extractPatchPaths(command: string): string[] {
   return extractPatchEntries(command).map((entry) => entry.path);
 }
 
+/**
+ * 字符串命令是否真的会执行补丁。普通 `cat <<'EOF'` / `echo` 的正文里也可能有
+ * `*** Delete File:`，扫它就会把磁盘上仍存在的文件标成「补丁已删」，跳过核对、给出确定性的
+ * 假结论（第 571 轮）。只有明确调用 `apply_patch`、或命令本身就是补丁信封时才扫描标记。
+ */
+function invokesApplyPatch(command: string): boolean {
+  if (/^\s*\*\*\* Begin Patch/m.test(command)) return true;
+  return (
+    /(?:^|[\n;&|])\s*(?:[^\s;&|/]+\/)*apply_patch(?=\s|<<|\\?['"]|$)/m.test(command) ||
+    /\btools\.apply_patch\s*\(/.test(command)
+  );
+}
+
 /** 单条工具调用的归类结果。`null` = 这条调用不是文件写入也不是命令（搜索 / TODO / 子代理…）。 */
 type Classified =
   | { kind: 'file'; path: string; mode: 'write' | 'edit' }
@@ -384,7 +397,12 @@ function classify(event: ProcessEvent): Classified {
   const command = firstString(obj, COMMAND_KEYS);
   if (command) {
     const workdir = typeof obj.workdir === 'string' && obj.workdir.trim() ? obj.workdir.trim() : undefined;
-    return { kind: 'command', command, ...(workdir ? { workdir } : {}) };
+    return {
+      kind: 'command',
+      command,
+      ...(workdir ? { workdir } : {}),
+      ...(invokesApplyPatch(command) ? {} : { scanPatch: false as const }),
+    };
   }
   // 旧版 Codex shell（rust-v0.20.0 的 create_shell_tool）把 command 记成 argv 数组；
   // 只认精确名 `shell`，MCP / 其他工具的同名参数不猜。字符串命令键优先（上面已返回）。
