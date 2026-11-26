@@ -14,7 +14,7 @@ import { cwdAliasHint, splitElsewhereByDirectory } from './cwd.js';
 import { compressedCopy, compressedRetryAdvice, describePathReadFailureReason, describeReadFailureOrSelf, emptySessionFileReasonFromStat, isEmptySessionFileReason, isMissingPathError, probeSessionReadable, sessionFilePresence, type CompressedCopyNote } from './read-text.js';
 import { noSessionHint, unknownProviderMessage } from '../providers/registry.js';
 import { collectUnattributable, unattributableNoPickMessage, unattributablePickWarning } from './session-coverage.js';
-import { assertCommandSessionId } from './shell-quote.js';
+import { assertCommandSessionId, sessionIdCommandProblem } from './shell-quote.js';
 
 /** 写回被阻断（如 TOCTOU 检测到目标被外部修改）：一票否决，不产生部分写 */
 export class HandoffBlockedError extends Error {
@@ -2643,6 +2643,16 @@ export async function handoff(
     emptiedTargetFile && isEmptySessionFileReason(emptiedTargetFile) ? emptiedTargetFile : null;
 
   const newRef = await guardedWrite(dedupeCallEvents(outgoing), replace ? { replace: true } : undefined);
+  // provider 写入时生成的新 ID 只有事后才知道，它同样必须能拼进恢复命令。目标文件已经写入，
+  // 不能等到末端 `target.resumeCommand(newRef)` 才暴露成普通失败——那会让用户以为这次交接没写成。
+  // 在链记录之前拒绝：链尾不指向一个生成不出命令的 ID，用户还能从结果里知道写入已经发生。
+  const newRefProblem = sessionIdCommandProblem(newRef.sessionId);
+  if (newRefProblem) {
+    throw new Error(
+      `目标会话已写入 ${escapeControlChars(newRef.sessionId)}，但没有生成恢复命令：${newRefProblem}；` +
+        `这次写入已经发生，链记录没有更新——请用 watch 查看该会话`,
+    );
+  }
   const vanished = into && !replace ? describeVanishedTarget(into, newRef, target.displayName) : null;
   if (vanished) warnings.push(vanished);
   const targetEmptyKind = into && !vanished && destTurns.length === 0 && outgoing.length > 0
