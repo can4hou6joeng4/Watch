@@ -541,7 +541,14 @@ export function describeWorktreeNote(probe: WorktreeInspection): string | null {
           : probe.branchState === 'unknown'
             ? `，无法确认分支（${escapeControlChars(probe.branchUnknownReason ?? 'HEAD 读取失败')}）`
             : '';
-      return `这是一个 git 链接工作树（${where}${root}${branch}）；这里的改动属于该工作树自己的分支，不要切到主工作树去改同一个文件`;
+      // detached 与读不出时没有「该工作树自己的分支」可归属，不能沿用分支状态下的措辞。
+      const ownership =
+        probe.branchState === 'branch'
+          ? '这里的改动属于该工作树自己的分支'
+          : probe.branchState === 'detached'
+            ? '这里的改动属于这个 detached 工作树'
+            : '这里的改动属于这个独立工作树';
+      return `这是一个 git 链接工作树（${where}${root}${branch}）；${ownership}，不要切到主工作树去改同一个文件`;
     }
   }
 }
